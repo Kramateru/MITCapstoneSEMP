@@ -1,0 +1,15 @@
+INFO:main:LOB catalog synced: created=0 updated=0 deactivated=0 migrated={'users': 0, 'scenarios': 0, 'batches': 0, 'courses': 0, 'mcq_categories': 0, 'coaching_logs': 0}
+INFO:     Started server process [336]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50697 - "WebSocket /api/trainer/live-updates?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmEwMDg4NGMtNmU0Zi00MGMwLTk2MjUtYzI0OWVmNWZiNDcyIiwiZW1haWwiOiJ0cmFpbmVyQHN0LnBldGVydmlsbGUuZWR1LnBoIiwicm9sZSI6InRyYWluZXIiLCJleHAiOjE3NzQyODI4OTEsImlhdCI6MTc3NDI4MTA5MSwidHlwZSI6ImFjY2VzcyJ9.S4Rew3Aygwrq5rlSTVDfBino3L8h5pWhbkHfUp9G6W4" [accepted]
+INFO:backend.services.live_updates:Live update client connected to trainers
+INFO:     connection open
+INFO:backend.services.live_updates:Live update client disconnected from trainers
+INFO:     connection closed
+INFO:     127.0.0.1:64021 - "WebSocket /api/trainer/live-updates?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiNmEwMDg4NGMtNmU0Zi00MGMwLTk2MjUtYzI0OWVmNWZiNDcyIiwiZW1haWwiOiJ0cmFpbmVyQHN0LnBldGVydmlsbGUuZWR1LnBoIiwicm9sZSI6InRyYWluZXIiLCJleHAiOjE3NzQyODI4OTEsImlhdCI6MTc3NDI4MTA5MSwidHlwZSI6ImFjY2VzcyJ9.S4Rew3Aygwrq5rlSTVDfBino3L8h5pWhbkHfUp9G6W4" [accepted]
+INFO:backend.services.live_updates:Live update client connected to trainers
+INFO:     connection open
+INFO:backend.services.live_updates:Live update client disconnected from trainers
+INFO:     connection closed

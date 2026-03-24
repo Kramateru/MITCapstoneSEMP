@@ -1,0 +1,12 @@
+Azure Speech SDK not installed; pronunciation features disabled
+WARNING:backend.supabase_client:Supabase library not installed. Cloud storage disabled.
+WARNING:passlib.handlers.bcrypt:(trapped) error reading bcrypt version
+Traceback (most recent call last):
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM - Speech Enabled BPO Platform\backend\venv\Lib\site-packages\passlib\handlers\bcrypt.py", line 620, in _load_backend_mixin
+    version = _bcrypt.__about__.__version__
+              ^^^^^^^^^^^^^^^^^
+AttributeError: module 'bcrypt' has no attribute '__about__'
+INFO:     Started server process [11512]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

@@ -1,0 +1,72 @@
+"""
+Backend API Routes - Complete Structure for BPO Training Platform
+This file documents all required API endpoints for the comprehensive UI design.
+"""
+
+# ==================== AUTHENTICATION API ====================
+# POST /api/auth/login
+# POST /api/auth/register
+# POST /api/auth/logout
+# POST /api/auth/refresh-token
+# GET /api/auth/profile
+
+# ==================== ADMIN API ====================
+# GET /api/admin/dashboard         - Get system-wide stats
+# GET /api/admin/scenarios         - List all scenarios
+# POST /api/admin/scenarios        - Create new scenario
+# PUT /api/admin/scenarios/{id}    - Update scenario
+# DELETE /api/admin/scenarios/{id} - Delete scenario
+# POST /api/admin/scenarios/{id}/publish - Publish scenario
+
+# GET /api/admin/assessment-categories - List assessment categories
+# POST /api/admin/assessment-categories - Create category
+# PUT /api/admin/assessment-categories/{id} - Update category
+
+# GET /api/admin/kpi-config        - Get KPI configuration
+# PUT /api/admin/kpi-config        - Update KPI weights
+
+# GET /api/admin/users            - List all users
+# POST /api/admin/users           - Create new user
+# PUT /api/admin/users/{id}       - Update user
+# DELETE /api/admin/users/{id}    - Delete user
+# POST /api/admin/users/bulk-upload - Bulk import users from CSV
+
+# GET /api/admin/lob              - List Lines of Business
+# POST /api/admin/lob             - Create LOB
+# PUT /api/admin/lob/{id}         - Update LOB
+
+# GET /api/admin/analytics        - System-wide analytics
+# GET /api/admin/audit-logs       - Admin action logs
+
+# ==================== TRAINER API ====================
+# GET /api/trainer/stats          - Trainer dashboard stats
+# GET /api/trainer/batches        - List trainee batches
+# POST /api/trainer/batches       - Create new batch
+# PUT /api/trainer/batches/{id}   - Update batch
+
+# GET /api/trainer/interaction-history - List recent sessions
+# GET /api/trainer/interaction-history/{session_id} - View session details
+# POST /api/trainer/interaction-history/{session_id}/verify - Verify session
+# POST /api/trainer/interaction-history/{session_id}/feedback - Add feedback
+
+# GET /api/trainer/analytics      - Performance analytics
+# GET /api/trainer/reports        - Generate reports
+
+# ==================== TRAINEE API ====================
+# GET /api/trainee/stats          - Personal stats
+# GET /api/trainee/scenarios      - List available scenarios
+# GET /api/trainee/sessions       - Session history
+# POST /api/trainee/sessions      - Create new session
+
+# GET /api/trainee/progress       - Progress over time
+# GET /api/trainee/achievements   - Badges and awards
+# GET /api/trainee/profile        - User profile
+
+# ==================== PRACTICE API ====================
+# WebSocket /ws/speech            - Real-time audio streaming
+# POST /api/practice/assess       - Submit audio for assessment
+# GET /api/practice/result/{session_id} - Get assessment results
+
+# ==================== COMMON ENDPOINTS ====================
+# GET /api/health                 - Health check
+# GET /api/api/docs              - API documentation

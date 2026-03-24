@@ -1,0 +1,20 @@
+INFO:     127.0.0.1:57795 - "GET / HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:52333 - "GET / HTTP/1.1" 307 Temporary Redirect
+INFO:     127.0.0.1:55136 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49713 - "POST /api/auth/login HTTP/1.1" 401 Unauthorized
+INFO:     127.0.0.1:50730 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54584 - "GET /api/trainee/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54583 - "GET /api/trainee/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54585 - "GET /api/trainee/scenarios HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62673 - "GET /api/trainee/scenarios HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50201 - "GET /api/certification/coaching/logs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60254 - "GET /api/certification/coaching/logs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60252 - "GET /api/trainee/reports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60255 - "GET /api/certification/mcq/my-assessments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56072 - "GET /api/certification/verdicts/my-latest HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56751 - "GET /api/certification/coaching/logs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56752 - "GET /api/certification/mcq/my-assessments HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56750 - "GET /api/trainee/reports HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51772 - "GET /api/trainee/sessions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51771 - "GET /api/trainee/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51773 - "GET /api/trainee/scenarios HTTP/1.1" 200 OK
