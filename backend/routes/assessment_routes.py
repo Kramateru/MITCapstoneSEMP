@@ -6,13 +6,14 @@ Handles practice sessions, speech recording, and pronunciation scoring
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
 import json
 
 from .. import auth_utils
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..models import PracticeSession, Scenario, Feedback, FeedbackType, User
+from ..services.speech_assessment import assess_audio_submission, build_gold_standard_script
 from ..schemas import (
     PracticeSessionCreate,
     PracticeSessionResponse,
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/api/assessments", tags=["assessments"])
 @router.post("/sessions", response_model=PracticeSessionResponse, status_code=status.HTTP_201_CREATED)
 async def create_practice_session(
     session_data: PracticeSessionCreate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Create a new practice session"""
@@ -65,7 +66,7 @@ async def list_practice_sessions(
     user_id: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """List practice sessions"""
@@ -98,7 +99,7 @@ async def list_practice_sessions(
 @router.get("/sessions/{session_id}", response_model=PracticeSessionResponse)
 async def get_practice_session(
     session_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get practice session by ID"""
@@ -125,7 +126,7 @@ async def get_practice_session(
 async def update_practice_session_scores(
     session_id: str,
     scores: PronunciationScores,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Update practice session with pronunciation scores"""
@@ -172,7 +173,7 @@ async def update_practice_session_scores(
 async def add_feedback(
     session_id: str,
     feedback_data: FeedbackCreate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Add feedback to a practice session"""
@@ -214,7 +215,7 @@ async def add_feedback(
 @router.get("/sessions/{session_id}/feedback", response_model=List[FeedbackResponse])
 async def get_session_feedback(
     session_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get all feedback for a practice session"""
@@ -244,7 +245,7 @@ async def get_session_feedback(
 @router.put("/feedback/{feedback_id}/acknowledge", response_model=SuccessResponse)
 async def acknowledge_feedback(
     feedback_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Mark feedback as acknowledged by trainee"""
@@ -288,15 +289,41 @@ async def assess_practice(
     Client sends audio chunks, server returns live assessment results
     """
     await websocket.accept()
-    
+    db = SessionLocal()
+
     try:
-        # Get user from token (implement token verification)
-        # For now, accept the connection
-        
+        if not token:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Authentication token is required",
+            })
+            await websocket.close(code=4401)
+            return
+
+        token_data = auth_utils.decode_token(token)
+        current_user = db.query(User).filter(User.id == token_data.user_id).first()
+        if not current_user:
+            await websocket.close(code=4401)
+            return
+        if current_user.role.value != "trainee":
+            await websocket.close(code=4403)
+            return
+
+        scenario = (
+            db.query(Scenario)
+            .filter(Scenario.id == scenario_id, Scenario.is_published == True)
+            .first()
+        )
+        if not scenario:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Scenario not found",
+            })
+            await websocket.close(code=4404)
+            return
+
         audio_buffer = bytearray()
-        session_started = False
-        practice_session = None
-        reference_text = None
+        reference_text = build_gold_standard_script(scenario=scenario)
         
         while True:
             data = await websocket.receive_text()
@@ -306,8 +333,7 @@ async def assess_practice(
                 
                 # Initialize session
                 if message.get("type") == "init":
-                    session_started = True
-                    reference_text = message.get("reference_text")
+                    reference_text = message.get("reference_text") or build_gold_standard_script(scenario=scenario)
                     
                     await websocket.send_json({
                         "type": "session_ready",
@@ -336,18 +362,34 @@ async def assess_practice(
                             "type": "processing",
                             "message": "Processing audio for pronunciation assessment"
                         })
-                        
-                        # Here you would call the pronunciation assessment
-                        # For now, send mock results
+
+                        assessment = assess_audio_submission(
+                            audio_bytes=bytes(audio_buffer),
+                            filename=f"{scenario_id}.webm",
+                            mime_type="audio/webm",
+                            scenario=scenario,
+                            reference_text=reference_text,
+                            user_dialect=current_user.language_dialect,
+                        )
+                        if assessment.get("status") != "completed":
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": assessment.get("error") or "Assessment failed",
+                            })
+                            audio_buffer = bytearray()
+                            continue
+
+                        score_breakdown = assessment.get("overall_scores", {})
                         await websocket.send_json({
                             "type": "assessment_complete",
-                            "overall_score": 85.5,
-                            "accuracy": 88.0,
-                            "fluency": 82.0,
-                            "completeness": 100.0,
-                            "prosody": 84.0,
-                            "transcription": "sample transcription",
-                            "word_feedback": []
+                            "overall_score": assessment.get("overall_score", 0),
+                            "accuracy": score_breakdown.get("accuracy", 0),
+                            "fluency": score_breakdown.get("fluency", 0),
+                            "completeness": score_breakdown.get("completeness", 0),
+                            "prosody": score_breakdown.get("prosody", 0),
+                            "transcription": assessment.get("transcription", ""),
+                            "word_feedback": assessment.get("word_feedback", []),
+                            "provider": assessment.get("provider"),
                         })
                         
                         audio_buffer = bytearray()
@@ -373,3 +415,5 @@ async def assess_practice(
             })
         except:
             pass
+    finally:
+        db.close()

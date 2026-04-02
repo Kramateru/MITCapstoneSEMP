@@ -60,6 +60,7 @@ class UserBase(BaseModel):
     layout: str = "default"
     big_font: bool = False
     high_contrast: bool = False
+    profile_image_url: Optional[str] = None
 
 
 class UserCreate(UserBase):
@@ -71,6 +72,7 @@ class UserCreate(UserBase):
 class UserUpdate(BaseModel):
     """User update schema"""
 
+    email: Optional[EmailStr] = None
     full_name: Optional[str] = None
     lob: Optional[str] = None
     department: Optional[str] = None
@@ -79,6 +81,7 @@ class UserUpdate(BaseModel):
     layout: Optional[str] = None
     big_font: Optional[bool] = None
     high_contrast: Optional[bool] = None
+    profile_image_url: Optional[str] = None
 
 
 class UserResponse(UserBase):

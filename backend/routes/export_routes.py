@@ -9,21 +9,58 @@ from typing import Any, List, Optional
 
 from .. import auth_utils
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Batch, PracticeSession, Scenario, User
+from ..models import Batch, PracticeSession, Scenario, User, UserRole
 from ..services.pdf_generator import PerformanceReportGenerator
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/export", tags=["Export"])
 
 
+def _ensure_report_access(
+    db: Session,
+    *,
+    current_user: User,
+    trainee: User,
+) -> None:
+    if current_user.role == UserRole.ADMIN:
+        return
+
+    if current_user.role == UserRole.TRAINEE:
+        if trainee.id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot export another trainee's report",
+            )
+        return
+
+    if current_user.role == UserRole.TRAINER:
+        trainer_batch_ids = {
+            batch.id
+            for batch in db.query(Batch).filter(Batch.created_by == current_user.id).all()
+        }
+        trainee_batch_ids = {batch.id for batch in trainee.batches}
+        if trainer_batch_ids & trainee_batch_ids:
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This trainee is not assigned to one of your batches.",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Export access denied",
+    )
+
+
 @router.post("/session-pdf/{session_id}")
 async def export_session_as_pdf(
     session_id: str,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -31,19 +68,18 @@ async def export_session_as_pdf(
     Trainee can export their own sessions, Trainer can export any session
     """
     
+    current_user = await auth_utils.get_current_user(authorization, db)
+
     # Get the practice session
     session = db.query(PracticeSession).filter(
         PracticeSession.id == session_id
     ).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    
-    # TODO: Add permission verification
-    # if current_user.role == "trainee" and session.trainee_id != current_user.id:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Cannot export other users' sessions"
-    #     )
+
+    if not session.user:
+        raise HTTPException(status_code=404, detail="Trainee not found for this session")
+    _ensure_report_access(db, current_user=current_user, trainee=session.user)
     
     # Get scenario details
     scenario = db.query(Scenario).filter(
@@ -93,6 +129,7 @@ async def export_progress_report(
     date_from: Optional[str] = None,  # YYYY-MM-DD format
     date_to: Optional[str] = None,
     trainee_id: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -101,6 +138,8 @@ async def export_progress_report(
     Trainee can export own, Trainer can export any trainee
     """
     
+    current_user = await auth_utils.get_current_user(authorization, db)
+
     # Parse dates
     date_to = datetime.strptime(date_to, "%Y-%m-%d") if date_to else datetime.now()
     date_from = datetime.strptime(date_from, "%Y-%m-%d") if date_from else date_to - timedelta(days=30)
@@ -113,6 +152,7 @@ async def export_progress_report(
     trainee_for_report = db.query(User).filter(User.id == trainee_id).first()
     if not trainee_for_report:
         raise HTTPException(status_code=404, detail="Trainee not found")
+    _ensure_report_access(db, current_user=current_user, trainee=trainee_for_report)
     
     # Get practice sessions in date range
     sessions = db.query(PracticeSession).filter(
@@ -193,6 +233,7 @@ async def export_progress_report(
 @router.post("/batch-performance-pdf/{batch_id}")
 async def export_batch_performance(
     batch_id: str,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """
@@ -200,6 +241,21 @@ async def export_batch_performance(
     Shows comparative metrics across all trainees in the batch
     """
     
+    current_user = await auth_utils.get_current_user(authorization, db)
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    if current_user.role == UserRole.TRAINEE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trainer or admin access required",
+        )
+    if current_user.role == UserRole.TRAINER and batch.created_by != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This batch does not belong to your trainer account.",
+        )
+
     # Get all sessions for batch
     if not (sessions := db.query(PracticeSession).filter(
         PracticeSession.user_id.in_(
@@ -215,6 +271,7 @@ async def export_batch_performance(
         "status": "success",
         "message": "Batch report generation in progress",
         "batch_id": batch_id,
+        "batch_name": batch.name,
         "total_sessions": len(sessions),
         "note": "Batch PDF export coming soon"
     }
@@ -253,7 +310,7 @@ async def export_custom_report(
 
 @router.get("/formats")
 async def get_export_formats(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get available export report formats"""

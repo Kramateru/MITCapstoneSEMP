@@ -6,18 +6,18 @@ Handles login, JWT tokens, and session management
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from .. import auth_utils
 from ..database import get_db
+from ..default_credentials import DEFAULT_TRAINEE_PASSWORD
 from ..models import User, UserRole
 from ..schemas import LoginRequest, LoginResponse, UserResponse, ChangePasswordRequest, SuccessResponse
 from ..services.lob_catalog import list_active_lobs, serialize_lobs
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-DEFAULT_TRAINEE_PASSWORD = "SPVTrainee2024"
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -60,7 +60,7 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", response_model=SuccessResponse)
-async def logout(authorization: Optional[str] = None, db: Session = Depends(get_db)):
+async def logout(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
     """Logout endpoint (client-side cleanup)"""
     # Token validation is handled by the dependency
     return SuccessResponse(message="Logged out successfully")
@@ -68,7 +68,7 @@ async def logout(authorization: Optional[str] = None, db: Session = Depends(get_
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user_profile(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
     request: Request = None,
 ):
@@ -82,7 +82,7 @@ async def get_current_user_profile(
 
 @router.post("/refresh-token")
 async def refresh_token(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
     request: Request = None,
 ):
@@ -110,7 +110,7 @@ async def refresh_token(
 
 @router.get("/verify-token", response_model=dict)
 async def verify_token_endpoint(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
     request: Request = None,
 ):
@@ -129,7 +129,7 @@ async def verify_token_endpoint(
 
 @router.get("/lobs", response_model=dict)
 async def get_lob_catalog(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
     request: Request = None,
 ):

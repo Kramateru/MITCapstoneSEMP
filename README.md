@@ -1,157 +1,289 @@
 # Speech-Enabled BPO Platform
 
-This repository contains the active St. Peter role-based BPO training platform. It combines a Next.js frontend, a FastAPI backend, Supabase-backed data access, speech assessment workflows, MCQ management, microlearning, and role-specific dashboards for admin, trainer, and trainee users.
+A full-stack application for speech-enabled BPO training with a React/Next.js frontend and FastAPI backend using WebSocket communication and Google Gemini API for real-time conversational AI, automated assessment, and content generation.
 
-## What The System Covers
+## Project Structure
 
-- Admin operations for Users & Access, LOB Management, simulation and assessment configuration, certification, and governance.
-- Trainer operations for Trainee Access, content assignment, coaching, grading, MCQ management, reports, and performance tracking.
-- Trainee operations for Training Hub, MCQ Assessment, Sim Floor, Microlearning, coaching review, certification, and personal performance tracking.
-- Speech assessment flows that capture trainee audio in the browser, upload it to the backend, score the response, and persist results to the database.
-- St. Peter Buddy support workflows for role-based FAQ guidance.
-
-## Current Stack
-
-### Frontend
-
-- Next.js 16
-- React 19
-- TypeScript
-- Tailwind CSS 4
-- Supabase JS client
-
-### Backend
-
-- FastAPI
-- SQLAlchemy
-- PostgreSQL via Supabase or local SQLite for development
-- Supabase Python client
-- Azure Speech SDK installed for direct speech experiments
-- OpenAI transcription support in the speech assessment service when configured
-
-## Repository Layout
-
-```text
+```
 .
-|-- backend/
-|   |-- main.py
-|   |-- requirements.txt
-|   |-- routes/
-|   |-- services/
-|   `-- .env.example
-|-- frontend/
-|   |-- app/
-|   |-- hooks/
-|   `-- package.json
-|-- run-backend.cmd
-|-- run-frontend.cmd
-|-- QUICKSTART.md
-|-- TESTING_GUIDE.md
-|-- AUDIO_PROCESSING.md
-|-- PRONUNCIATION_ASSESSMENT.md
-|-- SYSTEM_OPTIMIZATION.md
-`-- IMPLEMENTATION_CHECKLIST.md
+├── backend/              # FastAPI backend server
+│   ├── main.py          # WebSocket endpoint for audio streaming
+│   ├── requirements.txt  # Python dependencies
+│   ├── venv/            # Python virtual environment
+│   └── ...
+└── frontend/            # Next.js React application
+    ├── app/
+    │   ├── page.tsx     # Main page
+    │   └── components/
+    │       └── SpeechRecorder.tsx  # Speech recording UI
+    ├── hooks/
+    │   └── useAudioCapture.ts  # Custom hook for audio capture
+    ├── package.json
+    └── ...
 ```
 
-## Quick Start
+## Backend Setup
 
-### 1. Install dependencies
+### 1. Environment Setup
 
-```powershell
+Create a `.env` file in the backend directory and add your Gemini API key:
+
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+### 2. Install Dependencies
+
+```bash
 cd backend
-venv\Scripts\activate
+venv\Scripts\activate  # Activate virtual environment
 pip install -r requirements.txt
+```
 
-cd ..\frontend
+### 2. Run the Server
+
+```bash
+uvicorn main:app --reload
+```
+
+The server will start at `http://127.0.0.1:8000`
+
+#### Available Endpoints:
+- **GET** `/` - Health check endpoint
+- **WebSocket** `/ws/speech` - Audio streaming WebSocket
+
+You can also access:
+- **API Docs**: `http://127.0.0.1:8000/docs` (Swagger UI)
+- **ReDoc**: `http://127.0.0.1:8000/redoc` (Alternative API docs)
+
+## Frontend Setup
+
+### 1. Install Dependencies
+
+```bash
+cd frontend
 npm install
 ```
 
-### 2. Configure environment
+### 2. Run Development Server
 
-Copy `backend/.env.example` to `backend/.env` and update the values you need:
-
-- `DATABASE_URL` for Supabase Postgres
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `SUPABASE_SERVICE_KEY`
-- `AZURE_SPEECH_KEY`
-- `AZURE_SPEECH_REGION`
-- `OPENAI_API_KEY` if you want live transcription through the current assessment pipeline
-
-### 3. Start the backend
-
-For local SQLite:
-
-```powershell
-.\run-backend.cmd
+```bash
+npm run dev
 ```
 
-For Supabase:
+The app will be available at `http://localhost:3000`
 
-```powershell
-$env:USE_LOCAL_SQLITE='0'
-.\run-backend.cmd
+## How It Works
+
+### Audio Capture Flow:
+
+1. **User clicks "Start Recording"** in the SpeechRecorder component
+2. **Browser requests microphone permission** using `navigator.mediaDevices.getUserMedia()`
+3. **MediaRecorder API captures audio** in real-time
+4. **Audio chunks are streamed** to the backend via WebSocket
+5. **Backend receives audio data** and processes it using Gemini Live API for real-time conversational AI
+6. **Gemini provides human-like responses** and assessment feedback
+
+### WebSocket Communication:
+
+- **Frontend → Backend**: Audio data (binary chunks)
+- **Backend → Frontend**: Processing status, transcribed text, and AI responses
+
+## Key Components
+
+### Backend (main.py)
+
+```python
+@app.websocket("/ws/speech")
+async def speech_endpoint(websocket: WebSocket):
+    # Accept WebSocket connection
+    # Receive audio chunks
+    # Process with Gemini Live API for real-time conversation
+    # Send AI responses and assessment feedback
 ```
 
-### 4. Start the frontend
+### Frontend Hook (useAudioCapture.ts)
 
-```powershell
-.\run-frontend.cmd
+A custom React hook that handles:
+- Microphone permission requests
+- Audio stream recording
+- WebSocket connection management
+- Error handling
+
+Usage:
+```typescript
+const { startRecording, stopRecording, isRecording, isConnected, error } =
+  useAudioCapture();
 ```
 
-### 5. Open the app
+## Next Steps
 
-- Frontend: `http://127.0.0.1:3000`
-- Backend: `http://127.0.0.1:8000`
-- API docs: `http://127.0.0.1:8000/docs`
+### 1. Integrate Gemini API
+Modify `main.py` to use Google Gemini Live API for real-time conversational AI:
 
-## Database Modes
+```python
+# Example with Gemini Live API
+import google.generativeai as genai
 
-### Local development
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-`run-backend.cmd` defaults to `sqlite:///./test.db` unless `USE_LOCAL_SQLITE=0` is set.
+@app.websocket("/ws/speech")
+async def speech_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    # Stream audio to Gemini Live API
+    # Receive real-time responses
+    # Send responses back to client
+```
 
-### Supabase
+### 2. Implement Automated Assessment
+Use Gemini 1.5 Pro for performance evaluation:
 
-Set `USE_LOCAL_SQLITE=0`, provide a valid `DATABASE_URL`, and configure the Supabase keys in `backend/.env`. The current backend is built to use the live database routes for users, LOBs, MCQ categories, questions, assignments, and reporting.
+- Transcribe audio and analyze for BPO metrics
+- Detect tone and sentiment
+- Generate structured feedback JSON
 
-## Speech Assessment Overview
+### 3. Add Training Content Generation
+Use Gemini for microlearning content:
 
-The active trainee workflow is upload-based:
+- Generate customer complaint scenarios
+- Create audio prompts with Gemini-TTS
 
-1. The browser records audio with `MediaRecorder`.
-2. The frontend posts the recording to `/api/trainee/asr/assess`.
-3. The backend transcribes and scores the attempt.
-4. Practice session data is stored in the database and surfaced in trainer and trainee views.
+### 4. Add Transcription Display
+Update `SpeechRecorder.tsx` to show transcribed text and AI responses in real-time
 
-The repository also still includes a direct `/ws/speech` WebSocket endpoint in `backend/main.py` for Azure-based speech experiments and lower-level testing.
+### 5. Add User Authentication
+Implement JWT-based authentication to secure the WebSocket endpoint
 
-## Local Access Notes
+### 6. Deploy
+- **Backend**: Deploy to AWS, Azure, or Heroku
+- **Frontend**: Deploy to Vercel or Netlify
 
-On a fresh local SQLite startup, `backend/main.py` currently ensures baseline admin, trainer, and trainee accounts for local development. If your team wants a no-seed environment, disable or remove that bootstrap logic before deployment.
+## Technology Stack
 
-## Recommended Verification
+**Frontend:**
+- Next.js 14+
+- React 18
+- TypeScript
+- Tailwind CSS
+- MediaRecorder API
+- WebSocket API
 
-After startup, verify:
+**Backend:**
+- FastAPI
+- Uvicorn (ASGI server)
+- WebSockets
+- Python 3.12
+- Google Gemini API (Live API, 1.5 Pro, TTS)
 
-- `GET /openapi.json`
-- `GET /docs`
-- `GET /login`
-- Admin login and dashboard access
-- Trainer login and Trainee Access page
-- Trainee login and Training Hub page
-- LOB Management, MCQ Manager, and speech assessment submission
+## CORS Configuration
 
-Detailed smoke tests are in [TESTING_GUIDE.md](TESTING_GUIDE.md).
+The backend includes CORS middleware to allow requests from your frontend. In production, update this to your specific domain:
 
-## Documentation Map
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://yourdomain.com"],  # Your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
 
-- [QUICKSTART.md](QUICKSTART.md): fastest path to run the app locally
-- [TESTING_GUIDE.md](TESTING_GUIDE.md): smoke tests and troubleshooting
-- [AUDIO_PROCESSING.md](AUDIO_PROCESSING.md): current audio capture and assessment flow
-- [PRONUNCIATION_ASSESSMENT.md](PRONUNCIATION_ASSESSMENT.md): scoring model and outputs
-- [SYSTEM_OPTIMIZATION.md](SYSTEM_OPTIMIZATION.md): product structure and module grouping
-- [IMPLEMENTATION_CHECKLIST.md](IMPLEMENTATION_CHECKLIST.md): rollout and maintenance checklist
-- [backend/SUPABASE_SETUP.md](backend/SUPABASE_SETUP.md): backend database setup
-- [backend/AZURE_SETUP.md](backend/AZURE_SETUP.md): Azure speech configuration
-- [frontend/README.md](frontend/README.md): frontend-only commands and structure
+## Gemini API Integration
+
+The Gemini API is integrated across multiple functions of the system:
+
+### 1. Real-Time Conversational AI (Gemini Live API)
+- Enables voice-to-voice agent for trainees to practice customer calls
+- Low latency human-like responses
+- Multimodal input processing raw audio streams
+- Barge-in support for natural interruptions
+
+### 2. Automated Assessment & Scoring
+- Uses Gemini 1.5 Pro or Flash to evaluate trainee performance
+- Transcription analysis for BPO metrics (Opening/Closing, Problem Identification, Resolution Quality)
+- Tone and sentiment detection via Audio Understanding
+- Returns structured JSON feedback with scores and improvement tips
+
+### 3. Training Content Generation (Microlearning)
+- Generates fresh customer complaint scenarios
+- Uses Gemini-TTS to create audio prompts for trainees
+
+### 4. Technical Integration
+- API key stored securely in `.env` file
+- Backend proxies audio to Gemini Live API via WebSockets
+- Frontend captures microphone audio and streams to backend
+
+## Gemini API Integration
+
+The Gemini API is integrated across multiple functions of the system:
+
+### 1. Real-Time Conversational AI (Gemini Live API)
+- Enables voice-to-voice agent for trainees to practice customer calls
+- Low latency human-like responses
+- Multimodal input processing raw audio streams
+- Barge-in support for natural interruptions
+
+### 2. Automated Assessment & Scoring
+- Uses Gemini 1.5 Pro or Flash to evaluate trainee performance
+- Transcription analysis for BPO metrics (Opening/Closing, Problem Identification, Resolution Quality)
+- Tone and sentiment detection via Audio Understanding
+- Returns structured JSON feedback with scores and improvement tips
+
+### 3. Training Content Generation (Microlearning)
+- Generates fresh customer complaint scenarios
+- Uses Gemini-TTS to create audio prompts for trainees
+
+### 4. Technical Integration
+- API key stored securely in `.env` file
+- Backend proxies audio to Gemini Live API via WebSockets
+- Frontend captures microphone audio and streams to backend
+
+## Troubleshooting
+
+### Microphone Permission Failed
+- Check browser microphone permissions
+- Ensure HTTPS in production (WebSocket WSS)
+- Test microphone works in other apps
+
+### WebSocket Connection Failed
+- Verify backend is running on `127.0.0.1:8000`
+- Check browser console for connection errors
+- Ensure no firewall blocking port 8000
+
+### Audio Not Streaming
+- Check WebSocket connection status in browser DevTools
+- Verify `startRecording()` was called
+- Check browser console for JavaScript errors
+
+### Gemini API Errors
+- Verify `GEMINI_API_KEY` is set in `.env` file
+- Check API key validity and quota limits
+- Ensure internet connection for API calls
+- Review Gemini API documentation for rate limits and usage
+
+## License
+
+MIT License - See LICENSE file for details
+
+## Database Data
+
+The backend no longer creates demo users or sample records automatically on startup.
+
+All admin, trainer, and trainee views now read from the active database only. To load the reusable sample dataset into the currently configured database, run:
+
+```bash
+python -m backend.seed_supabase
+```
+
+Sample accounts are created only when you run the seed script against the target database.
+
+That seed command now also creates trainer workspace libraries in the active database, including
+database-backed empathy statements, probing questions, forbidden words, and required keywords.
+If `DATABASE_URL` points to Supabase and `USE_LOCAL_SQLITE=0`, those workspace libraries are
+written to and read from Supabase as well.
+
+Default passwords for newly created users
+- Trainee: SPVTrainee2026
+- Admin: SPVAdmin2026
+- Trainer: SPVTrainer2026

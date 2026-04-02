@@ -3,22 +3,15 @@ Database configuration and session management
 Supports both SQLite (development) and PostgreSQL/Supabase (production)
 """
 
-import os
-from pathlib import Path
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, event
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import NullPool, QueuePool
-from sqlalchemy.ext.declarative import declarative_base
+from .env_loader import load_backend_environment, resolve_database_url
 
-# Load environment variables (prefer repo root .env)
-_env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=_env_path)
+load_backend_environment()
 
 # Database configuration
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "sqlite:///./test.db"  # Default to SQLite for development
-)
+DATABASE_URL = resolve_database_url()
 
 # Create Base for ORM models
 Base = declarative_base()

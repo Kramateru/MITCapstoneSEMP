@@ -103,12 +103,18 @@ class User(Base):
     )
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
+    profile_image_url = Column(String(500), nullable=True)
 
     # UI Preferences
     theme = Column(String(20), default="default")  # dark, light, default
     layout = Column(String(20), default="default")  # default, minified, boxed
+    sidebar_state = Column(String(20), default="default")
     big_font = Column(Boolean, default=False)
+    big_font_scale = Column(Float, default=1.0)
     high_contrast = Column(Boolean, default=False)
+    daltonism_mode = Column(String(20), default="none")
+    ui_preferences = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    dismissed_notifications = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
 
     # Relationships
     batches = relationship(
@@ -121,6 +127,16 @@ class User(Base):
     )
     feedback_given = relationship(
         "Feedback", foreign_keys="Feedback.trainer_id", back_populates="trainer"
+    )
+    coaching_logs_created = relationship(
+        "CoachingLog",
+        foreign_keys="CoachingLog.trainer_id",
+        back_populates="trainer",
+    )
+    coaching_logs_received = relationship(
+        "CoachingLog",
+        foreign_keys="CoachingLog.trainee_id",
+        back_populates="trainee",
     )
 
     def __repr__(self):
@@ -454,6 +470,7 @@ class PracticeSession(Base):
     )
     scenario = relationship("Scenario", back_populates="practice_sessions")
     feedback_items = relationship("Feedback", back_populates="practice_session")
+    coaching_logs = relationship("CoachingLog", back_populates="practice_session")
 
     def __repr__(self):
         return f"<PracticeSession {self.user_id} - {self.scenario_id}>"
@@ -490,6 +507,24 @@ class Feedback(Base):
     )
 
 
+class MicrolearningAssessmentMethod(Base):
+    """Assessment method catalog used to organize microlearning lessons."""
+
+    __tablename__ = "microlearning_assessment_method"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    slug = Column(String(100), unique=True, nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=True)
+    method_description = Column(Text, nullable=True)
+    measures = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    modules = relationship("MicrolearningModule", back_populates="assessment_method")
+
+
 class MicrolearningModule(Base):
     """Microlearning drill/module for targeted skill improvement"""
 
@@ -508,10 +543,47 @@ class MicrolearningModule(Base):
 
     # Difficulty
     difficulty = Column(SQLEnum(ScenarioDifficulty), default=ScenarioDifficulty.BASIC)
+    assessment_method_id = Column(
+        String(36),
+        ForeignKey("microlearning_assessment_method.id"),
+        nullable=True,
+    )
 
     created_by = Column(String(36), ForeignKey("user.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
     is_active = Column(Boolean, default=True)
+
+    assessment_method = relationship(
+        "MicrolearningAssessmentMethod", back_populates="modules"
+    )
+    assignments = relationship("MicrolearningAssignment", back_populates="module")
+
+
+class MicrolearningAssignment(Base):
+    """Trainer-issued microlearning task for a specific trainee."""
+
+    __tablename__ = "microlearning_assignment"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    module_id = Column(String(36), ForeignKey("microlearning_module.id"), nullable=False)
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
+    assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
+    due_date = Column(DateTime, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_mandatory = Column(Boolean, default=True)
+    status = Column(String(20), default="assigned")  # assigned, in_progress, completed
+    completion_percentage = Column(Float, default=0.0)
+    completed_exercises = Column(Integer, default=0)
+    completed_at = Column(DateTime, nullable=True)
+    responses = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    module = relationship("MicrolearningModule", back_populates="assignments")
+    trainee = relationship("User", foreign_keys=[trainee_id])
+    trainer = relationship("User", foreign_keys=[assigned_by])
+    batch = relationship("Batch")
 
 
 class PerformanceMetrics(Base):
@@ -676,10 +748,19 @@ class CoachingLog(Base):
     action_plan = Column(Text, nullable=True)
     target_date = Column(DateTime, nullable=True)
     status = Column(String(20), default="draft")  # draft, sent, acknowledged
+    competency_status = Column(String(20), default="pending")
     trainer_remarks = Column(Text, nullable=True)
     acknowledged_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    practice_session = relationship("PracticeSession", back_populates="coaching_logs")
+    trainer = relationship(
+        "User", foreign_keys=[trainer_id], back_populates="coaching_logs_created"
+    )
+    trainee = relationship(
+        "User", foreign_keys=[trainee_id], back_populates="coaching_logs_received"
+    )
 
 
 class CertificationSettings(Base):
@@ -696,8 +777,29 @@ class CertificationSettings(Base):
     contact_email = Column(String(255), default="stpetervelle2003@yahoo.com.ph")
     logo_url = Column(String(500), nullable=True)
     registrar_name = Column(String(255), default="St. Peter Velle Registrar")
+    signatory_title = Column(String(255), default="Authorized Signatory")
     manager_signature_url = Column(String(500), nullable=True)
     dry_seal_url = Column(String(500), nullable=True)
+    certificate_prefix = Column(String(50), default="SPV")
+    certificate_title = Column(String(255), default="Certificate of Completion")
+    certificate_subtitle = Column(
+        String(255), default="Issued for completed trainee tasks and assessments"
+    )
+    certificate_intro = Column(Text, default="This certificate is proudly presented to")
+    certificate_outro = Column(
+        Text,
+        default=(
+            "for successfully completing the training requirement shown below through "
+            "St. Peter Velle Technical Training Center, Inc."
+        ),
+    )
+    certificate_footer = Column(
+        Text,
+        default=(
+            "This certificate is stored in the platform database and may be verified "
+            "through the official certificate record."
+        ),
+    )
     asr_passing_threshold = Column(Float, default=80.0)
     mcq_passing_threshold = Column(Float, default=100.0)
     unit_of_competency = Column(
@@ -737,4 +839,8 @@ class CertificateRecord(Base):
     unit_of_competency = Column(String(255), nullable=False)
     kip_score = Column(Float, default=0.0)
     qr_token = Column(String(100), unique=True, nullable=False)
+    source_type = Column(String(50), nullable=True)
+    source_id = Column(String(36), nullable=True)
+    achievement_type = Column(String(50), default="completion")
+    template_snapshot = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     issued_at = Column(DateTime, default=datetime.utcnow)

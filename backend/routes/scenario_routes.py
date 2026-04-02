@@ -5,7 +5,7 @@ Handles scenario CRUD, branching logic, and scenario templates
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
@@ -23,20 +23,24 @@ from ..schemas import (
 router = APIRouter(prefix="/api/scenarios", tags=["scenarios"])
 
 
+def _require_admin_scenario_access(current_user: User) -> None:
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+
 @router.post("", response_model=ScenarioResponse, status_code=status.HTTP_201_CREATED)
 async def create_scenario(
     scenario_data: ScenarioCreate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Create a new scenario (trainer/admin only)"""
+    """Create a new scenario (admin only)."""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
-    if current_user.role not in [UserRole.TRAINER, UserRole.ADMIN]:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Trainer or admin access required"
-        )
+
+    _require_admin_scenario_access(current_user)
     
     # Create scenario
     new_scenario = Scenario(
@@ -91,7 +95,7 @@ async def list_scenarios(
     published_only: bool = Query(False),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """List scenarios with optional filtering"""
@@ -127,7 +131,7 @@ async def list_scenarios(
 @router.get("/{scenario_id}", response_model=ScenarioResponse)
 async def get_scenario(
     scenario_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get scenario by ID"""
@@ -154,26 +158,20 @@ async def get_scenario(
 async def update_scenario(
     scenario_id: str,
     scenario_update: ScenarioUpdate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Update scenario (creator or admin only)"""
+    """Update scenario (admin only)."""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     # Update fields
     if scenario_update.title:
         scenario.title = scenario_update.title
@@ -196,26 +194,20 @@ async def update_scenario(
 @router.post("/{scenario_id}/publish", response_model=SuccessResponse)
 async def publish_scenario(
     scenario_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Publish a scenario (creator or admin only)"""
+    """Publish a scenario (admin only)."""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     scenario.is_published = True
     scenario.is_draft = False
     db.commit()
@@ -226,26 +218,20 @@ async def publish_scenario(
 @router.delete("/{scenario_id}", response_model=SuccessResponse)
 async def delete_scenario(
     scenario_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
-    """Delete scenario (creator or admin only)"""
+    """Delete scenario (admin only)."""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     # Delete associated flow steps
     db.query(ScenarioFlow).filter(ScenarioFlow.scenario_id == scenario_id).delete()
     db.delete(scenario)
@@ -261,26 +247,20 @@ async def delete_scenario(
 async def add_flow_step(
     scenario_id: str,
     step_data: ScenarioFlowBase,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Add a branching logic step to a scenario"""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     new_step = ScenarioFlow(
         scenario_id=scenario_id,
         step_number=step_data.step_number,
@@ -307,7 +287,7 @@ async def add_flow_step(
 @router.get("/{scenario_id}/steps", response_model=List[ScenarioFlowResponse])
 async def get_scenario_steps(
     scenario_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get all flow steps for a scenario"""
@@ -332,26 +312,20 @@ async def update_flow_step(
     scenario_id: str,
     step_id: str,
     step_update: ScenarioFlowBase,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Update a scenario flow step"""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     step = db.query(ScenarioFlow).filter(ScenarioFlow.id == step_id).first()
     if not step:
         raise HTTPException(
@@ -383,26 +357,20 @@ async def update_flow_step(
 async def delete_flow_step(
     scenario_id: str,
     step_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Delete a scenario flow step"""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
+
+    _require_admin_scenario_access(current_user)
     scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
     if not scenario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Scenario not found"
         )
-    
-    # Check permissions
-    if scenario.created_by != current_user.id and current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
+
     step = db.query(ScenarioFlow).filter(ScenarioFlow.id == step_id).first()
     if not step:
         raise HTTPException(

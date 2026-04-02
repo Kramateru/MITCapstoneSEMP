@@ -34,22 +34,52 @@ OPENAI_TRANSCRIPTION_MODEL=whisper-1
 
 ## 2. Start the backend
 
-### Local SQLite mode
+`.\run-backend.cmd` now starts in local SQLite mode by default so the platform can run even when Supabase is unavailable:
+- Default: bundled local SQLite database
+- Optional: set `USE_LOCAL_SQLITE=0` to force Supabase/Postgres
+
+### Default mode
 
 ```powershell
 .\run-backend.cmd
 ```
 
-### Supabase mode
+### Force local SQLite mode
+
+```powershell
+$env:USE_LOCAL_SQLITE='1'
+.\run-backend.cmd
+```
+
+### Force Supabase/Postgres mode
 
 ```powershell
 $env:USE_LOCAL_SQLITE='0'
 .\run-backend.cmd
 ```
 
-## 3. Start the frontend
+## 3. Build and start the frontend
+
+Build the frontend once before starting it, and rebuild after frontend code changes:
 
 ```powershell
+cd frontend
+npm run build
+cd ..
+```
+
+Then start the frontend server:
+
+```powershell
+.\run-frontend.cmd
+```
+
+This starts the frontend at `http://localhost:3000` by default.
+
+If port `3000` is already in use, you can override the launcher port:
+
+```powershell
+$env:FRONTEND_PORT='3001'
 .\run-frontend.cmd
 ```
 
@@ -57,7 +87,7 @@ $env:USE_LOCAL_SQLITE='0'
 
 Open:
 
-- `http://127.0.0.1:3000/login`
+- `http://localhost:3000/login`
 - `http://127.0.0.1:8000/docs`
 - `http://127.0.0.1:8000/openapi.json`
 

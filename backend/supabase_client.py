@@ -5,10 +5,11 @@ Supabase client module for managing cloud storage and database operations
 - Assessment data storage
 """
 
-import os
 import logging
+import os
 from typing import Optional, Dict, Any
 from datetime import datetime
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ class SupabaseClient:
         file_data: bytes,
         user_id: str,
         filename: Optional[str] = None,
+        content_type: Optional[str] = None,
     ) -> Optional[str]:
         """
         Upload audio file to Supabase storage bucket
@@ -74,7 +76,7 @@ class SupabaseClient:
             response = self.client.storage.from_(self.bucket_name).upload(
                 path=path,
                 file=file_data,
-                file_options={"content-type": "audio/wav"},
+                file_options={"content-type": content_type or "audio/wav"},
             )
 
             # Generate public URL
@@ -137,6 +139,35 @@ class SupabaseClient:
             logger.error(f"Failed to upload document: {e}")
             return None
 
+    def upload_profile_image(
+        self,
+        file_data: bytes,
+        user_id: str,
+        filename: str,
+        content_type: str,
+    ) -> Optional[str]:
+        """Upload a user profile image to Supabase storage."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Profile image not uploaded to cloud.")
+            return None
+
+        try:
+            path = f"profiles/{user_id}/{filename}"
+            self.client.storage.from_(self.bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={
+                    "content-type": content_type,
+                    "upsert": "true",
+                },
+            )
+            public_url = self.client.storage.from_(self.bucket_name).get_public_url(path)
+            logger.info(f"✓ Profile image uploaded: {path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload profile image: {e}")
+            return None
+
     def delete_file(self, file_path: str) -> bool:
         """
         Delete file from Supabase storage
@@ -156,6 +187,26 @@ class SupabaseClient:
             return True
         except Exception as e:
             logger.error(f"Failed to delete file: {e}")
+            return False
+
+    def delete_by_public_url(self, public_url: str) -> bool:
+        """Delete a public Supabase storage file when the bucket path can be derived."""
+        if not self.is_available or not public_url:
+            return False
+
+        try:
+            parsed = urlparse(public_url)
+            marker = f"/storage/v1/object/public/{self.bucket_name}/"
+            if marker not in parsed.path:
+                return False
+
+            path = parsed.path.split(marker, 1)[1]
+            if not path:
+                return False
+
+            return self.delete_file(path)
+        except Exception as e:
+            logger.error(f"Failed to delete public Supabase file: {e}")
             return False
 
     def list_user_files(self, user_id: str) -> list:

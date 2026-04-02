@@ -23,17 +23,42 @@ except Exception:
     import logging as _logging
     _logging.getLogger(__name__).info("Azure Speech SDK not installed; pronunciation features disabled")
 
-from dotenv import load_dotenv
+try:
+    import google.genai as genai
+    GEMINI_AVAILABLE = True
+except Exception:
+    genai = None
+    GEMINI_AVAILABLE = False
+    import logging as _logging
+    _logging.getLogger(__name__).info("Google GenAI not installed; Gemini features disabled")
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import inspect, text
 
-# Load environment variables (prefer repo root .env)
-_env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(dotenv_path=_env_path)
+try:
+    from .env_loader import load_backend_environment
+except ImportError:
+    from env_loader import load_backend_environment
+
+# Load environment variables using the shared backend resolution order.
+load_backend_environment()
+MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Configure Gemini-related availability messaging.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    logger.info("Gemini API key detected for REST-based support features")
+elif GEMINI_AVAILABLE:
+    logger.warning("Gemini API key not found; Gemini features disabled")
+else:
+    logger.warning("Google GenAI SDK not installed; WebSocket Gemini features disabled")
 
 # Support running from `backend/` as `uvicorn main:app`.
 if __package__ in (None, ""):
@@ -54,10 +79,9 @@ from backend.routes import (
     export_routes,
     support_routes,
     certification_routes,
+    notification_routes,
 )
 from backend.database import Base, engine, SessionLocal
-from backend.models import User, UserRole  # Import models to create tables
-from backend import auth_utils
 from backend.services.lob_catalog import (
     migrate_legacy_lob_references,
     sync_default_lob_catalog,
@@ -73,70 +97,212 @@ app = FastAPI(
 Base.metadata.create_all(bind=engine)
 
 
-def ensure_demo_users() -> None:
-    """Ensure demo users exist with known credentials for local dev."""
-    demo_users = [
-        {
-            "email": "admin@stpeterville.edu.ph",
-            "password": "Admin@SPV",
-            "full_name": "Admin User",
-            "role": UserRole.ADMIN,
-            "lob": "Administration",
-            "department": "Management",
-        },
-        {
-            "email": "trainer@st.peterville.edu.ph",
-            "password": "Trainer@123",
-            "full_name": "Trainer User",
-            "role": UserRole.TRAINER,
-            "lob": "Training",
-            "department": "Operations",
-        },
-        {
-            "email": "mcureta@fatima.edu.ph",
-            "password": "SPVTrainee2026",
-            "full_name": "Trainee User",
-            "role": UserRole.TRAINEE,
-            "lob": "Training",
-            "department": "Operations",
-        },
+def ensure_user_settings_columns() -> None:
+    """Backfill settings columns for existing databases created before UI settings were added."""
+    try:
+        inspector = inspect(engine)
+        existing_columns = {column["name"] for column in inspector.get_columns("user")}
+    except Exception:
+        logger.exception("Unable to inspect user table for settings migration")
+        return
+
+    if not existing_columns:
+        return
+
+    column_definitions = {
+        "sidebar_state": "VARCHAR(20) DEFAULT 'default'",
+        "big_font_scale": "FLOAT DEFAULT 1.0",
+        "daltonism_mode": "VARCHAR(20) DEFAULT 'none'",
+        "profile_image_url": "VARCHAR(500)",
+        "ui_preferences": "JSONB DEFAULT '{}'::jsonb"
+        if engine.dialect.name == "postgresql"
+        else "JSON DEFAULT '{}'",
+    }
+
+    statements = [
+        text(f'ALTER TABLE "user" ADD COLUMN {name} {definition}')
+        for name, definition in column_definitions.items()
+        if name not in existing_columns
     ]
 
-    db = SessionLocal()
+    if not statements:
+        return
+
+    empty_json_literal = "'{}'::jsonb" if engine.dialect.name == "postgresql" else "'{}'"
+
     try:
-        for demo in demo_users:
-            user = db.query(User).filter(User.email == demo["email"]).first()
-            if user:
-                user.full_name = demo["full_name"]
-                user.role = demo["role"]
-                user.is_active = True
-                user.lob = user.lob or demo["lob"]
-                user.department = user.department or demo["department"]
-                # Ensure demo passwords are usable in local dev
-                try:
-                    password_ok = auth_utils.verify_password(
-                        demo["password"],
-                        user.password_hash,
-                    )
-                except Exception:
-                    password_ok = False
-                if not password_ok:
-                    user.password_hash = auth_utils.hash_password(demo["password"])
-            else:
-                db.add(
-                    User(
-                        email=demo["email"],
-                        full_name=demo["full_name"],
-                        password_hash=auth_utils.hash_password(demo["password"]),
-                        role=demo["role"],
-                        is_active=True,
-                        lob=demo["lob"],
-                        department=demo["department"],
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(statement)
+
+            connection.execute(
+                text(
+                    'UPDATE "user" SET '
+                    "sidebar_state = COALESCE(sidebar_state, 'default'), "
+                    "big_font_scale = COALESCE(big_font_scale, 1.0), "
+                    "daltonism_mode = COALESCE(daltonism_mode, 'none'), "
+                    f"ui_preferences = COALESCE(ui_preferences, {empty_json_literal})"
+                )
+            )
+        logger.info("Applied user settings schema backfill for existing databases")
+    except Exception:
+        logger.exception("Failed to backfill user settings columns")
+
+
+ensure_user_settings_columns()
+
+
+def ensure_microlearning_assessment_schema() -> None:
+    """Backfill microlearning assessment method columns for existing databases."""
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception:
+        logger.exception("Unable to inspect microlearning tables for schema backfill")
+        return
+
+    if "microlearning_module" not in existing_tables:
+        return
+
+    current_columns = {
+        column["name"]
+        for column in inspector.get_columns("microlearning_module")
+    }
+
+    if "assessment_method_id" in current_columns:
+        return
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE microlearning_module "
+                    "ADD COLUMN assessment_method_id VARCHAR(36)"
+                )
+            )
+        logger.info("Applied microlearning assessment schema backfill")
+    except Exception:
+        logger.exception("Failed to backfill microlearning assessment schema")
+
+
+ensure_microlearning_assessment_schema()
+
+
+def ensure_certification_schema() -> None:
+    """Backfill certificate settings and certificate record columns for older databases."""
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception:
+        logger.exception("Unable to inspect certification tables for schema backfill")
+        return
+
+    json_definition = (
+        "JSONB DEFAULT '{}'::jsonb"
+        if engine.dialect.name == "postgresql"
+        else "JSON DEFAULT '{}'"
+    )
+    empty_json_literal = "'{}'::jsonb" if engine.dialect.name == "postgresql" else "'{}'"
+
+    certification_columns = {
+        "signatory_title": "VARCHAR(255) DEFAULT 'Authorized Signatory'",
+        "certificate_prefix": "VARCHAR(50) DEFAULT 'SPV'",
+        "certificate_title": "VARCHAR(255) DEFAULT 'Certificate of Completion'",
+        "certificate_subtitle": "VARCHAR(255) DEFAULT 'Issued for completed trainee tasks and assessments'",
+        "certificate_intro": "TEXT DEFAULT 'This certificate is proudly presented to'",
+        "certificate_outro": (
+            "TEXT DEFAULT 'for successfully completing the training requirement shown below "
+            "through St. Peter Velle Technical Training Center, Inc.'"
+        ),
+        "certificate_footer": (
+            "TEXT DEFAULT 'This certificate is stored in the platform database and may be "
+            "verified through the official certificate record.'"
+        ),
+    }
+
+    certificate_record_columns = {
+        "source_type": "VARCHAR(50) DEFAULT 'competency_verdict'",
+        "source_id": "VARCHAR(36)",
+        "achievement_type": "VARCHAR(50) DEFAULT 'completion'",
+        "template_snapshot": json_definition,
+    }
+    coaching_log_columns = {
+        "competency_status": "VARCHAR(20) DEFAULT 'pending'",
+    }
+
+    try:
+        with engine.begin() as connection:
+            if "certification_settings" in existing_tables:
+                current_columns = {
+                    column["name"]
+                    for column in inspector.get_columns("certification_settings")
+                }
+                for name, definition in certification_columns.items():
+                    if name not in current_columns:
+                        connection.execute(
+                            text(
+                                f'ALTER TABLE certification_settings ADD COLUMN {name} {definition}'
+                            )
+                        )
+
+                connection.execute(
+                    text(
+                        "UPDATE certification_settings SET "
+                        "signatory_title = COALESCE(signatory_title, 'Authorized Signatory'), "
+                        "certificate_prefix = COALESCE(certificate_prefix, 'SPV'), "
+                        "certificate_title = COALESCE(certificate_title, 'Certificate of Completion'), "
+                        "certificate_subtitle = COALESCE(certificate_subtitle, 'Issued for completed trainee tasks and assessments'), "
+                        "certificate_intro = COALESCE(certificate_intro, 'This certificate is proudly presented to'), "
+                        "certificate_outro = COALESCE(certificate_outro, 'for successfully completing the training requirement shown below through St. Peter Velle Technical Training Center, Inc.'), "
+                        "certificate_footer = COALESCE(certificate_footer, 'This certificate is stored in the platform database and may be verified through the official certificate record.')"
                     )
                 )
-        db.commit()
-    finally:
-        db.close()
+
+            if "certificate_record" in existing_tables:
+                current_columns = {
+                    column["name"]
+                    for column in inspector.get_columns("certificate_record")
+                }
+                for name, definition in certificate_record_columns.items():
+                    if name not in current_columns:
+                        connection.execute(
+                            text(
+                                f'ALTER TABLE certificate_record ADD COLUMN {name} {definition}'
+                            )
+                        )
+
+                connection.execute(
+                    text(
+                        "UPDATE certificate_record SET "
+                        "source_type = COALESCE(source_type, 'competency_verdict'), "
+                        "source_id = COALESCE(source_id, verdict_id), "
+                        "achievement_type = COALESCE(achievement_type, 'competency'), "
+                        f"template_snapshot = COALESCE(template_snapshot, {empty_json_literal})"
+                    )
+                )
+
+            if "coaching_log" in existing_tables:
+                current_columns = {
+                    column["name"] for column in inspector.get_columns("coaching_log")
+                }
+                for name, definition in coaching_log_columns.items():
+                    if name not in current_columns:
+                        connection.execute(
+                            text(f"ALTER TABLE coaching_log ADD COLUMN {name} {definition}")
+                        )
+
+                connection.execute(
+                    text(
+                        "UPDATE coaching_log SET "
+                        "competency_status = COALESCE(competency_status, 'pending')"
+                    )
+                )
+        logger.info("Applied certification schema backfill for existing databases")
+    except Exception:
+        logger.exception("Failed to backfill certification schema")
+
+
+ensure_certification_schema()
 
 
 def ensure_default_lob_catalog() -> None:
@@ -172,9 +338,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
-# Seed demo users for local dev
-ensure_demo_users()
 ensure_default_lob_catalog()
 
 # Include route blueprints
@@ -191,6 +356,7 @@ app.include_router(workspace_routes.router)
 app.include_router(export_routes.router)
 app.include_router(support_routes.router)
 app.include_router(certification_routes.router)
+app.include_router(notification_routes.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "your_key_here")
@@ -374,65 +540,60 @@ def assess_pronunciation(
 
 @app.websocket("/ws/speech")
 async def speech_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time speech streaming and pronunciation assessment."""
+    """WebSocket endpoint for real-time speech streaming with Gemini Live API."""
     await websocket.accept()
     logger.info("Client connected to speech endpoint")
 
-    reference_text = None
-    audio_buffer = bytearray()
+    if not GEMINI_AVAILABLE or not os.getenv("GEMINI_API_KEY"):
+        await websocket.send_json({
+            "status": "error",
+            "error": "Gemini API not configured"
+        })
+        return
 
     try:
+        # Create Gemini Live session
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        chat = model.start_chat()
+
+        await websocket.send_json({"status": "ready"})
+
         while True:
-            # Receive data from React (either text or audio)
+            # Receive data from React
             data = await websocket.receive_text()
 
             try:
                 message = json.loads(data)
 
-                # If it's initialization with reference text
-                if message.get("type") == "init":
-                    reference_text = message.get("reference_text")
-                    logger.info(f"Reference text set: {reference_text}")
-                    await websocket.send_json(
-                        {"status": "ready", "reference_text": reference_text}
-                    )
+                if message.get("type") == "audio":
+                    # Process audio with Gemini
+                    audio_data = message.get("audio")
+                    if audio_data:
+                        # Send audio to Gemini
+                        response = chat.send_message([
+                            "Listen to this audio and respond as a customer service AI:",
+                            {"mime_type": "audio/webm", "data": audio_data}
+                        ])
+                        
+                        # Send response back
+                        await websocket.send_json({
+                            "status": "response",
+                            "text": response.text,
+                            "audio": None  # For now, text only
+                        })
 
-                # If it's streaming control
-                elif message.get("type") == "start":
-                    audio_buffer = bytearray()
-                    logger.info("Audio streaming started")
-
-                elif message.get("type") == "stop":
-                    # Process the complete audio buffer
-                    if audio_buffer:
-                        logger.info(f"Processing {len(audio_buffer)} bytes of audio")
-                        result = assess_pronunciation(
-                            bytes(audio_buffer), reference_text=reference_text
-                        )
-                        await websocket.send_json(result)
-                    else:
-                        await websocket.send_json(
-                            {
-                                "status": "error",
-                                "error": "No audio data received",
-                            }
-                        )
-                    audio_buffer = bytearray()
+                elif message.get("type") == "text":
+                    # Handle text input
+                    text = message.get("text")
+                    if text:
+                        response = chat.send_message(text)
+                        await websocket.send_json({
+                            "status": "response",
+                            "text": response.text
+                        })
 
             except json.JSONDecodeError:
-                # If it's not JSON, try to treat it as raw audio bytes
-                try:
-                    # Try to decode as base64 audio data
-                    if isinstance(data, str) and data.startswith("data:audio"):
-                        # Handle base64 encoded audio
-                        audio_b64 = data.split(",")[1]
-                        import base64
-
-                        audio_bytes = base64.b64decode(audio_b64)
-                        audio_buffer.extend(audio_bytes)
-                        logger.info(f"Received {len(audio_bytes)} bytes of audio")
-                except Exception as e:
-                    logger.error(f"Error processing audio data: {e}")
+                logger.error("Invalid JSON received")
 
     except WebSocketDisconnect:
         logger.info("Client disconnected")
@@ -440,12 +601,10 @@ async def speech_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"WebSocket error: {str(e)}")
         try:
-            await websocket.send_json(
-                {
-                    "status": "error",
-                    "error": str(e),
-                }
-            )
+            await websocket.send_json({
+                "status": "error",
+                "error": str(e)
+            })
         except:
             pass
 

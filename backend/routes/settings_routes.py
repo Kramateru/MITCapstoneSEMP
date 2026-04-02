@@ -12,7 +12,6 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
-from ..models import User
 from ..models_extended import SystemSettings
 from ..database import get_db
 
@@ -27,8 +26,11 @@ class SidebarStateUpdate(BaseModel):
 
 class LayoutPreferencesUpdate(BaseModel):
     layout: str  # default, boxed, top-navigation
-    sidebar_position: str  # left, right
+    sidebar_position: str = "left"  # left, right
     compact_mode: bool = False
+    fixed_header: bool = False
+    top_navigation: bool = False
+    boxed_layout: bool = False
 
 
 class AccessibilitySettings(BaseModel):
@@ -78,6 +80,13 @@ class SystemSettingsResponse(BaseModel):
         from_attributes = True
 
 
+def _ui_preferences_for_user(current_user: Any) -> dict[str, Any]:
+    preferences = getattr(current_user, "ui_preferences", None)
+    if isinstance(preferences, dict):
+        return preferences
+    return {}
+
+
 async def verify_admin(current_user: Any = Depends(auth_utils.get_current_user)):
     """Dependency to verify user is admin"""
     if not current_user or current_user.role != "admin":
@@ -123,14 +132,54 @@ async def get_user_preferences(
     if not current_user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
+    ui_preferences = _ui_preferences_for_user(current_user)
+    accessibility_preferences_raw = ui_preferences.get("accessibility", {})
+    accessibility_preferences = (
+        accessibility_preferences_raw if isinstance(accessibility_preferences_raw, dict) else {}
+    )
+    theme_preferences_raw = ui_preferences.get("theme", {})
+    theme_preferences = theme_preferences_raw if isinstance(theme_preferences_raw, dict) else {}
+    layout_value = ui_preferences.get("layout", getattr(current_user, "layout", "default"))
+    sidebar_state = ui_preferences.get("sidebar_state", getattr(current_user, "sidebar_state", "default"))
+
     return {
-        "theme": current_user.theme,
-        "layout": getattr(current_user, 'layout', 'default'),
-        "big_font": current_user.big_font,
-        "high_contrast": current_user.high_contrast,
-        "daltonism_mode": getattr(current_user, 'daltonism_mode', 'none'),
-        "sidebar_state": getattr(current_user, 'sidebar_state', 'default'),
-        "language_dialect": current_user.language_dialect
+        "theme": theme_preferences.get("mode", current_user.theme),
+        "layout": layout_value,
+        "big_font": accessibility_preferences.get("big_font", current_user.big_font),
+        "big_font_scale": accessibility_preferences.get(
+            "big_font_scale",
+            getattr(current_user, "big_font_scale", 1.0),
+        ),
+        "high_contrast": accessibility_preferences.get(
+            "high_contrast",
+            current_user.high_contrast,
+        ),
+        "daltonism_mode": accessibility_preferences.get(
+            "daltonism_mode",
+            getattr(current_user, "daltonism_mode", "none"),
+        ),
+        "sidebar_state": sidebar_state,
+        "language_dialect": current_user.language_dialect,
+        "fixed_header": ui_preferences.get("fixed_header", False),
+        "sidebar_position": ui_preferences.get("sidebar_position", "left"),
+        "compact_mode": ui_preferences.get("compact_mode", False),
+        "top_navigation": ui_preferences.get(
+            "top_navigation",
+            layout_value == "top-navigation",
+        ),
+        "boxed_layout": ui_preferences.get(
+            "boxed_layout",
+            layout_value == "boxed",
+        ),
+        "theme_colors": {
+            "primary_color": theme_preferences.get("primary_color"),
+            "secondary_color": theme_preferences.get("secondary_color"),
+            "accent_color": theme_preferences.get("accent_color"),
+        },
+        "accessibility": {
+            "focus_indicators": accessibility_preferences.get("focus_indicators", True),
+            "reduce_motion": accessibility_preferences.get("reduce_motion", False),
+        },
     }
 
 
@@ -153,10 +202,12 @@ async def update_sidebar_state(
             detail=f"Invalid sidebar state. Must be one of {valid_states}"
         )
     
+    ui_preferences = _ui_preferences_for_user(current_user)
+
     current_user.sidebar_state = update.state
     if update.persist:
         current_user.ui_preferences = {
-            **(current_user.ui_preferences or {}),
+            **ui_preferences,
             "sidebar_state": update.state
         }
     
@@ -187,12 +238,22 @@ async def update_layout_preferences(
             detail=f"Invalid layout. Must be one of {valid_layouts}"
         )
     
-    current_user.layout = update.layout
+    ui_preferences = _ui_preferences_for_user(current_user)
+    resolved_layout = update.layout
+    if update.top_navigation:
+        resolved_layout = "top-navigation"
+    elif update.boxed_layout:
+        resolved_layout = "boxed"
+
+    current_user.layout = resolved_layout
     current_user.ui_preferences = {
-        **(current_user.ui_preferences or {}),
-        "layout": update.layout,
+        **ui_preferences,
+        "layout": resolved_layout,
         "sidebar_position": update.sidebar_position,
-        "compact_mode": update.compact_mode
+        "compact_mode": update.compact_mode,
+        "fixed_header": update.fixed_header,
+        "top_navigation": update.top_navigation,
+        "boxed_layout": update.boxed_layout,
     }
     
     db.add(current_user)
@@ -200,9 +261,12 @@ async def update_layout_preferences(
     
     return {
         "success": True,
-        "layout": update.layout,
+        "layout": resolved_layout,
         "sidebar_position": update.sidebar_position,
-        "compact_mode": update.compact_mode
+        "compact_mode": update.compact_mode,
+        "fixed_header": update.fixed_header,
+        "top_navigation": update.top_navigation,
+        "boxed_layout": update.boxed_layout,
     }
 
 
@@ -232,13 +296,15 @@ async def update_accessibility_settings(
         )
     
     # Apply accessibility settings
+    ui_preferences = _ui_preferences_for_user(current_user)
+
     current_user.big_font = settings.big_font
     current_user.big_font_scale = settings.big_font_scale
     current_user.high_contrast = settings.high_contrast
     current_user.daltonism_mode = settings.daltonism_mode
     
     current_user.ui_preferences = {
-        **(current_user.ui_preferences or {}),
+        **ui_preferences,
         "accessibility": {
             "big_font": settings.big_font,
             "big_font_scale": settings.big_font_scale,
@@ -292,9 +358,11 @@ async def update_theme_settings(
             detail="Primary color must be valid hex code (e.g., #007BFF)"
         )
     
+    ui_preferences = _ui_preferences_for_user(current_user)
+
     current_user.theme = settings.mode
     current_user.ui_preferences = {
-        **(current_user.ui_preferences or {}),
+        **ui_preferences,
         "theme": {
             "mode": settings.mode,
             "primary_color": settings.primary_color,

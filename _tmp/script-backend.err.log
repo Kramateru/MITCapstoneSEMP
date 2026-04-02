@@ -1,6 +1,0 @@
-INFO:backend.supabase_client:Supabase library not installed. Cloud storage disabled.
-INFO:     Started server process [7648]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-^C

@@ -3,15 +3,19 @@ User Management Routes
 Handles user CRUD operations, authentication, and profile management
 """
 
+from pathlib import Path
+import uuid
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
+from sqlalchemy.orm import Session
 
 from .. import auth_utils
 from ..database import get_db
+from ..default_credentials import DEFAULT_TRAINEE_PASSWORD
 from ..models import User, UserRole
+from ..supabase_client import get_supabase_client
 from ..schemas import (
     ChangePasswordRequest,
     LoginRequest,
@@ -23,7 +27,108 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
-DEFAULT_TRAINEE_PASSWORD = "SPVTrainee2024"
+PROFILE_IMAGE_DIR = Path(__file__).resolve().parents[2] / "media" / "profile-images"
+PROFILE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+ALLOWED_PROFILE_IMAGE_TYPES = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+MAX_PROFILE_IMAGE_SIZE = 5 * 1024 * 1024
+
+
+def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _apply_self_profile_updates(current_user: User, user_update: UserUpdate, db: Session) -> None:
+    if user_update.email is not None:
+        normalized_email = user_update.email.strip().lower()
+        existing_user = (
+            db.query(User)
+            .filter(func.lower(User.email) == normalized_email, User.id != current_user.id)
+            .first()
+        )
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is already in use by another account",
+            )
+        current_user.email = normalized_email
+
+    if user_update.full_name is not None:
+        full_name = user_update.full_name.strip()
+        if not full_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Full name cannot be empty",
+            )
+        current_user.full_name = full_name
+
+    if user_update.lob is not None:
+        current_user.lob = _normalize_optional_text(user_update.lob)
+    if user_update.department is not None:
+        current_user.department = _normalize_optional_text(user_update.department)
+    if user_update.language_dialect is not None:
+        current_user.language_dialect = _normalize_optional_text(user_update.language_dialect) or "en-US"
+    if user_update.theme is not None:
+        current_user.theme = user_update.theme
+    if user_update.layout is not None:
+        current_user.layout = user_update.layout
+    if user_update.big_font is not None:
+        current_user.big_font = user_update.big_font
+    if user_update.high_contrast is not None:
+        current_user.high_contrast = user_update.high_contrast
+
+
+def _apply_admin_user_updates(user: User, user_update: UserUpdate, db: Session) -> None:
+    if user_update.email is not None:
+        normalized_email = user_update.email.strip().lower()
+        existing_user = (
+            db.query(User)
+            .filter(func.lower(User.email) == normalized_email, User.id != user.id)
+            .first()
+        )
+        if existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is already in use by another account",
+            )
+        user.email = normalized_email
+
+    if user_update.full_name is not None:
+        full_name = user_update.full_name.strip()
+        if not full_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Full name cannot be empty",
+            )
+        user.full_name = full_name
+
+    if user_update.lob is not None:
+        user.lob = _normalize_optional_text(user_update.lob)
+    if user_update.department is not None:
+        user.department = _normalize_optional_text(user_update.department)
+    if user_update.language_dialect is not None:
+        user.language_dialect = _normalize_optional_text(user_update.language_dialect) or "en-US"
+
+
+def _delete_profile_image(profile_image_url: Optional[str]) -> None:
+    if not profile_image_url:
+        return
+
+    if profile_image_url.startswith("/media/profile-images/"):
+        local_path = PROFILE_IMAGE_DIR / profile_image_url.rsplit("/", 1)[-1]
+        if local_path.exists():
+            local_path.unlink(missing_ok=True)
+        return
+
+    get_supabase_client().delete_by_public_url(profile_image_url)
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -104,7 +209,7 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
 @router.get("/me", response_model=UserResponse)
 async def get_current_user(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get current user profile"""
@@ -115,34 +220,102 @@ async def get_current_user(
 @router.put("/me", response_model=UserResponse)
 async def update_current_user(
     user_update: UserUpdate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Update current user profile"""
     current_user = await auth_utils.get_current_user(authorization, db)
-    
-    # Update fields
-    if user_update.full_name:
-        current_user.full_name = user_update.full_name
-    if user_update.lob:
-        current_user.lob = user_update.lob
-    if user_update.department:
-        current_user.department = user_update.department
-    if user_update.language_dialect:
-        current_user.language_dialect = user_update.language_dialect
-    if user_update.theme:
-        current_user.theme = user_update.theme
-    if user_update.layout:
-        current_user.layout = user_update.layout
-    if user_update.big_font is not None:
-        current_user.big_font = user_update.big_font
-    if user_update.high_contrast is not None:
-        current_user.high_contrast = user_update.high_contrast
-    
+
+    _apply_self_profile_updates(current_user, user_update, db)
     db.commit()
     db.refresh(current_user)
-    
+
     return UserResponse.from_orm(current_user)
+
+
+@router.post("/me/profile-image", response_model=SuccessResponse)
+async def upload_current_user_profile_image(
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Upload or replace the current user's profile image."""
+    current_user = await auth_utils.get_current_user(authorization, db)
+
+    content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
+    extension = ALLOWED_PROFILE_IMAGE_TYPES.get(content_type)
+    if not extension:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Profile picture must be a JPG, PNG, WEBP, or GIF image",
+        )
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty")
+
+    if len(file_bytes) > MAX_PROFILE_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Profile picture must be 5 MB or smaller",
+        )
+
+    new_filename = f"{current_user.id}_{uuid.uuid4().hex}.{extension}"
+    new_profile_image_url: Optional[str] = None
+
+    supabase = get_supabase_client()
+    if supabase.is_available:
+        new_profile_image_url = supabase.upload_profile_image(
+            file_data=file_bytes,
+            user_id=current_user.id,
+            filename=new_filename,
+            content_type=content_type,
+        )
+
+    if not new_profile_image_url:
+        local_path = PROFILE_IMAGE_DIR / new_filename
+        local_path.write_bytes(file_bytes)
+        new_profile_image_url = f"/media/profile-images/{new_filename}"
+
+    previous_profile_image_url = current_user.profile_image_url
+    current_user.profile_image_url = new_profile_image_url
+    db.commit()
+    db.refresh(current_user)
+
+    if previous_profile_image_url and previous_profile_image_url != new_profile_image_url:
+        _delete_profile_image(previous_profile_image_url)
+
+    return SuccessResponse(
+        message="Profile picture updated successfully",
+        data={
+            "profile_image_url": current_user.profile_image_url,
+            "user": UserResponse.from_orm(current_user).model_dump(),
+        },
+    )
+
+
+@router.delete("/me/profile-image", response_model=SuccessResponse)
+async def delete_current_user_profile_image(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Remove the current user's profile image."""
+    current_user = await auth_utils.get_current_user(authorization, db)
+    previous_profile_image_url = current_user.profile_image_url
+    current_user.profile_image_url = None
+    db.commit()
+    db.refresh(current_user)
+
+    if previous_profile_image_url:
+        _delete_profile_image(previous_profile_image_url)
+
+    return SuccessResponse(
+        message="Profile picture removed successfully",
+        data={
+            "profile_image_url": None,
+            "user": UserResponse.from_orm(current_user).model_dump(),
+        },
+    )
 
 
 @router.post("/change-password", response_model=SuccessResponse)
@@ -180,7 +353,7 @@ async def list_users(
     role: Optional[UserRole] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=100),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """List all users (admin only)"""
@@ -203,7 +376,7 @@ async def list_users(
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Get user by ID"""
@@ -230,7 +403,7 @@ async def get_user(
 async def update_user(
     user_id: str,
     user_update: UserUpdate,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Update user (admin only)"""
@@ -248,27 +421,18 @@ async def update_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    # Update fields
-    if user_update.full_name:
-        user.full_name = user_update.full_name
-    if user_update.lob:
-        user.lob = user_update.lob
-    if user_update.department:
-        user.department = user_update.department
-    if user_update.language_dialect:
-        user.language_dialect = user_update.language_dialect
-    
+
+    _apply_admin_user_updates(user, user_update, db)
     db.commit()
     db.refresh(user)
-    
+
     return UserResponse.from_orm(user)
 
 
 @router.delete("/{user_id}", response_model=SuccessResponse)
 async def delete_user(
     user_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Deactivate user (admin only)"""

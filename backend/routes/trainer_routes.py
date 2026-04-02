@@ -23,10 +23,11 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
 from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import auth_utils
 from ..database import SessionLocal, get_db
+from ..default_credentials import DEFAULT_TRAINEE_PASSWORD
 from ..models import (
     batch_user_association,
     Batch,
@@ -34,17 +35,29 @@ from ..models import (
     CourseAssignment,
     Feedback,
     FeedbackType,
+    MicrolearningAssessmentMethod,
+    MicrolearningAssignment,
     MicrolearningModule,
     PerformanceMetrics,
     PracticeSession,
     Scenario,
+    ScenarioDifficulty,
     User,
     UserRole,
 )
 from ..services.live_updates import live_update_manager
+from ..services.microlearning import (
+    ensure_assessment_method_catalog,
+    ensure_assessment_method_examples,
+    ensure_module_exercises,
+    generate_default_exercises,
+    refresh_assignment_progress,
+    serialize_assessment_method,
+    serialize_microlearning_module,
+    serialize_assignment_summary,
+)
 
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
-DEFAULT_TRAINEE_PASSWORD = "SPVTrainee2026"
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
 
 
@@ -90,6 +103,102 @@ def _get_trainer_batch(
     return batch
 
 
+def _get_trainer_course(
+    db: Session,
+    *,
+    trainer_id: str,
+    course_id: str,
+) -> Course:
+    course = (
+        db.query(Course)
+        .filter(Course.id == course_id, Course.created_by == trainer_id)
+        .first()
+    )
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    return course
+
+
+def _get_trainer_microlearning_module(
+    db: Session,
+    *,
+    trainer_id: str,
+    module_id: str,
+) -> MicrolearningModule:
+    module = (
+        db.query(MicrolearningModule)
+        .options(selectinload(MicrolearningModule.assessment_method))
+        .filter(
+            MicrolearningModule.id == module_id,
+            MicrolearningModule.created_by == trainer_id,
+            MicrolearningModule.is_active == True,
+        )
+        .first()
+    )
+    if not module:
+        raise HTTPException(status_code=404, detail="Microlearning activity not found")
+    return module
+
+
+def _get_microlearning_assignment_counts(
+    db: Session,
+    *,
+    module_ids: List[str],
+) -> Dict[str, int]:
+    normalized_ids = [module_id for module_id in dict.fromkeys(module_ids) if module_id]
+    if not normalized_ids:
+        return {}
+
+    return {
+        module_id: int(count)
+        for module_id, count in (
+            db.query(
+                MicrolearningAssignment.module_id,
+                func.count(MicrolearningAssignment.id),
+            )
+            .filter(MicrolearningAssignment.module_id.in_(normalized_ids))
+            .group_by(MicrolearningAssignment.module_id)
+            .all()
+        )
+    }
+
+
+def _get_trainer_trainee(
+    db: Session,
+    *,
+    trainer_id: str,
+    trainee_id: str,
+) -> User:
+    trainee = (
+        db.query(User)
+        .join(batch_user_association, batch_user_association.c.user_id == User.id)
+        .join(Batch, Batch.id == batch_user_association.c.batch_id)
+        .filter(
+            User.id == trainee_id,
+            User.role == UserRole.TRAINEE,
+            User.is_active.is_(True),
+            Batch.created_by == trainer_id,
+        )
+        .first()
+    )
+    if not trainee:
+        raise HTTPException(status_code=404, detail="Trainee not found")
+    return trainee
+
+
+def _get_trainer_session(
+    db: Session,
+    *,
+    trainer_id: str,
+    session_id: str,
+) -> PracticeSession:
+    session = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    _get_trainer_trainee(db, trainer_id=trainer_id, trainee_id=session.user_id)
+    return session
+
+
 def _resolve_batch_lookup(
     db: Session,
     *,
@@ -128,6 +237,27 @@ def _build_batch_department_label(batch: Batch) -> str:
     return "Unassigned Batch"
 
 
+def _sort_batches_for_display(batches: List[Batch]) -> List[Batch]:
+    return sorted(
+        batches,
+        key=lambda batch: (
+            batch.wave_number is None,
+            batch.wave_number if batch.wave_number is not None else 0,
+            (batch.name or "").lower(),
+        ),
+    )
+
+
+def _apply_batch_profile(user: User, batch: Optional[Batch]) -> None:
+    user.lob = batch.lob if batch else None
+    user.department = _build_batch_department_label(batch) if batch else None
+
+
+def _refresh_trainee_profile_from_batches(user: User) -> None:
+    next_batch = _sort_batches_for_display(list(user.batches or []))
+    _apply_batch_profile(user, next_batch[0] if next_batch else None)
+
+
 def _serialize_batch(batch: Optional[Batch]) -> Optional[Dict[str, Any]]:
     if not batch:
         return None
@@ -139,15 +269,42 @@ def _serialize_batch(batch: Optional[Batch]) -> Optional[Dict[str, Any]]:
     }
 
 
-def _serialize_trainee(user: User, batch: Optional[Batch]) -> Dict[str, Any]:
+def _serialize_trainer_batch_summary(batch: Batch) -> Dict[str, Any]:
+    return {
+        "id": batch.id,
+        "name": batch.name,
+        "description": batch.description,
+        "wave_number": batch.wave_number,
+        "lob": batch.lob,
+        "users_count": len([user for user in batch.users if user.role == UserRole.TRAINEE]),
+        "created_at": batch.created_at,
+    }
+
+
+def _serialize_trainee(
+    user: User,
+    batch: Optional[Batch] = None,
+    *,
+    batches: Optional[List[Batch]] = None,
+) -> Dict[str, Any]:
+    trainee_batches = _sort_batches_for_display(
+        batches if batches is not None else ([batch] if batch else list(user.batches or []))
+    )
+    primary_batch = batch or (trainee_batches[0] if trainee_batches else None)
     return {
         "id": user.id,
         "email": user.email,
         "full_name": user.full_name,
         "role": user.role,
+        "is_active": user.is_active,
         "lob": user.lob,
         "department": user.department,
-        "batch": _serialize_batch(batch),
+        "batch": _serialize_batch(primary_batch),
+        "batches": [_serialize_batch(existing_batch) for existing_batch in trainee_batches],
+        "batch_ids": [existing_batch.id for existing_batch in trainee_batches],
+        "batch_names": [
+            _build_batch_department_label(existing_batch) for existing_batch in trainee_batches
+        ],
     }
 
 
@@ -177,9 +334,8 @@ def _create_trainee_account(
         full_name=normalized_name,
         password_hash=auth_utils.hash_password(temporary_password),
         role=UserRole.TRAINEE,
-        lob=batch.lob,
-        department=_build_batch_department_label(batch),
     )
+    _apply_batch_profile(new_user, batch)
 
     db.add(new_user)
     db.flush()
@@ -287,6 +443,26 @@ class FeedbackCreate(BaseModel):
     recommended_exercises: Optional[List[str]] = None
 
 
+class MicrolearningModuleCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    category: FeedbackType
+    duration_minutes: int = 2
+    skill_focus: Optional[str] = None
+    content_url: Optional[str] = None
+    difficulty: ScenarioDifficulty = ScenarioDifficulty.BASIC
+    assessment_method_id: Optional[str] = None
+
+
+class MicrolearningAssignmentCreate(BaseModel):
+    module_ids: List[str]
+    batch_id: Optional[str] = None
+    user_id: Optional[str] = None
+    due_date: Optional[datetime] = None
+    notes: Optional[str] = None
+    is_mandatory: bool = True
+
+
 class SessionVerification(BaseModel):
     is_verified: bool = True
     corrected_transcription: Optional[str] = None
@@ -305,6 +481,10 @@ class TraineeUpdate(BaseModel):
     full_name: str
     role: UserRole = UserRole.TRAINEE
     batch_id: str
+
+
+class TraineeStatusUpdate(BaseModel):
+    is_active: bool
 
 
 # ==================== Helper Functions ====================
@@ -367,13 +547,8 @@ async def create_batch(
     db.refresh(new_batch)
 
     return {
-        "id": new_batch.id,
-        "name": new_batch.name,
-        "description": new_batch.description,
-        "wave_number": new_batch.wave_number,
-        "lob": new_batch.lob,
         "status": "created",
-        "users_count": 0,
+        **_serialize_trainer_batch_summary(new_batch),
     }
 
 
@@ -396,18 +571,7 @@ async def list_batches(
 
     return {
         "count": len(batches),
-        "batches": [
-            {
-                "id": b.id,
-                "name": b.name,
-                "description": b.description,
-                "wave_number": b.wave_number,
-                "lob": b.lob,
-                "users_count": len(b.users),
-                "created_at": b.created_at,
-            }
-            for b in batches
-        ],
+        "batches": [_serialize_trainer_batch_summary(batch) for batch in batches],
     }
 
 
@@ -447,6 +611,116 @@ async def get_batch(
     }
 
 
+@router.put("/batches/{batch_id}")
+async def update_batch(
+    batch_id: str,
+    batch_data: BatchCreate,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Update an existing trainer-owned batch."""
+    batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
+    batch_name = _derive_batch_name(batch_data.name, batch_data.wave_number)
+
+    existing_name = (
+        db.query(Batch)
+        .filter(
+            Batch.created_by == current_user.id,
+            func.lower(Batch.name) == batch_name.lower(),
+            Batch.id != batch.id,
+        )
+        .first()
+    )
+    if existing_name:
+        raise HTTPException(status_code=400, detail="Batch name already exists")
+
+    if batch_data.wave_number is not None:
+        existing_wave = (
+            db.query(Batch)
+            .filter(
+                Batch.created_by == current_user.id,
+                Batch.wave_number == batch_data.wave_number,
+                Batch.id != batch.id,
+            )
+            .first()
+        )
+        if existing_wave:
+            raise HTTPException(status_code=400, detail="Batch number already exists")
+
+    batch.name = batch_name
+    batch.description = _normalize_text_value(batch_data.description) or None
+    batch.wave_number = batch_data.wave_number
+    batch.lob = _normalize_text_value(batch_data.lob) or None
+
+    for trainee in [user for user in batch.users if user.role == UserRole.TRAINEE]:
+        _apply_batch_profile(trainee, batch)
+
+    db.commit()
+    db.refresh(batch)
+
+    return {
+        "status": "updated",
+        "batch": _serialize_trainer_batch_summary(batch),
+    }
+
+
+@router.delete("/batches/{batch_id}")
+async def delete_batch(
+    batch_id: str,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Delete a trainer-owned batch and safely clean up linked trainer data."""
+    batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
+
+    batch_label = batch.name
+    linked_users = list(batch.users or [])
+    trainee_count = len([user for user in linked_users if user.role == UserRole.TRAINEE])
+
+    batch_course_assignments = (
+        db.query(CourseAssignment)
+        .filter(
+            CourseAssignment.batch_id == batch.id,
+            CourseAssignment.assigned_by == current_user.id,
+        )
+        .all()
+    )
+    batch_microlearning_assignments = (
+        db.query(MicrolearningAssignment)
+        .filter(
+            MicrolearningAssignment.batch_id == batch.id,
+            MicrolearningAssignment.assigned_by == current_user.id,
+        )
+        .all()
+    )
+
+    for user in linked_users:
+        if user in batch.users:
+            batch.users.remove(user)
+        if user.role == UserRole.TRAINEE:
+            _refresh_trainee_profile_from_batches(user)
+
+    for assignment in batch_microlearning_assignments:
+        assignment.batch_id = None
+
+    deleted_course_assignments = len(batch_course_assignments)
+    for assignment in batch_course_assignments:
+        db.delete(assignment)
+
+    preserved_microlearning_assignments = len(batch_microlearning_assignments)
+    db.delete(batch)
+    db.commit()
+
+    return {
+        "status": "deleted",
+        "batch_id": batch_id,
+        "name": batch_label,
+        "removed_trainees": trainee_count,
+        "deleted_course_assignments": deleted_course_assignments,
+        "preserved_microlearning_assignments": preserved_microlearning_assignments,
+    }
+
+
 @router.post("/batches/{batch_id}/users")
 async def assign_users_to_batch(
     batch_id: str,
@@ -456,10 +730,17 @@ async def assign_users_to_batch(
 ):
     """Add trainees to a batch"""
     batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
+    requested_ids = [user_id for user_id in dict.fromkeys(assignment.user_ids) if user_id]
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="Select at least one trainee to add")
 
     users = (
         db.query(User)
-        .filter(User.id.in_(assignment.user_ids), User.role == UserRole.TRAINEE)
+        .filter(
+            User.id.in_(requested_ids),
+            User.role == UserRole.TRAINEE,
+            User.is_active.is_(True),
+        )
         .all()
     )
 
@@ -467,10 +748,21 @@ async def assign_users_to_batch(
         raise HTTPException(status_code=404, detail="No users found")
 
     added_count = 0
+    moved_count = 0
     for user in users:
+        trainer_batches = [
+            existing_batch for existing_batch in user.batches if existing_batch.created_by == current_user.id
+        ]
+        moved_from_other_batch = any(existing_batch.id != batch.id for existing_batch in trainer_batches)
+        for existing_batch in trainer_batches:
+            if existing_batch.id != batch.id and user in existing_batch.users:
+                existing_batch.users.remove(user)
         if user not in batch.users:
             batch.users.append(user)
             added_count += 1
+        if moved_from_other_batch:
+            moved_count += 1
+        _apply_batch_profile(user, batch)
 
     db.commit()
 
@@ -478,7 +770,9 @@ async def assign_users_to_batch(
         "status": "updated",
         "batch_id": batch_id,
         "added_users": added_count,
-        "total_users": len(batch.users),
+        "moved_users": moved_count,
+        "total_users": len([user for user in batch.users if user.role == UserRole.TRAINEE]),
+        "trainees": [_serialize_trainee(user, batch=batch) for user in users],
     }
 
 
@@ -492,10 +786,21 @@ async def remove_user_from_batch(
     """Remove a trainee from a batch"""
     batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
 
-    user = db.query(User).filter(User.id == user_id).first()
+    user = (
+        db.query(User)
+        .filter(
+            User.id == user_id,
+            User.role == UserRole.TRAINEE,
+            User.is_active.is_(True),
+        )
+        .first()
+    )
+    if not user:
+        raise HTTPException(status_code=404, detail="Trainee not found")
 
     if user in batch.users:
         batch.users.remove(user)
+        _refresh_trainee_profile_from_batches(user)
         db.commit()
 
     return {"status": "removed", "batch_id": batch_id, "user_id": user_id}
@@ -560,13 +865,74 @@ async def list_trainees(
         .all()
     )
 
-    trainee_rows = []
-    seen_ids = set()
+    trainee_lookup: Dict[str, Dict[str, Any]] = {}
     for user, batch in trainees:
-        if user.id in seen_ids:
-            continue
-        seen_ids.add(user.id)
-        trainee_rows.append(_serialize_trainee(user, batch))
+        entry = trainee_lookup.setdefault(user.id, {"user": user, "batches": []})
+        if all(existing_batch.id != batch.id for existing_batch in entry["batches"]):
+            entry["batches"].append(batch)
+
+    trainee_rows = [
+        _serialize_trainee(
+            entry["user"],
+            batches=_sort_batches_for_display(entry["batches"]),
+        )
+        for entry in trainee_lookup.values()
+    ]
+    trainee_rows.sort(
+        key=lambda trainee: (
+            trainee["batch"]["wave_number"] if trainee.get("batch") and trainee["batch"].get("wave_number") is not None else 10**6,
+            trainee["full_name"].lower(),
+            trainee["email"].lower(),
+        )
+    )
+
+    return {"count": len(trainee_rows), "trainees": trainee_rows}
+
+
+@router.get("/trainees/registry")
+async def list_registered_trainees(
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """List every active trainee account so trainers can add existing users into their class batches."""
+    trainer_batches = (
+        db.query(Batch)
+        .filter(Batch.created_by == current_user.id)
+        .order_by(Batch.wave_number.is_(None), Batch.wave_number.asc(), Batch.name.asc())
+        .all()
+    )
+    trainer_batch_ids = {batch.id for batch in trainer_batches}
+
+    trainees = (
+        db.query(User)
+        .filter(
+            User.role == UserRole.TRAINEE,
+            User.is_active.is_(True),
+        )
+        .order_by(User.full_name.asc(), User.email.asc())
+        .all()
+    )
+
+    trainee_rows = []
+    for trainee in trainees:
+        all_batches = _sort_batches_for_display(list(trainee.batches or []))
+        trainer_owned_batches = [
+            existing_batch for existing_batch in all_batches if existing_batch.id in trainer_batch_ids
+        ]
+        current_trainer_batch = trainer_owned_batches[0] if trainer_owned_batches else None
+        serialized = _serialize_trainee(trainee, batches=all_batches)
+        serialized.update(
+            {
+                "is_in_my_class": bool(trainer_owned_batches),
+                "current_trainer_batch_id": current_trainer_batch.id if current_trainer_batch else None,
+                "current_trainer_batch_name": (
+                    _build_batch_department_label(current_trainer_batch)
+                    if current_trainer_batch
+                    else None
+                ),
+            }
+        )
+        trainee_rows.append(serialized)
 
     return {"count": len(trainee_rows), "trainees": trainee_rows}
 
@@ -624,8 +990,7 @@ async def update_trainee(
 
     trainee.email = normalized_email
     trainee.full_name = normalized_name
-    trainee.lob = batch.lob
-    trainee.department = _build_batch_department_label(batch)
+    _apply_batch_profile(trainee, batch)
 
     for existing_batch in trainer_batches:
         if existing_batch.id != batch.id and trainee in existing_batch.users:
@@ -650,22 +1015,6 @@ async def download_trainee_bulk_upload_template(
 ):
     """Download the trainee bulk upload template as CSV or Excel."""
     headers = ["Email Address", "Full Name", "Role", "Password", "Wave/Batch"]
-    sample_rows = [
-        [
-            "trainee.one@example.com",
-            "Trainee One",
-            "trainee",
-            DEFAULT_TRAINEE_PASSWORD,
-            "Batch 1",
-        ],
-        [
-            "trainee.two@example.com",
-            "Trainee Two",
-            "trainee",
-            DEFAULT_TRAINEE_PASSWORD,
-            "2",
-        ],
-    ]
 
     template_format = (format or "csv").strip().lower()
     if template_format == "xlsx":
@@ -673,8 +1022,6 @@ async def download_trainee_bulk_upload_template(
         worksheet = workbook.active
         worksheet.title = "Trainees"
         worksheet.append(headers)
-        for row in sample_rows:
-            worksheet.append(row)
 
         instructions = workbook.create_sheet("Instructions")
         instructions.append(["Field", "Notes"])
@@ -702,7 +1049,6 @@ async def download_trainee_bulk_upload_template(
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(headers)
-    writer.writerows(sample_rows)
 
     return StreamingResponse(
         iter([output.getvalue()]),
@@ -784,6 +1130,413 @@ async def bulk_upload_trainees(
     }
 
 
+# ==================== Microlearning Management ====================
+
+
+@router.get("/microlearning-assessment-methods")
+async def list_microlearning_assessment_methods(
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """List assessment methods used for assessment-based microlearning lessons."""
+    methods = ensure_assessment_method_catalog(db)
+    method_ids = [method.id for method in methods]
+
+    lesson_counts = {}
+    if method_ids:
+        lesson_counts = {
+            method_id: count
+            for method_id, count in (
+                db.query(
+                    MicrolearningModule.assessment_method_id,
+                    func.count(MicrolearningModule.id),
+                )
+                .filter(
+                    MicrolearningModule.created_by == current_user.id,
+                    MicrolearningModule.assessment_method_id.in_(method_ids),
+                    MicrolearningModule.is_active == True,
+                )
+                .group_by(MicrolearningModule.assessment_method_id)
+                .all()
+            )
+        }
+
+    db.commit()
+    return {
+        "count": len(methods),
+        "methods": [
+            serialize_assessment_method(
+                method,
+                lesson_count=lesson_counts.get(method.id, 0),
+            )
+            for method in methods
+            if method.is_active
+        ],
+    }
+
+
+@router.post("/microlearning-assessment-methods/seed-examples")
+async def seed_microlearning_assessment_examples(
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Create or refresh example assessment-based microlearning lessons for the current trainer."""
+    summary = ensure_assessment_method_examples(
+        db,
+        trainer_id=current_user.id,
+    )
+    db.commit()
+    return {
+        "status": "seeded",
+        **summary,
+    }
+
+
+@router.get("/microlearning-modules")
+async def list_microlearning_modules(
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """List active microlearning modules created by the current trainer."""
+    modules = (
+        db.query(MicrolearningModule)
+        .options(selectinload(MicrolearningModule.assessment_method))
+        .filter(
+            MicrolearningModule.created_by == current_user.id,
+            MicrolearningModule.is_active == True,
+        )
+        .order_by(MicrolearningModule.created_at.desc())
+        .all()
+    )
+
+    did_backfill = False
+    for module in modules:
+        did_backfill = ensure_module_exercises(module) or did_backfill
+
+    if did_backfill:
+        db.commit()
+
+    assignment_counts = _get_microlearning_assignment_counts(
+        db,
+        module_ids=[module.id for module in modules],
+    )
+
+    return {
+        "count": len(modules),
+        "modules": [
+            serialize_microlearning_module(
+                module,
+                assignment_count=assignment_counts.get(module.id, 0),
+            )
+            for module in modules
+        ],
+    }
+
+
+@router.post("/microlearning-modules")
+async def create_microlearning_module(
+    payload: MicrolearningModuleCreate,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Create a trainer-owned microlearning module with generated default exercises."""
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Module title is required")
+    if payload.duration_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Duration must be greater than zero")
+
+    assessment_method: Optional[MicrolearningAssessmentMethod] = None
+    if payload.assessment_method_id:
+        assessment_method = (
+            db.query(MicrolearningAssessmentMethod)
+            .filter(
+                MicrolearningAssessmentMethod.id == payload.assessment_method_id,
+                MicrolearningAssessmentMethod.is_active == True,
+            )
+            .first()
+        )
+        if not assessment_method:
+            raise HTTPException(status_code=404, detail="Assessment method not found")
+
+    module = MicrolearningModule(
+        title=title,
+        description=(payload.description or "").strip() or None,
+        category=payload.category,
+        duration_minutes=payload.duration_minutes,
+        skill_focus=(payload.skill_focus or "").strip() or None,
+        content_url=(payload.content_url or "").strip() or None,
+        difficulty=payload.difficulty,
+        exercises=generate_default_exercises(
+            payload.category,
+            title=title,
+            skill_focus=payload.skill_focus,
+            assessment_method_slug=assessment_method.slug if assessment_method else None,
+        ),
+        assessment_method_id=assessment_method.id if assessment_method else None,
+        created_by=current_user.id,
+    )
+    if assessment_method:
+        module.assessment_method = assessment_method
+    db.add(module)
+    db.commit()
+    db.refresh(module)
+    if assessment_method:
+        module.assessment_method = assessment_method
+
+    return {
+        "status": "created",
+        "module": serialize_microlearning_module(module, assignment_count=0),
+    }
+
+
+@router.put("/microlearning-modules/{module_id}")
+async def update_microlearning_module(
+    module_id: str,
+    payload: MicrolearningModuleCreate,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Update a trainer-owned microlearning module stored in the database."""
+    module = _get_trainer_microlearning_module(
+        db,
+        trainer_id=current_user.id,
+        module_id=module_id,
+    )
+
+    title = payload.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Module title is required")
+    if payload.duration_minutes <= 0:
+        raise HTTPException(status_code=400, detail="Duration must be greater than zero")
+
+    next_skill_focus = (payload.skill_focus or "").strip() or None
+    next_description = (payload.description or "").strip() or None
+    next_content_url = (payload.content_url or "").strip() or None
+
+    assessment_method: Optional[MicrolearningAssessmentMethod] = None
+    if payload.assessment_method_id:
+        assessment_method = (
+            db.query(MicrolearningAssessmentMethod)
+            .filter(
+                MicrolearningAssessmentMethod.id == payload.assessment_method_id,
+                MicrolearningAssessmentMethod.is_active == True,
+            )
+            .first()
+        )
+        if not assessment_method:
+            raise HTTPException(status_code=404, detail="Assessment method not found")
+
+    should_regenerate_exercises = any(
+        [
+            module.title != title,
+            module.category != payload.category,
+            module.skill_focus != next_skill_focus,
+            module.assessment_method_id != (assessment_method.id if assessment_method else None),
+            not module.exercises,
+        ]
+    )
+    has_existing_assignments = (
+        db.query(MicrolearningAssignment.id)
+        .filter(MicrolearningAssignment.module_id == module.id)
+        .first()
+        is not None
+    )
+
+    module.title = title
+    module.description = next_description
+    module.category = payload.category
+    module.duration_minutes = payload.duration_minutes
+    module.skill_focus = next_skill_focus
+    module.content_url = next_content_url
+    module.difficulty = payload.difficulty
+    module.assessment_method_id = assessment_method.id if assessment_method else None
+    module.assessment_method = assessment_method
+
+    exercises_regenerated = False
+    exercises_locked = False
+    if should_regenerate_exercises:
+        if has_existing_assignments:
+            exercises_locked = True
+        else:
+            module.exercises = generate_default_exercises(
+                payload.category,
+                title=title,
+                skill_focus=next_skill_focus,
+                assessment_method_slug=assessment_method.slug if assessment_method else None,
+            )
+            exercises_regenerated = True
+
+    db.commit()
+    db.refresh(module)
+    module.assessment_method = assessment_method
+    assignment_count = _get_microlearning_assignment_counts(db, module_ids=[module.id]).get(module.id, 0)
+
+    return {
+        "status": "updated",
+        "module": serialize_microlearning_module(module, assignment_count=assignment_count),
+        "exercises_regenerated": exercises_regenerated,
+        "exercises_locked": exercises_locked,
+    }
+
+
+@router.delete("/microlearning-modules/{module_id}")
+async def delete_microlearning_module(
+    module_id: str,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Soft-delete a trainer-owned microlearning module from the active library."""
+    module = _get_trainer_microlearning_module(
+        db,
+        trainer_id=current_user.id,
+        module_id=module_id,
+    )
+    module.is_active = False
+    db.commit()
+    return {
+        "status": "deleted",
+        "module_id": module.id,
+        "title": module.title,
+    }
+
+
+@router.get("/microlearning-assignments")
+async def list_microlearning_assignments(
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """List microlearning assignments created by the current trainer."""
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.batch),
+        )
+        .filter(MicrolearningAssignment.assigned_by == current_user.id)
+        .order_by(MicrolearningAssignment.assigned_at.desc())
+        .all()
+    )
+
+    did_update = False
+    serialized = []
+    for assignment in assignments:
+        did_update = ensure_module_exercises(assignment.module) or did_update
+        before = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+        )
+        refresh_assignment_progress(assignment)
+        after = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+        )
+        did_update = before != after or did_update
+        serialized.append(serialize_assignment_summary(assignment))
+
+    if did_update:
+        db.commit()
+
+    return {
+        "count": len(serialized),
+        "assignments": serialized,
+    }
+
+
+@router.post("/microlearning-assignments")
+async def assign_microlearning_modules(
+    payload: MicrolearningAssignmentCreate,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Assign selected modules to a batch or a specific trainee."""
+    module_ids = [module_id for module_id in dict.fromkeys(payload.module_ids) if module_id]
+    if not module_ids:
+        raise HTTPException(status_code=400, detail="Select at least one module to assign")
+    if bool(payload.batch_id) == bool(payload.user_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Specify either a batch_id or a user_id for the assignment.",
+        )
+
+    modules = (
+        db.query(MicrolearningModule)
+        .filter(
+            MicrolearningModule.id.in_(module_ids),
+            MicrolearningModule.created_by == current_user.id,
+            MicrolearningModule.is_active == True,
+        )
+        .all()
+    )
+    module_lookup = {module.id: module for module in modules}
+    missing_modules = [module_id for module_id in module_ids if module_id not in module_lookup]
+    if missing_modules:
+        raise HTTPException(status_code=404, detail="One or more modules were not found")
+
+    if payload.batch_id:
+        batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=payload.batch_id)
+        trainees = [user for user in batch.users if user.role == UserRole.TRAINEE]
+        if not trainees:
+            raise HTTPException(status_code=400, detail="Selected batch has no trainees")
+        batch_id = batch.id
+    else:
+        trainee = _get_trainer_trainee(db, trainer_id=current_user.id, trainee_id=payload.user_id or "")
+        trainees = [trainee]
+        batch_id = None
+
+    assigned_count = 0
+    skipped_count = 0
+    did_backfill = False
+
+    for trainee in trainees:
+        for module_id in module_ids:
+            module = module_lookup[module_id]
+            did_backfill = ensure_module_exercises(module) or did_backfill
+
+            existing = (
+                db.query(MicrolearningAssignment)
+                .filter(
+                    MicrolearningAssignment.trainee_id == trainee.id,
+                    MicrolearningAssignment.module_id == module.id,
+                    MicrolearningAssignment.status.in_(["assigned", "in_progress"]),
+                )
+                .first()
+            )
+            if existing:
+                skipped_count += 1
+                continue
+
+            assignment = MicrolearningAssignment(
+                module_id=module.id,
+                trainee_id=trainee.id,
+                assigned_by=current_user.id,
+                batch_id=batch_id,
+                due_date=payload.due_date,
+                notes=(payload.notes or "").strip() or None,
+                is_mandatory=payload.is_mandatory,
+                responses={},
+            )
+            assignment.module = module
+            refresh_assignment_progress(assignment)
+            db.add(assignment)
+            assigned_count += 1
+
+    db.commit()
+
+    return {
+        "status": "assigned",
+        "assigned_count": assigned_count,
+        "skipped_count": skipped_count,
+        "backfilled_modules": did_backfill,
+    }
+
+
 # ==================== Course Management ====================
 
 
@@ -849,9 +1602,7 @@ async def get_course(
     db: Session = Depends(),
 ):
     """Get course details"""
-    course = db.query(Course).filter(Course.id == course_id).first()
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    course = _get_trainer_course(db, trainer_id=current_user.id, course_id=course_id)
     return {
         "id": course.id,
         "name": course.name,
@@ -912,10 +1663,7 @@ async def publish_course(
     db: Session = Depends(),
 ):
     """Publish a course (make available for assignment)"""
-    course = db.query(Course).filter(Course.id == course_id).first()
-
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    course = _get_trainer_course(db, trainer_id=current_user.id, course_id=course_id)
 
     course.is_published = True
     db.commit()
@@ -933,27 +1681,45 @@ async def assign_course(
     db: Session = Depends(),
 ):
     """Assign a course to a batch or individual trainee"""
-    course = db.query(Course).filter(Course.id == assignment.course_id).first()
+    course = _get_trainer_course(db, trainer_id=current_user.id, course_id=assignment.course_id)
 
-    if not course:
-        raise HTTPException(status_code=404, detail="Course not found")
+    if bool(assignment.batch_id) == bool(assignment.user_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Specify either a batch_id or a user_id for the assignment.",
+        )
 
-    # Validate batch or user
+    target_batch_id = None
+    target_user_id = None
     if assignment.batch_id:
-        batch = db.query(Batch).filter(Batch.id == assignment.batch_id).first()
-        if not batch:
-            raise HTTPException(status_code=404, detail="Batch not found")
-    elif assignment.user_id:
-        user = db.query(User).filter(User.id == assignment.user_id).first()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=assignment.batch_id)
+        target_batch_id = batch.id
     else:
-        raise HTTPException(status_code=400, detail="Must specify batch_id or user_id")
+        trainee = _get_trainer_trainee(db, trainer_id=current_user.id, trainee_id=assignment.user_id or "")
+        target_user_id = trainee.id
+
+    existing_assignment = (
+        db.query(CourseAssignment)
+        .filter(
+            CourseAssignment.course_id == course.id,
+            CourseAssignment.batch_id == target_batch_id,
+            CourseAssignment.user_id == target_user_id,
+            CourseAssignment.assigned_by == current_user.id,
+        )
+        .first()
+    )
+    if existing_assignment:
+        return {
+            "id": existing_assignment.id,
+            "course_id": course.id,
+            "assigned_to": target_batch_id or target_user_id,
+            "status": "already_assigned",
+        }
 
     new_assignment = CourseAssignment(
-        course_id=assignment.course_id,
-        batch_id=assignment.batch_id,
-        user_id=assignment.user_id,
+        course_id=course.id,
+        batch_id=target_batch_id,
+        user_id=target_user_id,
         assigned_by=current_user.id,
         is_mandatory=assignment.is_mandatory,
         due_date=assignment.due_date,
@@ -964,8 +1730,8 @@ async def assign_course(
 
     return {
         "id": new_assignment.id,
-        "course_id": assignment.course_id,
-        "assigned_to": assignment.batch_id or assignment.user_id,
+        "course_id": course.id,
+        "assigned_to": target_batch_id or target_user_id,
         "status": "assigned",
     }
 
@@ -977,10 +1743,11 @@ async def list_course_assignments(
     batch_id: Optional[str] = None,
 ):
     """List course assignments for trainer's batches"""
-    query = db.query(CourseAssignment)
+    query = db.query(CourseAssignment).filter(CourseAssignment.assigned_by == current_user.id)
 
     if batch_id:
-        query = query.filter(CourseAssignment.batch_id == batch_id)
+        batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
+        query = query.filter(CourseAssignment.batch_id == batch.id)
 
     assignments = query.all()
 
@@ -1016,18 +1783,28 @@ async def get_interaction_history(
     limit: int = 50,
 ):
     """Get practice sessions for trainer's assigned batch/users"""
-    query = db.query(PracticeSession)
+    trainer_batches = db.query(Batch).filter(Batch.created_by == current_user.id).all()
+    trainer_user_ids = {
+        user.id
+        for batch in trainer_batches
+        for user in batch.users
+        if user.role == UserRole.TRAINEE
+    }
 
-    # Filter by batch if provided
     if batch_id:
-        batch = db.query(Batch).filter(Batch.id == batch_id).first()
-        if batch:
-            user_ids = [u.id for u in batch.users]
-            query = query.filter(PracticeSession.user_id.in_(user_ids))
+        batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
+        trainer_user_ids = {
+            user.id for user in batch.users if user.role == UserRole.TRAINEE
+        }
 
-    # Filter by user if provided
     if user_id:
-        query = query.filter(PracticeSession.user_id == user_id)
+        trainee = _get_trainer_trainee(db, trainer_id=current_user.id, trainee_id=user_id)
+        trainer_user_ids = {trainee.id}
+
+    if not trainer_user_ids:
+        return {"count": 0, "sessions": []}
+
+    query = db.query(PracticeSession).filter(PracticeSession.user_id.in_(trainer_user_ids))
 
     sessions = (
         query.order_by(PracticeSession.created_at.desc())
@@ -1066,10 +1843,7 @@ async def get_interaction_detail(
     db: Session = Depends(),
 ):
     """Get detailed interaction information with transcript"""
-    session = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = _get_trainer_session(db, trainer_id=current_user.id, session_id=session_id)
 
     return {
         "id": session.id,
@@ -1118,10 +1892,7 @@ async def verify_interaction(
     db: Session = Depends(),
 ):
     """Verify/correct ASR transcription for a session"""
-    session = db.query(PracticeSession).filter(PracticeSession.id == session_id).first()
-
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = _get_trainer_session(db, trainer_id=current_user.id, session_id=session_id)
 
     session.is_verified = verification.is_verified
 
@@ -1144,17 +1915,14 @@ async def create_feedback(
     db: Session = Depends(),
 ):
     """Provide coaching feedback on a practice session"""
-    session = (
-        db.query(PracticeSession)
-        .filter(PracticeSession.id == feedback_data.practice_session_id)
-        .first()
+    session = _get_trainer_session(
+        db,
+        trainer_id=current_user.id,
+        session_id=feedback_data.practice_session_id,
     )
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
     new_feedback = Feedback(
-        practice_session_id=feedback_data.practice_session_id,
+        practice_session_id=session.id,
         trainer_id=current_user.id,
         feedback_type=feedback_data.feedback_type,
         content=feedback_data.content,
@@ -1180,6 +1948,7 @@ async def get_feedback(
     db: Session = Depends(),
 ):
     """Get all feedback for a session"""
+    _get_trainer_session(db, trainer_id=current_user.id, session_id=session_id)
     feedback_items = (
         db.query(Feedback).filter(Feedback.practice_session_id == session_id).all()
     )
@@ -1212,6 +1981,14 @@ async def push_microlearning(
 
     if not feedback or not feedback.recommended_module_id:
         raise HTTPException(status_code=404, detail="Feedback or module not found")
+    if feedback.trainer_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+
+    _get_trainer_session(
+        db,
+        trainer_id=current_user.id,
+        session_id=feedback.practice_session_id,
+    )
 
     # Create assignment for trainee
     # This would be stored as a notification/assignment
@@ -1231,13 +2008,10 @@ async def get_batch_performance(
     batch_id: str, current_user: Any = Depends(verify_trainer), db: Session = Depends()
 ):
     """Get performance analytics for a batch"""
-    batch = db.query(Batch).filter(Batch.id == batch_id).first()
-
-    if not batch:
-        raise HTTPException(status_code=404, detail="Batch not found")
+    batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
 
     # Get all sessions for batch users
-    user_ids = [u.id for u in batch.users]
+    user_ids = [u.id for u in batch.users if u.role == UserRole.TRAINEE]
     sessions = (
         db.query(PracticeSession).filter(PracticeSession.user_id.in_(user_ids)).all()
     )
@@ -1297,6 +2071,8 @@ async def get_user_performance(
     from datetime import timedelta
 
     from sqlalchemy import and_
+
+    _get_trainer_trainee(db, trainer_id=current_user.id, trainee_id=user_id)
 
     # Get sessions in timeframe
     cutoff_date = datetime.utcnow() - timedelta(days=days)
@@ -1405,6 +2181,15 @@ async def trainer_live_updates(websocket: WebSocket, token: str):
             message = await websocket.receive_text()
             if message == "ping":
                 await websocket.send_json({"type": "pong"})
+    except HTTPException:
+        try:
+            await websocket.accept()
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=4401)
+        except Exception:
+            pass
     except WebSocketDisconnect:
         await live_update_manager.disconnect(channel, websocket)
     except Exception:
@@ -1436,7 +2221,7 @@ async def trainer_stats(
 async def trainer_dashboard(
     current_user: Any = Depends(verify_trainer), db: Session = Depends()
 ):
-    """Trainer dashboard overview"""
+    """Trainer dashboard summary"""
     # Get batches
     batches = db.query(Batch).filter(Batch.created_by == current_user.id).all()
     batch_ids = [b.id for b in batches]

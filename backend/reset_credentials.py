@@ -3,20 +3,17 @@ Reset credentials for local/Supabase database.
 """
 
 from .database import SessionLocal
+from .default_credentials import (
+    ADMIN_EMAIL,
+    ADMIN_PASSWORD,
+    DEFAULT_TRAINEE_PASSWORD,
+    TRAINEE_EMAIL,
+    TRAINEE_PASSWORD,
+    TRAINER_EMAIL,
+    TRAINER_PASSWORD,
+)
 from .models import User, UserRole
 from . import auth_utils
-
-
-ADMIN_EMAIL = "admin@stpeterville.edu.ph"
-ADMIN_PASSWORD = "Admin@SPV"
-
-TRAINER_EMAIL = "trainer@st.peterville.edu.ph"
-TRAINER_PASSWORD = "Trainer@123"
-
-TRAINEE_EMAIL = "mcureta@fatima.edu.ph"
-TRAINEE_PASSWORD = "SPVTrainee2026"
-
-DEFAULT_TRAINEE_PASSWORD = "SPVTrainee2024"
 
 
 def _upsert_user(db, email: str, full_name: str, role: UserRole, password: str) -> User:

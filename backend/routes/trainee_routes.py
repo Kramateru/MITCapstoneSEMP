@@ -9,15 +9,17 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends as FastAPIDepends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import and_, func
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import auth_utils
 from ..database import get_db
 from ..models import (
     Batch,
+    CertificateRecord,
     Course,
     CourseAssignment,
     Feedback,
+    MicrolearningAssignment,
     MicrolearningModule,
     PerformanceMetrics,
     PracticeSession,
@@ -26,6 +28,15 @@ from ..models import (
     UserRole,
 )
 from ..services.live_updates import live_update_manager
+from ..services.certificate_awards import award_certificate
+from ..services.microlearning import (
+    ensure_module_exercises,
+    evaluate_exercise_submission,
+    refresh_assignment_progress,
+    serialize_microlearning_module,
+    serialize_assignment_detail,
+    serialize_assignment_summary,
+)
 from ..services.speech_assessment import (
     assess_audio_submission,
     build_gold_standard_script,
@@ -74,6 +85,11 @@ class UIPreferences(BaseModel):
     high_contrast: Optional[bool] = None
 
 
+class MicrolearningExerciseSubmission(BaseModel):
+    response_text: Optional[str] = None
+    selected_option: Optional[str] = None
+
+
 # ==================== Helper Functions ====================
 
 
@@ -84,6 +100,76 @@ def verify_trainee(
     if current_user.role != UserRole.TRAINEE:
         raise HTTPException(status_code=403, detail="Trainee access required")
     return current_user
+
+
+def _get_trainee_microlearning_assignment(
+    db: Session,
+    *,
+    trainee_id: str,
+    assignment_id: str,
+) -> MicrolearningAssignment:
+    assignment = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.batch),
+        )
+        .filter(
+            MicrolearningAssignment.id == assignment_id,
+            MicrolearningAssignment.trainee_id == trainee_id,
+        )
+        .first()
+    )
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Microlearning assignment not found")
+    return assignment
+
+
+def _award_scenario_completion_certificate(
+    db: Session,
+    *,
+    trainee: User,
+    scenario: Scenario,
+    practice_session: PracticeSession,
+) -> None:
+    award_certificate(
+        db,
+        trainee_id=trainee.id,
+        issuer_id=scenario.created_by,
+        source_type="scenario_task",
+        source_id=scenario.id,
+        achievement_title=scenario.title,
+        achievement_type="task",
+        remarks=f"Completed scenario task: {scenario.title}",
+        score=float(practice_session.overall_score or 0.0),
+        practice_session_id=practice_session.id,
+        issued_at=practice_session.created_at,
+    )
+
+
+def _award_course_assignment_completion_certificate(
+    db: Session,
+    *,
+    trainee: User,
+    assignment: CourseAssignment,
+) -> None:
+    if not assignment.course:
+        return
+
+    award_certificate(
+        db,
+        trainee_id=trainee.id,
+        issuer_id=assignment.assigned_by,
+        source_type="course_assignment",
+        source_id=assignment.id,
+        achievement_title=assignment.course.name,
+        achievement_type="task",
+        remarks=f"Completed training task: {assignment.course.name}",
+        score=float(assignment.completion_percentage or 0.0),
+        issued_at=assignment.updated_at or assignment.assigned_at,
+    )
 
 
 # ==================== Initial Setup ====================
@@ -373,6 +459,12 @@ async def assess_practice_audio(
     db.add(practice_session)
     db.commit()
     db.refresh(practice_session)
+    _award_scenario_completion_certificate(
+        db,
+        trainee=current_user,
+        scenario=scenario,
+        practice_session=practice_session,
+    )
 
     assignments = (
         db.query(CourseAssignment)
@@ -411,6 +503,11 @@ async def assess_practice_audio(
 
             if assignment.completion_percentage >= 100:
                 assignment.is_completed = True
+                _award_course_assignment_completion_certificate(
+                    db,
+                    trainee=current_user,
+                    assignment=assignment,
+                )
 
     db.commit()
 
@@ -479,6 +576,13 @@ async def create_practice_session(
 
     db.add(new_session)
     db.commit()
+    db.refresh(new_session)
+    _award_scenario_completion_certificate(
+        db,
+        trainee=current_user,
+        scenario=scenario,
+        practice_session=new_session,
+    )
 
     # Update course assignment completion if applicable
     # Find if there's an assignment for this scenario's course
@@ -519,6 +623,11 @@ async def create_practice_session(
 
             if assignment.completion_percentage >= 100:
                 assignment.is_completed = True
+                _award_course_assignment_completion_certificate(
+                    db,
+                    trainee=current_user,
+                    assignment=assignment,
+                )
 
     db.commit()
 
@@ -899,22 +1008,134 @@ async def get_microlearning_modules(
     if category:
         query = query.filter(MicrolearningModule.category == category)
 
-    modules = query.all()
+    modules = query.options(selectinload(MicrolearningModule.assessment_method)).all()
 
     return {
         "count": len(modules),
-        "modules": [
-            {
-                "id": m.id,
-                "title": m.title,
-                "category": m.category,
-                "skill_focus": m.skill_focus,
-                "duration_minutes": m.duration_minutes,
-                "difficulty": m.difficulty,
-                "content_url": m.content_url,
-            }
-            for m in modules
-        ],
+        "modules": [serialize_microlearning_module(m) for m in modules],
+    }
+
+
+@router.get("/microlearning-assignments")
+async def list_microlearning_assignments(
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """List the trainee's assigned microlearning modules."""
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.batch),
+        )
+        .filter(MicrolearningAssignment.trainee_id == current_user.id)
+        .order_by(MicrolearningAssignment.assigned_at.desc())
+        .all()
+    )
+
+    did_update = False
+    serialized = []
+    for assignment in assignments:
+        did_update = ensure_module_exercises(assignment.module) or did_update
+        before = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+        )
+        refresh_assignment_progress(assignment)
+        after = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+        )
+        did_update = before != after or did_update
+        serialized.append(serialize_assignment_summary(assignment))
+
+    if did_update:
+        db.commit()
+
+    return {
+        "count": len(serialized),
+        "assignments": serialized,
+    }
+
+
+@router.get("/microlearning-assignments/{assignment_id}")
+async def get_microlearning_assignment_detail(
+    assignment_id: str,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Get the assignment detail and exercise attempts for a trainee."""
+    assignment = _get_trainee_microlearning_assignment(
+        db,
+        trainee_id=current_user.id,
+        assignment_id=assignment_id,
+    )
+
+    did_update = ensure_module_exercises(assignment.module)
+    before = (
+        assignment.status,
+        assignment.completion_percentage,
+        assignment.completed_exercises,
+        assignment.completed_at,
+    )
+    refresh_assignment_progress(assignment)
+    after = (
+        assignment.status,
+        assignment.completion_percentage,
+        assignment.completed_exercises,
+        assignment.completed_at,
+    )
+    if did_update or before != after:
+        db.commit()
+        db.refresh(assignment)
+
+    return serialize_assignment_detail(assignment)
+
+
+@router.post("/microlearning-assignments/{assignment_id}/exercises/{exercise_id}")
+async def submit_microlearning_exercise(
+    assignment_id: str,
+    exercise_id: str,
+    payload: MicrolearningExerciseSubmission,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Save a trainee exercise response and update assignment progress."""
+    assignment = _get_trainee_microlearning_assignment(
+        db,
+        trainee_id=current_user.id,
+        assignment_id=assignment_id,
+    )
+
+    ensure_module_exercises(assignment.module)
+    exercises = (assignment.module.exercises or []) if assignment.module else []
+    exercise = next((item for item in exercises if item.get("id") == exercise_id), None)
+    if not exercise:
+        raise HTTPException(status_code=404, detail="Exercise not found")
+
+    attempt = evaluate_exercise_submission(
+        exercise,
+        response_text=payload.response_text,
+        selected_option=payload.selected_option,
+    )
+
+    responses = dict(assignment.responses or {})
+    responses[exercise_id] = attempt
+    assignment.responses = responses
+    refresh_assignment_progress(assignment)
+    db.commit()
+    db.refresh(assignment)
+
+    return {
+        "status": "saved",
+        "attempt": attempt,
+        "assignment": serialize_assignment_summary(assignment),
     }
 
 
@@ -957,6 +1178,18 @@ async def trainee_stats(
         .scalar()
         or 0
     )
+    completed_scenarios = (
+        db.query(func.count(func.distinct(PracticeSession.scenario_id)))
+        .filter(PracticeSession.user_id == current_user.id)
+        .scalar()
+        or 0
+    )
+    certifications = (
+        db.query(func.count(CertificateRecord.id))
+        .filter(CertificateRecord.trainee_id == current_user.id)
+        .scalar()
+        or 0
+    )
 
     return {
         "total_sessions": int(total_sessions),
@@ -964,6 +1197,8 @@ async def trainee_stats(
         "highest_score": float(max_score or 0),
         "total_practice_time": int(total_practice_time or 0),
         "completed_today": int(completed_today),
+        "completed_scenarios": int(completed_scenarios),
+        "certifications": int(certifications),
     }
 
 

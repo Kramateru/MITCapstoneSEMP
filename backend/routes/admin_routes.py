@@ -5,20 +5,32 @@ Handles scenario creation, assessment categories, KPI configuration, and user ma
 
 import csv
 import io
-from datetime import datetime
+import os
+from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
 from ..database import get_db
+from ..default_credentials import (
+    ADMIN_EMAIL,
+    ADMIN_PASSWORD,
+    DEFAULT_TRAINEE_PASSWORD,
+    TRAINEE_EMAIL,
+    TRAINEE_PASSWORD,
+    TRAINER_EMAIL,
+    TRAINER_PASSWORD,
+)
 from ..models import (
     AssessmentCategory,
     Batch,
     CertificationSettings,
+    CertificateRecord,
+    CompetencyVerdict,
     Course,
     CourseAssignment,
     FeedbackType,
@@ -43,11 +55,11 @@ from ..services.lob_catalog import (
     serialize_lobs,
     sync_default_lob_catalog,
 )
+from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-DEFAULT_ADMIN_PASSWORD = "SPVAdmin2026"
-DEFAULT_TRAINER_PASSWORD = "SPVTrainer2026"
-DEFAULT_TRAINEE_PASSWORD = "SPVTrainee2026"
+DEFAULT_ADMIN_PASSWORD = ADMIN_PASSWORD
+DEFAULT_TRAINER_PASSWORD = TRAINER_PASSWORD
 ALL_LOB_ACCESS_LABEL = "All LOBs"
 
 
@@ -101,6 +113,17 @@ class AssessmentCategoryCreate(BaseModel):
     weight: float = 1.0
 
 
+class AssessmentCategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    category_type: Optional[FeedbackType] = None
+    description: Optional[str] = None
+    min_score: Optional[float] = None
+    max_score: Optional[float] = None
+    passing_threshold: Optional[float] = None
+    scoring_rules: Optional[dict] = None
+    weight: Optional[float] = None
+
+
 class KPIConfigUpdate(BaseModel):
     accuracy_weight: Optional[float] = None
     fluency_weight: Optional[float] = None
@@ -132,12 +155,6 @@ class LineOfBusinessCreate(BaseModel):
 class LineOfBusinessUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-
-
-class SampleDataSeedRequest(BaseModel):
-    """Optional flags for sample-data seeding."""
-
-    reset_sample_scenarios: bool = False
 
 
 # ==================== Helper Functions ====================
@@ -268,6 +285,29 @@ def _ensure_assessment_category(
 
     db.flush()
     return category, created
+
+
+def _serialize_assessment_category(category: AssessmentCategory) -> dict:
+    return {
+        "id": category.id,
+        "name": category.name,
+        "category_type": category.category_type,
+        "description": category.description,
+        "min_score": category.min_score,
+        "max_score": category.max_score,
+        "passing_threshold": category.passing_threshold,
+        "scoring_rules": category.scoring_rules,
+        "weight": category.weight,
+        "is_active": category.is_active,
+        "created_by": category.created_by,
+        "created_at": category.created_at,
+        "updated_at": category.updated_at,
+    }
+
+
+def _format_system_log_action(action: Optional[str]) -> str:
+    normalized = (action or "").replace("_", " ").strip()
+    return normalized.title() if normalized else "Updated Record"
 
 
 def _ensure_scenario(
@@ -449,6 +489,11 @@ def _ensure_practice_session(
     response_duration: int,
     filler_words: List[str],
     keyword_hits: List[str],
+    attempt_number: int = 1,
+    created_at: Optional[datetime] = None,
+    transcription_confidence: float = 0.94,
+    dead_air_time: int = 2,
+    volume_level: float = 0.81,
 ):
     session = (
         db.query(PracticeSession)
@@ -466,11 +511,15 @@ def _ensure_practice_session(
             user_id=user_id,
             scenario_id=scenario_id,
             transcription=transcription,
-            attempt_number=1,
+            attempt_number=attempt_number,
         )
         db.add(session)
 
-    session.transcription_confidence = 0.94
+    session.attempt_number = attempt_number
+    if created_at is not None:
+        session.created_at = created_at
+        session.updated_at = created_at
+    session.transcription_confidence = transcription_confidence
     session.accuracy_score = accuracy_score
     session.fluency_score = fluency_score
     session.clarity_score = clarity_score
@@ -478,8 +527,8 @@ def _ensure_practice_session(
     session.soft_skills_score = soft_skills_score
     session.overall_score = overall_score
     session.response_duration = response_duration
-    session.dead_air_time = 2
-    session.volume_level = 0.81
+    session.dead_air_time = dead_air_time
+    session.volume_level = volume_level
     session.filler_words_detected = filler_words
     session.word_feedback = [
         {"word": word, "score": 92, "error_type": "None", "color": "green"}
@@ -495,6 +544,98 @@ def _ensure_practice_session(
 
     db.flush()
     return session, created
+
+
+def _ensure_competency_verdict(
+    db: Session,
+    *,
+    trainee_id: str,
+    trainer_id: str,
+    practice_session_id: Optional[str],
+    mcq_assessment_id: Optional[str],
+    asr_score: float,
+    mcq_score: float,
+    remarks: str,
+    is_competent: bool,
+    decided_at: datetime,
+):
+    verdict = (
+        db.query(CompetencyVerdict)
+        .filter(
+            CompetencyVerdict.trainee_id == trainee_id,
+            CompetencyVerdict.practice_session_id == practice_session_id,
+            CompetencyVerdict.mcq_assessment_id == mcq_assessment_id,
+        )
+        .first()
+    )
+    created = verdict is None
+
+    if not verdict:
+        verdict = CompetencyVerdict(
+            trainee_id=trainee_id,
+            trainer_id=trainer_id,
+            practice_session_id=practice_session_id,
+            mcq_assessment_id=mcq_assessment_id,
+        )
+        db.add(verdict)
+
+    verdict.asr_score = asr_score
+    verdict.mcq_score = mcq_score
+    verdict.remarks = remarks
+    verdict.is_competent = is_competent
+    verdict.decided_at = decided_at
+
+    db.flush()
+    return verdict, created
+
+
+def _ensure_certificate_record(
+    db: Session,
+    *,
+    verdict_id: str,
+    trainee_id: str,
+    trainer_id: str,
+    unit_of_competency: str,
+    kip_score: float,
+    certificate_no: str,
+    qr_token: str,
+):
+    certificate = (
+        db.query(CertificateRecord)
+        .filter(
+            or_(
+                CertificateRecord.verdict_id == verdict_id,
+                CertificateRecord.certificate_no == certificate_no,
+                CertificateRecord.qr_token == qr_token,
+            )
+        )
+        .first()
+    )
+    created = certificate is None
+
+    if not certificate:
+        certificate = CertificateRecord(
+            verdict_id=verdict_id,
+            trainee_id=trainee_id,
+            trainer_id=trainer_id,
+            certificate_no=certificate_no,
+            qr_token=qr_token,
+            unit_of_competency=unit_of_competency,
+            source_type="competency_verdict",
+            source_id=verdict_id,
+            achievement_type="competency",
+            template_snapshot={},
+        )
+        db.add(certificate)
+
+    certificate.kip_score = kip_score
+    certificate.unit_of_competency = unit_of_competency
+    certificate.source_type = "competency_verdict"
+    certificate.source_id = verdict_id
+    certificate.achievement_type = "competency"
+
+    db.flush()
+    return certificate, created
 
 
 def _ensure_mcq_category(
@@ -848,6 +989,7 @@ async def create_assessment_category(
         "id": new_category.id,
         "name": new_category.name,
         "category_type": new_category.category_type,
+        "category": _serialize_assessment_category(new_category),
         "status": "created",
     }
 
@@ -863,17 +1005,91 @@ async def list_assessment_categories(
 
     return {
         "count": len(categories),
-        "categories": [
-            {
-                "id": c.id,
-                "name": c.name,
-                "category_type": c.category_type,
-                "weight": c.weight,
-                "passing_threshold": c.passing_threshold,
-            }
-            for c in categories
-        ],
+        "categories": [_serialize_assessment_category(category) for category in categories],
     }
+
+
+@router.put("/assessment-categories/{category_id}")
+async def update_assessment_category(
+    category_id: str,
+    category_update: AssessmentCategoryUpdate,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Update an assessment category"""
+    category = (
+        db.query(AssessmentCategory)
+        .filter(
+            AssessmentCategory.id == category_id,
+            AssessmentCategory.is_active == True,
+        )
+        .first()
+    )
+
+    if not category:
+        raise HTTPException(status_code=404, detail="Assessment category not found")
+
+    changes = {}
+    update_data = category_update.model_dump(exclude_unset=True)
+
+    for field, value in update_data.items():
+        previous_value = getattr(category, field)
+        if previous_value != value:
+            setattr(category, field, value)
+            changes[field] = {"old": previous_value, "new": value}
+
+    if not changes:
+        return {"status": "unchanged", "category": _serialize_assessment_category(category)}
+
+    category.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(category)
+
+    log_admin_action(
+        db,
+        current_user.id,
+        "updated_assessment_category",
+        "AssessmentCategory",
+        category.id,
+        changes,
+    )
+
+    return {"status": "updated", "category": _serialize_assessment_category(category)}
+
+
+@router.delete("/assessment-categories/{category_id}")
+async def delete_assessment_category(
+    category_id: str,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Deactivate an assessment category"""
+    category = (
+        db.query(AssessmentCategory)
+        .filter(
+            AssessmentCategory.id == category_id,
+            AssessmentCategory.is_active == True,
+        )
+        .first()
+    )
+
+    if not category:
+        raise HTTPException(status_code=404, detail="Assessment category not found")
+
+    category.is_active = False
+    category.updated_at = datetime.utcnow()
+    db.commit()
+
+    log_admin_action(
+        db,
+        current_user.id,
+        "deleted_assessment_category",
+        "AssessmentCategory",
+        category.id,
+        {"name": category.name},
+    )
+
+    return {"status": "deleted", "category_id": category.id}
 
 
 @router.post("/scenarios/{scenario_id}/assessment-categories/{category_id}")
@@ -1380,6 +1596,8 @@ def _seed_sample_dataset(
         "mcq_questions_created": 0,
         "mcq_assessments_created": 0,
         "mcq_submissions_created": 0,
+        "competency_verdicts_created": 0,
+        "certificates_created": 0,
     }
 
     lob_sync = sync_default_lob_catalog(db, deactivate_missing=True)
@@ -1388,28 +1606,28 @@ def _seed_sample_dataset(
     users = {}
     for user_seed in [
         {
-            "email": "admin@stpeterville.edu.ph",
+            "email": ADMIN_EMAIL,
             "full_name": "Admin User",
             "role": UserRole.ADMIN,
-            "password": "Admin@SPV",
+            "password": ADMIN_PASSWORD,
             "lob": "Customer Service",
             "department": "Management",
             "language_dialect": "en-US",
         },
         {
-            "email": "trainer@st.peterville.edu.ph",
+            "email": TRAINER_EMAIL,
             "full_name": "Trainer User",
             "role": UserRole.TRAINER,
-            "password": "Trainer@123",
+            "password": TRAINER_PASSWORD,
             "lob": "Customer Service",
             "department": "Operations",
             "language_dialect": "en-US",
         },
         {
-            "email": "mcureta@fatima.edu.ph",
+            "email": TRAINEE_EMAIL,
             "full_name": "Maria Cureta",
             "role": UserRole.TRAINEE,
-            "password": "SPVTrainee2026",
+            "password": TRAINEE_PASSWORD,
             "lob": "Billing & Payments",
             "department": "Wave 1",
             "language_dialect": "en-PH",
@@ -1642,7 +1860,7 @@ def _seed_sample_dataset(
         scenario_lookup[scenario_seed["title"]] = scenario
         summary["scenarios_created"] += int(created)
 
-    trainer_user = users["trainer@st.peterville.edu.ph"]
+    trainer_user = users[TRAINER_EMAIL]
     sample_batch, batch_created = _ensure_batch(
         db,
         name="Wave 1 - Sample Cohort",
@@ -1682,79 +1900,248 @@ def _seed_sample_dataset(
     )
     summary["course_assignments_created"] += int(assignment_created)
 
-    for (
-        trainee,
-        scenario,
-        transcription,
-        overall_score,
-        accuracy_score,
-        fluency_score,
-        clarity_score,
-        keyword_adherence_score,
-        soft_skills_score,
-        response_duration,
-        filler_words,
-        keyword_hits,
-    ) in [
-        (
-            users["mcureta@fatima.edu.ph"],
-            scenario_lookup["Billing Dispute Resolution"],
-            "I am sorry for the duplicate charge. Let me verify your account, review the refund request, and give you the timeline today.",
-            88.5,
-            90.0,
-            86.0,
-            87.0,
-            91.0,
-            88.0,
-            112,
-            ["um"],
-            ["verify", "refund", "timeline"],
-        ),
-        (
-            users["sample.trainee1@stpeterville.edu.ph"],
-            scenario_lookup["Account Verification and Refund Inquiry"],
-            "I can verify your account details first and then explain the refund policy and the next steps clearly.",
-            84.2,
-            85.0,
-            82.0,
-            84.0,
-            83.0,
-            87.0,
-            94,
-            [],
-            ["verify", "refund", "policy"],
-        ),
-        (
-            users["sample.trainee2@stpeterville.edu.ph"],
-            scenario_lookup["Service Outage Escalation Call"],
-            "I understand how frustrating this outage is. I will troubleshoot with you, create an escalation ticket, and stay accountable for the update.",
-            91.4,
-            92.0,
-            90.0,
-            89.0,
-            93.0,
-            93.0,
-            138,
-            ["uh"],
-            ["troubleshoot", "escalate", "ticket"],
-        ),
-    ]:
-        _, created = _ensure_practice_session(
+    now = datetime.utcnow()
+    latest_sessions_by_email = {}
+    practice_session_seeds = [
+        {
+            "trainee_email": "mcureta@fatima.edu.ph",
+            "scenario_title": "Account Verification and Refund Inquiry",
+            "transcription": "Week 6 attempt 1: I can verify the account first and confirm the best callback details before we review the refund options.",
+            "overall_score": 72.4,
+            "accuracy_score": 74.0,
+            "fluency_score": 70.0,
+            "clarity_score": 73.0,
+            "keyword_adherence_score": 71.0,
+            "soft_skills_score": 74.0,
+            "response_duration": 102,
+            "filler_words": ["um", "uh"],
+            "keyword_hits": ["verify", "confirm"],
+            "attempt_number": 1,
+            "created_at": now - timedelta(days=38),
+            "transcription_confidence": 0.91,
+        },
+        {
+            "trainee_email": "mcureta@fatima.edu.ph",
+            "scenario_title": "Billing Dispute Resolution",
+            "transcription": "Week 4 attempt 2: I am sorry for the duplicate charge. Let me verify the account, review the transaction, and explain the refund timeline.",
+            "overall_score": 79.8,
+            "accuracy_score": 81.0,
+            "fluency_score": 77.0,
+            "clarity_score": 80.0,
+            "keyword_adherence_score": 79.0,
+            "soft_skills_score": 82.0,
+            "response_duration": 108,
+            "filler_words": ["um"],
+            "keyword_hits": ["verify", "refund", "timeline"],
+            "attempt_number": 2,
+            "created_at": now - timedelta(days=25),
+            "transcription_confidence": 0.93,
+        },
+        {
+            "trainee_email": "mcureta@fatima.edu.ph",
+            "scenario_title": "Account Verification and Refund Inquiry",
+            "transcription": "Week 2 attempt 3: I verified the account details, confirmed the contact information, and explained the refund policy with the next update window.",
+            "overall_score": 84.7,
+            "accuracy_score": 86.0,
+            "fluency_score": 82.0,
+            "clarity_score": 85.0,
+            "keyword_adherence_score": 83.0,
+            "soft_skills_score": 86.0,
+            "response_duration": 96,
+            "filler_words": [],
+            "keyword_hits": ["verify", "refund", "policy", "confirm"],
+            "attempt_number": 3,
+            "created_at": now - timedelta(days=13),
+            "transcription_confidence": 0.95,
+        },
+        {
+            "trainee_email": "mcureta@fatima.edu.ph",
+            "scenario_title": "Billing Dispute Resolution",
+            "transcription": "Week 1 attempt 4: I am sorry for the duplicate charge. Let me verify your account, review the refund request, and give you the timeline today.",
+            "overall_score": 88.5,
+            "accuracy_score": 90.0,
+            "fluency_score": 86.0,
+            "clarity_score": 87.0,
+            "keyword_adherence_score": 91.0,
+            "soft_skills_score": 88.0,
+            "response_duration": 112,
+            "filler_words": ["um"],
+            "keyword_hits": ["verify", "refund", "timeline"],
+            "attempt_number": 4,
+            "created_at": now - timedelta(days=5),
+            "transcription_confidence": 0.97,
+        },
+        {
+            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "scenario_title": "Account Verification and Refund Inquiry",
+            "transcription": "Week 5 attempt 1: I can check the account details and then explain the refund process once the information is verified.",
+            "overall_score": 68.9,
+            "accuracy_score": 70.0,
+            "fluency_score": 67.0,
+            "clarity_score": 69.0,
+            "keyword_adherence_score": 68.0,
+            "soft_skills_score": 71.0,
+            "response_duration": 101,
+            "filler_words": ["uh"],
+            "keyword_hits": ["verify"],
+            "attempt_number": 1,
+            "created_at": now - timedelta(days=32),
+            "transcription_confidence": 0.9,
+        },
+        {
+            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "scenario_title": "Billing Dispute Resolution",
+            "transcription": "Week 3 attempt 2: I understand the duplicate charge concern, I will verify the account and review the refund path with you.",
+            "overall_score": 76.4,
+            "accuracy_score": 78.0,
+            "fluency_score": 74.0,
+            "clarity_score": 77.0,
+            "keyword_adherence_score": 75.0,
+            "soft_skills_score": 80.0,
+            "response_duration": 107,
+            "filler_words": ["um"],
+            "keyword_hits": ["verify", "refund"],
+            "attempt_number": 2,
+            "created_at": now - timedelta(days=19),
+            "transcription_confidence": 0.92,
+        },
+        {
+            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "scenario_title": "Account Verification and Refund Inquiry",
+            "transcription": "Week 2 attempt 3: I verified your account details first, and I can now explain the refund policy and the next steps clearly.",
+            "overall_score": 84.2,
+            "accuracy_score": 85.0,
+            "fluency_score": 82.0,
+            "clarity_score": 84.0,
+            "keyword_adherence_score": 83.0,
+            "soft_skills_score": 87.0,
+            "response_duration": 94,
+            "filler_words": [],
+            "keyword_hits": ["verify", "refund", "policy"],
+            "attempt_number": 3,
+            "created_at": now - timedelta(days=8),
+            "transcription_confidence": 0.95,
+        },
+        {
+            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "scenario_title": "Billing Dispute Resolution",
+            "transcription": "Week 1 attempt 4: I reviewed the billing issue, verified the transaction, and set a clear refund follow-up timeline for you.",
+            "overall_score": 86.4,
+            "accuracy_score": 87.0,
+            "fluency_score": 84.0,
+            "clarity_score": 86.0,
+            "keyword_adherence_score": 85.0,
+            "soft_skills_score": 89.0,
+            "response_duration": 99,
+            "filler_words": [],
+            "keyword_hits": ["verify", "refund", "timeline"],
+            "attempt_number": 4,
+            "created_at": now - timedelta(days=2),
+            "transcription_confidence": 0.96,
+        },
+        {
+            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "scenario_title": "Service Outage Escalation Call",
+            "transcription": "Week 5 attempt 1: I know the outage is frustrating, so I will begin troubleshooting and document the escalation for you.",
+            "overall_score": 79.5,
+            "accuracy_score": 81.0,
+            "fluency_score": 77.0,
+            "clarity_score": 78.0,
+            "keyword_adherence_score": 80.0,
+            "soft_skills_score": 82.0,
+            "response_duration": 122,
+            "filler_words": ["uh"],
+            "keyword_hits": ["troubleshoot", "escalate"],
+            "attempt_number": 1,
+            "created_at": now - timedelta(days=30),
+            "transcription_confidence": 0.92,
+        },
+        {
+            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "scenario_title": "Service Outage Escalation Call",
+            "transcription": "Week 3 attempt 2: I understand the impact of the outage. I will take ownership, troubleshoot the line, and create the escalation ticket.",
+            "overall_score": 85.6,
+            "accuracy_score": 87.0,
+            "fluency_score": 84.0,
+            "clarity_score": 83.0,
+            "keyword_adherence_score": 88.0,
+            "soft_skills_score": 86.0,
+            "response_duration": 131,
+            "filler_words": [],
+            "keyword_hits": ["ownership", "troubleshoot", "ticket"],
+            "attempt_number": 2,
+            "created_at": now - timedelta(days=18),
+            "transcription_confidence": 0.95,
+        },
+        {
+            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "scenario_title": "Service Outage Escalation Call",
+            "transcription": "Week 2 attempt 3: I understand how frustrating this outage is. I will troubleshoot with you, create an escalation ticket, and set the callback update.",
+            "overall_score": 89.7,
+            "accuracy_score": 90.0,
+            "fluency_score": 88.0,
+            "clarity_score": 87.0,
+            "keyword_adherence_score": 91.0,
+            "soft_skills_score": 91.0,
+            "response_duration": 136,
+            "filler_words": [],
+            "keyword_hits": ["troubleshoot", "escalate", "ticket", "update"],
+            "attempt_number": 3,
+            "created_at": now - timedelta(days=9),
+            "transcription_confidence": 0.96,
+        },
+        {
+            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "scenario_title": "Service Outage Escalation Call",
+            "transcription": "Week 1 attempt 4: I understand how frustrating this outage is. I will troubleshoot with you, create an escalation ticket, and stay accountable for the update.",
+            "overall_score": 91.4,
+            "accuracy_score": 92.0,
+            "fluency_score": 90.0,
+            "clarity_score": 89.0,
+            "keyword_adherence_score": 93.0,
+            "soft_skills_score": 93.0,
+            "response_duration": 138,
+            "filler_words": ["uh"],
+            "keyword_hits": ["troubleshoot", "escalate", "ticket"],
+            "attempt_number": 4,
+            "created_at": now - timedelta(days=1),
+            "transcription_confidence": 0.98,
+        },
+    ]
+
+    for practice_seed in practice_session_seeds:
+        trainee = users[practice_seed["trainee_email"]]
+        scenario = scenario_lookup[practice_seed["scenario_title"]]
+        session, created = _ensure_practice_session(
             db,
             user_id=trainee.id,
             scenario_id=scenario.id,
-            transcription=transcription,
-            overall_score=overall_score,
-            accuracy_score=accuracy_score,
-            fluency_score=fluency_score,
-            clarity_score=clarity_score,
-            keyword_adherence_score=keyword_adherence_score,
-            soft_skills_score=soft_skills_score,
-            response_duration=response_duration,
-            filler_words=filler_words,
-            keyword_hits=keyword_hits,
+            transcription=practice_seed["transcription"],
+            overall_score=practice_seed["overall_score"],
+            accuracy_score=practice_seed["accuracy_score"],
+            fluency_score=practice_seed["fluency_score"],
+            clarity_score=practice_seed["clarity_score"],
+            keyword_adherence_score=practice_seed["keyword_adherence_score"],
+            soft_skills_score=practice_seed["soft_skills_score"],
+            response_duration=practice_seed["response_duration"],
+            filler_words=practice_seed["filler_words"],
+            keyword_hits=practice_seed["keyword_hits"],
+            attempt_number=practice_seed["attempt_number"],
+            created_at=practice_seed["created_at"],
+            transcription_confidence=practice_seed["transcription_confidence"],
         )
         summary["practice_sessions_created"] += int(created)
+
+        latest_existing = latest_sessions_by_email.get(practice_seed["trainee_email"])
+        if (
+            latest_existing is None
+            or (
+                session.created_at is not None
+                and latest_existing.created_at is not None
+                and session.created_at > latest_existing.created_at
+            )
+        ):
+            latest_sessions_by_email[practice_seed["trainee_email"]] = session
 
     mcq_category, mcq_category_created = _ensure_mcq_category(
         db,
@@ -1811,7 +2198,7 @@ def _seed_sample_dataset(
         mcq_questions[0].id: "B",
         mcq_questions[1].id: "C",
     }
-    _, submission_created = _ensure_mcq_submission(
+    maria_submission, submission_created = _ensure_mcq_submission(
         db,
         assessment_id=mcq_assessment.id,
         trainee_id=users["mcureta@fatima.edu.ph"].id,
@@ -1821,46 +2208,94 @@ def _seed_sample_dataset(
     )
     summary["mcq_submissions_created"] += int(submission_created)
 
+    noah_submission, noah_submission_created = _ensure_mcq_submission(
+        db,
+        assessment_id=mcq_assessment.id,
+        trainee_id=users["sample.trainee2@stpeterville.edu.ph"].id,
+        answers=answers,
+        score_percentage=100.0,
+        is_passed=True,
+    )
+    summary["mcq_submissions_created"] += int(noah_submission_created)
+
+    alyssa_submission, alyssa_submission_created = _ensure_mcq_submission(
+        db,
+        assessment_id=mcq_assessment.id,
+        trainee_id=users["sample.trainee1@stpeterville.edu.ph"].id,
+        answers={
+            mcq_questions[0].id: "B",
+            mcq_questions[1].id: "A",
+        },
+        score_percentage=50.0,
+        is_passed=False,
+    )
+    summary["mcq_submissions_created"] += int(alyssa_submission_created)
+
+    verdict_seed_rows = [
+        {
+            "trainee_email": "mcureta@fatima.edu.ph",
+            "practice_session_id": latest_sessions_by_email["mcureta@fatima.edu.ph"].id,
+            "mcq_assessment_id": maria_submission.assessment_id,
+            "asr_score": latest_sessions_by_email["mcureta@fatima.edu.ph"].overall_score or 0.0,
+            "mcq_score": maria_submission.score_percentage or 0.0,
+            "remarks": "Consistently demonstrates refund verification, empathy, and accurate next-step communication.",
+            "is_competent": True,
+            "decided_at": now - timedelta(days=3),
+            "certificate_no": "CL-2026-SAMPLE-0001",
+            "qr_token": "seed-certificate-maria",
+        },
+        {
+            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "practice_session_id": latest_sessions_by_email["sample.trainee2@stpeterville.edu.ph"].id,
+            "mcq_assessment_id": noah_submission.assessment_id,
+            "asr_score": latest_sessions_by_email["sample.trainee2@stpeterville.edu.ph"].overall_score or 0.0,
+            "mcq_score": noah_submission.score_percentage or 0.0,
+            "remarks": "Shows strong outage-escalation ownership and confidently meets the technical support benchmark.",
+            "is_competent": True,
+            "decided_at": now - timedelta(days=1),
+            "certificate_no": "CL-2026-SAMPLE-0002",
+            "qr_token": "seed-certificate-noah",
+        },
+    ]
+
+    for verdict_seed in verdict_seed_rows:
+        trainee = users[verdict_seed["trainee_email"]]
+        verdict, verdict_created = _ensure_competency_verdict(
+            db,
+            trainee_id=trainee.id,
+            trainer_id=trainer_user.id,
+            practice_session_id=verdict_seed["practice_session_id"],
+            mcq_assessment_id=verdict_seed["mcq_assessment_id"],
+            asr_score=verdict_seed["asr_score"],
+            mcq_score=verdict_seed["mcq_score"],
+            remarks=verdict_seed["remarks"],
+            is_competent=verdict_seed["is_competent"],
+            decided_at=verdict_seed["decided_at"],
+        )
+        summary["competency_verdicts_created"] += int(verdict_created)
+
+        _, certificate_created = _ensure_certificate_record(
+            db,
+            verdict_id=verdict.id,
+            trainee_id=trainee.id,
+            trainer_id=trainer_user.id,
+            unit_of_competency=cert_settings.unit_of_competency,
+            kip_score=round((verdict.asr_score + verdict.mcq_score) / 2, 2),
+            certificate_no=verdict_seed["certificate_no"],
+            qr_token=verdict_seed["qr_token"],
+        )
+        summary["certificates_created"] += int(certificate_created)
+
     db.commit()
 
     return {
         "summary": summary,
         "credentials": {
-            "admin": {"email": "admin@stpeterville.edu.ph", "password": "Admin@SPV"},
-            "trainer": {"email": "trainer@st.peterville.edu.ph", "password": "Trainer@123"},
-            "trainee": {"email": "mcureta@fatima.edu.ph", "password": "SPVTrainee2026"},
+            "admin": {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+            "trainer": {"email": TRAINER_EMAIL, "password": TRAINER_PASSWORD},
+            "trainee": {"email": TRAINEE_EMAIL, "password": TRAINEE_PASSWORD},
         },
     }
-
-
-@router.post("/seed-sample-data")
-async def seed_sample_data(
-    payload: SampleDataSeedRequest,
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Seed a reusable sample dataset into the active database."""
-    try:
-        seeded = _seed_sample_dataset(
-            db,
-            admin_user=current_user,
-            reset_sample_scenarios=payload.reset_sample_scenarios,
-        )
-        log_admin_action(
-            db,
-            current_user.id,
-            "seeded_sample_data",
-            "SampleData",
-            "",
-            seeded["summary"],
-        )
-        return {"status": "seeded", **seeded}
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to seed sample data: {exc}")
-
-
-# ==================== Analytics & Reports ====================
 
 
 @router.get("/dashboard")
@@ -1874,11 +2309,41 @@ async def admin_dashboard(
 
     trainee_count = db.query(User).filter(User.role == UserRole.TRAINEE).count()
     trainer_count = db.query(User).filter(User.role == UserRole.TRAINER).count()
-
-    # Get average overall score
-    from sqlalchemy import func
+    active_batches = sum(
+        1
+        for batch in db.query(Batch).all()
+        if any(user.role == UserRole.TRAINEE for user in batch.users)
+    )
+    average_completion = db.query(func.avg(CourseAssignment.completion_percentage)).scalar() or 0
 
     avg_score = db.query(func.avg(PracticeSession.overall_score)).scalar() or 0
+    audio_sessions = (
+        db.query(PracticeSession)
+        .filter(PracticeSession.audio_file_url.isnot(None))
+        .count()
+    )
+    audio_coverage = round((audio_sessions / total_sessions * 100) if total_sessions else 0.0, 2)
+
+    database_status = {
+        "status": "connected",
+        "detail": "Primary database connection is healthy.",
+    }
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        database_status = {
+            "status": "error",
+            "detail": str(exc),
+        }
+
+    supabase = get_supabase_client()
+    openai_key_configured = bool(os.getenv("OPENAI_API_KEY"))
+    recent_logs = db.query(SystemLog).order_by(SystemLog.created_at.desc()).limit(8).all()
+    actor_ids = [log.admin_id for log in recent_logs if log.admin_id]
+    actor_lookup = {
+        user.id: user.full_name
+        for user in db.query(User).filter(User.id.in_(actor_ids)).all()
+    } if actor_ids else {}
 
     return {
         "total_users": total_users,
@@ -1887,5 +2352,48 @@ async def admin_dashboard(
         "total_scenarios": total_scenarios,
         "total_sessions": total_sessions,
         "average_score": round(avg_score, 2),
+        "active_batches": active_batches,
+        "average_completion": round(float(average_completion or 0), 2),
+        "system_status": {
+            "asr_engine": {
+                "status": "configured" if openai_key_configured else "fallback_only",
+                "detail": (
+                    "OpenAI transcription is configured for live assessment."
+                    if openai_key_configured
+                    else "Live ASR credentials are missing, so heuristic fallback scoring is active."
+                ),
+            },
+            "nlp_processing": {
+                "status": "active",
+                "detail": "Database-backed scoring, keyword matching, and coaching insights are enabled.",
+            },
+            "database": database_status,
+            "audio_storage": {
+                "status": "connected" if supabase.is_available else "not_configured",
+                "provider": "supabase" if supabase.is_available else "unavailable",
+                "detail": (
+                    "Audio uploads are stored through Supabase."
+                    if supabase.is_available
+                    else "Supabase storage is not configured, so audio uploads are blocked."
+                ),
+                "utilization": {
+                    "sessions_with_audio": audio_sessions,
+                    "coverage_percentage": audio_coverage,
+                },
+            },
+        },
+        "recent_activity": [
+            {
+                "id": log.id,
+                "action": log.action,
+                "label": _format_system_log_action(log.action),
+                "entity_type": log.entity_type,
+                "entity_id": log.entity_id,
+                "actor_name": actor_lookup.get(log.admin_id, "System"),
+                "created_at": log.created_at,
+                "changes": log.changes or {},
+            }
+            for log in recent_logs
+        ],
         "timestamp": datetime.utcnow(),
     }

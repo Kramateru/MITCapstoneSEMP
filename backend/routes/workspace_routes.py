@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ..models import User, Workspace
+from .. import auth_utils
+from ..models import User, UserRole, Workspace
 from ..database import get_db
 from ..schemas import WorkspaceCreate
 
@@ -80,14 +81,42 @@ class WorkspaceNLPStatsResponse(BaseModel):
 
 # Dependency to verify trainer/admin
 
-async def verify_trainer_or_admin(current_user: Any = Depends(get_db)):
+def _role_value(role: Any) -> str:
+    return role.value if hasattr(role, "value") else str(role)
+
+
+async def verify_trainer_or_admin(current_user: Any = Depends(auth_utils.get_current_user)):
     """Verify user is trainer or admin"""
-    if not current_user or current_user.role not in ["trainer", "admin"]:
+    if not current_user or _role_value(current_user.role) not in {
+        UserRole.TRAINER.value,
+        UserRole.ADMIN.value,
+    }:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Trainer or Admin access required"
         )
     return current_user
+
+
+def _get_workspace_for_user(
+    db: Session,
+    workspace_id: str,
+    current_user: Any,
+) -> Workspace:
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not workspace:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+
+    if (
+        _role_value(getattr(current_user, "role", "")) == UserRole.TRAINER.value
+        and workspace.trainer_id != current_user.id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This workspace is not assigned to your account",
+        )
+
+    return workspace
 
 
 # GET ENDPOINTS ============================================
@@ -101,12 +130,13 @@ async def create_workspace(
     """Create a new workspace (trainer or admin)"""
     new_ws = Workspace(
         name=workspace_data.name,
-        trainer_id=current_user.id if current_user.role == "trainer" else None,
+        trainer_id=current_user.id if _role_value(current_user.role) == UserRole.TRAINER.value else None,
         empathy_statements=workspace_data.empathy_statements or [],
         probing_questions=workspace_data.probing_questions or [],
         forbidden_words=workspace_data.forbidden_words or [],
         required_keywords=workspace_data.required_keywords or [],
     )
+
     db.add(new_ws)
     db.commit()
     db.refresh(new_ws)
@@ -120,7 +150,7 @@ async def list_workspaces(
 ):
     """List workspaces (trainers see own, admins see all)"""
     query = db.query(Workspace)
-    if current_user.role == "trainer":
+    if _role_value(current_user.role) == UserRole.TRAINER.value:
         query = query.filter(Workspace.trainer_id == current_user.id)
     workspaces = query.all()
     return [
@@ -131,14 +161,13 @@ async def list_workspaces(
 @router.get("/{workspace_id}/config")
 async def get_workspace_nlp_config(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get complete NLP configuration for a workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     return {
         "workspace_id": workspace.id,
         "empathy_statements": workspace.empathy_statements or [],
@@ -146,7 +175,7 @@ async def get_workspace_nlp_config(
         "forbidden_words": workspace.forbidden_words or [],
         "required_keywords": workspace.required_keywords or [],
         "confidence_threshold": getattr(workspace, 'confidence_threshold', 0.75),
-        "language_dialect": workspace.language_dialect,
+        "language_dialect": getattr(workspace, 'language_dialect', 'en-US'),
         "is_production": getattr(workspace, 'is_production', False)
     }
 
@@ -154,14 +183,13 @@ async def get_workspace_nlp_config(
 @router.get("/{workspace_id}/empathy-statements")
 async def get_empathy_statements(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get all empathy statements for workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     statements = workspace.empathy_statements or []
     # Organize by category
     by_category = {}
@@ -182,14 +210,13 @@ async def get_empathy_statements(
 @router.get("/{workspace_id}/probing-questions")
 async def get_probing_questions(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get all probing questions for workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     questions = workspace.probing_questions or []
     
     return {
@@ -203,14 +230,13 @@ async def get_probing_questions(
 @router.get("/{workspace_id}/forbidden-words")
 async def get_forbidden_words(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get all forbidden/restricted words for workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     words = workspace.forbidden_words or []
     active_only = [w for w in words if w.get('is_active', True)]
     
@@ -230,14 +256,13 @@ async def get_forbidden_words(
 @router.get("/{workspace_id}/required-keywords")
 async def get_required_keywords(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get all required keywords for workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     keywords = workspace.required_keywords or []
     
     return {
@@ -255,14 +280,13 @@ async def get_required_keywords(
 @router.get("/{workspace_id}/statistics")
 async def get_workspace_nlp_statistics(
     workspace_id: str,
+    current_user: Any = Depends(verify_trainer_or_admin),
     db: Session = Depends(get_db)
 ):
     """Get statistics about NLP configuration"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     statements = workspace.empathy_statements or []
     questions = workspace.probing_questions or []
     words = workspace.forbidden_words or []
@@ -288,11 +312,9 @@ async def add_empathy_statement(
     db: Session = Depends(get_db)
 ):
     """Add a new empathy statement to workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     statements = workspace.empathy_statements or []
     
     new_stmt = {
@@ -328,11 +350,9 @@ async def add_probing_question(
     db: Session = Depends(get_db)
 ):
     """Add a new probing question to workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     questions = workspace.probing_questions or []
     
     new_question = {
@@ -368,11 +388,9 @@ async def add_forbidden_word(
     db: Session = Depends(get_db)
 ):
     """Add a forbidden/restricted word to workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     words = workspace.forbidden_words or []
     
     new_word = {
@@ -408,11 +426,9 @@ async def add_required_keyword(
     db: Session = Depends(get_db)
 ):
     """Add a required keyword to workspace"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     keywords = workspace.required_keywords or []
     
     new_keyword = {
@@ -450,11 +466,9 @@ async def update_empathy_statement(
     db: Session = Depends(get_db)
 ):
     """Update an empathy statement"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     statements = workspace.empathy_statements or []
     
     for stmt in statements:
@@ -478,11 +492,9 @@ async def delete_empathy_statement(
     db: Session = Depends(get_db)
 ):
     """Delete an empathy statement"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     statements = [s for s in (workspace.empathy_statements or []) if s.get("id") != statement_id]
     workspace.empathy_statements = statements
     workspace.updated_at = datetime.utcnow()
@@ -499,11 +511,9 @@ async def delete_forbidden_word(
     db: Session = Depends(get_db)
 ):
     """Delete a forbidden word (soft delete by marking inactive)"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     words = workspace.forbidden_words or []
     for word in words:
         if word.get("id") == word_id:
@@ -527,11 +537,9 @@ async def import_nlp_configuration(
     db: Session = Depends(get_db)
 ):
     """Bulk import NLP configuration (e.g., from template or another workspace)"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     workspace.empathy_statements = config.empathy_statements
     workspace.probing_questions = config.probing_questions
     workspace.forbidden_words = config.forbidden_words
@@ -559,11 +567,9 @@ async def export_nlp_configuration(
     db: Session = Depends(get_db)
 ):
     """Export current NLP configuration as JSON (for sharing or backup)"""
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     return {
         "workspace_id": workspace_id,
         "workspace_name": workspace.name,
@@ -584,17 +590,15 @@ async def approve_workspace_production(
     db: Session = Depends(get_db)
 ):
     """Mark workspace NLP config as approved for production use"""
-    
-    if current_user.role != "admin":
+
+    if _role_value(current_user.role) != UserRole.ADMIN.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only admins can approve for production"
         )
-    
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if not workspace:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    
+
+    workspace = _get_workspace_for_user(db, workspace_id, current_user)
+
     workspace.is_production = True
     workspace.updated_at = datetime.utcnow()
     db.commit()
