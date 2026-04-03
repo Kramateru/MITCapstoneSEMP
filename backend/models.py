@@ -90,7 +90,7 @@ class User(Base):
     role = Column(
         SQLEnum(UserRole), nullable=False, default=UserRole.TRAINEE
     )
-    lob = Column(String(100), nullable=True)  # Line of Business
+    lob = Column(String(100), nullable=True)
     department = Column(String(100), nullable=True)
     language_dialect = Column(
         String(50), default="en-US"
@@ -141,6 +141,30 @@ class User(Base):
 
     def __repr__(self):
         return f"<User {self.email} ({self.role})>"
+
+
+class NotificationRead(Base):
+    """Per-user read state for synthesized role-based notifications."""
+
+    __tablename__ = "notification_read"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    notification_id = Column(String(255), nullable=False, index=True)
+    role = Column(SQLEnum(UserRole), nullable=False)
+    status = Column(String(20), nullable=False, default="read")
+    is_cleared = Column(Boolean, nullable=False, default=True)
+    read_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "notification_id",
+            name="uq_notification_read_user_notification",
+        ),
+    )
 
 
 class LineOfBusiness(Base):
@@ -348,6 +372,7 @@ class Batch(Base):
     # Training wave/cohort info
     wave_number = Column(Integer)  # e.g., Wave 1, Wave 2
     lob = Column(String(100))
+    is_active = Column(Boolean, default=True)
 
     # Relationships
     users = relationship(

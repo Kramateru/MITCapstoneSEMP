@@ -1,7 +1,0 @@
-INFO:main:Gemini API key detected for REST-based support features
-INFO:main:Applied certification schema backfill for existing databases
-INFO:main:LOB catalog synced: created=0 updated=0 deactivated=0 migrated={'users': 0, 'scenarios': 0, 'batches': 0, 'courses': 0, 'mcq_categories': 0, 'coaching_logs': 0}
-INFO:     Started server process [16552]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)

@@ -3,6 +3,8 @@ PDF Export Service - Generate performance reports and session summaries as PDF
 Uses reportlab for PDF generation
 """
 
+from pathlib import Path
+
 from reportlab.lib.pagesizes import letter, A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -23,6 +25,8 @@ class PerformanceReportGenerator:
     DEFAULT_FONT_SIZE = 10
     TITLE_FONT_SIZE = 16
     HEADING_FONT_SIZE = 12
+    REPORT_INSTITUTION_NAME = "St. Peter Ville Technical Training Center, Inc."
+    REPORT_INSTITUTION_SUBTITLE = "Speech-Enabled BPO Platform"
     
     def __init__(self, title: str = "Performance Report"):
         self.title = title
@@ -60,6 +64,88 @@ class PerformanceReportGenerator:
             textColor=colors.grey,
             spaceAfter=2
         ))
+        self.styles.add(ParagraphStyle(
+            name='InstitutionName',
+            parent=self.styles['Heading2'],
+            fontSize=18,
+            textColor=colors.HexColor('#102a5e'),
+            alignment=TA_CENTER,
+            spaceAfter=4,
+            fontName='Helvetica-Bold'
+        ))
+        self.styles.add(ParagraphStyle(
+            name='InstitutionMeta',
+            parent=self.styles['Normal'],
+            fontSize=10,
+            textColor=colors.HexColor('#475569'),
+            alignment=TA_CENTER,
+            spaceAfter=2,
+        ))
+        self.styles.add(ParagraphStyle(
+            name='ReportSubtitle',
+            parent=self.styles['Normal'],
+            fontSize=11,
+            textColor=colors.HexColor('#334155'),
+            alignment=TA_CENTER,
+            spaceAfter=10,
+            fontName='Helvetica-Bold'
+        ))
+
+    def _resolve_default_logo_path(self) -> Optional[str]:
+        repo_root = Path(__file__).resolve().parents[2]
+        for relative_path in (
+            Path("frontend/public/st-peter-seal.png"),
+            Path("frontend/public/spvlogo.png"),
+            Path("frontend/public/st-peter-seal.svg"),
+        ):
+            candidate = repo_root / relative_path
+            if candidate.exists():
+                return str(candidate)
+        return None
+
+    def _append_st_peter_header(
+        self,
+        story: List[Any],
+        *,
+        report_title: str,
+        report_subtitle: Optional[str] = None,
+    ) -> None:
+        logo_path = self._resolve_default_logo_path()
+        logo = None
+        if logo_path:
+            try:
+                logo = Image(logo_path, width=24, height=24)
+            except Exception:
+                logo = None
+
+        text_blocks = [
+            Paragraph(f"<b>{self.REPORT_INSTITUTION_NAME}</b>", self.styles['InstitutionName']),
+            Paragraph(self.REPORT_INSTITUTION_SUBTITLE, self.styles['InstitutionMeta']),
+            Paragraph(report_title, self.styles['CustomTitle']),
+        ]
+        if report_subtitle:
+            text_blocks.append(Paragraph(report_subtitle, self.styles['ReportSubtitle']))
+
+        if logo:
+            header_table = Table(
+                [[logo, text_blocks]],
+                colWidths=[0.6 * inch, 5.9 * inch],
+            )
+            header_table.setStyle(TableStyle([
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                ('ALIGN', (1, 0), (1, 0), 'CENTER'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            story.append(header_table)
+        else:
+            for block in text_blocks:
+                story.append(block)
+
+        story.append(Spacer(1, 0.15 * inch))
     
     def generate_session_summary(
         self,
@@ -392,7 +478,397 @@ class PerformanceReportGenerator:
         doc.build(story)
         self.buffer.seek(0)
         return self.buffer
-    
+
+    def generate_trainer_batch_report(
+        self,
+        *,
+        batch_name: str,
+        wave_number: Optional[int],
+        report_period: str,
+        generated_at: datetime,
+        focus_metric: str,
+        total_trainees: int,
+        total_sessions: int,
+        average_score: float,
+        pass_rate: float,
+        average_pronunciation: float,
+        improvement_rows: List[Dict[str, Any]],
+        pronunciation_rows: List[Dict[str, Any]],
+        ranking_rows: List[Dict[str, Any]],
+    ) -> BytesIO:
+        story = []
+
+        self._append_st_peter_header(
+            story,
+            report_title="Performance Report",
+            report_subtitle="Batch / Wave Progress Report",
+        )
+
+        batch_label = batch_name
+        if wave_number:
+            batch_label = f"{batch_name} (Wave {wave_number})"
+
+        report_info = [
+            ['Batch / Wave:', batch_label],
+            ['Report Period:', report_period],
+            ['Focus Metric:', focus_metric],
+            ['Generated:', generated_at.strftime("%B %d, %Y at %I:%M %p")],
+        ]
+
+        report_table = Table(report_info, colWidths=[1.8 * inch, 4.4 * inch])
+        report_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        story.append(report_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("EXECUTIVE SUMMARY", self.styles['CustomHeading']))
+        story.append(
+            Paragraph(
+                (
+                    f"This batch report covers <b>{total_trainees}</b> trainees with "
+                    f"<b>{total_sessions}</b> saved practice sessions. The average score is "
+                    f"<b>{average_score:.1f}%</b> with a pass rate of <b>{pass_rate:.1f}%</b>. "
+                    f"Average pronunciation accuracy is <b>{average_pronunciation:.1f}%</b>."
+                ),
+                self.styles['Normal'],
+            )
+        )
+        story.append(Spacer(1, 0.15 * inch))
+
+        summary_table = Table(
+            [
+                ['Metric', 'Value'],
+                ['Total Trainees', str(total_trainees)],
+                ['Total Sessions', str(total_sessions)],
+                ['Average Score', f"{average_score:.1f}%"],
+                ['Pass Rate', f"{pass_rate:.1f}%"],
+                ['Avg. Pronunciation', f"{average_pronunciation:.1f}%"],
+            ],
+            colWidths=[3.0 * inch, 2.2 * inch],
+        )
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        if improvement_rows:
+            story.append(Paragraph("IMPROVEMENT PRIORITIES", self.styles['CustomHeading']))
+            improvement_table = Table(
+                [
+                    ['Category', 'Average', 'Below 70', 'Recommendation'],
+                    *[
+                        [
+                            row['category'],
+                            f"{float(row['average']):.1f}%",
+                            str(int(row['below_threshold_count'])),
+                            row['recommendation'],
+                        ]
+                        for row in improvement_rows
+                    ],
+                ],
+                colWidths=[1.65 * inch, 0.8 * inch, 0.9 * inch, 3.15 * inch],
+                repeatRows=1,
+            )
+            improvement_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(improvement_table)
+            story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("COMMON PRONUNCIATION ERRORS", self.styles['CustomHeading']))
+        if pronunciation_rows:
+            pronunciation_table = Table(
+                [
+                    ['Error Type', 'Frequency', 'Examples'],
+                    *[
+                        [
+                            row['error_type'],
+                            str(int(row['frequency'])),
+                            ', '.join(row['examples']) if row['examples'] else 'No sample words',
+                        ]
+                        for row in pronunciation_rows
+                    ],
+                ],
+                colWidths=[1.75 * inch, 0.8 * inch, 3.95 * inch],
+                repeatRows=1,
+            )
+            pronunciation_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(pronunciation_table)
+        else:
+            story.append(Paragraph("No pronunciation error data was available for the selected report period.", self.styles['Normal']))
+        story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("TRAINEE RANKING SNAPSHOT", self.styles['CustomHeading']))
+        if ranking_rows:
+            ranking_table = Table(
+                [
+                    ['Trainee', 'Sessions', 'Average', 'Highest', 'Passed'],
+                    *[
+                        [
+                            row['trainee_name'],
+                            str(int(row['sessions_count'])),
+                            f"{float(row['average_score']):.1f}%",
+                            f"{float(row['highest_score']):.1f}%",
+                            str(int(row['pass_sessions'])),
+                        ]
+                        for row in ranking_rows
+                    ],
+                ],
+                colWidths=[2.4 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch],
+                repeatRows=1,
+            )
+            ranking_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(ranking_table)
+        else:
+            story.append(Paragraph("No trainee ranking rows were available for the selected report period.", self.styles['Normal']))
+
+        story.append(Spacer(1, 0.25 * inch))
+        story.append(
+            Paragraph(
+                "<i>Generated from trainer analytics data stored in the active platform database.</i>",
+                self.styles['MetricLabel'],
+            )
+        )
+
+        doc = SimpleDocTemplate(
+            self.buffer,
+            pagesize=letter,
+            rightMargin=0.6 * inch,
+            leftMargin=0.6 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.65 * inch,
+            title=self.title,
+        )
+        doc.build(story)
+        self.buffer.seek(0)
+        return self.buffer
+
+    def generate_trainer_trainee_report(
+        self,
+        *,
+        trainee_name: str,
+        trainee_email: str,
+        report_period: str,
+        generated_at: datetime,
+        focus_metric: str,
+        overall_metrics: Dict[str, Any],
+        category_breakdown: List[Dict[str, Any]],
+        recent_sessions: List[Dict[str, Any]],
+        weak_areas: List[Dict[str, Any]],
+    ) -> BytesIO:
+        story = []
+
+        self._append_st_peter_header(
+            story,
+            report_title="Performance Report",
+            report_subtitle="Specific Trainee Progress Report",
+        )
+
+        report_info = [
+            ['Trainee Name:', trainee_name],
+            ['Email:', trainee_email],
+            ['Report Period:', report_period],
+            ['Focus Metric:', focus_metric],
+            ['Generated:', generated_at.strftime("%B %d, %Y at %I:%M %p")],
+        ]
+        report_table = Table(report_info, colWidths=[1.7 * inch, 4.5 * inch])
+        report_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        story.append(report_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        summary_table = Table(
+            [
+                ['Metric', 'Value'],
+                ['Total Sessions', str(int(overall_metrics.get('total_sessions', 0)))],
+                ['Average Score', f"{float(overall_metrics.get('average_score', 0)):.1f}%"],
+                ['Highest Score', f"{float(overall_metrics.get('highest_score', 0)):.1f}%"],
+                ['Lowest Score', f"{float(overall_metrics.get('lowest_score', 0)):.1f}%"],
+                ['Pass Rate', f"{float(overall_metrics.get('pass_rate', 0)):.1f}%"],
+            ],
+            colWidths=[3.0 * inch, 2.2 * inch],
+        )
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+        ]))
+        story.append(Paragraph("OVERALL PERFORMANCE", self.styles['CustomHeading']))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        if category_breakdown:
+            story.append(Paragraph("CATEGORY BREAKDOWN", self.styles['CustomHeading']))
+            category_table = Table(
+                [
+                    ['Category', 'Average', 'Highest', 'Lowest'],
+                    *[
+                        [
+                            row['category'],
+                            f"{float(row['average']):.1f}%",
+                            f"{float(row['highest']):.1f}%",
+                            f"{float(row['lowest']):.1f}%",
+                        ]
+                        for row in category_breakdown
+                    ],
+                ],
+                colWidths=[2.7 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
+                repeatRows=1,
+            )
+            category_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+            ]))
+            story.append(category_table)
+            story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("NEEDS IMPROVEMENT", self.styles['CustomHeading']))
+        if weak_areas:
+            weak_area_table = Table(
+                [
+                    ['Area', 'Score', 'Recommendation'],
+                    *[
+                        [
+                            row['category'],
+                            f"{float(row['score']):.1f}%",
+                            row['recommendation'],
+                        ]
+                        for row in weak_areas
+                    ],
+                ],
+                colWidths=[1.5 * inch, 0.8 * inch, 4.0 * inch],
+                repeatRows=1,
+            )
+            weak_area_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+            ]))
+            story.append(weak_area_table)
+        else:
+            story.append(Paragraph("No sub-threshold skill areas were detected for the selected report period.", self.styles['Normal']))
+        story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("RECENT SESSIONS", self.styles['CustomHeading']))
+        if recent_sessions:
+            recent_sessions_table = Table(
+                [
+                    ['Date', 'Scenario', 'Score', 'Status'],
+                    *[
+                        [
+                            row.get('date_label', ''),
+                            row['scenario'],
+                            f"{float(row['score']):.1f}%",
+                            row['status'],
+                        ]
+                        for row in recent_sessions
+                    ],
+                ],
+                colWidths=[1.3 * inch, 3.0 * inch, 0.8 * inch, 1.1 * inch],
+                repeatRows=1,
+            )
+            recent_sessions_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('ALIGN', (2, 1), (3, -1), 'CENTER'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+            ]))
+            story.append(recent_sessions_table)
+        else:
+            story.append(Paragraph("No recent sessions were available for the selected report period.", self.styles['Normal']))
+
+        story.append(Spacer(1, 0.25 * inch))
+        story.append(
+            Paragraph(
+                "<i>Generated from trainer analytics data stored in the active platform database.</i>",
+                self.styles['MetricLabel'],
+            )
+        )
+
+        doc = SimpleDocTemplate(
+            self.buffer,
+            pagesize=letter,
+            rightMargin=0.6 * inch,
+            leftMargin=0.6 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.65 * inch,
+            title=self.title,
+        )
+        doc.build(story)
+        self.buffer.seek(0)
+        return self.buffer
+
     @staticmethod
     def _score_to_badge(score: float) -> str:
         """Convert score to badge text"""

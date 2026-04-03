@@ -5,11 +5,12 @@ Includes cloud storage integration with Supabase
 
 import uuid
 from datetime import datetime, timedelta
+import re
 from typing import Any, List, Optional
 
 from .. import auth_utils
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,14 @@ from ..services.pdf_generator import PerformanceReportGenerator
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/export", tags=["Export"])
+
+TRAINER_RECOMMENDATIONS = {
+    "Pronunciation": "Focus on articulation drills and technical term enunciation.",
+    "Pacing": "Practice smoother pacing and reduce filler words during live answers.",
+    "Clarity": "Make next-step explanations more direct and easier to follow.",
+    "Grammar": "Review grammar patterns and required keywords before the next attempt.",
+    "Soft Skills": "Add stronger empathy and ownership statements in the opening response.",
+}
 
 
 def _ensure_report_access(
@@ -55,6 +64,63 @@ def _ensure_report_access(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="Export access denied",
     )
+
+
+def _resolve_export_period(
+    *,
+    month: Optional[int],
+    year: Optional[int],
+) -> tuple[Optional[datetime], Optional[datetime], str]:
+    active_year = year or datetime.utcnow().year
+
+    if month:
+        from calendar import monthrange
+
+        _, last_day = monthrange(active_year, month)
+        return (
+            datetime(active_year, month, 1),
+            datetime(active_year, month, last_day, 23, 59, 59),
+            f"{datetime(active_year, month, 1).strftime('%B %Y')}",
+        )
+
+    if year:
+        return (
+            datetime(active_year, 1, 1),
+            datetime(active_year, 12, 31, 23, 59, 59),
+            f"All Months {active_year}",
+        )
+
+    return None, None, "All Time"
+
+
+def _metric_label(metric_type: str) -> str:
+    labels = {
+        "overall": "Overall",
+        "pronunciation": "Pronunciation",
+        "grammar": "Grammar",
+        "pacing": "Pacing",
+        "clarity": "Clarity",
+        "soft_skills": "Soft Skills",
+    }
+    return labels.get(metric_type, "Overall")
+
+
+def _metric_attribute(metric_type: str) -> str:
+    metric_map = {
+        "overall": "overall_score",
+        "pronunciation": "accuracy_score",
+        "grammar": "keyword_adherence_score",
+        "pacing": "fluency_score",
+        "clarity": "clarity_score",
+        "soft_skills": "soft_skills_score",
+    }
+    return metric_map.get(metric_type, "overall_score")
+
+
+def _safe_filename_fragment(value: str, fallback: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', "", (value or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned or fallback
 
 
 @router.post("/session-pdf/{session_id}")
@@ -227,6 +293,246 @@ async def export_progress_report(
         content=pdf_buffer.read(),
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="progress_report_{datetime.now().strftime("%Y%m%d")}.pdf"'},
+    )
+
+
+@router.get("/trainer-report-pdf")
+async def export_trainer_report_pdf(
+    scope: str = Query("batch", pattern="^(batch|trainee)$"),
+    batch_id: Optional[str] = None,
+    trainee_id: Optional[str] = None,
+    metric_type: str = Query("overall", pattern="^(overall|pronunciation|grammar|pacing|clarity|soft_skills)$"),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Generate a PDF version of the trainer reporting workspace."""
+    current_user = await auth_utils.get_current_user(authorization, db)
+    generated_at = datetime.utcnow()
+    start_date, end_date, period_label = _resolve_export_period(month=month, year=year)
+    focus_metric = _metric_label(metric_type)
+
+    if scope == "batch":
+        if not batch_id:
+            raise HTTPException(status_code=400, detail="batch_id is required for batch report export")
+
+        batch = db.query(Batch).filter(Batch.id == batch_id).first()
+        if not batch:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        if current_user.role == UserRole.TRAINEE:
+            raise HTTPException(status_code=403, detail="Trainer or admin access required")
+        if current_user.role == UserRole.TRAINER and batch.created_by != current_user.id:
+            raise HTTPException(status_code=403, detail="This batch does not belong to your trainer account.")
+
+        trainees = [user for user in batch.users if user.role == UserRole.TRAINEE]
+        trainee_ids = [user.id for user in trainees]
+        session_query = db.query(PracticeSession).filter(PracticeSession.user_id.in_(trainee_ids))
+        if start_date and end_date:
+            session_query = session_query.filter(
+                PracticeSession.created_at >= start_date,
+                PracticeSession.created_at <= end_date,
+            )
+        sessions = session_query.order_by(PracticeSession.created_at.asc()).all()
+        if not sessions:
+            raise HTTPException(status_code=404, detail="No sessions found for the selected batch report period")
+
+        overall_scores = [float(session.overall_score or 0.0) for session in sessions if session.overall_score is not None]
+        pronunciation_scores = [float(session.accuracy_score or 0.0) for session in sessions if session.accuracy_score is not None]
+        pass_count = sum((session.overall_score or 0.0) >= 70 for session in sessions)
+
+        improvement_rows = []
+        improvement_specs = [
+            ("Pronunciation", "accuracy_score", "Pronunciation"),
+            ("Pacing", "fluency_score", "Pacing"),
+            ("Clarity", "clarity_score", "Clarity"),
+            ("Grammar", "keyword_adherence_score", "Grammar"),
+            ("Soft Skills", "soft_skills_score", "Soft Skills"),
+        ]
+        for label, attribute, recommendation_key in improvement_specs:
+            scores = [
+                float(getattr(session, attribute))
+                for session in sessions
+                if getattr(session, attribute) is not None
+            ]
+            average = sum(scores) / len(scores) if scores else 0.0
+            below_threshold = sum(score < 70 for score in scores)
+            improvement_rows.append(
+                {
+                    "category": label,
+                    "average": average,
+                    "below_threshold_count": below_threshold,
+                    "recommendation": TRAINER_RECOMMENDATIONS[recommendation_key],
+                }
+            )
+
+        error_counts: dict[str, dict[str, Any]] = {}
+        for session in sessions:
+            for feedback in session.word_feedback or []:
+                if not isinstance(feedback, dict):
+                    continue
+                error_type = str(feedback.get("error_type") or "").strip()
+                if not error_type or error_type.lower() == "none":
+                    continue
+                bucket = error_counts.setdefault(error_type, {"count": 0, "examples": []})
+                bucket["count"] += 1
+                word = str(feedback.get("word") or "").strip()
+                if word and word not in bucket["examples"] and len(bucket["examples"]) < 4:
+                    bucket["examples"].append(word)
+
+        pronunciation_rows = [
+            {
+                "error_type": error_type,
+                "frequency": payload["count"],
+                "examples": payload["examples"],
+            }
+            for error_type, payload in sorted(
+                error_counts.items(),
+                key=lambda item: item[1]["count"],
+                reverse=True,
+            )[:6]
+        ]
+
+        ranking_rows = []
+        for trainee in trainees:
+            trainee_sessions = [session for session in sessions if session.user_id == trainee.id]
+            trainee_scores = [
+                float(session.overall_score or 0.0)
+                for session in trainee_sessions
+                if session.overall_score is not None
+            ]
+            ranking_rows.append(
+                {
+                    "trainee_name": trainee.full_name,
+                    "sessions_count": len(trainee_sessions),
+                    "average_score": (sum(trainee_scores) / len(trainee_scores)) if trainee_scores else 0.0,
+                    "highest_score": max(trainee_scores) if trainee_scores else 0.0,
+                    "pass_sessions": sum((session.overall_score or 0.0) >= 70 for session in trainee_sessions),
+                }
+            )
+        ranking_rows.sort(key=lambda row: row["average_score"], reverse=True)
+
+        generator = PerformanceReportGenerator(title="Performance Report")
+        pdf_buffer = generator.generate_trainer_batch_report(
+            batch_name=batch.name,
+            wave_number=batch.wave_number,
+            report_period=period_label,
+            generated_at=generated_at,
+            focus_metric=focus_metric,
+            total_trainees=len(trainees),
+            total_sessions=len(sessions),
+            average_score=(sum(overall_scores) / len(overall_scores)) if overall_scores else 0.0,
+            pass_rate=(pass_count / len(sessions) * 100) if sessions else 0.0,
+            average_pronunciation=(sum(pronunciation_scores) / len(pronunciation_scores)) if pronunciation_scores else 0.0,
+            improvement_rows=improvement_rows,
+            pronunciation_rows=pronunciation_rows,
+            ranking_rows=ranking_rows,
+        )
+
+        return Response(
+            content=pdf_buffer.read(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="Progress Report (Batch - {_safe_filename_fragment(batch.name, "Batch")}).pdf"'
+                )
+            },
+        )
+
+    if not trainee_id:
+        raise HTTPException(status_code=400, detail="trainee_id is required for trainee report export")
+
+    trainee = db.query(User).filter(User.id == trainee_id).first()
+    if not trainee:
+        raise HTTPException(status_code=404, detail="Trainee not found")
+    _ensure_report_access(db, current_user=current_user, trainee=trainee)
+
+    session_query = db.query(PracticeSession).filter(PracticeSession.user_id == trainee.id)
+    if start_date and end_date:
+        session_query = session_query.filter(
+            PracticeSession.created_at >= start_date,
+            PracticeSession.created_at <= end_date,
+        )
+    sessions = session_query.order_by(PracticeSession.created_at.asc()).all()
+    if not sessions:
+        raise HTTPException(status_code=404, detail="No sessions found for the selected trainee report period")
+
+    overall_scores = [float(session.overall_score or 0.0) for session in sessions if session.overall_score is not None]
+    category_specs = [
+        ("Pronunciation", "accuracy_score", "Pronunciation"),
+        ("Pacing", "fluency_score", "Pacing"),
+        ("Clarity", "clarity_score", "Clarity"),
+        ("Grammar", "keyword_adherence_score", "Grammar"),
+        ("Soft Skills", "soft_skills_score", "Soft Skills"),
+    ]
+
+    category_breakdown = []
+    weak_areas = []
+    for label, attribute, recommendation_key in category_specs:
+        scores = [
+            float(getattr(session, attribute))
+            for session in sessions
+            if getattr(session, attribute) is not None
+        ]
+        average = sum(scores) / len(scores) if scores else 0.0
+        category_breakdown.append(
+            {
+                "category": label,
+                "average": average,
+                "highest": max(scores) if scores else 0.0,
+                "lowest": min(scores) if scores else 0.0,
+            }
+        )
+        if scores and average < 70:
+            weak_areas.append(
+                {
+                    "category": label,
+                    "score": average,
+                    "recommendation": TRAINER_RECOMMENDATIONS[recommendation_key],
+                }
+            )
+
+    scenario_lookup = {
+        scenario.id: scenario.title
+        for scenario in db.query(Scenario).filter(Scenario.id.in_([session.scenario_id for session in sessions])).all()
+    }
+    recent_sessions = [
+        {
+            "date_label": session.created_at.strftime("%Y-%m-%d") if session.created_at else "",
+            "scenario": scenario_lookup.get(session.scenario_id, "Unknown Scenario"),
+            "score": float(session.overall_score or 0.0),
+            "status": "Passed" if (session.overall_score or 0.0) >= 70 else "Needs Improvement",
+        }
+        for session in sessions[-10:]
+    ]
+
+    generator = PerformanceReportGenerator(title="Performance Report")
+    pdf_buffer = generator.generate_trainer_trainee_report(
+        trainee_name=trainee.full_name,
+        trainee_email=trainee.email,
+        report_period=period_label,
+        generated_at=generated_at,
+        focus_metric=focus_metric,
+        overall_metrics={
+            "total_sessions": len(sessions),
+            "average_score": (sum(overall_scores) / len(overall_scores)) if overall_scores else 0.0,
+            "highest_score": max(overall_scores) if overall_scores else 0.0,
+            "lowest_score": min(overall_scores) if overall_scores else 0.0,
+            "pass_rate": (sum(score >= 70 for score in overall_scores) / len(overall_scores) * 100) if overall_scores else 0.0,
+        },
+        category_breakdown=category_breakdown,
+        recent_sessions=recent_sessions,
+        weak_areas=sorted(weak_areas, key=lambda item: item["score"]),
+    )
+
+    return Response(
+        content=pdf_buffer.read(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="Progress Report (Specific Trainee - {_safe_filename_fragment(trainee.full_name, "Trainee")}).pdf"'
+            )
+        },
     )
 
 

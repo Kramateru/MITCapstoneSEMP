@@ -1,0 +1,9 @@
+_npm-cache/
+_tmp/
+media/profile-images/
+frontend/.git.codex-backup/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+Thumbs.db

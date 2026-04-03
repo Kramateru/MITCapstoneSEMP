@@ -70,8 +70,6 @@ def _apply_self_profile_updates(current_user: User, user_update: UserUpdate, db:
             )
         current_user.full_name = full_name
 
-    if user_update.lob is not None:
-        current_user.lob = _normalize_optional_text(user_update.lob)
     if user_update.department is not None:
         current_user.department = _normalize_optional_text(user_update.department)
     if user_update.language_dialect is not None:
@@ -110,8 +108,6 @@ def _apply_admin_user_updates(user: User, user_update: UserUpdate, db: Session) 
             )
         user.full_name = full_name
 
-    if user_update.lob is not None:
-        user.lob = _normalize_optional_text(user_update.lob)
     if user_update.department is not None:
         user.department = _normalize_optional_text(user_update.department)
     if user_update.language_dialect is not None:
@@ -158,7 +154,6 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         full_name=user_data.full_name,
         password_hash=auth_utils.hash_password(effective_password),
         role=user_data.role,
-        lob=user_data.lob,
         department=user_data.department,
         language_dialect=user_data.language_dialect,
         theme=user_data.theme,

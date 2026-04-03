@@ -42,10 +42,19 @@ CATEGORY_METRICS = [
 IMPROVEMENT_RECOMMENDATIONS = {
     "Pronunciation": "Focus on articulation drills and keyword enunciation practice.",
     "Fluency": "Practice pacing control and reduce filler words during live simulations.",
+    "Pacing": "Practice pacing control and reduce filler words during live simulations.",
     "Clarity": "Tighten verification statements and make next-step explanations more explicit.",
     "Keyword Adherence": "Review the required keywords for each scenario before the next attempt.",
+    "Grammar": "Review grammar patterns, sentence structure, and required knowledge keywords before the next attempt.",
     "Soft Skills": "Strengthen empathy language and proactive ownership statements.",
 }
+
+
+def _trainer_has_trainee_access(current_user: User, trainee: User) -> bool:
+    if current_user.role != UserRole.TRAINER:
+        return False
+
+    return any(batch.created_by == current_user.id for batch in trainee.batches)
 
 
 def _average(values: List[float]) -> float:
@@ -128,6 +137,31 @@ def _progress_state(sessions: List[PracticeSession]) -> str:
     if delta < -2:
         return "declining"
     return "stable"
+
+
+def _resolve_period_range(
+    *,
+    month: Optional[int],
+    year: Optional[int],
+) -> tuple[Optional[datetime], Optional[datetime], str]:
+    if month and year:
+        from calendar import monthrange
+
+        _, last_day = monthrange(year, month)
+        return (
+            datetime(year, month, 1),
+            datetime(year, month, last_day, 23, 59, 59),
+            f"{month}/{year}",
+        )
+
+    if year:
+        return (
+            datetime(year, 1, 1),
+            datetime(year, 12, 31, 23, 59, 59),
+            f"All Months {year}",
+        )
+
+    return None, None, "all_time"
 
 
 # ==================== Trainee Progress ====================
@@ -1197,16 +1231,16 @@ async def get_batch_monthly_report(
     if current_user.role == UserRole.TRAINER and batch.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Default to current month if not specified
     now = datetime.utcnow()
-    month = month or now.month
-    year = year or now.year
-    
-    # Get date range for the month
-    from calendar import monthrange
-    _, last_day = monthrange(year, month)
-    start_date = datetime(year, month, 1)
-    end_date = datetime(year, month, last_day, 23, 59, 59)
+    active_year = year or now.year
+    active_month = month
+    if active_month is None and year is None:
+        active_month = now.month
+
+    start_date, end_date, period_label = _resolve_period_range(
+        month=active_month,
+        year=active_year,
+    )
     
     trainee_ids = [u.id for u in batch.users if u.role == UserRole.TRAINEE]
     sessions = db.query(PracticeSession).filter(
@@ -1218,7 +1252,7 @@ async def get_batch_monthly_report(
     # Monthly summary
     monthly_report = {
         "batch_name": batch.name,
-        "month": f"{month}/{year}",
+        "month": period_label,
         "summary": {
             "total_sessions": len(sessions),
             "total_trainees": len(trainee_ids),
@@ -1263,6 +1297,8 @@ async def get_batch_monthly_report(
 @router.get("/reports/trainee/{trainee_id}/detailed-report")
 async def get_trainee_detailed_report(
     trainee_id: str,
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=2020),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
@@ -1276,10 +1312,39 @@ async def get_trainee_detailed_report(
     trainee = db.query(User).filter(User.id == trainee_id).first()
     if not trainee:
         raise HTTPException(status_code=404, detail="Trainee not found")
-    
-    sessions = db.query(PracticeSession).filter(
+
+    if current_user.id != trainee_id and current_user.role == UserRole.TRAINER:
+        if not _trainer_has_trainee_access(current_user, trainee):
+            raise HTTPException(status_code=403, detail="Access denied")
+
+    start_date, end_date, period_label = _resolve_period_range(
+        month=month,
+        year=year,
+    )
+
+    session_query = db.query(PracticeSession).filter(
         PracticeSession.user_id == trainee_id
-    ).order_by(PracticeSession.created_at).all()
+    )
+    if start_date:
+        session_query = session_query.filter(
+            PracticeSession.created_at >= start_date,
+            PracticeSession.created_at <= end_date,
+        )
+
+    sessions = session_query.order_by(PracticeSession.created_at).all()
+    accessible_batches = list(trainee.batches or [])
+    if current_user.role == UserRole.TRAINER:
+        accessible_batches = [
+            batch for batch in accessible_batches if batch.created_by == current_user.id
+        ]
+
+    scenario_titles = {}
+    scenario_ids = {session.scenario_id for session in sessions if session.scenario_id}
+    if scenario_ids:
+        scenario_titles = {
+            scenario.id: scenario.title
+            for scenario in db.query(Scenario).filter(Scenario.id.in_(scenario_ids)).all()
+        }
     
     # Overall metrics
     scores = [s.overall_score for s in sessions if s.overall_score is not None]
@@ -1289,6 +1354,16 @@ async def get_trainee_detailed_report(
         "trainee_name": trainee.full_name,
         "trainee_email": trainee.email,
         "report_generated": datetime.utcnow().isoformat(),
+        "report_period": period_label,
+        "assigned_batches": [
+            {
+                "id": batch.id,
+                "name": batch.name,
+                "wave_number": batch.wave_number,
+                "lob": batch.lob,
+            }
+            for batch in accessible_batches
+        ],
         "overall_metrics": {
             "total_sessions": len(sessions),
             "average_score": _average(scores),
@@ -1334,7 +1409,7 @@ async def get_trainee_detailed_report(
         "recent_sessions": [
             {
                 "session_id": s.id,
-                "scenario": db.query(Scenario).filter(Scenario.id == s.scenario_id).first().title if s.scenario_id else "Unknown",
+                "scenario": scenario_titles.get(s.scenario_id, "Unknown") if s.scenario_id else "Unknown",
                 "score": s.overall_score,
                 "date": s.created_at.isoformat() if s.created_at else "",
                 "status": "Passed" if (s.overall_score and s.overall_score >= 70) else "Failed"
@@ -1351,7 +1426,7 @@ async def filter_report_data(
     report_type: str = Query("batch", pattern="^(batch|trainee)$"),
     batch_id: Optional[str] = None,
     trainee_id: Optional[str] = None,
-    metric_type: str = Query("pronunciation", pattern="^(pronunciation|grammar|pacing|soft_skills|overall)$"),
+    metric_type: str = Query("pronunciation", pattern="^(pronunciation|grammar|pacing|clarity|soft_skills|overall)$"),
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=2020),
     authorization: Optional[str] = Header(None),
@@ -1371,13 +1446,10 @@ async def filter_report_data(
         trainee_ids = [u.id for u in batch.users if u.role == UserRole.TRAINEE]
         
         # Apply date filter if provided
-        start_date = None
-        end_date = None
-        if month and year:
-            from calendar import monthrange
-            _, last_day = monthrange(year, month)
-            start_date = datetime(year, month, 1)
-            end_date = datetime(year, month, last_day, 23, 59, 59)
+        start_date, end_date, period_label = _resolve_period_range(
+            month=month,
+            year=year,
+        )
         
         query = db.query(PracticeSession).filter(PracticeSession.user_id.in_(trainee_ids))
         if start_date:
@@ -1390,6 +1462,7 @@ async def filter_report_data(
             "pronunciation": "accuracy_score",
             "grammar": "keyword_adherence_score",
             "pacing": "fluency_score",
+            "clarity": "clarity_score",
             "soft_skills": "soft_skills_score",
             "overall": "overall_score"
         }
@@ -1410,7 +1483,7 @@ async def filter_report_data(
             "batch_id": batch_id,
             "batch_name": batch.name,
             "metric_type": metric_type,
-            "period": f"{month}/{year}" if month and year else "all_time",
+            "period": period_label,
             "data_points": filtered_data,
             "summary": {
                 "count": len(filtered_data),
@@ -1423,17 +1496,16 @@ async def filter_report_data(
         if not trainee:
             raise HTTPException(status_code=404, detail="Trainee not found")
         
-        if current_user.id != trainee_id and current_user.role != UserRole.ADMIN:
+        if current_user.id != trainee_id and current_user.role not in [UserRole.ADMIN, UserRole.TRAINER]:
+            raise HTTPException(status_code=403, detail="Access denied")
+        if current_user.role == UserRole.TRAINER and not _trainer_has_trainee_access(current_user, trainee):
             raise HTTPException(status_code=403, detail="Access denied")
         
         # Apply date filter if provided
-        start_date = None
-        end_date = None
-        if month and year:
-            from calendar import monthrange
-            _, last_day = monthrange(year, month)
-            start_date = datetime(year, month, 1)
-            end_date = datetime(year, month, last_day, 23, 59, 59)
+        start_date, end_date, period_label = _resolve_period_range(
+            month=month,
+            year=year,
+        )
         
         query = db.query(PracticeSession).filter(PracticeSession.user_id == trainee_id)
         if start_date:
@@ -1445,6 +1517,7 @@ async def filter_report_data(
             "pronunciation": "accuracy_score",
             "grammar": "keyword_adherence_score",
             "pacing": "fluency_score",
+            "clarity": "clarity_score",
             "soft_skills": "soft_skills_score",
             "overall": "overall_score"
         }
@@ -1464,7 +1537,7 @@ async def filter_report_data(
             "trainee_id": trainee_id,
             "trainee_name": trainee.full_name,
             "metric_type": metric_type,
-            "period": f"{month}/{year}" if month and year else "all_time",
+            "period": period_label,
             "data_points": filtered_data,
             "summary": {
                 "count": len(filtered_data),

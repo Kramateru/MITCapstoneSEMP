@@ -209,7 +209,7 @@ def _resolve_batch_lookup(
     if not raw_lookup:
         return None
 
-    base_query = db.query(Batch).filter(Batch.created_by == trainer_id)
+    base_query = db.query(Batch).filter(Batch.created_by == trainer_id, Batch.is_active == True)
     direct_match = (
         base_query.filter(func.lower(Batch.name) == raw_lookup.lower()).first()
     )
@@ -276,6 +276,7 @@ def _serialize_trainer_batch_summary(batch: Batch) -> Dict[str, Any]:
         "description": batch.description,
         "wave_number": batch.wave_number,
         "lob": batch.lob,
+        "is_active": batch.is_active,
         "users_count": len([user for user in batch.users if user.role == UserRole.TRAINEE]),
         "created_at": batch.created_at,
     }
@@ -413,6 +414,7 @@ class BatchCreate(BaseModel):
     description: Optional[str] = None
     wave_number: Optional[int] = None
     lob: Optional[str] = None
+    is_active: bool = True
 
 
 class BatchUserAssignment(BaseModel):
@@ -539,6 +541,7 @@ async def create_batch(
         description=_normalize_text_value(batch_data.description) or None,
         wave_number=batch_data.wave_number,
         lob=_normalize_text_value(batch_data.lob) or None,
+        is_active=batch_data.is_active,
         created_by=current_user.id,
     )
 
@@ -651,6 +654,7 @@ async def update_batch(
     batch.description = _normalize_text_value(batch_data.description) or None
     batch.wave_number = batch_data.wave_number
     batch.lob = _normalize_text_value(batch_data.lob) or None
+    batch.is_active = batch_data.is_active
 
     for trainee in [user for user in batch.users if user.role == UserRole.TRAINEE]:
         _apply_batch_profile(trainee, batch)
@@ -905,11 +909,8 @@ async def list_registered_trainees(
 
     trainees = (
         db.query(User)
-        .filter(
-            User.role == UserRole.TRAINEE,
-            User.is_active.is_(True),
-        )
-        .order_by(User.full_name.asc(), User.email.asc())
+        .filter(User.role == UserRole.TRAINEE)
+        .order_by(User.is_active.desc(), User.full_name.asc(), User.email.asc())
         .all()
     )
 
@@ -1029,7 +1030,7 @@ async def download_trainee_bulk_upload_template(
         instructions.append(["Full Name", "Required"])
         instructions.append(["Role", "Use trainee"])
         instructions.append(["Password", f"Default password is always {DEFAULT_TRAINEE_PASSWORD}"])
-        instructions.append(["Wave/Batch", "Use an existing trainer batch name or batch number"])
+        instructions.append(["Wave/Batch", "Use an existing active trainer batch name or batch number"])
 
         output = io.BytesIO()
         workbook.save(output)

@@ -20,6 +20,7 @@ from ..models import (
     MCQAssessment,
     MCQSubmission,
     MicrolearningAssignment,
+    NotificationRead,
     PracticeSession,
     SystemLog,
     User,
@@ -61,6 +62,8 @@ def _serialize_notification(
         "level": level,
         "action_label": action_label,
         "created_at": created_at.isoformat() if created_at else None,
+        "status": "unread",
+        "is_cleared": False,
     }
 
 
@@ -79,6 +82,92 @@ def _sort_key(notification: dict[str, Any]) -> tuple[int, str]:
         except ValueError:
             timestamp = 0.0
     return (level_priority.get(notification.get("level", "info"), 4), -timestamp)
+
+
+def _read_notification_ids(
+    *,
+    db: Session,
+    current_user: User,
+) -> set[str]:
+    legacy_ids = set(current_user.dismissed_notifications or [])
+    persisted_ids = {
+        notification_id
+        for (notification_id,) in (
+            db.query(NotificationRead.notification_id)
+            .filter(
+                NotificationRead.user_id == current_user.id,
+                NotificationRead.is_cleared == True,
+            )
+            .all()
+        )
+    }
+    return legacy_ids | persisted_ids
+
+
+def _build_notifications_for_user(
+    *,
+    db: Session,
+    current_user: User,
+) -> list[dict[str, Any]]:
+    if current_user.role == UserRole.TRAINEE:
+        notifications = _build_trainee_notifications(db=db, current_user=current_user)
+    elif current_user.role == UserRole.TRAINER:
+        notifications = _build_trainer_notifications(db=db, current_user=current_user)
+    else:
+        notifications = _build_admin_notifications(db=db)
+
+    notifications.sort(key=_sort_key)
+    return notifications
+
+
+def _active_notifications_for_user(
+    *,
+    db: Session,
+    current_user: User,
+) -> list[dict[str, Any]]:
+    notifications = _build_notifications_for_user(db=db, current_user=current_user)
+    cleared_ids = _read_notification_ids(db=db, current_user=current_user)
+    return [notification for notification in notifications if notification["id"] not in cleared_ids]
+
+
+def _persist_notification_read(
+    *,
+    db: Session,
+    current_user: User,
+    notification_id: str,
+) -> NotificationRead:
+    record = (
+        db.query(NotificationRead)
+        .filter(
+            NotificationRead.user_id == current_user.id,
+            NotificationRead.notification_id == notification_id,
+        )
+        .first()
+    )
+    now = datetime.utcnow()
+
+    if not record:
+        record = NotificationRead(
+            user_id=current_user.id,
+            notification_id=notification_id,
+            role=current_user.role,
+        )
+        db.add(record)
+
+    record.role = current_user.role
+    record.status = "read"
+    record.is_cleared = True
+    record.read_at = now
+
+    # Keep the legacy user-level dismissal list in sync so existing records remain hidden.
+    dismissed_ids = list(current_user.dismissed_notifications or [])
+    if notification_id not in dismissed_ids:
+        dismissed_ids.append(notification_id)
+        current_user.dismissed_notifications = dismissed_ids
+
+    db.commit()
+    db.refresh(record)
+    return record
 
 
 def _trainer_cohort_ids(db: Session, trainer_id: str) -> tuple[list[str], list[str]]:
@@ -515,20 +604,7 @@ async def list_notifications(
     current_user: User = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db),
 ):
-    notifications: list[dict[str, Any]]
-
-    if current_user.role == UserRole.TRAINEE:
-        notifications = _build_trainee_notifications(db=db, current_user=current_user)
-    elif current_user.role == UserRole.TRAINER:
-        notifications = _build_trainer_notifications(db=db, current_user=current_user)
-    else:
-        notifications = _build_admin_notifications(db=db)
-
-    notifications.sort(key=_sort_key)
-
-    # Filter out dismissed notifications
-    dismissed_ids = set(current_user.dismissed_notifications or [])
-    notifications = [n for n in notifications if n["id"] not in dismissed_ids]
+    notifications = _active_notifications_for_user(db=db, current_user=current_user)
 
     return {
         "count": len(notifications),
@@ -538,8 +614,8 @@ async def list_notifications(
     }
 
 
-@router.post("/dismiss")
-async def dismiss_notification(
+@router.post("/read")
+async def mark_notification_read(
     payload: dict[str, str] = Body(...),
     current_user: User = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db),
@@ -548,10 +624,27 @@ async def dismiss_notification(
     if not notification_id:
         raise HTTPException(status_code=400, detail="notification_id is required")
 
-    dismissed = list(current_user.dismissed_notifications or [])
-    if notification_id not in dismissed:
-        dismissed.append(notification_id)
-        current_user.dismissed_notifications = dismissed
-        db.commit()
+    read_record = _persist_notification_read(
+        db=db,
+        current_user=current_user,
+        notification_id=notification_id,
+    )
+    unread_notifications = _active_notifications_for_user(db=db, current_user=current_user)
 
-    return {"message": "Notification dismissed", "notification_id": notification_id}
+    return {
+        "message": "Notification marked as read",
+        "notification_id": notification_id,
+        "status": read_record.status,
+        "is_cleared": read_record.is_cleared,
+        "read_at": read_record.read_at.isoformat() if read_record.read_at else None,
+        "count": len(unread_notifications),
+    }
+
+
+@router.post("/dismiss")
+async def dismiss_notification(
+    payload: dict[str, str] = Body(...),
+    current_user: User = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await mark_notification_read(payload=payload, current_user=current_user, db=db)

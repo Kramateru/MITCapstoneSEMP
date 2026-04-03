@@ -188,6 +188,37 @@ def ensure_microlearning_assessment_schema() -> None:
 ensure_microlearning_assessment_schema()
 
 
+def ensure_user_dismissed_notifications_column() -> None:
+    """Backfill dismissed_notifications column for existing databases."""
+    try:
+        inspector = inspect(engine)
+        existing_columns = {column["name"] for column in inspector.get_columns("user")}
+    except Exception:
+        logger.exception("Unable to inspect user table for dismissed_notifications migration")
+        return
+
+    if "dismissed_notifications" in existing_columns:
+        return
+
+    json_definition = (
+        "JSONB DEFAULT '[]'::jsonb"
+        if engine.dialect.name == "postgresql"
+        else "JSON DEFAULT '[]'"
+    )
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(f'ALTER TABLE "user" ADD COLUMN dismissed_notifications {json_definition}')
+            )
+        logger.info("Applied user dismissed_notifications schema backfill")
+    except Exception:
+        logger.exception("Failed to backfill dismissed_notifications column")
+
+
+ensure_user_dismissed_notifications_column()
+
+
 def ensure_certification_schema() -> None:
     """Backfill certificate settings and certificate record columns for older databases."""
     try:

@@ -2,6 +2,7 @@
 Authentication and security utilities for JWT token handling and password management.
 """
 
+import logging
 import os
 from datetime import datetime, timedelta
 from typing import Optional
@@ -15,6 +16,8 @@ from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import User, UserRole
+
+logger = logging.getLogger(__name__)
 
 # Passlib 1.7 expects bcrypt.__about__.__version__, which bcrypt 4.x no longer exposes.
 if not hasattr(bcrypt, "__about__"):
@@ -52,12 +55,20 @@ class TokenResponse(BaseModel):
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
-    return pwd_context.hash(password)
+    # Bcrypt has a 72-byte limit; truncate to handle edge cases
+    return pwd_context.hash(password[:72])
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        # Bcrypt has a 72-byte limit; truncate plain password to match hash behavior
+        return pwd_context.verify(plain_password[:72], hashed_password)
+    except (ValueError, TypeError) as e:
+        # Handle any bcrypt errors (corrupted hash, encoding issues, etc.)
+        # If verification fails, treat as invalid credentials
+        logger.warning(f"Password verification error: {str(e)}")
+        return False
 
 
 # ===================== JWT Token Management =====================

@@ -53,7 +53,6 @@ class UserBase(BaseModel):
     email: EmailStr
     full_name: str
     role: UserRole = UserRole.TRAINEE
-    lob: Optional[str] = None
     department: Optional[str] = None
     language_dialect: str = "en-US"
     theme: str = "default"
@@ -74,7 +73,6 @@ class UserUpdate(BaseModel):
 
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
-    lob: Optional[str] = None
     department: Optional[str] = None
     language_dialect: Optional[str] = None
     theme: Optional[str] = None
