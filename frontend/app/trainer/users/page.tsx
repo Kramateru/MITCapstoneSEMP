@@ -55,6 +55,7 @@ export default function TrainerUsersPage() {
   const [isSavingTrainee, setIsSavingTrainee] = useState(false);
   const [isRemovingTrainee, setIsRemovingTrainee] = useState(false);
   const [isAssigningRegistered, setIsAssigningRegistered] = useState(false);
+  const [isUpdatingTraineeStatus, setIsUpdatingTraineeStatus] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [editingTraineeId, setEditingTraineeId] = useState<string | null>(null);
@@ -491,6 +492,35 @@ export default function TrainerUsersPage() {
     }
   };
 
+  const updateTraineeStatus = async (trainee: TraineeRecord, isActive: boolean) => {
+    setIsUpdatingTraineeStatus(true);
+    setStatus(null);
+    setBulkErrors([]);
+
+    try {
+      const response = await fetchWithAuthRetry(`/api/trainer/trainees/${trainee.id}/status`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ is_active: isActive }),
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail || 'Failed to update trainee status.');
+      }
+
+      const action = isActive ? 'activated' : 'deactivated';
+      showStatus('success', `Trainee ${action} successfully.`);
+      cancelEditingTrainee();
+      await loadData(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to update trainee status.';
+      showStatus('error', message);
+    } finally {
+      setIsUpdatingTraineeStatus(false);
+    }
+  };
+
   const downloadTemplate = async () => {
     setStatus(null);
     setBulkErrors([]);
@@ -771,40 +801,63 @@ export default function TrainerUsersPage() {
                 Review all trainee accounts already saved in the database, then add the selected trainees into one of your existing batch or wave records.
               </p>
             </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setRosterFilter('available')}
-                className={`rounded border px-3 py-2 text-sm ${
-                  rosterFilter === 'available'
-                    ? 'border-blue-600 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                Available
-              </button>
-              <button
-                type="button"
-                onClick={() => setRosterFilter('mine')}
-                className={`rounded border px-3 py-2 text-sm ${
-                  rosterFilter === 'mine'
-                    ? 'border-blue-600 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                In My Class
-              </button>
-              <button
-                type="button"
-                onClick={() => setRosterFilter('all')}
-                className={`rounded border px-3 py-2 text-sm ${
-                  rosterFilter === 'all'
-                    ? 'border-blue-600 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-700 hover:bg-gray-50'
-                }`}
-              >
-                All Registered
-              </button>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Search by name or email..."
+                    value={rosterSearch}
+                    onChange={(e) => setRosterSearch(e.target.value)}
+                    className="w-full rounded border border-gray-200 pl-10 pr-3 py-2 text-sm md:w-64"
+                  />
+                </div>
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                  className="rounded border border-gray-200 px-3 py-2 text-sm"
+                >
+                  <option value="all">All Status</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setRosterFilter('available')}
+                  className={`rounded border px-3 py-2 text-sm ${
+                    rosterFilter === 'available'
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Available
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRosterFilter('mine')}
+                  className={`rounded border px-3 py-2 text-sm ${
+                    rosterFilter === 'mine'
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  In My Class
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRosterFilter('all')}
+                  className={`rounded border px-3 py-2 text-sm ${
+                    rosterFilter === 'all'
+                      ? 'border-blue-600 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  All Registered
+                </button>
+              </div>
             </div>
           </div>
 
@@ -943,7 +996,18 @@ export default function TrainerUsersPage() {
                       }}
                     />
                     <div className="min-w-0">
-                      <div className="font-medium text-gray-900">{trainee.full_name}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium text-gray-900">{trainee.full_name}</div>
+                        <span
+                          className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ${
+                            isInactive
+                              ? 'bg-red-100 text-red-800'
+                              : 'bg-green-100 text-green-800'
+                          }`}
+                        >
+                          {isInactive ? 'Inactive' : 'Active'}
+                        </span>
+                      </div>
                       <div className="text-xs text-gray-600">{trainee.email}</div>
                       <div className="mt-1 text-xs text-gray-600">
                         Status: {isInactive ? 'Inactive' : 'Active'} | Current batches: {formatBatchSummary(trainee)}
@@ -1098,6 +1162,38 @@ export default function TrainerUsersPage() {
                           </option>
                         ))}
                       </select>
+                      <div className="flex items-center gap-2">
+                        <label className="text-sm font-medium text-gray-700">Status:</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const trainee = trainees.find((t) => t.id === editingTraineeId);
+                            if (trainee) {
+                              updateTraineeStatus(trainee, !trainee.is_active);
+                            }
+                          }}
+                          disabled={isUpdatingTraineeStatus}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                            trainees.find((t) => t.id === editingTraineeId)?.is_active
+                              ? 'bg-green-600'
+                              : 'bg-gray-200'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                              trainees.find((t) => t.id === editingTraineeId)?.is_active
+                                ? 'translate-x-6'
+                                : 'translate-x-1'
+                            }`}
+                          />
+                        </button>
+                        <span className="text-sm text-gray-600">
+                          {trainees.find((t) => t.id === editingTraineeId)?.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                        {isUpdatingTraineeStatus && (
+                          <span className="text-xs text-blue-600">Updating...</span>
+                        )}
+                      </div>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
