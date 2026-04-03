@@ -76,6 +76,10 @@ export default function TrainerUsersPage() {
 
   const sidebarItems = trainerSidebarItems();
 
+  const assignmentTargetBatch = useMemo(() => {
+    return batches.find((batch) => batch.id === assignmentBatchId) || null;
+  }, [batches, assignmentBatchId]);
+
   const authHeaders = (json = true) => {
     return {
       ...(json ? { 'Content-Type': 'application/json' } : {}),
@@ -379,7 +383,6 @@ export default function TrainerUsersPage() {
         throw new Error(payload?.detail || 'Failed to add registered trainees to the selected batch.');
       }
 
-      const assignmentTargetBatch = batches.find((batch) => batch.id === assignmentBatchId);
       const batchLabel = assignmentTargetBatch ? formatBatchLabel(assignmentTargetBatch) : 'the selected batch';
       const movedSuffix =
         payload?.moved_users > 0 ? ` ${payload.moved_users} trainee(s) were moved from another batch you manage.` : '';

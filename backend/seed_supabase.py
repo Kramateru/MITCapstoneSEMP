@@ -48,6 +48,26 @@ def _ensure_user_settings_columns() -> None:
         )
 
 
+def _ensure_batch_columns() -> None:
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns("batch")}
+    if not existing_columns:
+        return
+
+    column_definitions = {
+        "is_active": "BOOLEAN DEFAULT TRUE",
+    }
+
+    with engine.begin() as connection:
+        for name, definition in column_definitions.items():
+            if name not in existing_columns:
+                connection.execute(text(f'ALTER TABLE "batch" ADD COLUMN {name} {definition}'))
+
+        connection.execute(
+            text('UPDATE "batch" SET is_active = COALESCE(is_active, TRUE)')
+        )
+
+
 def _ensure_certification_schema() -> None:
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
@@ -149,6 +169,7 @@ def _ensure_certification_schema() -> None:
 def seed(reset_sample_scenarios: bool = False) -> dict:
     Base.metadata.create_all(bind=engine)
     _ensure_user_settings_columns()
+    _ensure_batch_columns()
     _ensure_certification_schema()
 
     db = SessionLocal()
