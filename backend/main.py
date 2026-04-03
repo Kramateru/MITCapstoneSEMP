@@ -219,6 +219,34 @@ def ensure_user_dismissed_notifications_column() -> None:
 ensure_user_dismissed_notifications_column()
 
 
+def ensure_batch_active_column() -> None:
+    """Backfill is_active column for batch table in existing databases."""
+    try:
+        inspector = inspect(engine)
+        existing_columns = {column["name"] for column in inspector.get_columns("batch")}
+    except Exception:
+        logger.exception("Unable to inspect batch table for is_active migration")
+        return
+
+    if "is_active" in existing_columns:
+        return
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text('ALTER TABLE "batch" ADD COLUMN is_active BOOLEAN DEFAULT TRUE')
+            )
+            connection.execute(
+                text('UPDATE "batch" SET is_active = COALESCE(is_active, TRUE)')
+            )
+        logger.info("Applied batch is_active schema backfill")
+    except Exception:
+        logger.exception("Failed to backfill batch is_active column")
+
+
+ensure_batch_active_column()
+
+
 def ensure_certification_schema() -> None:
     """Backfill certificate settings and certificate record columns for older databases."""
     try:

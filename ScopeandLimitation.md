@@ -17,17 +17,18 @@
 11. **Export & PDF Generation Module** - Export Routes (`export_routes.py`)
 12. **Settings & System Configuration Module** - Settings Routes (`settings_routes.py`)
 13. **Support & Help Module** - Support Routes (`support_routes.py`)
-14. **Speech Assessment Module** - Speech Assessment Service (`speech_assessment.py`)
-15. **Microlearning Module** - Microlearning Service (`microlearning.py`)
-16. **Coaching Module** - Coaching Service (`coaching.py`)
+14. **Notification Module** - Notification Routes (`notification_routes.py`)
+15. **Speech Assessment Module** - Speech Assessment Service (`speech_assessment.py`)
+16. **Microlearning Module** - Microlearning Service (`microlearning.py`)
+17. **Coaching Module** - Coaching Service (`coaching.py`)
 
 ---
 
 ## Data Models & Entities
 
 ### **Core Data Models**
-- **User** - Central user entity with role-based differentiation (Admin, Trainer, Trainee)
-- **Batch** - Groups of trainees for batch assignment and management
+- **User** - Central user entity with role-based differentiation (Admin, Trainer, Trainee) including notification dismiss tracking
+- **Batch** - Groups of trainees for batch assignment and management with active/inactive status control
 - **Course** - Training programs containing multiple scenarios and microlearning modules
 - **CourseAssignment** - Assignment of courses to batches or individuals
 - **Scenario** - Practice/assessment use cases with opening prompts and branching logic
@@ -48,6 +49,7 @@
 - **CoachingLog** - Coaching records between trainer and trainee
 - **CompetencyVerdict** - Final competency assessment results
 - **CertificateRecord** - Digital certificates awarded
+- **NotificationRead** - Per-user notification read state tracking
 
 ### **Configuration Models**
 - **KPIConfiguration** - Global weighted scoring configuration (accuracy, fluency, clarity, keyword adherence, soft skills)
@@ -70,6 +72,9 @@ The user management module enables comprehensive user account operations includi
 
 For administrative purposes, this module provides endpoints to list all users, retrieve specific user information, update user accounts, and delete user accounts when necessary. It ensures proper role-based access control and maintains audit trails for user management activities.
 
+**Recent Enhancements:**
+- Users can now remove their Line of Business (LOB) association from their profile settings, providing flexibility in organizational structure management.
+
 ### **3. Trainee Portal Module** (`/api/trainee`)
 The trainee portal module serves as the primary interface for trainees to engage with training content and track their progress. It allows trainees to set their language dialect preferences and customize UI settings for optimal learning experience. Trainees can view scenarios assigned by their trainers and browse all published scenarios for self-directed learning.
 
@@ -79,6 +84,12 @@ The module facilitates practice sessions through audio recording and real-time A
 The trainer portal module empowers trainers to manage their training programs and monitor trainee performance effectively. It provides comprehensive batch management capabilities including creating, updating, and deleting trainee batches, as well as bulk assignment of trainees to specific batches. Trainers can create and manage training courses composed of scenarios and microlearning modules.
 
 The module supports course assignment to individual trainees or entire batches, with tracking of assignment progress and completion. Trainers can review trainee interaction history, verify ASR transcriptions for accuracy, and provide detailed feedback on practice sessions. It includes analytics features for monitoring batch and individual trainee performance, with capabilities to export performance reports in PDF format.
+
+**Recent Enhancements:**
+- Added "Remove from Batch" functionality allowing trainers to remove individual trainees from batches through the trainee modification interface
+- Implemented batch status management with active/inactive states - only active batches can be selected for new trainee assignments, providing better batch lifecycle control
+- Enhanced batch assignment workflows to filter and display only active batches in trainee creation and modification forms
+- Updated bulk upload processes to validate batch assignments against active batches only
 
 ### **5. Admin Portal Module** (`/api/admin`)
 The admin portal module provides system-wide administrative controls and configuration management. It enables administrators to create and manage scenarios across different purposes (practice, assessment, certification), publish scenarios to make them available system-wide, and define assessment categories for evaluation criteria. The module supports global KPI configuration, adjusting scoring weights for accuracy, fluency, clarity, keyword adherence, and soft skills.
@@ -115,10 +126,23 @@ The analytics module delivers detailed performance insights and dashboard views 
 
 It offers role-specific dashboards with tailored metrics and visualizations, including performance hubs for comprehensive data exploration. The module enables data export capabilities for further analysis and integration with external systems.
 
+**Recent Enhancements:**
+- Added trainer Reports page with comprehensive analytics including pronunciation error summaries, per-trainee error details, and improvement insights
+- Implemented progress graphs with overview, weekly trends, category trends, and trainee trend lines
+- Added monthly performance reports with pass rates and improvement deltas
+- Integrated advanced filtering for scope (batch/trainee), metric views, and time periods (7 days, 30 days, month, quarter)
+- Added print-friendly report generation for trainer analytics
+- Connected analytics to Supabase-backed session and assessment data for real-time insights
+
 ### **12. Settings Module** (`/api/settings`)
 The settings module manages user preferences and system-wide configuration options. It handles individual user preferences including sidebar state, layout options, accessibility settings, and theme selections. The module supports UI customization for optimal user experience.
 
 For administrators, it provides system-wide settings management including branding customization, date format configuration, and global accessibility options. The module ensures consistent user experience while allowing personalization within defined boundaries.
+
+### **13. Notification Module** (`/api/notifications`)
+The notification module provides role-based notification management and delivery system. It supports in-app notifications with persistent dismiss state tracking, allowing users to receive important updates, feedback requests, and system announcements. The module handles notification creation, delivery, and dismissal across different user roles (Admin, Trainer, Trainee).
+
+It includes notification persistence in the database with user-specific dismiss tracking, ensuring notifications remain dismissed across sessions. The module supports real-time notification delivery and integrates with the broader platform communication system.
 
 ---
 
@@ -136,6 +160,7 @@ For administrators, it provides system-wide settings management including brandi
 - View comprehensive system audit logs and administrative dashboards
 - Approve trainer workspace configurations for production deployment
 - Access all system analytics and performance metrics across the platform
+- Receive and manage in-app notifications with persistent dismiss tracking
 
 **Limitations:**
 - Cannot participate in practice scenarios or training sessions as a trainee
@@ -155,7 +180,9 @@ For administrators, it provides system-wide settings management including brandi
 ### **TRAINER Role**
 **Scope (What Trainers Can Do):**
 - Create, update, delete, and manage batches of trainees with custom settings
+- Activate/deactivate batches to control which batches are available for trainee assignment
 - Add/remove trainees from batches through individual assignment or bulk operations
+- Remove individual trainees from batches using the "Remove from Batch" functionality
 - Create and manage training courses composed of scenarios and microlearning modules
 - Publish courses to make them available for assignment to trainees
 - Assign courses to individual trainees or entire batches with progress tracking
@@ -169,8 +196,9 @@ For administrators, it provides system-wide settings management including brandi
 - Customize workspace NLP configurations (empathy statements, probing questions, forbidden words, required keywords)
 - View detailed analytics for their batches and assigned trainees
 - Export performance reports in PDF format for individual trainees and batches
-- Create trainee accounts through bulk upload with Excel templates
+- Create trainee accounts through bulk upload with Excel templates (validates against active batches only)
 - Access trainer-specific dashboards with performance metrics and insights
+- Receive and manage in-app notifications with persistent dismiss tracking
 
 **Limitations:**
 - Cannot create or modify scenarios (Admin-only privilege)
@@ -183,6 +211,7 @@ For administrators, it provides system-wide settings management including brandi
 - Cannot manually create user accounts outside bulk upload processes
 - Cannot override Admin-configured scoring weights or thresholds
 - Cannot access trainee data from other trainers' batches
+- Cannot deactivate batches that contain active trainees (must remove trainees first)
 
 **Key Endpoints:** `/api/trainer/*`, `/api/workspace/*`, `/api/certification/coaching*`
 
@@ -210,6 +239,7 @@ For administrators, it provides system-wide settings management including brandi
 - Verify certificate authenticity using unique tokens
 - Upload and manage profile images
 - Change personal passwords and update profile information
+- Receive and manage in-app notifications with persistent dismiss tracking
 
 **Limitations:**
 - Cannot create, modify, or delete scenarios, courses, or training content
@@ -242,6 +272,7 @@ For administrators, it provides system-wide settings management including brandi
 - UI preference customization (theme, layout, accessibility)
 - Personal progress and performance metrics viewing
 - Certificate verification (after issuance)
+- In-app notification management with persistent dismiss tracking
 
 ### **Data Access Control Patterns:**
 1. **User Ownership:** Trainees can only see their own data; Trainers see their created resources and assigned trainees
@@ -261,7 +292,7 @@ For administrators, it provides system-wide settings management including brandi
 
 ---
 
-## New features implemented (trainer analytics + notifications)
+## New features implemented (comprehensive platform enhancements)
 
 - Added trainer module navigation item "Reports" (`/trainer/reports`) and corresponding dashboard page.
 - Implemented automatic summary generation for batch/wave pronunciation errors and per-trainee error detail via analytics endpoints.
@@ -274,6 +305,13 @@ For administrators, it provides system-wide settings management including brandi
 - Added role-based notification system with in-app popover and dismiss behavior:
   - notifications are removed after click for trainee/trainer/admin,
   - dismiss state is now persisted (backend `dismissed_notifications` on `User`, `/api/notifications/dismiss`).
+- **Profile Management Enhancement:** Added LOB (Line of Business) removal functionality allowing users to disassociate themselves from their assigned Line of Business through profile settings.
+- **Batch Management Enhancements:** 
+  - Implemented batch status (active/inactive) functionality with database connectivity
+  - Added UI controls for trainers to activate/deactivate batches
+  - Only active batches can be selected for trainee assignment in creation and modification forms
+  - Updated bulk upload validation to only accept active batches
+  - Added "Remove from Batch" button in trainee Modify flow for individual trainee removal
 
 
 ### **Session Management:**
@@ -286,6 +324,9 @@ For administrators, it provides system-wide settings management including brandi
 - Courses are composed of scenario lists stored as JSON
 - Batches organized by wave number and LOB
 - Course assignments can target batch or individual trainee
+- Batch status management with active/inactive states
+- Only active batches available for new trainee assignments
+- Batch deactivation requires removal of all assigned trainees first
 
 ### **Workspace Customization:**
 - Trainer-specific NLP configuration per workspace
