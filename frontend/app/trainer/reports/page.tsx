@@ -13,7 +13,6 @@ import {
 } from '@/app/components/ui/select';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 import {
-    Download,
     Filter,
     LineChart as LineChartIcon,
     Loader2,
@@ -949,10 +948,6 @@ export default function ReportsPage() {
               <Button onClick={() => void generateReport()} disabled={loadingReport || initialLoading}>
                 {loadingReport ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
                 Refresh Report
-              </Button>
-              <Button variant="outline" onClick={() => void handleDownloadPdf()} disabled={!hasReportContent || downloadingPdf}>
-                {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
-                Download PDF
               </Button>
             </div>
 

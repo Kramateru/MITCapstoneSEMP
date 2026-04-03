@@ -94,8 +94,8 @@ class PerformanceReportGenerator:
         self.styles.add(ParagraphStyle(
             name='TableHeaderLeft',
             parent=self.styles['Normal'],
-            fontSize=8.5,
-            leading=10,
+            fontSize=9.5,
+            leading=11,
             textColor=colors.whitesmoke,
             alignment=TA_LEFT,
             fontName='Helvetica-Bold',
@@ -111,8 +111,8 @@ class PerformanceReportGenerator:
         self.styles.add(ParagraphStyle(
             name='TableBody',
             parent=self.styles['Normal'],
-            fontSize=8.5,
-            leading=10,
+            fontSize=9.5,
+            leading=11,
             textColor=colors.black,
             alignment=TA_LEFT,
             spaceAfter=0,
@@ -155,12 +155,24 @@ class PerformanceReportGenerator:
     ) -> None:
         logo_path = self._resolve_default_logo_path()
         logo = None
-        side_width = 0.72 * inch
         if logo_path:
             try:
-                logo = Image(logo_path, width=0.52 * inch, height=0.52 * inch)
+                logo = Image(logo_path, width=0.8 * inch, height=0.8 * inch)
             except Exception:
                 logo = None
+
+        # Center the logo above the text
+        if logo:
+            logo_table = Table([[logo]], colWidths=[7.5 * inch])
+            logo_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(logo_table)
 
         text_blocks = [
             Paragraph(f"<b>{self.REPORT_INSTITUTION_NAME}</b>", self.styles['InstitutionName']),
@@ -170,7 +182,7 @@ class PerformanceReportGenerator:
         if report_subtitle:
             text_blocks.append(Paragraph(report_subtitle, self.styles['ReportSubtitle']))
 
-        text_table = Table([[block] for block in text_blocks], colWidths=[6.06 * inch])
+        text_table = Table([[block] for block in text_blocks], colWidths=[7.5 * inch])
         text_table.setStyle(TableStyle([
             ('LEFTPADDING', (0, 0), (-1, -1), 0),
             ('RIGHTPADDING', (0, 0), (-1, -1), 0),
@@ -179,24 +191,7 @@ class PerformanceReportGenerator:
             ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
             ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ]))
-
-        if logo:
-            header_table = Table(
-                [[logo, text_table, ""]],
-                colWidths=[side_width, 6.06 * inch, side_width],
-            )
-            header_table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-                ('ALIGN', (0, 0), (0, 0), 'CENTER'),
-                ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-                ('LEFTPADDING', (0, 0), (-1, -1), 0),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ('TOPPADDING', (0, 0), (-1, -1), 2),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-            ]))
-            story.append(header_table)
-        else:
-            story.append(text_table)
+        story.append(text_table)
 
         story.append(Spacer(1, 0.15 * inch))
     
