@@ -3,6 +3,7 @@ PDF Export Service - Generate performance reports and session summaries as PDF
 Uses reportlab for PDF generation
 """
 
+from html import escape
 from pathlib import Path
 
 from reportlab.lib.pagesizes import letter, A4
@@ -90,6 +91,48 @@ class PerformanceReportGenerator:
             spaceAfter=10,
             fontName='Helvetica-Bold'
         ))
+        self.styles.add(ParagraphStyle(
+            name='TableHeaderLeft',
+            parent=self.styles['Normal'],
+            fontSize=8.5,
+            leading=10,
+            textColor=colors.whitesmoke,
+            alignment=TA_LEFT,
+            fontName='Helvetica-Bold',
+            spaceAfter=0,
+            spaceBefore=0,
+            wordWrap='CJK',
+        ))
+        self.styles.add(ParagraphStyle(
+            name='TableHeaderCenter',
+            parent=self.styles['TableHeaderLeft'],
+            alignment=TA_CENTER,
+        ))
+        self.styles.add(ParagraphStyle(
+            name='TableBody',
+            parent=self.styles['Normal'],
+            fontSize=8.5,
+            leading=10,
+            textColor=colors.black,
+            alignment=TA_LEFT,
+            spaceAfter=0,
+            spaceBefore=0,
+            wordWrap='CJK',
+        ))
+        self.styles.add(ParagraphStyle(
+            name='TableBodyCenter',
+            parent=self.styles['TableBody'],
+            alignment=TA_CENTER,
+        ))
+        self.styles.add(ParagraphStyle(
+            name='TableBodyLabel',
+            parent=self.styles['TableBody'],
+            fontName='Helvetica-Bold',
+        ))
+
+    def _table_cell(self, value: Any, style_name: str = 'TableBody') -> Paragraph:
+        text = "" if value is None else escape(str(value)).replace("\n", "<br/>")
+        return Paragraph(text, self.styles[style_name])
 
     def _resolve_default_logo_path(self) -> Optional[str]:
         repo_root = Path(__file__).resolve().parents[2]
@@ -112,9 +155,10 @@ class PerformanceReportGenerator:
     ) -> None:
         logo_path = self._resolve_default_logo_path()
         logo = None
+        side_width = 0.72 * inch
         if logo_path:
             try:
-                logo = Image(logo_path, width=24, height=24)
+                logo = Image(logo_path, width=0.52 * inch, height=0.52 * inch)
             except Exception:
                 logo = None
 
@@ -126,24 +170,33 @@ class PerformanceReportGenerator:
         if report_subtitle:
             text_blocks.append(Paragraph(report_subtitle, self.styles['ReportSubtitle']))
 
+        text_table = Table([[block] for block in text_blocks], colWidths=[6.06 * inch])
+        text_table.setStyle(TableStyle([
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ]))
+
         if logo:
             header_table = Table(
-                [[logo, text_blocks]],
-                colWidths=[0.6 * inch, 5.9 * inch],
+                [[logo, text_table, ""]],
+                colWidths=[side_width, 6.06 * inch, side_width],
             )
             header_table.setStyle(TableStyle([
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
                 ('ALIGN', (0, 0), (0, 0), 'CENTER'),
                 ('ALIGN', (1, 0), (1, 0), 'CENTER'),
                 ('LEFTPADDING', (0, 0), (-1, -1), 0),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
                 ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
             ]))
             story.append(header_table)
         else:
-            for block in text_blocks:
-                story.append(block)
+            story.append(text_table)
 
         story.append(Spacer(1, 0.15 * inch))
     
@@ -515,13 +568,22 @@ class PerformanceReportGenerator:
             ['Generated:', generated_at.strftime("%B %d, %Y at %I:%M %p")],
         ]
 
-        report_table = Table(report_info, colWidths=[1.8 * inch, 4.4 * inch])
+        report_table = Table(
+            [
+                [self._table_cell(label, 'TableBodyLabel'), self._table_cell(value)]
+                for label, value in report_info
+            ],
+            colWidths=[1.9 * inch, 5.1 * inch],
+        )
         report_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
             ('GRID', (0, 0), (-1, -1), 1, colors.grey),
         ]))
         story.append(report_table)
@@ -543,22 +605,24 @@ class PerformanceReportGenerator:
 
         summary_table = Table(
             [
-                ['Metric', 'Value'],
-                ['Total Trainees', str(total_trainees)],
-                ['Total Sessions', str(total_sessions)],
-                ['Average Score', f"{average_score:.1f}%"],
-                ['Pass Rate', f"{pass_rate:.1f}%"],
-                ['Avg. Pronunciation', f"{average_pronunciation:.1f}%"],
+                [self._table_cell('Metric', 'TableHeaderLeft'), self._table_cell('Value', 'TableHeaderCenter')],
+                [self._table_cell('Total Trainees', 'TableBodyLabel'), self._table_cell(str(total_trainees), 'TableBodyCenter')],
+                [self._table_cell('Total Sessions', 'TableBodyLabel'), self._table_cell(str(total_sessions), 'TableBodyCenter')],
+                [self._table_cell('Average Score', 'TableBodyLabel'), self._table_cell(f"{average_score:.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Pass Rate', 'TableBodyLabel'), self._table_cell(f"{pass_rate:.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Avg. Pronunciation', 'TableBodyLabel'), self._table_cell(f"{average_pronunciation:.1f}%", 'TableBodyCenter')],
             ],
-            colWidths=[3.0 * inch, 2.2 * inch],
+            colWidths=[4.1 * inch, 2.9 * inch],
         )
         summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
             ('GRID', (0, 0), (-1, -1), 1, colors.grey),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
         ]))
@@ -569,26 +633,30 @@ class PerformanceReportGenerator:
             story.append(Paragraph("IMPROVEMENT PRIORITIES", self.styles['CustomHeading']))
             improvement_table = Table(
                 [
-                    ['Category', 'Average', 'Below 70', 'Recommendation'],
+                    [
+                        self._table_cell('Category', 'TableHeaderLeft'),
+                        self._table_cell('Average', 'TableHeaderCenter'),
+                        self._table_cell('Below 70', 'TableHeaderCenter'),
+                        self._table_cell('Recommendation', 'TableHeaderLeft'),
+                    ],
                     *[
                         [
-                            row['category'],
-                            f"{float(row['average']):.1f}%",
-                            str(int(row['below_threshold_count'])),
-                            row['recommendation'],
+                            self._table_cell(row['category'], 'TableBodyLabel'),
+                            self._table_cell(f"{float(row['average']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(str(int(row['below_threshold_count'])), 'TableBodyCenter'),
+                            self._table_cell(row['recommendation']),
                         ]
                         for row in improvement_rows
                     ],
                 ],
-                colWidths=[1.65 * inch, 0.8 * inch, 0.9 * inch, 3.15 * inch],
+                colWidths=[1.7 * inch, 0.95 * inch, 0.95 * inch, 3.4 * inch],
                 repeatRows=1,
             )
             improvement_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
                 ('LEFTPADDING', (0, 0), (-1, -1), 6),
@@ -603,25 +671,28 @@ class PerformanceReportGenerator:
         if pronunciation_rows:
             pronunciation_table = Table(
                 [
-                    ['Error Type', 'Frequency', 'Examples'],
+                    [
+                        self._table_cell('Error Type', 'TableHeaderLeft'),
+                        self._table_cell('Frequency', 'TableHeaderCenter'),
+                        self._table_cell('Examples', 'TableHeaderLeft'),
+                    ],
                     *[
                         [
-                            row['error_type'],
-                            str(int(row['frequency'])),
-                            ', '.join(row['examples']) if row['examples'] else 'No sample words',
+                            self._table_cell(row['error_type'], 'TableBodyLabel'),
+                            self._table_cell(str(int(row['frequency'])), 'TableBodyCenter'),
+                            self._table_cell(', '.join(row['examples']) if row['examples'] else 'No sample words'),
                         ]
                         for row in pronunciation_rows
                     ],
                 ],
-                colWidths=[1.75 * inch, 0.8 * inch, 3.95 * inch],
+                colWidths=[1.7 * inch, 0.9 * inch, 4.4 * inch],
                 repeatRows=1,
             )
             pronunciation_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
                 ('LEFTPADDING', (0, 0), (-1, -1), 6),
@@ -638,27 +709,32 @@ class PerformanceReportGenerator:
         if ranking_rows:
             ranking_table = Table(
                 [
-                    ['Trainee', 'Sessions', 'Average', 'Highest', 'Passed'],
+                    [
+                        self._table_cell('Trainee', 'TableHeaderLeft'),
+                        self._table_cell('Sessions', 'TableHeaderCenter'),
+                        self._table_cell('Average', 'TableHeaderCenter'),
+                        self._table_cell('Highest', 'TableHeaderCenter'),
+                        self._table_cell('Passed', 'TableHeaderCenter'),
+                    ],
                     *[
                         [
-                            row['trainee_name'],
-                            str(int(row['sessions_count'])),
-                            f"{float(row['average_score']):.1f}%",
-                            f"{float(row['highest_score']):.1f}%",
-                            str(int(row['pass_sessions'])),
+                            self._table_cell(row['trainee_name'], 'TableBodyLabel'),
+                            self._table_cell(str(int(row['sessions_count'])), 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['average_score']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['highest_score']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(str(int(row['pass_sessions'])), 'TableBodyCenter'),
                         ]
                         for row in ranking_rows
                     ],
                 ],
-                colWidths=[2.4 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch, 0.8 * inch],
+                colWidths=[3.05 * inch, 0.95 * inch, 1.0 * inch, 1.0 * inch, 0.95 * inch],
                 repeatRows=1,
             )
             ranking_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
                 ('LEFTPADDING', (0, 0), (-1, -1), 6),
@@ -681,8 +757,8 @@ class PerformanceReportGenerator:
         doc = SimpleDocTemplate(
             self.buffer,
             pagesize=letter,
-            rightMargin=0.6 * inch,
-            leftMargin=0.6 * inch,
+            rightMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
             topMargin=0.65 * inch,
             bottomMargin=0.65 * inch,
             title=self.title,
@@ -719,13 +795,22 @@ class PerformanceReportGenerator:
             ['Focus Metric:', focus_metric],
             ['Generated:', generated_at.strftime("%B %d, %Y at %I:%M %p")],
         ]
-        report_table = Table(report_info, colWidths=[1.7 * inch, 4.5 * inch])
+        report_table = Table(
+            [
+                [self._table_cell(label, 'TableBodyLabel'), self._table_cell(value)]
+                for label, value in report_info
+            ],
+            colWidths=[1.8 * inch, 5.2 * inch],
+        )
         report_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
             ('GRID', (0, 0), (-1, -1), 1, colors.grey),
         ]))
         story.append(report_table)
@@ -733,22 +818,24 @@ class PerformanceReportGenerator:
 
         summary_table = Table(
             [
-                ['Metric', 'Value'],
-                ['Total Sessions', str(int(overall_metrics.get('total_sessions', 0)))],
-                ['Average Score', f"{float(overall_metrics.get('average_score', 0)):.1f}%"],
-                ['Highest Score', f"{float(overall_metrics.get('highest_score', 0)):.1f}%"],
-                ['Lowest Score', f"{float(overall_metrics.get('lowest_score', 0)):.1f}%"],
-                ['Pass Rate', f"{float(overall_metrics.get('pass_rate', 0)):.1f}%"],
+                [self._table_cell('Metric', 'TableHeaderLeft'), self._table_cell('Value', 'TableHeaderCenter')],
+                [self._table_cell('Total Sessions', 'TableBodyLabel'), self._table_cell(str(int(overall_metrics.get('total_sessions', 0))), 'TableBodyCenter')],
+                [self._table_cell('Average Score', 'TableBodyLabel'), self._table_cell(f"{float(overall_metrics.get('average_score', 0)):.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Highest Score', 'TableBodyLabel'), self._table_cell(f"{float(overall_metrics.get('highest_score', 0)):.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Lowest Score', 'TableBodyLabel'), self._table_cell(f"{float(overall_metrics.get('lowest_score', 0)):.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Pass Rate', 'TableBodyLabel'), self._table_cell(f"{float(overall_metrics.get('pass_rate', 0)):.1f}%", 'TableBodyCenter')],
             ],
-            colWidths=[3.0 * inch, 2.2 * inch],
+            colWidths=[4.1 * inch, 2.9 * inch],
         )
         summary_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
             ('GRID', (0, 0), (-1, -1), 1, colors.grey),
             ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
         ]))
@@ -760,28 +847,36 @@ class PerformanceReportGenerator:
             story.append(Paragraph("CATEGORY BREAKDOWN", self.styles['CustomHeading']))
             category_table = Table(
                 [
-                    ['Category', 'Average', 'Highest', 'Lowest'],
+                    [
+                        self._table_cell('Category', 'TableHeaderLeft'),
+                        self._table_cell('Average', 'TableHeaderCenter'),
+                        self._table_cell('Highest', 'TableHeaderCenter'),
+                        self._table_cell('Lowest', 'TableHeaderCenter'),
+                    ],
                     *[
                         [
-                            row['category'],
-                            f"{float(row['average']):.1f}%",
-                            f"{float(row['highest']):.1f}%",
-                            f"{float(row['lowest']):.1f}%",
+                            self._table_cell(row['category'], 'TableBodyLabel'),
+                            self._table_cell(f"{float(row['average']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['highest']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['lowest']):.1f}%", 'TableBodyCenter'),
                         ]
                         for row in category_breakdown
                     ],
                 ],
-                colWidths=[2.7 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
+                colWidths=[4.0 * inch, 1.0 * inch, 1.0 * inch, 1.0 * inch],
                 repeatRows=1,
             )
             category_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('ALIGN', (1, 1), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ]))
             story.append(category_table)
             story.append(Spacer(1, 0.2 * inch))
@@ -790,27 +885,34 @@ class PerformanceReportGenerator:
         if weak_areas:
             weak_area_table = Table(
                 [
-                    ['Area', 'Score', 'Recommendation'],
+                    [
+                        self._table_cell('Area', 'TableHeaderLeft'),
+                        self._table_cell('Score', 'TableHeaderCenter'),
+                        self._table_cell('Recommendation', 'TableHeaderLeft'),
+                    ],
                     *[
                         [
-                            row['category'],
-                            f"{float(row['score']):.1f}%",
-                            row['recommendation'],
+                            self._table_cell(row['category'], 'TableBodyLabel'),
+                            self._table_cell(f"{float(row['score']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(row['recommendation']),
                         ]
                         for row in weak_areas
                     ],
                 ],
-                colWidths=[1.5 * inch, 0.8 * inch, 4.0 * inch],
+                colWidths=[1.65 * inch, 0.85 * inch, 4.5 * inch],
                 repeatRows=1,
             )
             weak_area_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
                 ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ]))
             story.append(weak_area_table)
         else:
@@ -821,28 +923,36 @@ class PerformanceReportGenerator:
         if recent_sessions:
             recent_sessions_table = Table(
                 [
-                    ['Date', 'Scenario', 'Score', 'Status'],
+                    [
+                        self._table_cell('Date', 'TableHeaderLeft'),
+                        self._table_cell('Scenario', 'TableHeaderLeft'),
+                        self._table_cell('Score', 'TableHeaderCenter'),
+                        self._table_cell('Status', 'TableHeaderCenter'),
+                    ],
                     *[
                         [
-                            row.get('date_label', ''),
-                            row['scenario'],
-                            f"{float(row['score']):.1f}%",
-                            row['status'],
+                            self._table_cell(row.get('date_label', '')),
+                            self._table_cell(row['scenario'], 'TableBodyLabel'),
+                            self._table_cell(f"{float(row['score']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(row['status'], 'TableBodyCenter'),
                         ]
                         for row in recent_sessions
                     ],
                 ],
-                colWidths=[1.3 * inch, 3.0 * inch, 0.8 * inch, 1.1 * inch],
+                colWidths=[1.25 * inch, 4.0 * inch, 0.9 * inch, 1.35 * inch],
                 repeatRows=1,
             )
             recent_sessions_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 9),
-                ('ALIGN', (2, 1), (3, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
                 ('GRID', (0, 0), (-1, -1), 1, colors.grey),
                 ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
             ]))
             story.append(recent_sessions_table)
         else:
@@ -859,8 +969,8 @@ class PerformanceReportGenerator:
         doc = SimpleDocTemplate(
             self.buffer,
             pagesize=letter,
-            rightMargin=0.6 * inch,
-            leftMargin=0.6 * inch,
+            rightMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
             topMargin=0.65 * inch,
             bottomMargin=0.65 * inch,
             title=self.title,

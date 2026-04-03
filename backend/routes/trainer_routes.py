@@ -1009,6 +1009,52 @@ async def update_trainee(
     }
 
 
+@router.put("/trainees/{trainee_id}/status", response_model=dict)
+async def update_trainee_status(
+    trainee_id: str,
+    status_data: TraineeStatusUpdate,
+    current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
+):
+    """Update a trainee's active/inactive status."""
+    trainee = (
+        db.query(User)
+        .filter(
+            User.id == trainee_id,
+            User.role == UserRole.TRAINEE,
+        )
+        .first()
+    )
+
+    if not trainee:
+        raise HTTPException(status_code=404, detail="Trainee not found")
+
+    # Check if trainee is in any of the trainer's batches
+    trainer_batches = [batch for batch in trainee.batches if batch.created_by == current_user.id]
+    if not trainer_batches:
+        raise HTTPException(status_code=404, detail="Trainee not found in your batch list")
+
+    # If deactivating a trainee, remove them from all batches first
+    if not status_data.is_active:
+        for batch in trainer_batches:
+            if trainee in batch.users:
+                batch.users.remove(trainee)
+
+    trainee.is_active = status_data.is_active
+    db.commit()
+    db.refresh(trainee)
+
+    return {
+        "status": "updated",
+        "trainee": {
+            "id": trainee.id,
+            "email": trainee.email,
+            "full_name": trainee.full_name,
+            "is_active": trainee.is_active,
+        },
+    }
+
+
 @router.get("/trainees/bulk-upload-template")
 async def download_trainee_bulk_upload_template(
     current_user: Any = Depends(verify_trainer),

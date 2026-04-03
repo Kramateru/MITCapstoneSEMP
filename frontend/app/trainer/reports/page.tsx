@@ -17,7 +17,6 @@ import {
     Filter,
     LineChart as LineChartIcon,
     Loader2,
-    Printer,
     RefreshCw,
     TrendingUp,
     Users
@@ -699,10 +698,6 @@ export default function ReportsPage() {
     [graphView, visibleGraphOptions],
   );
 
-  const handlePrint = useCallback(() => {
-    window.print();
-  }, []);
-
   const hasReportContent = useMemo(() => {
     return Boolean(
       reportData.improvement ||
@@ -954,10 +949,6 @@ export default function ReportsPage() {
               <Button onClick={() => void generateReport()} disabled={loadingReport || initialLoading}>
                 {loadingReport ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
                 Refresh Report
-              </Button>
-              <Button variant="outline" onClick={handlePrint} disabled={!hasReportContent}>
-                <Printer className="mr-2 size-4" />
-                Print Report
               </Button>
               <Button variant="outline" onClick={() => void handleDownloadPdf()} disabled={!hasReportContent || downloadingPdf}>
                 {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
