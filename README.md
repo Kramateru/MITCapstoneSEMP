@@ -287,3 +287,4 @@ Default passwords for newly created users
 - Trainee: SPVTrainee2026
 - Admin: SPVAdmin2026
 - Trainer: SPVTrainer2026
+"# SpeechEnablerMicrolearningPlatformMIT" 
