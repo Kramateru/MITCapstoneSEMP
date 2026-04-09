@@ -12,15 +12,21 @@ from ..models import (
     CertificateRecord,
     CertificationSettings,
     CompetencyVerdict,
-    CourseAssignment,
     MCQAssessment,
     MCQCategory,
     MCQSubmission,
-    PracticeSession,
-    Scenario,
+    MicrolearningAssignment,
+    SimSession,
     User,
     UserRole,
 )
+
+SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES = {
+    "sim_floor_session",
+    "mcq_assessment",
+    "microlearning_assignment",
+}
+LEGACY_MICROLEARNING_SOURCES = {"microlearning"}
 
 
 def ensure_certification_settings(db: Session) -> CertificationSettings:
@@ -190,50 +196,147 @@ def issue_certificate_for_verdict(
     )
 
 
+def _microlearning_assignment_average_score(
+    assignment: MicrolearningAssignment,
+) -> float:
+    responses = dict(assignment.responses or {})
+    scores = [
+        float(attempt.get("score") or 0.0)
+        for attempt in responses.values()
+        if isinstance(attempt, dict) and attempt.get("is_completed")
+    ]
+    if not scores:
+        return 0.0
+    return round(sum(scores) / len(scores), 2)
+
+
+def _microlearning_assignment_is_passed(
+    assignment: MicrolearningAssignment,
+) -> bool:
+    module = getattr(assignment, "module", None)
+    if not module:
+        return False
+
+    exercises = list(module.exercises or [])
+    if not exercises:
+        return False
+
+    completed_count = sum(
+        1
+        for attempt in dict(assignment.responses or {}).values()
+        if isinstance(attempt, dict) and attempt.get("is_completed")
+    )
+    if completed_count < len(exercises):
+        return False
+
+    return _microlearning_assignment_average_score(assignment) >= float(
+        getattr(module, "passing_score", 0) or 0
+    )
+
+
+def _normalize_certificate_source_type(source_type: Optional[str]) -> Optional[str]:
+    if not source_type:
+        return None
+    if source_type in LEGACY_MICROLEARNING_SOURCES:
+        return "microlearning_assignment"
+    return source_type
+
+
+def _is_supported_certificate_record(
+    db: Session,
+    certificate: CertificateRecord,
+) -> bool:
+    normalized_source_type = _normalize_certificate_source_type(certificate.source_type)
+    if not normalized_source_type or not certificate.source_id:
+        return False
+
+    if normalized_source_type == "sim_floor_session":
+        session = db.query(SimSession).filter(SimSession.id == certificate.source_id).first()
+        return bool(
+            session
+            and session.trainee_id == certificate.trainee_id
+            and (session.trainer_verdict_status or "").lower() == "competent"
+        )
+
+    if normalized_source_type == "mcq_assessment":
+        submission = (
+            db.query(MCQSubmission)
+            .filter(
+                MCQSubmission.assessment_id == certificate.source_id,
+                MCQSubmission.trainee_id == certificate.trainee_id,
+            )
+            .first()
+        )
+        return bool(submission and submission.is_passed)
+
+    if normalized_source_type == "microlearning_assignment":
+        assignment = (
+            db.query(MicrolearningAssignment)
+            .filter(
+                MicrolearningAssignment.id == certificate.source_id,
+                MicrolearningAssignment.trainee_id == certificate.trainee_id,
+            )
+            .first()
+        )
+        return bool(assignment and _microlearning_assignment_is_passed(assignment))
+
+    return False
+
+
+def prune_trainee_activity_certificates(db: Session, trainee_id: str) -> int:
+    certificates = (
+        db.query(CertificateRecord)
+        .filter(CertificateRecord.trainee_id == trainee_id)
+        .all()
+    )
+
+    deleted_count = 0
+    for certificate in certificates:
+        normalized_source_type = _normalize_certificate_source_type(certificate.source_type)
+        if normalized_source_type != certificate.source_type:
+            certificate.source_type = normalized_source_type
+
+        linked_sim_session = None
+        linked_assignment = None
+        if normalized_source_type == "sim_floor_session" and certificate.source_id:
+            linked_sim_session = (
+                db.query(SimSession)
+                .filter(SimSession.id == certificate.source_id)
+                .first()
+            )
+        elif normalized_source_type == "microlearning_assignment" and certificate.source_id:
+            linked_assignment = (
+                db.query(MicrolearningAssignment)
+                .filter(MicrolearningAssignment.id == certificate.source_id)
+                .first()
+            )
+
+        if normalized_source_type not in SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES:
+            if linked_sim_session and linked_sim_session.certificate_id == certificate.id:
+                linked_sim_session.certificate_id = None
+            if linked_assignment and linked_assignment.certificate_id == certificate.id:
+                linked_assignment.certificate_id = None
+            db.delete(certificate)
+            deleted_count += 1
+            continue
+
+        if not _is_supported_certificate_record(db, certificate):
+            if linked_sim_session and linked_sim_session.certificate_id == certificate.id:
+                linked_sim_session.certificate_id = None
+            if linked_assignment and linked_assignment.certificate_id == certificate.id:
+                linked_assignment.certificate_id = None
+            db.delete(certificate)
+            deleted_count += 1
+
+    return deleted_count
+
+
 def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[CertificateRecord]:
     created_certificates: list[CertificateRecord] = []
 
     trainee = db.query(User).filter(User.id == trainee_id).first()
     if not trainee:
         return created_certificates
-
-    sessions = (
-        db.query(PracticeSession)
-        .filter(PracticeSession.user_id == trainee_id)
-        .order_by(PracticeSession.created_at.desc())
-        .all()
-    )
-    latest_session_by_scenario: dict[str, PracticeSession] = {}
-    for session in sessions:
-        if session.scenario_id not in latest_session_by_scenario:
-            latest_session_by_scenario[session.scenario_id] = session
-
-    scenarios = (
-        db.query(Scenario)
-        .filter(Scenario.id.in_(list(latest_session_by_scenario.keys())))
-        .all()
-        if latest_session_by_scenario
-        else []
-    )
-    scenario_lookup = {scenario.id: scenario for scenario in scenarios}
-
-    for scenario_id, session in latest_session_by_scenario.items():
-        scenario = scenario_lookup.get(scenario_id)
-        certificate, created = award_certificate(
-            db,
-            trainee_id=trainee_id,
-            issuer_id=scenario.created_by if scenario else None,
-            source_type="scenario_task",
-            source_id=scenario_id,
-            achievement_title=scenario.title if scenario else "Completed Scenario Task",
-            achievement_type="task",
-            remarks=f"Completed scenario task: {scenario.title if scenario else 'Scenario'}",
-            score=float(session.overall_score or 0.0),
-            practice_session_id=session.id,
-            issued_at=session.created_at,
-        )
-        if created:
-            created_certificates.append(certificate)
 
     submissions = (
         db.query(MCQSubmission, MCQAssessment)
@@ -253,6 +356,8 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
         )
     }
     for submission, assessment in submissions:
+        if not submission.is_passed:
+            continue
         category = category_lookup.get(assessment.category_id)
         certificate, created = award_certificate(
             db,
@@ -270,33 +375,45 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
         if created:
             created_certificates.append(certificate)
 
-    completed_assignments = (
-        db.query(CourseAssignment)
-        .filter(
-            CourseAssignment.user_id == trainee_id,
-            CourseAssignment.is_completed == True,
-        )
+    microlearning_assignments = (
+        db.query(MicrolearningAssignment)
+        .filter(MicrolearningAssignment.trainee_id == trainee_id)
+        .order_by(MicrolearningAssignment.updated_at.desc())
         .all()
     )
-    for assignment in completed_assignments:
-        if not assignment.course:
+    did_update_microlearning_assignments = False
+    for assignment in microlearning_assignments:
+        if not _microlearning_assignment_is_passed(assignment):
             continue
+
+        module = getattr(assignment, "module", None)
+        if not module:
+            continue
+
         certificate, created = award_certificate(
             db,
             trainee_id=trainee_id,
             issuer_id=assignment.assigned_by,
-            source_type="course_assignment",
+            source_type="microlearning_assignment",
             source_id=assignment.id,
-            achievement_title=assignment.course.name,
-            achievement_type="task",
-            remarks=f"Completed training task: {assignment.course.name}",
-            score=float(assignment.completion_percentage or 0.0),
-            issued_at=assignment.updated_at or assignment.assigned_at,
+            achievement_title=module.title,
+            achievement_type="microlearning",
+            remarks=f"Completed microlearning module: {module.title}",
+            score=_microlearning_assignment_average_score(assignment),
+            issued_at=assignment.completed_at or assignment.updated_at or assignment.assigned_at,
         )
+        if assignment.certificate_id != certificate.id:
+            assignment.certificate_id = certificate.id
+            did_update_microlearning_assignments = True
+        if assignment.status != "certified":
+            assignment.status = "certified"
+            did_update_microlearning_assignments = True
         if created:
             created_certificates.append(certificate)
 
-    if created_certificates:
+    deleted_certificates = prune_trainee_activity_certificates(db, trainee_id)
+
+    if created_certificates or did_update_microlearning_assignments or deleted_certificates:
         db.commit()
 
     return created_certificates

@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
@@ -55,6 +56,7 @@ from ..services.lob_catalog import (
     serialize_lobs,
     sync_default_lob_catalog,
 )
+from ..services.pdf_generator import PerformanceReportGenerator
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -1633,7 +1635,7 @@ def _seed_sample_dataset(
             "language_dialect": "en-PH",
         },
         {
-            "email": "sample.trainee1@stpeterville.edu.ph",
+            "email": "sample.trainee1@stpetervelle.edu.ph",
             "full_name": "Alyssa Ramos",
             "role": UserRole.TRAINEE,
             "password": DEFAULT_TRAINEE_PASSWORD,
@@ -1642,7 +1644,7 @@ def _seed_sample_dataset(
             "language_dialect": "en-PH",
         },
         {
-            "email": "sample.trainee2@stpeterville.edu.ph",
+            "email": "sample.trainee2@stpetervelle.edu.ph",
             "full_name": "Noah Santos",
             "role": UserRole.TRAINEE,
             "password": DEFAULT_TRAINEE_PASSWORD,
@@ -1675,7 +1677,7 @@ def _seed_sample_dataset(
     cert_settings.institution_name = "St. Peter Velle Technical Training Center, Inc."
     cert_settings.address = "#92 Mc Arthur Highway Marulas, Valenzuela, Philippines, 1440"
     cert_settings.contact_number = "0960 545 6293"
-    cert_settings.contact_email = "training@stpeterville.edu.ph"
+    cert_settings.contact_email = "training@stpetervelle.edu.ph"
     cert_settings.registrar_name = "Training Registrar"
     cert_settings.unit_of_competency = "Communication effectively in English for Customer Support Services"
     cert_settings.asr_passing_threshold = 80
@@ -1873,8 +1875,8 @@ def _seed_sample_dataset(
 
     for trainee in [
         users["mcureta@fatima.edu.ph"],
-        users["sample.trainee1@stpeterville.edu.ph"],
-        users["sample.trainee2@stpeterville.edu.ph"],
+        users["sample.trainee1@stpetervelle.edu.ph"],
+        users["sample.trainee2@stpetervelle.edu.ph"],
     ]:
         if trainee not in sample_batch.users:
             sample_batch.users.append(trainee)
@@ -1972,7 +1974,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.97,
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Account Verification and Refund Inquiry",
             "transcription": "Week 5 attempt 1: I can check the account details and then explain the refund process once the information is verified.",
             "overall_score": 68.9,
@@ -1989,7 +1991,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.9,
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Billing Dispute Resolution",
             "transcription": "Week 3 attempt 2: I understand the duplicate charge concern, I will verify the account and review the refund path with you.",
             "overall_score": 76.4,
@@ -2006,7 +2008,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.92,
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Account Verification and Refund Inquiry",
             "transcription": "Week 2 attempt 3: I verified your account details first, and I can now explain the refund policy and the next steps clearly.",
             "overall_score": 84.2,
@@ -2023,7 +2025,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.95,
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Billing Dispute Resolution",
             "transcription": "Week 1 attempt 4: I reviewed the billing issue, verified the transaction, and set a clear refund follow-up timeline for you.",
             "overall_score": 86.4,
@@ -2040,7 +2042,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.96,
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "Week 5 attempt 1: I know the outage is frustrating, so I will begin troubleshooting and document the escalation for you.",
             "overall_score": 79.5,
@@ -2057,7 +2059,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.92,
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "Week 3 attempt 2: I understand the impact of the outage. I will take ownership, troubleshoot the line, and create the escalation ticket.",
             "overall_score": 85.6,
@@ -2074,7 +2076,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.95,
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "Week 2 attempt 3: I understand how frustrating this outage is. I will troubleshoot with you, create an escalation ticket, and set the callback update.",
             "overall_score": 89.7,
@@ -2091,7 +2093,7 @@ def _seed_sample_dataset(
             "transcription_confidence": 0.96,
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "Week 1 attempt 4: I understand how frustrating this outage is. I will troubleshoot with you, create an escalation ticket, and stay accountable for the update.",
             "overall_score": 91.4,
@@ -2211,7 +2213,7 @@ def _seed_sample_dataset(
     noah_submission, noah_submission_created = _ensure_mcq_submission(
         db,
         assessment_id=mcq_assessment.id,
-        trainee_id=users["sample.trainee2@stpeterville.edu.ph"].id,
+        trainee_id=users["sample.trainee2@stpetervelle.edu.ph"].id,
         answers=answers,
         score_percentage=100.0,
         is_passed=True,
@@ -2221,7 +2223,7 @@ def _seed_sample_dataset(
     alyssa_submission, alyssa_submission_created = _ensure_mcq_submission(
         db,
         assessment_id=mcq_assessment.id,
-        trainee_id=users["sample.trainee1@stpeterville.edu.ph"].id,
+        trainee_id=users["sample.trainee1@stpetervelle.edu.ph"].id,
         answers={
             mcq_questions[0].id: "B",
             mcq_questions[1].id: "A",
@@ -2245,10 +2247,10 @@ def _seed_sample_dataset(
             "qr_token": "seed-certificate-maria",
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
-            "practice_session_id": latest_sessions_by_email["sample.trainee2@stpeterville.edu.ph"].id,
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
+            "practice_session_id": latest_sessions_by_email["sample.trainee2@stpetervelle.edu.ph"].id,
             "mcq_assessment_id": noah_submission.assessment_id,
-            "asr_score": latest_sessions_by_email["sample.trainee2@stpeterville.edu.ph"].overall_score or 0.0,
+            "asr_score": latest_sessions_by_email["sample.trainee2@stpetervelle.edu.ph"].overall_score or 0.0,
             "mcq_score": noah_submission.score_percentage or 0.0,
             "remarks": "Shows strong outage-escalation ownership and confidently meets the technical support benchmark.",
             "is_competent": True,
@@ -2397,3 +2399,506 @@ async def admin_dashboard(
         ],
         "timestamp": datetime.utcnow(),
     }
+
+
+# Admin Reports and Data Access Routes
+@router.get("/trainers")
+async def get_all_trainers(
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Get all trainers for admin reports"""
+    trainers = db.query(User).filter(User.role == UserRole.TRAINER).all()
+    
+    trainer_data = []
+    for trainer in trainers:
+        trainer_batches = db.query(Batch).filter(Batch.created_by == trainer.id).all()
+        trainee_count = sum(
+            1
+            for batch in trainer_batches
+            for trainee in batch.users
+            if trainee.role == UserRole.TRAINEE
+        )
+        
+        trainer_data.append({
+            "id": trainer.id,
+            "full_name": trainer.full_name,
+            "email": trainer.email,
+            "batches_count": len(trainer_batches),
+            "trainees_count": trainee_count,
+        })
+    
+    return {"trainers": trainer_data}
+
+
+@router.get("/batches")
+async def get_all_batches(
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Get all batches for admin reports"""
+    batches = db.query(Batch).all()
+    
+    batch_data = []
+    for batch in batches:
+        trainer = db.query(User).filter(User.id == batch.created_by).first()
+        trainee_count = len(
+            [user for user in batch.users if user.role == UserRole.TRAINEE]
+        )
+        
+        batch_data.append({
+            "id": batch.id,
+            "name": batch.name,
+            "wave_number": batch.wave_number,
+            "users_count": trainee_count,
+            "description": batch.description,
+            "lob": batch.lob,
+            "trainer_name": trainer.full_name if trainer else "Unknown",
+        })
+    
+    return {"batches": batch_data}
+
+
+def _get_report_trainees_for_batch(batch: Batch) -> List[User]:
+    return [
+        user
+        for user in batch.users
+        if user.role == UserRole.TRAINEE and user.is_active
+    ]
+
+
+def _average_numbers(values: List[Optional[float]]) -> float:
+    normalized = [float(value) for value in values if value is not None]
+    if not normalized:
+        return 0.0
+    return sum(normalized) / len(normalized)
+
+
+def _get_scored_sessions(sessions: List[PracticeSession]) -> List[PracticeSession]:
+    return [session for session in sessions if session.overall_score is not None]
+
+
+def _get_average_score(sessions: List[PracticeSession]) -> float:
+    return _average_numbers([session.overall_score for session in sessions])
+
+
+def _get_pass_rate_percent(
+    sessions: List[PracticeSession],
+    *,
+    passing_score: float = 70.0,
+) -> float:
+    scored_sessions = _get_scored_sessions(sessions)
+    if not scored_sessions:
+        return 0.0
+    passed_sessions = [
+        session for session in scored_sessions if float(session.overall_score or 0) >= passing_score
+    ]
+    return (len(passed_sessions) / len(scored_sessions)) * 100
+
+
+def _get_average_metric(sessions: List[PracticeSession], field_name: str) -> float:
+    return _average_numbers([getattr(session, field_name) for session in sessions])
+
+
+def _get_metric_improvement(sessions: List[PracticeSession], field_name: str) -> float:
+    metric_sessions = [
+        session
+        for session in sorted(sessions, key=lambda item: item.created_at or datetime.min)
+        if getattr(session, field_name) is not None
+    ]
+    if len(metric_sessions) < 2:
+        return 0.0
+
+    midpoint = max(len(metric_sessions) // 2, 1)
+    earlier_sessions = metric_sessions[:midpoint]
+    recent_sessions = metric_sessions[midpoint:]
+    earlier_average = _get_average_metric(earlier_sessions, field_name)
+    recent_average = _get_average_metric(recent_sessions, field_name)
+    return recent_average - earlier_average
+
+
+def _build_category_performance(sessions: List[PracticeSession]) -> List[dict]:
+    category_fields = [
+        ("Pronunciation", "accuracy_score"),
+        ("Fluency", "fluency_score"),
+        ("Clarity", "clarity_score"),
+        ("Keyword Adherence", "keyword_adherence_score"),
+        ("Soft Skills", "soft_skills_score"),
+    ]
+    return [
+        {
+            "category": category_name,
+            "average_score": round(_get_average_metric(sessions, field_name), 1),
+            "improvement_trend": round(_get_metric_improvement(sessions, field_name), 1),
+        }
+        for category_name, field_name in category_fields
+    ]
+
+
+def _get_sessions_for_trainee_ids(db: Session, trainee_ids: List[str]) -> List[PracticeSession]:
+    if not trainee_ids:
+        return []
+    return (
+        db.query(PracticeSession)
+        .filter(PracticeSession.user_id.in_(trainee_ids))
+        .all()
+    )
+
+
+@router.get("/reports/trainer/{trainer_id}")
+async def get_trainer_report(
+    trainer_id: str,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Get comprehensive trainer performance report"""
+    trainer = (
+        db.query(User)
+        .filter(User.id == trainer_id, User.role == UserRole.TRAINER)
+        .first()
+    )
+    if not trainer:
+        raise HTTPException(status_code=404, detail="Trainer not found")
+    
+    # Get all batches for this trainer
+    batches = db.query(Batch).filter(Batch.created_by == trainer_id).all()
+    
+    batch_summaries = []
+    total_trainees = 0
+    total_sessions = 0
+    total_avg_performance = 0
+    trainer_trainee_lookup = {}
+    
+    for batch in batches:
+        trainees = _get_report_trainees_for_batch(batch)
+        for trainee in trainees:
+            trainer_trainee_lookup[trainee.id] = trainee
+        
+        batch_trainees = len(trainees)
+        total_trainees += batch_trainees
+        
+        # Get sessions for this batch
+        sessions = _get_sessions_for_trainee_ids(db, [trainee.id for trainee in trainees])
+        
+        batch_sessions = len(sessions)
+        total_sessions += batch_sessions
+        
+        # Calculate average performance
+        avg_score = _get_average_score(sessions)
+        pass_rate_percent = _get_pass_rate_percent(sessions)
+        
+        total_avg_performance += avg_score
+        trainee_scores = {
+            trainee.id: _get_average_score(
+                [session for session in sessions if session.user_id == trainee.id]
+            )
+            for trainee in trainees
+        }
+        
+        batch_summaries.append({
+            "batch_id": batch.id,
+            "batch_name": batch.name,
+            "total_trainees": batch_trainees,
+            "avg_performance": round(avg_score, 1),
+            "avg_score": round(avg_score, 1),
+            "pass_rate": round(pass_rate_percent, 1),
+            "total_sessions": batch_sessions,
+            "completion_rate": round((batch_sessions / max(batch_trainees, 1)) * 100, 1),
+            "top_performers": len(
+                [score for score in trainee_scores.values() if score >= 80]
+            ),
+            "needs_improvement": len(
+                [score for score in trainee_scores.values() if score < 60]
+            ),
+        })
+    
+    # Calculate overall metrics
+    avg_batch_performance = total_avg_performance / max(len(batches), 1)
+    trainer_trainee_ids = list(trainer_trainee_lookup.keys())
+    trainer_sessions = _get_sessions_for_trainee_ids(db, trainer_trainee_ids)
+    
+    # Get performance trends (last 30 days)
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    trends = []
+    
+    for i in range(30):
+        date = thirty_days_ago + timedelta(days=i)
+        next_date = date + timedelta(days=1)
+        
+        day_sessions = [
+            session
+            for session in trainer_sessions
+            if session.created_at and date <= session.created_at < next_date
+        ]
+        avg_score = _get_average_score(day_sessions)
+        pass_rate_percent = _get_pass_rate_percent(day_sessions)
+        
+        trends.append({
+            "period": date.strftime("%Y-%m-%d"),
+            "avg_score": round(avg_score, 1),
+            "sessions": len(day_sessions),
+            "pass_rate": round(pass_rate_percent, 1),
+        })
+    
+    category_performance = _build_category_performance(trainer_sessions)
+    overall_pass_rate = _get_pass_rate_percent(trainer_sessions)
+    top_batch_summary = (
+        max(batch_summaries, key=lambda item: item["avg_performance"])
+        if batch_summaries
+        else None
+    )
+    top_performing_batch = (
+        {
+            "batch_name": top_batch_summary["batch_name"],
+            "avg_score": top_batch_summary["avg_performance"],
+        }
+        if top_batch_summary
+        else None
+    )
+    
+    return {
+        "trainer": {
+            "id": trainer.id,
+            "full_name": trainer.full_name,
+            "email": trainer.email,
+        },
+        "batches": batch_summaries,
+        "summary": {
+            "trainer_id": trainer.id,
+            "trainer_name": trainer.full_name,
+            "total_batches": len(batches),
+            "total_trainees": total_trainees,
+            "avg_batch_performance": round(avg_batch_performance, 1),
+            "total_sessions": total_sessions,
+            "pass_rate": round(overall_pass_rate, 1),
+            "top_performing_batch": top_performing_batch,
+            "needs_attention_batches": len([b for b in batch_summaries if b["avg_performance"] < 70]),
+        },
+        "trends": trends,
+        "category_performance": category_performance,
+    }
+
+
+@router.get("/reports/batch/{batch_id}")
+async def get_batch_report(
+    batch_id: str,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Get comprehensive batch performance report"""
+    batch = db.query(Batch).filter(Batch.id == batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    
+    trainer = db.query(User).filter(User.id == batch.created_by).first()
+    
+    # Get trainees in this batch
+    trainees = _get_report_trainees_for_batch(batch)
+    
+    # Get all sessions for this batch
+    sessions = _get_sessions_for_trainee_ids(db, [trainee.id for trainee in trainees])
+    
+    # Calculate batch metrics
+    total_sessions = len(sessions)
+    sessions_with_scores = _get_scored_sessions(sessions)
+    
+    if sessions_with_scores:
+        avg_performance = _get_average_score(sessions_with_scores)
+        pass_rate_percent = _get_pass_rate_percent(sessions_with_scores)
+    else:
+        avg_performance = 0
+        pass_rate_percent = 0
+    
+    completion_rate = (total_sessions / max(len(trainees), 1)) * 100
+    
+    # Get trainee performance data
+    trainee_performance = []
+    for trainee in trainees:
+        trainee_sessions = [s for s in sessions if s.user_id == trainee.id]
+        sessions_with_scores = _get_scored_sessions(trainee_sessions)
+        
+        if sessions_with_scores:
+            avg_score = _get_average_score(sessions_with_scores)
+            pass_rate_percent = _get_pass_rate_percent(sessions_with_scores)
+            highest_score = max(
+                float(session.overall_score or 0) for session in sessions_with_scores
+            )
+        else:
+            avg_score = 0
+            pass_rate_percent = 0
+            highest_score = 0
+        
+        latest_session = max(trainee_sessions, key=lambda s: s.created_at) if trainee_sessions else None
+        
+        trainee_performance.append({
+            "trainee_id": trainee.id,
+            "trainee_name": trainee.full_name,
+            "sessions_completed": len(trainee_sessions),
+            "avg_score": round(avg_score, 1),
+            "highest_score": round(highest_score, 1),
+            "pass_rate": round(pass_rate_percent, 1),
+            "latest_session": latest_session.created_at.isoformat() if latest_session else None,
+        })
+    
+    # Sort by performance
+    trainee_performance.sort(key=lambda x: x["avg_score"], reverse=True)
+    
+    # Get performance trends (last 30 days)
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    trends = []
+    
+    for i in range(30):
+        date = thirty_days_ago + timedelta(days=i)
+        next_date = date + timedelta(days=1)
+        
+        day_sessions = [s for s in sessions if date <= s.created_at < next_date]
+        
+        if day_sessions:
+            sessions_with_scores = _get_scored_sessions(day_sessions)
+            if sessions_with_scores:
+                avg_score = _get_average_score(sessions_with_scores)
+                pass_rate_percent = _get_pass_rate_percent(sessions_with_scores)
+            else:
+                avg_score = 0
+                pass_rate_percent = 0
+        else:
+            avg_score = 0
+            pass_rate_percent = 0
+        
+        trends.append({
+            "period": date.strftime("%Y-%m-%d"),
+            "avg_score": round(avg_score, 1),
+            "sessions": len(day_sessions),
+            "pass_rate": round(pass_rate_percent, 1),
+        })
+    
+    category_performance = _build_category_performance(sessions)
+    
+    return {
+        "batch": {
+            "id": batch.id,
+            "name": batch.name,
+            "wave_number": batch.wave_number,
+            "description": batch.description,
+            "lob": batch.lob,
+        },
+        "trainer": {
+            "id": trainer.id if trainer else None,
+            "full_name": trainer.full_name if trainer else "Unknown",
+            "email": trainer.email if trainer else "",
+        },
+        "summary": {
+            "batch_id": batch.id,
+            "batch_name": batch.name,
+            "trainer_name": trainer.full_name if trainer else "Unknown",
+            "total_trainees": len(trainees),
+            "avg_performance": round(avg_performance, 1),
+            "pass_rate": round(pass_rate_percent, 1),
+            "total_sessions": total_sessions,
+            "completion_rate": round(completion_rate, 1),
+            "top_performers": len([t for t in trainee_performance if t["avg_score"] >= 80]),
+            "needs_improvement": len([t for t in trainee_performance if t["avg_score"] < 60]),
+        },
+        "trends": trends,
+        "category_performance": category_performance,
+        "trainee_performance": trainee_performance,
+    }
+
+
+@router.get("/reports/trainer/{trainer_id}/pdf")
+async def download_trainer_report_pdf(
+    trainer_id: str,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Download trainer performance report as PDF"""
+    report_data = await get_trainer_report(trainer_id, current_user, db)
+
+    generator = PerformanceReportGenerator(title="Trainer Performance Report")
+    pdf_buffer = generator.generate_trainer_report(
+        trainer_name=report_data["trainer"]["full_name"],
+        trainer_email=report_data["trainer"]["email"],
+        report_period="All Time",
+        generated_at=datetime.utcnow(),
+        total_batches=int(report_data["summary"]["total_batches"]),
+        total_trainees=int(report_data["summary"]["total_trainees"]),
+        avg_batch_performance=float(report_data["summary"]["avg_batch_performance"]),
+        total_sessions=int(report_data["summary"]["total_sessions"]),
+        pass_rate=float(report_data["summary"]["pass_rate"]),
+        top_performing_batch=report_data["summary"].get("top_performing_batch"),
+        needs_attention_batches=int(report_data["summary"]["needs_attention_batches"]),
+        batch_rows=report_data["batches"],
+        category_rows=report_data["category_performance"],
+        trend_rows=report_data["trends"],
+    )
+
+    return Response(
+        content=pdf_buffer.read(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="trainer_report_{trainer_id[:8]}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.pdf"',
+        },
+    )
+
+
+@router.get("/reports/batch/{batch_id}/pdf")
+async def download_batch_report_pdf(
+    batch_id: str,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db)
+):
+    """Download batch performance report as PDF"""
+    report_data = await get_batch_report(batch_id, current_user, db)
+
+    generator = PerformanceReportGenerator(title="Batch Performance Report")
+    improvement_rows = [
+        {
+            "category": category["category"],
+            "average": float(category["average_score"]),
+            "below_threshold_count": int(category["average_score"] < 70),
+            "recommendation": f"Improve {category['category']}.",
+        }
+        for category in report_data["category_performance"]
+    ]
+    pronunciation_rows = [
+        {
+            "error_type": category["category"],
+            "frequency": max(1, int(category["average_score"] // 10)),
+            "examples": [],
+        }
+        for category in report_data["category_performance"]
+    ]
+    ranking_rows = [
+        {
+            "trainee_name": trainee["trainee_name"],
+            "sessions_count": int(trainee["sessions_completed"]),
+            "average_score": float(trainee["avg_score"]),
+            "highest_score": float(trainee.get("highest_score", trainee["avg_score"])),
+            "pass_sessions": int(round(trainee["pass_rate"] / 100 * trainee["sessions_completed"])),
+        }
+        for trainee in report_data["trainee_performance"]
+    ]
+
+    pdf_buffer = generator.generate_trainer_batch_report(
+        batch_name=report_data["batch"]["name"],
+        wave_number=report_data["batch"].get("wave_number"),
+        report_period="All Time",
+        generated_at=datetime.utcnow(),
+        focus_metric="Average Score",
+        total_trainees=int(report_data["summary"]["total_trainees"]),
+        total_sessions=int(report_data["summary"]["total_sessions"]),
+        average_score=float(report_data["summary"]["avg_performance"]),
+        pass_rate=float(report_data["summary"]["pass_rate"]),
+        average_pronunciation=float(report_data["summary"]["avg_performance"]),
+        improvement_rows=improvement_rows,
+        pronunciation_rows=pronunciation_rows,
+        ranking_rows=ranking_rows,
+    )
+
+    return Response(
+        content=pdf_buffer.read(),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="batch_report_{batch_id[:8]}_{datetime.utcnow().strftime("%Y%m%d_%H%M%S")}.pdf"',
+        },
+    )

@@ -30,36 +30,36 @@ export default function SupportChatPage() {
               St Peter Buddy
             </h1>
             <p className="mt-3 text-sm leading-7 text-slate-600">
-              A role-aware AI support assistant for the Speech-Enabled BPO Platform.
-              It adapts support based on whether the signed-in user is a trainee,
-              trainer, or admin, while keeping answers focused on the system.
-              You can type a question or use the microphone to ask it by voice.
+              A role-aware AI assistant for St. Peter Life Plan and Chapels inside the
+              Speech-Enabled BPO Platform. It adjusts answers for trainee, trainer, and
+              admin users, keeps replies concise for text to speech, and flags the right
+              department for claims, sales, customer accounts, or IT issues.
             </p>
 
             <div className="mt-6 space-y-4">
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <h2 className="text-sm font-semibold text-slate-900">What it handles</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Give users a single support assistant that understands platform
-                  roles, feature access boundaries, and common BPO training
-                  workflows.
+                  Give users one assistant for basic plan FAQs, training support,
+                  role-aware guidance, and department routing inside the platform.
                 </p>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <h2 className="text-sm font-semibold text-slate-900">Role support</h2>
                 <ul className="mt-2 space-y-2 text-sm text-slate-600">
-                  <li>Trainee: modules, schedules, submissions, scores, speech tasks</li>
-                  <li>Trainer: reviews, grading, content updates, performance tracking</li>
-                  <li>Admin: users, permissions, settings, reports, maintenance</li>
+                  <li>Trainee: learning modules, basic plan FAQs, navigation</li>
+                  <li>Trainer: teaching guidance, routing procedures, performance metrics</li>
+                  <li>Admin: system health, routing oversight, sensitive summaries</li>
                 </ul>
               </div>
 
               <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                <h2 className="text-sm font-semibold text-blue-900">Answer style</h2>
+                <h2 className="text-sm font-semibold text-blue-900">Routing Behavior</h2>
                 <p className="mt-2 text-sm text-blue-800">
-                  Clean, human support experience with role-based guidance and
-                  concise system answers backed by platform workflows and route guidance.
+                  Tags urgent death claims to Claims, new plan and pricing questions to
+                  Sales, payment or account updates to Customer Accounts, and platform
+                  bugs to IT Support.
                 </p>
               </div>
             </div>

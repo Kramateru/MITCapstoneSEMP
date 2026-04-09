@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, Column, DateTime
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -79,28 +79,18 @@ class User(Base):
 
     __tablename__ = "user"
 
-    id = Column(
-        String(36),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4())
-    )
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String(255), unique=True, nullable=False, index=True)
     full_name = Column(String(255), nullable=False)
     password_hash = Column(String(255), nullable=False)  # bcrypt hash
-    role = Column(
-        SQLEnum(UserRole), nullable=False, default=UserRole.TRAINEE
-    )
+    role = Column(SQLEnum(UserRole), nullable=False, default=UserRole.TRAINEE)
     lob = Column(String(100), nullable=True)
     department = Column(String(100), nullable=True)
-    language_dialect = Column(
-        String(50), default="en-US"
-    )  # e.g., en-US, en-PH, en-IN
+    language_dialect = Column(String(50), default="en-US")  # e.g., en-US, en-PH, en-IN
 
     # Account settings
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     is_active = Column(Boolean, default=True)
     last_login = Column(DateTime, nullable=True)
     profile_image_url = Column(String(500), nullable=True)
@@ -121,9 +111,7 @@ class User(Base):
         "Batch", secondary=batch_user_association, back_populates="users"
     )
     practice_sessions = relationship(
-        "PracticeSession", 
-        back_populates="user",
-        foreign_keys="PracticeSession.user_id"
+        "PracticeSession", back_populates="user", foreign_keys="PracticeSession.user_id"
     )
     feedback_given = relationship(
         "Feedback", foreign_keys="Feedback.trainer_id", back_populates="trainer"
@@ -222,18 +210,12 @@ class Workspace(Base):
     empathy_statements = Column(
         JSON, default=list
     )  # List of empathetic phrases to recognize
-    probing_questions = Column(
-        JSON, default=list
-    )  # List of mandatory questions
+    probing_questions = Column(JSON, default=list)  # List of mandatory questions
     forbidden_words = Column(JSON, default=list)  # Negative triggers
-    required_keywords = Column(
-        JSON, default=list
-    )  # Keywords that must be included
+    required_keywords = Column(JSON, default=list)  # Keywords that must be included
 
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
-    )
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Scenario(Base):
@@ -241,30 +223,25 @@ class Scenario(Base):
 
     __tablename__ = "scenario"
 
-    id = Column(
-        String(36),
-        primary_key=True,
-        default=lambda: str(uuid.uuid4())
-    )
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String(255), nullable=False)
     description = Column(Text)
 
     # Metadata
-    purpose = Column(
-        SQLEnum(ScenarioPurpose), default=ScenarioPurpose.PRACTICE
-    )
-    difficulty = Column(
-        SQLEnum(ScenarioDifficulty), default=ScenarioDifficulty.BASIC
-    )
+    purpose = Column(SQLEnum(ScenarioPurpose), default=ScenarioPurpose.PRACTICE)
+    difficulty = Column(SQLEnum(ScenarioDifficulty), default=ScenarioDifficulty.BASIC)
     lob = Column(String(100))  # Line of Business
 
     # Scenario configuration
-    opening_prompt = Column(
-        Text, nullable=False
-    )  # Customer's opening statement
+    opening_prompt = Column(Text, nullable=False)  # Customer's opening statement
     opening_prompt_audio = Column(String(500))  # URL to audio file
     expected_keywords = Column(JSON, default=list)  # Keywords agent should use
     estimated_duration = Column(Integer)  # seconds
+    member_profile = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    cxone_metadata = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    sim_floor_config = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    ringer_audio_url = Column(String(500))
+    hold_audio_url = Column(String(500))
 
     # Creator/Owner
     created_by = Column(String(36), ForeignKey("user.id"))
@@ -306,6 +283,9 @@ class ScenarioFlow(Base):
     prompt_text = Column(Text)  # Customer prompt for this step
     prompt_audio = Column(String(500))  # URL to audio
     expected_response = Column(Text)  # Expected agent response (for branching)
+    speaker_role = Column(String(20), default="member")  # member, csr, system
+    speaker_label = Column(String(100))
+    step_metadata = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
 
     # Branching logic
     expected_keywords_for_step = Column(JSON, default=list)
@@ -364,6 +344,8 @@ class Batch(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(100), nullable=False)
     description = Column(Text)
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
 
     # Created by trainer
     created_by = Column(String(36), ForeignKey("user.id"))
@@ -489,9 +471,7 @@ class PracticeSession(Base):
 
     # Relationships
     user = relationship(
-        "User", 
-        back_populates="practice_sessions",
-        foreign_keys=[user_id]
+        "User", back_populates="practice_sessions", foreign_keys=[user_id]
     )
     scenario = relationship("Scenario", back_populates="practice_sessions")
     feedback_items = relationship("Feedback", back_populates="practice_session")
@@ -550,6 +530,31 @@ class MicrolearningAssessmentMethod(Base):
     modules = relationship("MicrolearningModule", back_populates="assessment_method")
 
 
+class MicrolearningTopicCategory(Base):
+    """Trainer-managed topic grouping for microlearning modules."""
+
+    __tablename__ = "microlearning_topic_category"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = Column(String(120), nullable=False)
+    slug = Column(String(120), nullable=False)
+    description = Column(Text, nullable=True)
+    created_by = Column(String(36), ForeignKey("user.id"), nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    modules = relationship("MicrolearningModule", back_populates="topic_category")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "created_by",
+            "slug",
+            name="uq_microlearning_topic_category_owner_slug",
+        ),
+    )
+
+
 class MicrolearningModule(Base):
     """Microlearning drill/module for targeted skill improvement"""
 
@@ -561,16 +566,24 @@ class MicrolearningModule(Base):
     category = Column(SQLEnum(FeedbackType))
 
     # Content
-    duration_minutes = Column(Integer, default=2)  # Typically 2-5 minutes
+    type = Column(String(50), nullable=False, default="video")  # video, quiz, flashcard, infographic, case_study
+    duration_minutes = Column(Integer, default=3)
+    content_data = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)  # JSON payload for type-specific content
+    passing_score = Column(Integer, default=75)
     skill_focus = Column(String(100))  # e.g., "Breathing & Pacing", "Empathy"
-    content_url = Column(String(500))  # Link to video/exercise
-    exercises = Column(JSON, default=list)  # List of practice exercises
+    content_url = Column(String(500), nullable=True)  # Link to video/audio/image
+    exercises = Column(JSONB().with_variant(JSON, "sqlite"), default=list)  # List of practice exercises
 
     # Difficulty
     difficulty = Column(SQLEnum(ScenarioDifficulty), default=ScenarioDifficulty.BASIC)
     assessment_method_id = Column(
         String(36),
         ForeignKey("microlearning_assessment_method.id"),
+        nullable=True,
+    )
+    topic_category_id = Column(
+        String(36),
+        ForeignKey("microlearning_topic_category.id"),
         nullable=True,
     )
 
@@ -581,6 +594,9 @@ class MicrolearningModule(Base):
     assessment_method = relationship(
         "MicrolearningAssessmentMethod", back_populates="modules"
     )
+    topic_category = relationship(
+        "MicrolearningTopicCategory", back_populates="modules"
+    )
     assignments = relationship("MicrolearningAssignment", back_populates="module")
 
 
@@ -590,7 +606,9 @@ class MicrolearningAssignment(Base):
     __tablename__ = "microlearning_assignment"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    module_id = Column(String(36), ForeignKey("microlearning_module.id"), nullable=False)
+    module_id = Column(
+        String(36), ForeignKey("microlearning_module.id"), nullable=False
+    )
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
     batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
@@ -604,11 +622,13 @@ class MicrolearningAssignment(Base):
     responses = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     assigned_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    certificate_id = Column(String(36), ForeignKey("certificate_record.id"), nullable=True)
 
     module = relationship("MicrolearningModule", back_populates="assignments")
     trainee = relationship("User", foreign_keys=[trainee_id])
     trainer = relationship("User", foreign_keys=[assigned_by])
     batch = relationship("Batch")
+    certificate = relationship("CertificateRecord")
 
 
 class PerformanceMetrics(Base):
@@ -736,7 +756,9 @@ class MCQSubmission(Base):
     submitted_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("assessment_id", "trainee_id", name="uq_mcq_assessment_trainee"),
+        UniqueConstraint(
+            "assessment_id", "trainee_id", name="uq_mcq_assessment_trainee"
+        ),
     )
 
 
@@ -762,7 +784,11 @@ class CoachingLog(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     coaching_id = Column(String(50), unique=True, nullable=False)
-    practice_session_id = Column(String(36), ForeignKey("practice_session.id"), nullable=True)
+    source_type = Column(String(30), default="practice_session")
+    practice_session_id = Column(
+        String(36), ForeignKey("practice_session.id"), nullable=True
+    )
+    sim_session_id = Column(String(36), ForeignKey("sim_session.id"), nullable=True)
     trainer_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     batch_name = Column(String(100), nullable=True)
@@ -780,6 +806,7 @@ class CoachingLog(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     practice_session = relationship("PracticeSession", back_populates="coaching_logs")
+    sim_session = relationship("SimSession", foreign_keys=[sim_session_id])
     trainer = relationship(
         "User", foreign_keys=[trainer_id], back_populates="coaching_logs_created"
     )
@@ -797,14 +824,17 @@ class CertificationSettings(Base):
     institution_name = Column(
         String(255), default="St. Peter Velle Technical Training Center, Inc."
     )
-    address = Column(String(255), default="#92 Mc Arthur Highway Marulas, Valenzuela, Philippines, 1440")
+    address = Column(
+        String(255),
+        default="#92 Mc Arthur Highway Marulas, Valenzuela, Philippines, 1440",
+    )
     contact_number = Column(String(50), default="0960 545 6293")
     contact_email = Column(String(255), default="stpetervelle2003@yahoo.com.ph")
-    logo_url = Column(String(500), nullable=True)
+    logo_url = Column(Text, nullable=True)
     registrar_name = Column(String(255), default="St. Peter Velle Registrar")
     signatory_title = Column(String(255), default="Authorized Signatory")
-    manager_signature_url = Column(String(500), nullable=True)
-    dry_seal_url = Column(String(500), nullable=True)
+    manager_signature_url = Column(Text, nullable=True)
+    dry_seal_url = Column(Text, nullable=True)
     certificate_prefix = Column(String(50), default="SPV")
     certificate_title = Column(String(255), default="Certificate of Completion")
     certificate_subtitle = Column(
@@ -842,8 +872,12 @@ class CompetencyVerdict(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     trainer_id = Column(String(36), ForeignKey("user.id"), nullable=False)
-    practice_session_id = Column(String(36), ForeignKey("practice_session.id"), nullable=True)
-    mcq_assessment_id = Column(String(36), ForeignKey("mcq_assessment.id"), nullable=True)
+    practice_session_id = Column(
+        String(36), ForeignKey("practice_session.id"), nullable=True
+    )
+    mcq_assessment_id = Column(
+        String(36), ForeignKey("mcq_assessment.id"), nullable=True
+    )
     asr_score = Column(Float, default=0.0)
     mcq_score = Column(Float, default=0.0)
     remarks = Column(Text, nullable=True)
@@ -869,3 +903,323 @@ class CertificateRecord(Base):
     achievement_type = Column(String(50), default="completion")
     template_snapshot = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     issued_at = Column(DateTime, default=datetime.utcnow)
+
+
+# ==================== Sim Floor Models ====================
+
+
+class ScenarioVariation(Base):
+    """CSR response variations with scores for a scenario."""
+
+    __tablename__ = "scenario_variation"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    actor_name = Column(String(100), nullable=False)
+    script = Column(Text, nullable=False)
+    score = Column(Float, default=0.0)  # 0-5 scale
+    branching_logic = Column(Text)  # JSON string for conditional branching
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    scenario = relationship("Scenario", backref="variations")
+
+
+class BatchScenarioMapping(Base):
+    """Maps scenarios to batches for Sim Floor access control."""
+
+    __tablename__ = "batch_scenario_mapping"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=False)
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+    assigned_by = Column(String(36), ForeignKey("user.id"))
+    is_active = Column(Boolean, default=True)
+
+    batch = relationship("Batch", backref="scenario_mappings")
+    scenario = relationship("Scenario", backref="batch_mappings")
+
+    __table_args__ = (
+        UniqueConstraint("batch_id", "scenario_id", name="uq_batch_scenario"),
+    )
+
+
+class SimFloorAssignment(Base):
+    """Trainer-issued Sim Floor assignment row for a trainee."""
+
+    __tablename__ = "sim_floor_assignment"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
+    assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
+    trainer_notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    scenario = relationship("Scenario", backref="sim_floor_assignments")
+    trainee = relationship("User", foreign_keys=[trainee_id])
+    trainer = relationship("User", foreign_keys=[assigned_by])
+    batch = relationship("Batch")
+
+    __table_args__ = (
+        UniqueConstraint("scenario_id", "trainee_id", name="uq_sim_floor_assignment"),
+    )
+
+
+class BatchKPIConfig(Base):
+    """Per-batch KPI weighting configuration for Sim Floor."""
+
+    __tablename__ = "batch_kpi_config"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=False, unique=True)
+
+    # Core KPI Weights (must sum to 100)
+    speech_to_text_weight = Column(Float, default=25.0)
+    aht_weight = Column(Float, default=20.0)
+    rate_of_speech_weight = Column(Float, default=15.0)
+    dead_air_weight = Column(Float, default=15.0)
+
+    # Behavioral KPI Weights
+    empathy_statements_weight = Column(Float, default=10.0)
+    probing_questions_weight = Column(Float, default=10.0)
+
+    # AI Assessment KPI Weights
+    grammar_weight = Column(Float, default=2.5)
+    pronunciation_weight = Column(Float, default=1.0)
+    pacing_weight = Column(Float, default=1.0)
+
+    # Negative Impact
+    forbidden_words_penalty = Column(
+        Float, default=5.0
+    )  # % deduction per forbidden word
+
+    # Threshold
+    passing_score = Column(Float, default=90.0)
+
+    # Forbidden words list
+    forbidden_words = Column(JSON, default=list)
+    empathy_keywords = Column(JSON, default=list)
+    probing_keywords = Column(JSON, default=list)
+
+    # Targets
+    target_aht_seconds = Column(Integer, default=120)
+    target_ros_words_per_min = Column(Float, default=150.0)
+    target_dead_air_seconds = Column(Float, default=3.0)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    batch = relationship("Batch", backref="kpi_config")
+
+
+class SimSession(Base):
+    """Sim Floor simulation session - tracks trainee progress through a scenario."""
+
+    __tablename__ = "sim_session"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    scenario_variation_id = Column(
+        String(36), ForeignKey("scenario_variation.id"), nullable=True
+    )
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
+
+    # Session State
+    status = Column(
+        String(50), default="pending"
+    )  # pending, in_progress, completed, failed
+    current_step = Column(Integer, default=0)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Audio Recording
+    audio_url = Column(String(500))  # Supabase Storage URL
+    audio_duration_seconds = Column(Integer)
+
+    # Transcript
+    transcript = Column(Text)
+    transcript_confidence = Column(Float)
+    transcript_log = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    turn_logs = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
+
+    # Core KPI Scores
+    speech_to_text_accuracy = Column(Float)  # 0-100
+    aht_target = Column(Integer)  # Target AHT in seconds
+    aht_actual = Column(Integer)  # Actual AHT in seconds
+    rate_of_speech = Column(Float)  # Words per minute
+    dead_air_seconds = Column(Float)
+
+    # Behavioral KPI Counts
+    empathy_statements_count = Column(Integer, default=0)
+    probing_questions_count = Column(Integer, default=0)
+
+    # AI Assessment Scores
+    grammar_score = Column(Float)
+    pronunciation_score = Column(Float)
+    pacing_score = Column(Float)
+    sentiment_score = Column(Float)
+    keyword_compliance = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+
+    # Negative Impact
+    forbidden_words_count = Column(Integer, default=0)
+    forbidden_words_detected = Column(JSON, default=list)
+    forbidden_word_penalty_applied = Column(Float, default=0.0)
+
+    # Final Score
+    weighted_score = Column(Float)
+    pass_fail = Column(Boolean, default=False)
+
+    # Attempts
+    attempt_number = Column(Integer, default=1)
+    max_attempts = Column(Integer, default=3)
+
+    # AI Feedback Summary
+    ai_feedback = Column(Text)
+    coaching_notes = Column(Text)
+    trainer_verdict_status = Column(String(30), default="pending")
+    trainer_verdict_notes = Column(Text)
+    trainer_evaluated_by = Column(String(36), ForeignKey("user.id"), nullable=True)
+    trainer_evaluated_at = Column(DateTime, nullable=True)
+    certificate_id = Column(String(36), ForeignKey("certificate_record.id"), nullable=True)
+
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    trainee = relationship("User", foreign_keys=[trainee_id])
+    scenario = relationship("Scenario")
+    batch = relationship("Batch")
+    variation = relationship("ScenarioVariation")
+    trainer = relationship("User", foreign_keys=[trainer_evaluated_by])
+    certificate = relationship("CertificateRecord")
+
+    def __repr__(self):
+        return f"<SimSession {self.id} - Trainee: {self.trainee_id} Scenario: {self.scenario_id}>"
+
+
+# ==================== Assessment Management Models ====================
+
+
+class Assessment(Base):
+    """Trainer-created assessment for BPO competency evaluation."""
+
+    __tablename__ = "assessment"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=False)  # grammar, pronunciation, customer_service, communication, product_knowledge
+    difficulty = Column(String(20), nullable=False)  # basic, intermediate, advanced
+    question_count = Column(Integer, default=10)
+    passing_score = Column(Integer, default=75)  # Percentage (0-100)
+    
+    created_by = Column(String(36), ForeignKey("user.id"), nullable=False)
+    is_published = Column(Boolean, default=True)
+    is_draft = Column(Boolean, default=False)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    creator = relationship("User", foreign_keys=[created_by])
+    questions = relationship("AssessmentQuestion", back_populates="assessment", cascade="all, delete-orphan")
+    assignments = relationship("AssignmentBatch", back_populates="assessment", cascade="all, delete-orphan")
+    submissions = relationship("AssessmentSubmission", back_populates="assessment", cascade="all, delete-orphan")
+
+
+class AssessmentQuestion(Base):
+    """Individual question within an assessment."""
+
+    __tablename__ = "assessment_question"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assessment_id = Column(String(36), ForeignKey("assessment.id"), nullable=False)
+    question_text = Column(Text, nullable=False)
+    
+    # Question options (JSON format for flexibility)
+    options = Column(JSONB().with_variant(JSON, "sqlite"), default=list)  # ["option1", "option2", ...]
+    correct_answer = Column(String(255), nullable=False)  # Index or text of correct option
+    explanation = Column(Text, nullable=True)  # Why this is correct
+    
+    difficulty_override = Column(String(20), nullable=True)  # Override assessment difficulty if needed
+    question_index = Column(Integer, default=0)  # Order in assessment
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    assessment = relationship("Assessment", back_populates="questions")
+
+
+class AssignmentBatch(Base):
+    """Maps assessments to batches for trainee access control."""
+
+    __tablename__ = "assignment_batch"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assessment_id = Column(String(36), ForeignKey("assessment.id"), nullable=False)
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=False)
+    
+    assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
+    assigned_at = Column(DateTime, default=datetime.utcnow)
+    is_active = Column(Boolean, default=True)
+    due_date = Column(DateTime, nullable=True)
+
+    # Relationships
+    assessment = relationship("Assessment", back_populates="assignments")
+    batch = relationship("Batch", backref="assessment_assignments")
+    assignee = relationship("User", foreign_keys=[assigned_by])
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "batch_id", name="uq_assessment_batch"),
+    )
+
+
+class AssessmentSubmission(Base):
+    """Trainee submission/result for an assessment."""
+
+    __tablename__ = "assessment_submission"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assessment_id = Column(String(36), ForeignKey("assessment.id"), nullable=False)
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
+    batch_id = Column(String(36), ForeignKey("batch.id"), nullable=False)
+    
+    score = Column(Float, default=0.0)  # Percentage (0-100)
+    is_passed = Column(Boolean, default=False)
+    time_taken_seconds = Column(Integer, default=0)
+    
+    # Store user responses
+    responses = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)  # {question_id: answer}
+    
+    submitted_at = Column(DateTime, default=datetime.utcnow)
+    graded_at = Column(DateTime, nullable=True)
+    
+    # Certificate linkage
+    certificate_id = Column(String(36), ForeignKey("certificate_record.id"), nullable=True)
+    
+    # Metadata
+    is_reviewed = Column(Boolean, default=False)
+    reviewer_feedback = Column(Text, nullable=True)
+    reviewed_by = Column(String(36), ForeignKey("user.id"), nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    assessment = relationship("Assessment", back_populates="submissions")
+    trainee = relationship("User", foreign_keys=[trainee_id])
+    batch = relationship("Batch")
+    certificate = relationship("CertificateRecord")
+    reviewer = relationship("User", foreign_keys=[reviewed_by])
+
+    __table_args__ = (
+        UniqueConstraint("assessment_id", "trainee_id", name="uq_assessment_trainee"),
+    )

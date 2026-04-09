@@ -221,9 +221,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       const data = await response.json()
       
-      setToken(data.access_token)
-      setRefreshTokenValue(data.refresh_token)
+      // Validate response has required fields
+      if (!data.access_token) {
+        throw new Error('Invalid login response: missing access token')
+      }
+      if (!data.user) {
+        throw new Error('Invalid login response: missing user data')
+      }
+      
       const userData = buildUserFromResponse(data)
+      if (!userData) {
+        throw new Error('Failed to process user data from login response')
+      }
+      
+      setToken(data.access_token)
+      setRefreshTokenValue(data.refresh_token || null)
       setUser(userData)
 
       try {

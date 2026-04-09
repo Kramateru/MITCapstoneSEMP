@@ -3,6 +3,7 @@ Trainee Dashboard Routes
 Handles practice sessions, feedback viewing, and progress tracking
 """
 
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -28,14 +29,19 @@ from ..models import (
     UserRole,
 )
 from ..services.live_updates import live_update_manager
-from ..services.certificate_awards import award_certificate
+from ..services.certificate_awards import (
+    SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES,
+    award_certificate,
+    prune_trainee_activity_certificates,
+    sync_trainee_completion_certificates,
+)
 from ..services.microlearning import (
     ensure_module_exercises,
     evaluate_exercise_submission,
     refresh_assignment_progress,
-    serialize_microlearning_module,
     serialize_assignment_detail,
     serialize_assignment_summary,
+    serialize_microlearning_module,
 )
 from ..services.speech_assessment import (
     assess_audio_submission,
@@ -44,6 +50,7 @@ from ..services.speech_assessment import (
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/trainee", tags=["trainee"])
+logger = logging.getLogger(__name__)
 
 
 def Depends(dependency=None):
@@ -88,6 +95,7 @@ class UIPreferences(BaseModel):
 class MicrolearningExerciseSubmission(BaseModel):
     response_text: Optional[str] = None
     selected_option: Optional[str] = None
+    input_mode: Optional[str] = None
 
 
 # ==================== Helper Functions ====================
@@ -112,9 +120,11 @@ def _get_trainee_microlearning_assignment(
         db.query(MicrolearningAssignment)
         .options(
             selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
             selectinload(MicrolearningAssignment.trainee),
             selectinload(MicrolearningAssignment.trainer),
             selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.certificate),
         )
         .filter(
             MicrolearningAssignment.id == assignment_id,
@@ -170,6 +180,190 @@ def _award_course_assignment_completion_certificate(
         score=float(assignment.completion_percentage or 0.0),
         issued_at=assignment.updated_at or assignment.assigned_at,
     )
+
+
+def _award_microlearning_assignment_certificate(
+    db: Session,
+    *,
+    trainee: User,
+    assignment: MicrolearningAssignment,
+) -> None:
+    module = assignment.module
+    if not module:
+        return
+
+    assignment_summary = serialize_assignment_summary(assignment)
+    if not assignment_summary.get("is_passed"):
+        return
+
+    certificate, _ = award_certificate(
+        db,
+        trainee_id=trainee.id,
+        issuer_id=assignment.assigned_by,
+        source_type="microlearning_assignment",
+        source_id=assignment.id,
+        achievement_title=module.title,
+        achievement_type="microlearning",
+        remarks=f"Completed microlearning module: {module.title}",
+        score=float(assignment_summary.get("average_score") or 0.0),
+        issued_at=assignment.completed_at or assignment.updated_at or assignment.assigned_at,
+    )
+    assignment.certificate_id = certificate.id
+    assignment.status = "certified"
+
+
+def _build_trainee_microlearning_report(
+    db: Session,
+    *,
+    trainee_id: str,
+) -> dict[str, Any]:
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
+            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.certificate),
+        )
+        .filter(MicrolearningAssignment.trainee_id == trainee_id)
+        .order_by(MicrolearningAssignment.assigned_at.desc())
+        .all()
+    )
+
+    did_update = False
+    rows: list[dict[str, Any]] = []
+    topic_breakdown: dict[str, dict[str, Any]] = {}
+
+    for assignment in assignments:
+        did_update = ensure_module_exercises(assignment.module) or did_update
+        before = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+            assignment.certificate_id,
+        )
+        refresh_assignment_progress(assignment)
+        summary = serialize_assignment_summary(assignment)
+        if summary.get("is_passed") and assignment.status in {"completed", "certified"}:
+            _award_microlearning_assignment_certificate(
+                db,
+                trainee=assignment.trainee,
+                assignment=assignment,
+            )
+            refresh_assignment_progress(assignment)
+            summary = serialize_assignment_summary(assignment)
+        after = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+            assignment.certificate_id,
+        )
+        did_update = before != after or did_update
+        rows.append(summary)
+
+        topic_key = summary.get("topic_category_id") or "uncategorized"
+        bucket = topic_breakdown.setdefault(
+            topic_key,
+            {
+                "topic_category_id": summary.get("topic_category_id"),
+                "topic_category_name": summary.get("topic_category_name") or "Uncategorized",
+                "assignment_count": 0,
+                "completed_count": 0,
+                "certified_count": 0,
+                "scores": [],
+            },
+        )
+        bucket["assignment_count"] += 1
+        if summary.get("status") in {"completed", "certified"}:
+            bucket["completed_count"] += 1
+        if summary.get("certificate_id"):
+            bucket["certified_count"] += 1
+        if summary.get("completed_exercises"):
+            bucket["scores"].append(float(summary.get("average_score") or 0.0))
+
+    if did_update:
+        db.commit()
+
+    def _average(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        return round(sum(values) / len(values), 2)
+
+    score_values = [
+        float(row.get("average_score") or 0.0)
+        for row in rows
+        if int(row.get("completed_exercises") or 0) > 0
+    ]
+    completed_count = sum(
+        1 for row in rows if row.get("status") in {"completed", "certified"}
+    )
+    certified_count = sum(1 for row in rows if row.get("certificate_id"))
+    in_progress_count = sum(
+        1 for row in rows if row.get("status") in {"assigned", "in_progress"}
+    )
+    total_duration_minutes = sum(int(row.get("duration_minutes") or 0) for row in rows)
+
+    topic_rows = [
+        {
+            "topic_category_id": bucket["topic_category_id"],
+            "topic_category_name": bucket["topic_category_name"],
+            "assignment_count": bucket["assignment_count"],
+            "completed_count": bucket["completed_count"],
+            "certified_count": bucket["certified_count"],
+            "average_score": _average(bucket["scores"]),
+        }
+        for bucket in topic_breakdown.values()
+    ]
+    topic_rows.sort(
+        key=lambda row: (
+            row["certified_count"],
+            row["completed_count"],
+            row["average_score"],
+            row["assignment_count"],
+        ),
+        reverse=True,
+    )
+
+    recent_certificates = (
+        db.query(CertificateRecord)
+        .filter(
+            CertificateRecord.trainee_id == trainee_id,
+            CertificateRecord.source_type == "microlearning_assignment",
+        )
+        .order_by(CertificateRecord.issued_at.desc())
+        .limit(8)
+        .all()
+    )
+
+    return {
+        "summary": {
+            "assignment_count": len(rows),
+            "in_progress_count": in_progress_count,
+            "completed_count": completed_count,
+            "certified_count": certified_count,
+            "average_score": _average(score_values),
+            "pass_rate": round(
+                (certified_count / len(rows) * 100) if rows else 0.0,
+                2,
+            ),
+            "total_duration_minutes": total_duration_minutes,
+        },
+        "topic_progress": topic_rows,
+        "recent_certificates": [
+            {
+                "certificate_id": certificate.id,
+                "certificate_no": certificate.certificate_no,
+                "achievement_title": certificate.unit_of_competency,
+                "issued_at": certificate.issued_at,
+            }
+            for certificate in recent_certificates
+        ],
+        "assignments": rows,
+    }
 
 
 # ==================== Initial Setup ====================
@@ -1008,7 +1202,10 @@ async def get_microlearning_modules(
     if category:
         query = query.filter(MicrolearningModule.category == category)
 
-    modules = query.options(selectinload(MicrolearningModule.assessment_method)).all()
+    modules = query.options(
+        selectinload(MicrolearningModule.assessment_method),
+        selectinload(MicrolearningModule.topic_category),
+    ).all()
 
     return {
         "count": len(modules),
@@ -1026,9 +1223,11 @@ async def list_microlearning_assignments(
         db.query(MicrolearningAssignment)
         .options(
             selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
             selectinload(MicrolearningAssignment.trainee),
             selectinload(MicrolearningAssignment.trainer),
             selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.certificate),
         )
         .filter(MicrolearningAssignment.trainee_id == current_user.id)
         .order_by(MicrolearningAssignment.assigned_at.desc())
@@ -1123,12 +1322,21 @@ async def submit_microlearning_exercise(
         exercise,
         response_text=payload.response_text,
         selected_option=payload.selected_option,
+        input_mode=payload.input_mode,
     )
 
     responses = dict(assignment.responses or {})
     responses[exercise_id] = attempt
     assignment.responses = responses
     refresh_assignment_progress(assignment)
+    assignment_summary = serialize_assignment_summary(assignment)
+    if assignment_summary.get("is_passed") and assignment.status in {"completed", "certified"}:
+        _award_microlearning_assignment_certificate(
+            db,
+            trainee=current_user,
+            assignment=assignment,
+        )
+        refresh_assignment_progress(assignment)
     db.commit()
     db.refresh(assignment)
 
@@ -1139,6 +1347,15 @@ async def submit_microlearning_exercise(
     }
 
 
+@router.get("/microlearning-report")
+async def get_microlearning_report(
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Return the trainee's microlearning accomplishment report."""
+    return _build_trainee_microlearning_report(db, trainee_id=current_user.id)
+
+
 # ==================== Trainee Dashboard ====================
 
 
@@ -1147,6 +1364,10 @@ async def trainee_stats(
     current_user: Any = Depends(verify_trainee), db: Session = Depends()
 ):
     """Stats payload used by trainee dashboard UI."""
+    sync_trainee_completion_certificates(db, current_user.id)
+    prune_trainee_activity_certificates(db, current_user.id)
+    db.commit()
+
     now = datetime.utcnow()
     start_of_day = datetime(now.year, now.month, now.day)
     end_of_day = start_of_day + timedelta(days=1)
@@ -1186,7 +1407,25 @@ async def trainee_stats(
     )
     certifications = (
         db.query(func.count(CertificateRecord.id))
-        .filter(CertificateRecord.trainee_id == current_user.id)
+        .filter(
+            CertificateRecord.trainee_id == current_user.id,
+            CertificateRecord.source_type.in_(list(SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES)),
+        )
+        .scalar()
+        or 0
+    )
+    microlearning_assignments = (
+        db.query(func.count(MicrolearningAssignment.id))
+        .filter(MicrolearningAssignment.trainee_id == current_user.id)
+        .scalar()
+        or 0
+    )
+    certified_microlearning_assignments = (
+        db.query(func.count(MicrolearningAssignment.id))
+        .filter(
+            MicrolearningAssignment.trainee_id == current_user.id,
+            MicrolearningAssignment.certificate_id.isnot(None),
+        )
         .scalar()
         or 0
     )
@@ -1199,6 +1438,8 @@ async def trainee_stats(
         "completed_today": int(completed_today),
         "completed_scenarios": int(completed_scenarios),
         "certifications": int(certifications),
+        "microlearning_assignments": int(microlearning_assignments),
+        "microlearning_certifications": int(certified_microlearning_assignments),
     }
 
 
@@ -1287,10 +1528,13 @@ async def upload_audio_to_supabase(
         supabase = get_supabase_client()
         
         if not supabase.is_available:
-            raise HTTPException(
-                status_code=503,
-                detail="Cloud storage not available. Please check Supabase configuration."
-            )
+            logger.warning("Supabase storage not available for audio upload")
+            return {
+                "status": "success",
+                "audio_url": None,
+                "message": "Audio storage not configured - assessment will proceed without audio file",
+                "user_id": current_user.id,
+            }
         
         # Read file bytes
         file_bytes = await file.read()
@@ -1303,10 +1547,13 @@ async def upload_audio_to_supabase(
         )
         
         if not public_url:
-            raise HTTPException(
-                status_code=500,
-                detail="Failed to upload audio to cloud storage"
-            )
+            logger.warning(f"Failed to upload audio for scenario {scenario_id}, continuing without URL")
+            return {
+                "status": "success",
+                "audio_url": None,
+                "message": "Audio upload failed - assessment will proceed without audio file",
+                "user_id": current_user.id,
+            }
         
         return {
             "status": "success",
@@ -1322,3 +1569,106 @@ async def upload_audio_to_supabase(
             status_code=500,
             detail=f"Audio upload failed: {str(e)}"
         )
+
+
+# ==================== Account Status Management ====================
+
+
+class AccountStatusUpdate(BaseModel):
+    """Request model for trainee account status update"""
+    is_active: bool
+
+
+@router.get("/account-status")
+async def get_account_status(
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Get the trainee's current account status"""
+    trainee = db.query(User).filter(User.id == current_user.id).first()
+    
+    if not trainee:
+        raise HTTPException(status_code=404, detail="Trainee account not found")
+    
+    return {
+        "id": trainee.id,
+        "full_name": trainee.full_name,
+        "email": trainee.email,
+        "is_active": trainee.is_active,
+        "created_at": trainee.created_at,
+        "updated_at": trainee.updated_at,
+    }
+
+
+@router.get("/registered-trainees")
+async def get_all_registered_trainees(
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Get all registered trainee accounts in the system (read-only for trainees)"""
+    trainees = (
+        db.query(User)
+        .filter(User.role == UserRole.TRAINEE)
+        .order_by(User.is_active.desc(), User.full_name.asc(), User.email.asc())
+        .all()
+    )
+    
+    trainee_list = [
+        {
+            "id": t.id,
+            "full_name": t.full_name,
+            "email": t.email,
+            "is_active": t.is_active,
+            "department": t.department,
+            "created_at": t.created_at,
+        }
+        for t in trainees
+    ]
+    
+    return {
+        "count": len(trainee_list),
+        "trainees": trainee_list,
+    }
+
+
+@router.put("/account-status")
+async def update_account_status(
+    status_data: AccountStatusUpdate,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """
+    Update trainee's own account status (active/inactive).
+    Trainee can deactivate their own account but CANNOT reactivate it.
+    Only trainers can reactivate deactivated trainee accounts.
+    """
+    trainee = db.query(User).filter(User.id == current_user.id).first()
+    
+    if not trainee:
+        raise HTTPException(status_code=404, detail="Trainee account not found")
+    
+    # Trainee can only deactivate their account, not reactivate
+    if status_data.is_active and not trainee.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="You cannot reactivate your account. Please contact your trainer for account reactivation."
+        )
+    
+    # If deactivating, remove from all batch assignments
+    if not status_data.is_active and trainee.is_active:
+        trainee.batches.clear()
+    
+    trainee.is_active = status_data.is_active
+    db.commit()
+    db.refresh(trainee)
+    
+    return {
+        "status": "updated",
+        "message": f"Account status changed to {'active' if status_data.is_active else 'inactive'}",
+        "trainee": {
+            "id": trainee.id,
+            "full_name": trainee.full_name,
+            "email": trainee.email,
+            "is_active": trainee.is_active,
+        }
+    }

@@ -24,6 +24,7 @@ from ..models import (
     MCQQuestion,
     MCQSubmission,
     PracticeSession,
+    SimSession,
     User,
     UserRole,
 )
@@ -32,14 +33,15 @@ from ..services.certificate_awards import (
     build_template_snapshot,
     ensure_certification_settings,
     issue_certificate_for_verdict,
+    prune_trainee_activity_certificates,
     sync_trainee_completion_certificates,
 )
 from ..services.mcq_samples import ensure_trainer_language_assessment_samples
 from ..services.certificate_service import generate_certificate_pdf
 from ..services.coaching import (
     build_training_state,
+    generate_coaching_id,
     load_latest_coaching_logs,
-    load_latest_sessions,
     normalize_competency_status,
     serialize_coaching_log,
 )
@@ -353,10 +355,112 @@ def _ensure_settings(db: Session) -> CertificationSettings:
 
 
 def _generate_coaching_id(db: Session) -> str:
-    year = datetime.utcnow().year
-    prefix = f"COACH-{year}-"
-    count = db.query(CoachingLog).filter(CoachingLog.coaching_id.like(f"{prefix}%")).count()
-    return f"{prefix}{count + 1:04d}"
+    return generate_coaching_id(db)
+
+
+def _resolve_coaching_log_source(
+    db: Session,
+    *,
+    payload: "CoachingLogPayload",
+    trainee_id: str,
+) -> tuple[Optional[PracticeSession], Optional[SimSession], str]:
+    if payload.practice_session_id and payload.sim_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either a practice session or a Sim Floor session, not both.",
+        )
+
+    if payload.practice_session_id:
+        practice_session = (
+            db.query(PracticeSession)
+            .filter(PracticeSession.id == payload.practice_session_id)
+            .first()
+        )
+        if not practice_session:
+            raise HTTPException(status_code=404, detail="Practice session not found")
+        if practice_session.user_id != trainee_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Practice session does not belong to the selected trainee",
+            )
+        return practice_session, None, "practice_session"
+
+    if payload.sim_session_id:
+        sim_session = (
+            db.query(SimSession)
+            .filter(SimSession.id == payload.sim_session_id)
+            .first()
+        )
+        if not sim_session:
+            raise HTTPException(status_code=404, detail="Sim Floor session not found")
+        if sim_session.trainee_id != trainee_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Sim Floor session does not belong to the selected trainee",
+            )
+        return None, sim_session, "sim_floor_session"
+
+    return None, None, "general"
+
+
+def _purge_orphaned_coaching_logs(
+    db: Session,
+    *,
+    trainee_ids: Optional[list[str]] = None,
+) -> int:
+    query = db.query(CoachingLog)
+    if trainee_ids:
+        query = query.filter(CoachingLog.trainee_id.in_(trainee_ids))
+
+    logs = query.all()
+    practice_ids = {log.practice_session_id for log in logs if log.practice_session_id}
+    sim_session_ids = {log.sim_session_id for log in logs if log.sim_session_id}
+    valid_practice_ids = {
+        session_id
+        for session_id, in (
+            db.query(PracticeSession.id)
+            .filter(PracticeSession.id.in_(list(practice_ids or ["__none__"])))
+            .all()
+        )
+    }
+    valid_sim_session_ids = {
+        session_id
+        for session_id, in (
+            db.query(SimSession.id)
+            .filter(SimSession.id.in_(list(sim_session_ids or ["__none__"])))
+            .all()
+        )
+    }
+
+    deleted_count = 0
+    for log in logs:
+        if log.practice_session_id and log.practice_session_id not in valid_practice_ids:
+            db.delete(log)
+            deleted_count += 1
+            continue
+        if log.sim_session_id and log.sim_session_id not in valid_sim_session_ids:
+            db.delete(log)
+            deleted_count += 1
+            continue
+        if (
+            log.status == "draft"
+            and normalize_competency_status(log.competency_status) == "pending"
+            and not (log.strengths or "").strip()
+            and not (log.opportunities or "").strip()
+            and not (log.action_plan or "").strip()
+            and not (log.trainer_remarks or "").strip()
+            and not (log.batch_name or "").strip()
+            and not (log.lob or "").strip()
+            and not int(log.coaching_minutes or 0)
+            and not log.target_date
+        ):
+            db.delete(log)
+            deleted_count += 1
+
+    if deleted_count:
+        db.commit()
+
+    return deleted_count
 
 
 def _get_trainer_scope(
@@ -1279,6 +1383,7 @@ class CoachingTemplatePayload(BaseModel):
 
 class CoachingLogPayload(BaseModel):
     practice_session_id: Optional[str] = None
+    sim_session_id: Optional[str] = None
     trainee_id: str
     coaching_minutes: int = 0
     strengths: Optional[str] = None
@@ -1415,46 +1520,75 @@ async def create_coaching_log(
         current_user=current_user,
         trainee_id=payload.trainee_id,
     )
-    practice_session = None
+    practice_session, sim_session, source_type = _resolve_coaching_log_source(
+        db,
+        payload=payload,
+        trainee_id=payload.trainee_id,
+    )
+
+    existing_log = None
     if payload.practice_session_id:
-        practice_session = (
-            db.query(PracticeSession)
-            .filter(PracticeSession.id == payload.practice_session_id)
+        existing_log = (
+            db.query(CoachingLog)
+            .filter(CoachingLog.practice_session_id == payload.practice_session_id)
+            .order_by(CoachingLog.updated_at.desc(), CoachingLog.created_at.desc())
             .first()
         )
-        if not practice_session:
-            raise HTTPException(status_code=404, detail="Practice session not found")
-        if practice_session.user_id != payload.trainee_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Practice session does not belong to the selected trainee",
-            )
+    elif payload.sim_session_id:
+        existing_log = (
+            db.query(CoachingLog)
+            .filter(CoachingLog.sim_session_id == payload.sim_session_id)
+            .order_by(CoachingLog.updated_at.desc(), CoachingLog.created_at.desc())
+            .first()
+        )
 
-    coaching_id = _generate_coaching_id(db)
-    log = CoachingLog(
-        coaching_id=coaching_id,
-        practice_session_id=payload.practice_session_id,
+    log = existing_log or CoachingLog(
+        coaching_id=_generate_coaching_id(db),
         trainer_id=current_user.id,
         trainee_id=payload.trainee_id,
-        batch_name=(
-            trainer_batch.name
-            if trainer_batch
-            else (trainee.batches[0].name if trainee.batches else None)
-        ),
-        lob=practice_session.scenario.lob if practice_session and practice_session.scenario else trainee.lob,
-        coaching_minutes=payload.coaching_minutes,
-        strengths=payload.strengths,
-        opportunities=payload.opportunities,
-        action_plan=payload.action_plan,
-        target_date=payload.target_date,
-        trainer_remarks=payload.trainer_remarks,
-        status=requested_status,
-        competency_status=normalize_competency_status(payload.competency_status),
     )
-    db.add(log)
+    if not existing_log:
+        db.add(log)
+
+    source_batch = (
+        sim_session.batch
+        if sim_session and sim_session.batch
+        else trainer_batch or (trainee.batches[0] if trainee.batches else None)
+    )
+    source_lob = (
+        sim_session.scenario.lob
+        if sim_session and sim_session.scenario
+        else practice_session.scenario.lob
+        if practice_session and practice_session.scenario
+        else trainee.lob
+    )
+
+    log.source_type = source_type
+    log.practice_session_id = payload.practice_session_id
+    log.sim_session_id = payload.sim_session_id
+    log.trainer_id = current_user.id
+    log.trainee_id = payload.trainee_id
+    log.batch_name = source_batch.name if source_batch else None
+    log.lob = source_lob
+    log.coaching_minutes = payload.coaching_minutes
+    log.strengths = payload.strengths
+    log.opportunities = payload.opportunities
+    log.action_plan = payload.action_plan
+    log.target_date = payload.target_date
+    log.trainer_remarks = payload.trainer_remarks
+    log.status = requested_status
+    log.competency_status = normalize_competency_status(payload.competency_status)
+    log.updated_at = datetime.utcnow()
+    if requested_status != "acknowledged":
+        log.acknowledged_at = None
+
     db.commit()
     db.refresh(log)
-    return {"status": "created", "coaching_log_id": log.id, "coaching_id": log.coaching_id}
+    return {
+        "status": "updated" if existing_log else "created",
+        "coaching_log_id": log.id,
+        "coaching_id": log.coaching_id,
+    }
 
 
 @router.get("/coaching/logs")
@@ -1466,6 +1600,10 @@ async def list_coaching_logs(
 ):
     _ensure_role(current_user, [UserRole.TRAINER, UserRole.ADMIN, UserRole.TRAINEE])
     coaching_payload = None
+    scoped_trainee_ids = [trainee_id] if trainee_id else None
+    if current_user.role == UserRole.TRAINEE:
+        scoped_trainee_ids = [current_user.id]
+    _purge_orphaned_coaching_logs(db, trainee_ids=scoped_trainee_ids)
     query = db.query(CoachingLog)
 
     if current_user.role == UserRole.TRAINEE:
@@ -1532,6 +1670,7 @@ async def coaching_compliance(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.ADMIN, UserRole.TRAINER])
+    _purge_orphaned_coaching_logs(db)
     query = db.query(CoachingLog)
     if current_user.role == UserRole.TRAINER:
         scope = _get_trainer_scope(db, current_user=current_user)
@@ -1573,6 +1712,7 @@ async def coaching_hub(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINER, UserRole.ADMIN])
+    _purge_orphaned_coaching_logs(db)
 
     batch_lookup: dict[str, Batch] = {}
     accessible_trainee_ids: set[str] = set()
@@ -1631,24 +1771,47 @@ async def coaching_hub(
         .all()
     )
 
-    session_payload = load_latest_sessions(
-        db,
-        trainee_ids=list(accessible_trainee_ids),
+    completed_sim_sessions = (
+        db.query(SimSession)
+        .filter(
+            SimSession.trainee_id.in_(list(accessible_trainee_ids)),
+            SimSession.status.in_(["completed", "failed"]),
+        )
+        .order_by(SimSession.created_at.desc(), SimSession.attempt_number.desc())
+        .all()
     )
-    coaching_payload = load_latest_coaching_logs(
-        db,
-        trainee_ids=list(accessible_trainee_ids),
+    latest_session_by_scenario: dict[tuple[str, str], SimSession] = {}
+    for session in completed_sim_sessions:
+        key = (session.trainee_id, session.scenario_id)
+        if key not in latest_session_by_scenario:
+            latest_session_by_scenario[key] = session
+
+    relevant_session_ids = [session.id for session in latest_session_by_scenario.values()]
+    sim_coaching_logs = (
+        db.query(CoachingLog)
+        .filter(
+            CoachingLog.sim_session_id.in_(relevant_session_ids or ["__none__"]),
+        )
+        .order_by(CoachingLog.created_at.desc(), CoachingLog.updated_at.desc())
+        .all()
     )
+    latest_log_by_sim_session: dict[str, CoachingLog] = {}
+    published_sim_logs: list[CoachingLog] = []
+    for log in sim_coaching_logs:
+        if log.status != "draft":
+            published_sim_logs.append(log)
+        if log.sim_session_id and log.sim_session_id not in latest_log_by_sim_session:
+            latest_log_by_sim_session[log.sim_session_id] = log
 
     completed_categories = []
-    for (user_id, scenario_id), latest_session in session_payload["latest_by_scenario"].items():
-        latest_log = coaching_payload["latest_by_session"].get(latest_session.id)
+    for (user_id, scenario_id), latest_session in latest_session_by_scenario.items():
+        latest_log = latest_log_by_sim_session.get(latest_session.id)
         training_state = build_training_state(
             latest_session=latest_session,
             coaching_log=latest_log,
         )
-        trainee = latest_session.user
-        batch = trainee_batch.get(user_id)
+        trainee = latest_session.trainee
+        batch = latest_session.batch or trainee_batch.get(user_id)
 
         completed_categories.append(
             {
@@ -1660,22 +1823,23 @@ async def coaching_hub(
                 "wave_number": batch.wave_number if batch else None,
                 "scenario_id": scenario_id,
                 "scenario_title": latest_session.scenario.title if latest_session.scenario else None,
-                "practice_session_id": latest_session.id,
-                "audio_file_url": latest_session.audio_file_url,
-                "transcription": latest_session.transcription,
-                "transcription_confidence": latest_session.transcription_confidence,
-                "overall_score": latest_session.overall_score,
+                "practice_session_id": None,
+                "sim_session_id": latest_session.id,
+                "audio_file_url": latest_session.audio_url,
+                "transcription": latest_session.transcript,
+                "transcription_confidence": latest_session.transcript_confidence,
+                "overall_score": latest_session.weighted_score,
                 "scores": {
-                    "accuracy": latest_session.accuracy_score,
-                    "fluency": latest_session.fluency_score,
-                    "clarity": latest_session.clarity_score,
-                    "keyword_adherence": latest_session.keyword_adherence_score,
-                    "soft_skills": latest_session.soft_skills_score,
+                    "accuracy": latest_session.speech_to_text_accuracy,
+                    "fluency": latest_session.pronunciation_score,
+                    "clarity": latest_session.pacing_score,
+                    "keyword_adherence": (latest_session.keyword_compliance or {}).get("score"),
+                    "soft_skills": latest_session.sentiment_score,
                 },
                 "attempt_number": latest_session.attempt_number,
                 "created_at": latest_session.created_at,
                 "status": latest_session.status,
-                "is_verified": latest_session.is_verified,
+                "is_verified": latest_session.trainer_verdict_status == "competent",
                 "latest_coaching_log": serialize_coaching_log(latest_log) if latest_log else None,
                 "training_state": training_state,
             }
@@ -1691,7 +1855,7 @@ async def coaching_hub(
 
     recent_logs = [
         serialize_coaching_log(log)
-        for log in coaching_payload["logs"][:20]
+        for log in sim_coaching_logs[:20]
     ]
 
     summary = {
@@ -1702,19 +1866,19 @@ async def coaching_hub(
             if item["training_state"]["code"] == "awaiting_coaching"
         ),
         "pending_acknowledgement": sum(
-            1 for log in coaching_payload["published_logs"] if log.status == "sent"
+            1 for log in published_sim_logs if log.status == "sent"
         ),
         "acknowledged": sum(
-            1 for log in coaching_payload["published_logs"] if log.status == "acknowledged"
+            1 for log in published_sim_logs if log.status == "acknowledged"
         ),
         "competent": sum(
             1
-            for log in coaching_payload["published_logs"]
+            for log in published_sim_logs
             if normalize_competency_status(log.competency_status) == "competent"
         ),
         "not_competent": sum(
             1
-            for log in coaching_payload["published_logs"]
+            for log in published_sim_logs
             if normalize_competency_status(log.competency_status) == "not_competent"
         ),
     }
@@ -1902,6 +2066,8 @@ async def list_certificates(
 
     if target_trainee_id:
         sync_trainee_completion_certificates(db, target_trainee_id)
+        prune_trainee_activity_certificates(db, target_trainee_id)
+        db.commit()
 
     query = db.query(CertificateRecord)
     if current_user.role == UserRole.TRAINEE:

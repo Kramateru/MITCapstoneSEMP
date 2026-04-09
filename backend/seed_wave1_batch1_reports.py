@@ -79,7 +79,7 @@ def _seed_rows(reference_time: datetime) -> list[dict[str, object]]:
             "coaching_focus": ["pacing balance", "escalation ownership"],
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Account Verification and Refund Inquiry",
             "transcription": "April report seed 3: I checked the account details, verified the transaction, and explained the refund policy together with the follow-up timing.",
             "overall_score": 81.6,
@@ -100,7 +100,7 @@ def _seed_rows(reference_time: datetime) -> list[dict[str, object]]:
             "coaching_focus": ["grammar control", "next-step phrasing"],
         },
         {
-            "trainee_email": "sample.trainee1@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee1@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "April report seed 4: I understand the outage concern, I will document the issue, troubleshoot with you now, and keep the escalation moving.",
             "overall_score": 84.9,
@@ -121,7 +121,7 @@ def _seed_rows(reference_time: datetime) -> list[dict[str, object]]:
             "coaching_focus": ["confidence in escalation wording", "steady pacing"],
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Service Outage Escalation Call",
             "transcription": "April report seed 5: I know the outage is affecting your work, so I will troubleshoot the line, create the ticket, and stay accountable for the update.",
             "overall_score": 92.1,
@@ -142,7 +142,7 @@ def _seed_rows(reference_time: datetime) -> list[dict[str, object]]:
             "coaching_focus": ["maintain pronunciation consistency", "strong ownership"],
         },
         {
-            "trainee_email": "sample.trainee2@stpeterville.edu.ph",
+            "trainee_email": "sample.trainee2@stpetervelle.edu.ph",
             "scenario_title": "Account Verification and Refund Inquiry",
             "transcription": "April report seed 6: I verified the account, confirmed the refund path, and explained the expected timeline together with the next update.",
             "overall_score": 90.6,

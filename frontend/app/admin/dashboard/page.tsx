@@ -1,11 +1,11 @@
 'use client';
 
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import { Activity, FileText, Plus, Search, UserCheck, Users } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 
+import { adminSidebarItems } from '@/app/admin/nav';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Button } from '@/app/components/ui/button';
-import { adminSidebarItems } from '@/app/admin/nav';
 import { useLobCatalog } from '@/app/hooks/useLobCatalog';
 
 type Scenario = {
@@ -108,7 +108,7 @@ export default function AdminDashboardPage() {
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [statsResponse, scenariosResponse] = await Promise.all([
         fetch('/api/admin/dashboard', { headers: authHeaders(), cache: 'no-store' }),
@@ -132,11 +132,11 @@ export default function AdminDashboardPage() {
       setStats(null);
       setScenarios([]);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadData();
-  }, []);
+  }, [loadData]);
 
   const filteredScenarios = useMemo(() => {
     const query = searchTerm.trim().toLowerCase();

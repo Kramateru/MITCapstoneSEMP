@@ -4,6 +4,7 @@ Modular ASR and scoring workflow for trainee speech assessments.
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import os
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from statistics import mean
 from typing import Any, Optional, Protocol
+
+import requests
 
 try:
     from openai import OpenAI
@@ -182,6 +185,17 @@ def _build_transcription_prompt(
     )
 
 
+def _resolve_google_encoding(mime_type: str, filename: str) -> str:
+    lowered = f"{mime_type} {filename}".lower()
+    if "webm" in lowered:
+        return "WEBM_OPUS"
+    if "ogg" in lowered or "opus" in lowered:
+        return "OGG_OPUS"
+    if "mp3" in lowered or "mpeg" in lowered:
+        return "MP3"
+    return "LINEAR16"
+
+
 def _detect_disfluencies(original_transcript: str, actual_tokens: list[str]) -> dict[str, Any]:
     lowered = original_transcript.lower()
     filler_hits = [token for token in actual_tokens if token in FILLER_WORDS]
@@ -269,6 +283,116 @@ class OpenAIWhisperProvider:
         )
 
 
+class GoogleSpeechProvider:
+    name = "google_speech_to_text"
+
+    def __init__(self) -> None:
+        self.api_key = (
+            os.getenv("GOOGLE_SPEECH_API_KEY")
+            or os.getenv("GOOGLE_CLOUD_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
+        self.endpoint = os.getenv(
+            "GOOGLE_SPEECH_ENDPOINT",
+            "https://speech.googleapis.com/v1/speech:recognize",
+        )
+
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+    def transcribe(
+        self,
+        *,
+        audio_bytes: bytes,
+        filename: str,
+        mime_type: str,
+        language_hint: str,
+        prompt: str,
+        fallback_text: Optional[str] = None,
+    ) -> ASRResult:
+        if not self.is_available():
+            raise RuntimeError("Google Speech-to-Text is not configured")
+
+        payload = {
+            "config": {
+                "encoding": _resolve_google_encoding(mime_type, filename),
+                "languageCode": "en-US",
+                "alternativeLanguageCodes": ["en-PH"],
+                "enableAutomaticPunctuation": True,
+                "enableWordTimeOffsets": True,
+                "model": "phone_call",
+                "metadata": {
+                    "interactionType": "PHONE_CALL",
+                    "industryNaicsCodeOfAudio": 561422,
+                    "originalMediaType": "AUDIO",
+                    "recordingDeviceType": "PC",
+                },
+                "speechContexts": [{"phrases": [prompt[:500]]}] if prompt else [],
+            },
+            "audio": {
+                "content": base64.b64encode(audio_bytes).decode("ascii"),
+            },
+        }
+
+        response = requests.post(
+            f"{self.endpoint}?key={self.api_key}",
+            json=payload,
+            timeout=45,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        transcripts: list[str] = []
+        confidences: list[float] = []
+        words: list[ASRWord] = []
+        for result in data.get("results") or []:
+            alternatives = result.get("alternatives") or []
+            if not alternatives:
+                continue
+            best = alternatives[0]
+            transcript_part = best.get("transcript", "")
+            if transcript_part:
+                transcripts.append(transcript_part)
+            confidence = best.get("confidence")
+            if isinstance(confidence, (int, float)):
+                confidences.append(float(confidence))
+            for item in best.get("words") or []:
+                word = item.get("word")
+                if not word:
+                    continue
+                start = None
+                end = None
+                start_raw = item.get("startTime")
+                end_raw = item.get("endTime")
+                if isinstance(start_raw, str) and start_raw.endswith("s"):
+                    try:
+                        start = float(start_raw[:-1])
+                    except ValueError:
+                        start = None
+                if isinstance(end_raw, str) and end_raw.endswith("s"):
+                    try:
+                        end = float(end_raw[:-1])
+                    except ValueError:
+                        end = None
+                words.append(ASRWord(word=word, start=start, end=end))
+
+        transcript = _clean_spaces(" ".join(transcripts))
+        if not transcript and fallback_text:
+            transcript = _clean_spaces(fallback_text)
+
+        return ASRResult(
+            transcript=transcript,
+            confidence=round(mean(confidences), 4) if confidences else (0.72 if transcript else 0.0),
+            provider=self.name,
+            words=words,
+            metadata={
+                "mime_type": mime_type,
+                "language": language_hint,
+                "result_count": len(data.get("results") or []),
+            },
+        )
+
+
 class HeuristicFallbackProvider:
     name = "heuristic_fallback"
 
@@ -311,11 +435,13 @@ class HeuristicFallbackProvider:
 class SpeechAssessmentService:
     """Coordinates provider selection and transcript scoring."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_heuristic_fallback: bool = True) -> None:
         self.providers: list[ASRProvider] = [
+            GoogleSpeechProvider(),
             OpenAIWhisperProvider(),
-            HeuristicFallbackProvider(),
         ]
+        if include_heuristic_fallback:
+            self.providers.append(HeuristicFallbackProvider())
 
     def transcribe(
         self,
@@ -324,6 +450,7 @@ class SpeechAssessmentService:
         filename: str,
         mime_type: str,
         gold_script: str,
+        fallback_text: Optional[str] = None,
         user_dialect: Optional[str] = None,
         scenario: Any = None,
     ) -> ASRResult:
@@ -344,7 +471,7 @@ class SpeechAssessmentService:
                     mime_type=mime_type,
                     language_hint=language_hint,
                     prompt=prompt,
-                    fallback_text=gold_script,
+                    fallback_text=fallback_text or gold_script,
                 )
             except Exception as exc:
                 logger.warning("ASR provider %s failed: %s", provider.name, exc)
@@ -626,6 +753,7 @@ def assess_audio_submission(
     mime_type: str,
     scenario: Any = None,
     reference_text: Optional[str] = None,
+    fallback_transcript: Optional[str] = None,
     response_duration: Optional[float] = None,
     user_dialect: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -642,6 +770,7 @@ def assess_audio_submission(
         filename=filename,
         mime_type=mime_type,
         gold_script=gold_script,
+        fallback_text=fallback_transcript,
         user_dialect=user_dialect,
         scenario=scenario,
     )

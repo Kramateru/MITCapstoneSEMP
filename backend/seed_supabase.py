@@ -13,6 +13,7 @@ from .default_credentials import ADMIN_EMAIL, ADMIN_PASSWORD
 from .models import Batch, CoachingLog, Course, MCQAssessment, MCQCategory, User, UserRole, Workspace
 from .routes.admin_routes import _ensure_user, _seed_sample_dataset
 from .services.mcq_samples import ensure_trainer_language_assessment_samples
+from .services.microlearning_catalog import seed_bpo_microlearning_library
 from .services.workspace_seed import seed_workspace_library
 
 
@@ -56,6 +57,8 @@ def _ensure_batch_columns() -> None:
 
     column_definitions = {
         "is_active": "BOOLEAN DEFAULT TRUE",
+        "start_date": "DATE",
+        "end_date": "DATE",
     }
 
     with engine.begin() as connection:
@@ -100,6 +103,8 @@ def _ensure_certification_schema() -> None:
         "template_snapshot": json_definition,
     }
     coaching_log_columns = {
+        "source_type": "VARCHAR(30) DEFAULT 'practice_session'",
+        "sim_session_id": "VARCHAR(36)",
         "competency_status": "VARCHAR(20) DEFAULT 'pending'",
     }
 
@@ -161,9 +166,82 @@ def _ensure_certification_schema() -> None:
             connection.execute(
                 text(
                     "UPDATE coaching_log SET "
+                    "source_type = COALESCE(source_type, CASE WHEN sim_session_id IS NOT NULL THEN 'sim_floor_session' ELSE 'practice_session' END), "
                     "competency_status = COALESCE(competency_status, 'pending')"
                 )
             )
+
+
+def _ensure_microlearning_schema() -> None:
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    json_definition = (
+        "JSONB DEFAULT '{}'::jsonb"
+        if engine.dialect.name == "postgresql"
+        else "JSON DEFAULT '{}'"
+    )
+    empty_json_literal = "'{}'::jsonb" if engine.dialect.name == "postgresql" else "'{}'"
+
+    with engine.begin() as connection:
+        if "microlearning_module" in existing_tables:
+            module_columns = {
+                column["name"] for column in inspector.get_columns("microlearning_module")
+            }
+            if "type" not in module_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_module "
+                        "ADD COLUMN type VARCHAR(50) DEFAULT 'video'"
+                    )
+                )
+            if "content_data" not in module_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_module "
+                        f"ADD COLUMN content_data {json_definition}"
+                    )
+                )
+            if "passing_score" not in module_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_module "
+                        "ADD COLUMN passing_score INTEGER DEFAULT 75"
+                    )
+                )
+            if "assessment_method_id" not in module_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_module "
+                        "ADD COLUMN assessment_method_id VARCHAR(36)"
+                    )
+                )
+            if "topic_category_id" not in module_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_module "
+                        "ADD COLUMN topic_category_id VARCHAR(36)"
+                    )
+                )
+            connection.execute(
+                text(
+                    "UPDATE microlearning_module SET "
+                    "type = COALESCE(type, 'video'), "
+                    f"content_data = COALESCE(content_data, {empty_json_literal}), "
+                    "passing_score = COALESCE(passing_score, 75)"
+                )
+            )
+
+        if "microlearning_assignment" in existing_tables:
+            assignment_columns = {
+                column["name"] for column in inspector.get_columns("microlearning_assignment")
+            }
+            if "certificate_id" not in assignment_columns:
+                connection.execute(
+                    text(
+                        "ALTER TABLE microlearning_assignment "
+                        "ADD COLUMN certificate_id VARCHAR(36)"
+                    )
+                )
 
 
 def seed(reset_sample_scenarios: bool = False) -> dict:
@@ -171,6 +249,7 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
     _ensure_user_settings_columns()
     _ensure_batch_columns()
     _ensure_certification_schema()
+    _ensure_microlearning_schema()
 
     db = SessionLocal()
     try:
@@ -205,6 +284,11 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
             "seeded_probing_questions": 0,
             "seeded_forbidden_words": 0,
             "seeded_required_keywords": 0,
+        }
+        microlearning_summary = {
+            "categories_seeded": 0,
+            "modules_created": 0,
+            "modules_updated": 0,
         }
         sample_trainers = (
             db.query(User)
@@ -259,6 +343,15 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
                     seeded_counts["seeded_required_keywords"]
                 )
 
+            trainer_microlearning_summary = seed_bpo_microlearning_library(
+                db,
+                trainer_id=trainer.id,
+            )
+            for key in microlearning_summary:
+                microlearning_summary[key] += int(
+                    trainer_microlearning_summary.get(key, 0)
+                )
+
         db.commit()
         result["summary"].update(
             {
@@ -272,6 +365,9 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
                 "workspace_probing_questions_seeded": workspace_summary["seeded_probing_questions"],
                 "workspace_forbidden_words_seeded": workspace_summary["seeded_forbidden_words"],
                 "workspace_required_keywords_seeded": workspace_summary["seeded_required_keywords"],
+                "trainer_microlearning_categories_seeded": microlearning_summary["categories_seeded"],
+                "trainer_microlearning_modules_created": microlearning_summary["modules_created"],
+                "trainer_microlearning_modules_updated": microlearning_summary["modules_updated"],
             }
         )
 

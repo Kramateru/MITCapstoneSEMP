@@ -1,17 +1,17 @@
 'use client';
 
+import {
+    AlertCircle,
+    ArrowRight,
+    BookOpen,
+    ClipboardCheck,
+    FileText,
+    Layers3,
+    TrendingUp,
+    Users,
+} from 'lucide-react';
 import Link from 'next/link';
 import React, { useEffect, useEffectEvent, useMemo, useState } from 'react';
-import {
-  AlertCircle,
-  ArrowRight,
-  BookOpen,
-  ClipboardCheck,
-  FileText,
-  Layers3,
-  TrendingUp,
-  Users,
-} from 'lucide-react';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Badge } from '@/app/components/ui/badge';
@@ -164,10 +164,10 @@ export default function TrainerDashboardPage() {
 
       const authHeaders = { Authorization: `Bearer ${token}` };
       const [statsRes, sessionsRes, coachingRes, batchesRes] = await Promise.all([
-        fetch('/api/trainer/stats', { headers: authHeaders }),
-        fetch('/api/trainer/interaction-history?limit=12', { headers: authHeaders }),
-        fetch('/api/certification/coaching/compliance', { headers: authHeaders }),
-        fetch('/api/trainer/batches', { headers: authHeaders }),
+        fetch('/api/trainer/stats', { headers: authHeaders, cache: 'no-store' }),
+        fetch('/api/trainer/interaction-history?limit=12', { headers: authHeaders, cache: 'no-store' }),
+        fetch('/api/certification/coaching/compliance', { headers: authHeaders, cache: 'no-store' }),
+        fetch('/api/trainer/batches', { headers: authHeaders, cache: 'no-store' }),
       ]);
 
       if (statsRes.ok) {
@@ -207,6 +207,7 @@ export default function TrainerDashboardPage() {
             try {
               const performanceRes = await fetch(`/api/trainer/batch-performance/${batch.id}`, {
                 headers: authHeaders,
+                cache: 'no-store',
               });
 
               if (!performanceRes.ok) {

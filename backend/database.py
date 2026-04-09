@@ -22,9 +22,14 @@ if "postgresql" in DATABASE_URL:
     engine = create_engine(
         DATABASE_URL,
         poolclass=QueuePool,
-        pool_size=5,
-        max_overflow=10,
+        pool_size=10,  # Increased from 5
+        max_overflow=20,  # Increased from 10
         pool_pre_ping=True,  # Verify connections before using
+        pool_recycle=3600,  # Recycle connections after 1 hour
+        connect_args={
+            "connect_timeout": 5,  # Don't hang forever
+            "keepalives_idle": 30  # Keep connections alive
+        },
         echo=False,
     )
 else:
@@ -45,5 +50,8 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()  # Rollback on errors
+        raise
     finally:
         db.close()

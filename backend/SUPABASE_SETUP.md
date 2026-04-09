@@ -7,7 +7,7 @@ This guide covers the backend connection to Supabase Postgres and related platfo
 The backend can use Supabase for:
 
 - PostgreSQL via `DATABASE_URL`
-- shared data for users, LOBs, scenarios, MCQ categories, MCQ questions, assignments, and reporting
+- shared data for users, LOBs, scenarios, microlearning categories, microlearning modules, MCQ categories, MCQ questions, assignments, and reporting
 - optional storage integrations when service credentials are configured
 
 ## 1. Create Or Open A Supabase Project
@@ -70,6 +70,7 @@ Check:
 Then perform one real write:
 
 - create or modify an LOB
+- create or seed a microlearning topic category or module
 - create or edit an MCQ category
 - create a trainer or trainee account
 
@@ -100,8 +101,21 @@ Run these after connecting to Supabase:
 - trainer login
 - trainee login
 - LOB Management fetch and modify
+- Microlearning Studio category CRUD, seed pack, assignment, and trainee completion
 - MCQ Manager refresh, create, and edit
 - Trainee Access create user flow
 - speech assessment submission and saved practice session
+
+## 7. Microlearning Seed Options
+
+To load the default 10-module BPO microlearning pack into the active Supabase database, use either of these paths:
+
+- Run `python -m backend.seed_supabase` with `USE_LOCAL_SQLITE=0`
+- Run `python -m backend.seed_microlearning` with `USE_LOCAL_SQLITE=0` for a microlearning-only upload
+- Run `supabase/microlearning_seed.sql` in the Supabase SQL editor, then call:
+
+```sql
+select public.seed_bpo_microlearning_pack('trainer@st.peterville.edu.ph');
+```
 
 For the complete startup flow, see [README.md](../README.md) and [TESTING_GUIDE.md](../TESTING_GUIDE.md).

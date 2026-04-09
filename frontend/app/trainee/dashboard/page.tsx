@@ -1,21 +1,25 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
-import { traineeSidebarItems } from '@/app/trainee/nav';
 import { useAuth } from '@/app/context/AuthContext';
+import { traineeSidebarItems } from '@/app/trainee/nav';
 import {
-  Home,
-  Play,
-  TrendingUp,
-  Medal,
-  BookOpen,
-  Clock,
-  Target,
-  MessageSquare,
-  GraduationCap,
+    Award,
+    BookOpen,
+    ClipboardList,
+    Clock,
+    GraduationCap,
+    Medal,
+    MessageSquare,
+    Mic,
+    Play,
+    RotateCcw,
+    ShieldCheck,
+    Target,
+    TrendingUp,
 } from 'lucide-react';
+import Link from 'next/link';
+import React, { useEffect, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -46,11 +50,43 @@ interface CoachingLogSummary {
   created_at?: string | null;
 }
 
+interface SimFloorDashboardReport {
+  summary: {
+    total_sessions: number;
+    average_score: number;
+    pass_rate: number;
+    retakes: number;
+    latest_score: number;
+    passing_score: number;
+  };
+  recent_sessions: Array<{
+    session_id: string;
+    scenario_title: string;
+    score: number;
+    attempt_number: number;
+    trainer_verdict_status?: string;
+    certificate_id?: string | null;
+    created_at?: string | null;
+  }>;
+  certificates: Array<{
+    certificate_id: string;
+    certificate_no: string;
+  }>;
+}
+
+function verdictLabel(status?: string) {
+  const normalized = (status || '').toLowerCase();
+  if (normalized === 'competent') return 'Competent';
+  if (normalized === 'retake') return 'Retake';
+  return 'Pending';
+}
+
 export default function TraineeDashboard() {
   const { user, updateUser } = useAuth();
   const [stats, setStats] = useState<TraineeStats | null>(null);
   const [sessions, setSessions] = useState<PracticeSession[]>([]);
   const [coachingLogs, setCoachingLogs] = useState<CoachingLogSummary[]>([]);
+  const [simFloorReport, setSimFloorReport] = useState<SimFloorDashboardReport | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -98,6 +134,29 @@ export default function TraineeDashboard() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchTraineeData();
   }, []);
+
+  useEffect(() => {
+    if (!user?.user_id) return;
+
+    const loadSimFloorReport = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(`/api/sim-floor/reports/trainee/${user.user_id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as SimFloorDashboardReport;
+        setSimFloorReport(payload);
+      } catch (error) {
+        console.error('Error loading Sim Floor report:', error);
+      }
+    };
+
+    void loadSimFloorReport();
+  }, [user?.user_id]);
 
   useEffect(() => {
     setMustChangePassword(!!user?.must_change_password);
@@ -390,11 +449,36 @@ export default function TraineeDashboard() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <QuickLinkCard
+                  title="Sim Floor"
+                  description={
+                    simFloorReport?.summary.retakes
+                      ? `${simFloorReport.summary.retakes} retake${simFloorReport.summary.retakes === 1 ? '' : 's'} still need completion.`
+                      : 'Resume mock calls, record your CSR turns, and view trainer coaching results.'
+                  }
+                  href="/trainee/sim-floor"
+                  icon={<Mic size={20} />}
+                  accent="violet"
+                />
+                <QuickLinkCard
                   title="Microlearning"
                   description="Continue your assigned learning modules and save exercise progress."
                   href="/trainee/microlearning"
                   icon={<BookOpen size={20} />}
                   accent="sky"
+                />
+                <QuickLinkCard
+                  title="Assessment Hub"
+                  description="Start assigned tests, unlock certificates, and retake failed assessments right away."
+                  href="/trainee/assessment"
+                  icon={<ClipboardList size={20} />}
+                  accent="emerald"
+                />
+                <QuickLinkCard
+                  title="My Progress"
+                  description="Review score history, coaching notes, and category-level performance trends."
+                  href="/trainee/progress"
+                  icon={<TrendingUp size={20} />}
+                  accent="emerald"
                 />
                 <QuickLinkCard
                   title="My Coaching"
@@ -407,26 +491,78 @@ export default function TraineeDashboard() {
                   icon={<MessageSquare size={20} />}
                   accent="amber"
                 />
-                <QuickLinkCard
-                  title="MCQ Assessments"
-                  description="Open assigned knowledge checks and submit your assessment answers."
-                  href="/trainee/mcq"
-                  icon={<Target size={20} />}
-                  accent="emerald"
-                />
-                <QuickLinkCard
-                  title="Reports and Progress"
-                  description="Track your saved performance records, certificates, and improvement trends."
-                  href="/trainee/progress"
-                  icon={<TrendingUp size={20} />}
-                  accent="violet"
-                />
               </div>
             </div>
           </div>
 
           {/* Sidebar - Coaching and Recent Sessions */}
           <div className="space-y-6">
+            <div className="bg-card rounded-lg shadow-md p-6 border border-border">
+              <h3 className="text-lg font-bold text-foreground mb-4">Sim Floor Snapshot</h3>
+              {simFloorReport ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
+                      <div className="text-xs text-violet-700">Mock Calls</div>
+                      <div className="mt-2 text-2xl font-bold text-violet-700">{simFloorReport.summary.total_sessions}</div>
+                    </div>
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                      <div className="text-xs text-emerald-700">Certificates</div>
+                      <div className="mt-2 text-2xl font-bold text-emerald-700">{simFloorReport.certificates.length}</div>
+                    </div>
+                    <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                      <div className="text-xs text-sky-700">Average</div>
+                      <div className="mt-2 text-2xl font-bold text-sky-700">{simFloorReport.summary.average_score.toFixed(1)}%</div>
+                    </div>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <div className="text-xs text-amber-700">Retakes</div>
+                      <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-amber-700">
+                        <RotateCcw size={18} />
+                        {simFloorReport.summary.retakes}
+                      </div>
+                    </div>
+                  </div>
+
+                  {simFloorReport.recent_sessions.slice(0, 2).map((session) => (
+                    <div key={session.session_id} className="rounded-lg border border-border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-foreground text-sm">{session.scenario_title}</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Attempt {session.attempt_number} | {session.created_at ? new Date(session.created_at).toLocaleDateString() : 'No date'}
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-foreground">{session.score.toFixed(1)}%</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{verdictLabel(session.trainer_verdict_status)}</div>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">
+                          <ShieldCheck size={12} />
+                          {verdictLabel(session.trainer_verdict_status)}
+                        </span>
+                        {session.certificate_id ? (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
+                            <Award size={12} />
+                            Certificate issued
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+
+                  {!simFloorReport.recent_sessions.length ? (
+                    <div className="text-sm text-muted-foreground">No Sim Floor attempts yet.</div>
+                  ) : null}
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">
+                  Start a Sim Floor scenario and your mock-call performance summary will appear here.
+                </div>
+              )}
+            </div>
+
             <div className="bg-card rounded-lg shadow-md p-6 border border-border">
               <h3 className="text-lg font-bold text-foreground mb-4">Coaching Snapshot</h3>
               <div className="grid grid-cols-3 gap-3 mb-4">

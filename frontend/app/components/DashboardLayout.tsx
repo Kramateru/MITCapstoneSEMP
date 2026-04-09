@@ -5,13 +5,14 @@ import ProfileManagementDialog from '@/app/components/shared/profile-management-
 import { StPeterBuddyChat } from '@/app/components/shared/st-peter-buddy-chat';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
+import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-client';
 import {
-  applyUserSettingsToDocument,
-  buildDefaultUserSettings,
-  loadUserSettings,
-  readCachedUserSettings,
-  USER_SETTINGS_EVENT,
-  type UserDashboardSettings,
+    applyUserSettingsToDocument,
+    buildDefaultUserSettings,
+    loadUserSettings,
+    readCachedUserSettings,
+    USER_SETTINGS_EVENT,
+    type UserDashboardSettings,
 } from '@/app/utils/user-settings';
 import { Bot, LogOut, Menu, MessageCircle, X } from 'lucide-react';
 import Link from 'next/link';
@@ -45,7 +46,8 @@ export function DashboardLayout({
   const [dashboardSettings, setDashboardSettings] = useState<UserDashboardSettings>(
     () => readCachedUserSettings() ?? buildDefaultUserSettings(),
   );
-  const { user, isLoading, logout } = useAuth();
+  const [sidebarBadgeMap, setSidebarBadgeMap] = useState<Record<string, number>>({});
+  const { user, token, isLoading, logout } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const resolvedUserRole = userRole === 'admin' || userRole === 'trainer' || userRole === 'trainee'
@@ -136,6 +138,85 @@ export function DashboardLayout({
     }
   }, [isLoading, resolvedUserRole, router, user]);
 
+  useEffect(() => {
+    sidebarItems.forEach((item) => {
+      void router.prefetch(item.href);
+    });
+  }, [router, sidebarItems]);
+
+  useEffect(() => {
+    if (resolvedUserRole !== 'trainee' || !token) {
+      setSidebarBadgeMap({});
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadSidebarBadges = async () => {
+      try {
+        const response = await fetch('/api/notifications?limit=20', {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json().catch(() => null)) as
+          | { notifications?: Array<{ href?: string | null }> }
+          | null;
+        if (!isMounted) {
+          return;
+        }
+        const notifications = payload?.notifications || [];
+        const certificateBadge = notifications.filter((item) =>
+          (item.href || '').startsWith('/trainee/reports'),
+        ).length;
+        const simFloorBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/sim-floor')).length;
+        setSidebarBadgeMap({
+          '/trainee/certificates': certificateBadge,
+          '/trainee/sim-floor': simFloorBadge,
+        });
+      } catch {
+        // Keep the rest of the workspace responsive when notifications are temporarily unavailable.
+      }
+    };
+
+    void loadSidebarBadges();
+    const intervalId = window.setInterval(() => {
+      void loadSidebarBadges();
+    }, 60000);
+
+    let stream: EventSource | null = null;
+    try {
+      stream = openSimFloorRealtimeStream();
+      stream.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as { type?: string };
+          if (payload.type === 'session_changed' || payload.type === 'certificate_changed') {
+            void loadSidebarBadges();
+          }
+        } catch {
+          // Ignore malformed realtime payloads.
+        }
+      };
+    } catch {
+      // Realtime badges are optional; polling keeps this functional.
+    }
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+      stream?.close();
+    };
+  }, [resolvedUserRole, token]);
+
+  const resolvedSidebarItems = sidebarItems.map((item) => ({
+    ...item,
+    badge: sidebarBadgeMap[item.href] ?? item.badge,
+  }));
+
   const handleLogout = () => {
     logout();
     router.replace('/login');
@@ -203,10 +284,11 @@ export function DashboardLayout({
 
           {/* Navigation Items */}
           <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-            {sidebarItems.map((item) => (
+            {resolvedSidebarItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch={true}
                 onClick={handleSidebarLinkClick}
                 className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
                   pathname === item.href
@@ -216,11 +298,11 @@ export function DashboardLayout({
               >
                 {item.icon}
                 <span className={`flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
-                {item.badge && !isMinifiedSidebar && (
-                  <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-semibold">
-                    {item.badge}
-                  </span>
-                )}
+                  {item.badge && !isMinifiedSidebar ? (
+                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-semibold">
+                      {item.badge}
+                    </span>
+                  ) : null}
               </Link>
             ))}
           </nav>
@@ -272,7 +354,7 @@ export function DashboardLayout({
             <div className={`mx-auto w-full px-6 ${contentWidthClass}`}>
               <nav className="overflow-x-auto py-3">
                 <div className="flex min-w-max items-center gap-2">
-                  {sidebarItems.map((item) => (
+                  {resolvedSidebarItems.map((item) => (
                     <Link
                       key={`top-${item.href}`}
                       href={item.href}

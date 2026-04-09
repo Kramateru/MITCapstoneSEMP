@@ -26,9 +26,20 @@ class SupabaseClient:
 
     def __init__(self):
         self.client: Optional[Client] = None
-        self.url = os.getenv("SUPABASE_URL")
-        self.key = os.getenv("SUPABASE_SERVICE_KEY")
+        self.url = (
+            os.getenv("SUPABASE_URL")
+            or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+            or os.getenv("REACT_APP_SUPABASE_URL")
+        )
+        self.key = (
+            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+            or os.getenv("SUPABASE_SERVICE_KEY")
+            or os.getenv("SUPABASE_SERVICE_ROLE")
+        )
         self.bucket_name = os.getenv("STORAGE_BUCKET_NAME", "audio-records")
+        self.sim_floor_bucket_name = os.getenv(
+            "SIM_FLOOR_STORAGE_BUCKET_NAME", "sim-floor-audio"
+        )
         self.is_available = False
 
         if SUPABASE_AVAILABLE and self.url and self.key:
@@ -87,6 +98,65 @@ class SupabaseClient:
 
         except Exception as e:
             logger.error(f"Failed to upload audio file: {e}")
+            return None
+
+    def upload_sim_floor_audio(
+        self,
+        *,
+        file_data: bytes,
+        trainee_id: str,
+        scenario_id: str,
+        session_id: str,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload a Sim Floor recording using the recordings/{trainee}/{scenario}/... layout."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Sim Floor audio file not uploaded to cloud.")
+            return None
+
+        try:
+            path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+            self.client.storage.from_(self.sim_floor_bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={"content-type": content_type or "audio/webm"},
+            )
+            public_url = self.client.storage.from_(self.sim_floor_bucket_name).get_public_url(path)
+            logger.info(f"Sim Floor audio uploaded: {path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload Sim Floor audio file: {e}")
+            return None
+
+    def upload_sim_floor_asset(
+        self,
+        *,
+        file_data: bytes,
+        trainer_id: str,
+        asset_kind: str,
+        filename: str,
+        scenario_id: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload trainer-managed Sim Floor audio assets such as member turns and call tones."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Sim Floor asset upload skipped.")
+            return None
+
+        try:
+            scenario_segment = scenario_id or "draft"
+            path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
+            self.client.storage.from_(self.sim_floor_bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={"content-type": content_type or "audio/mpeg"},
+            )
+            public_url = self.client.storage.from_(self.sim_floor_bucket_name).get_public_url(path)
+            logger.info(f"Sim Floor asset uploaded: {path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload Sim Floor asset: {e}")
             return None
 
     def upload_document(
@@ -166,6 +236,42 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload profile image: {e}")
+            return None
+
+    def upload_binary(
+        self,
+        *,
+        path: str,
+        file_data: bytes,
+        content_type: Optional[str] = None,
+        upsert: bool = False,
+    ) -> Optional[str]:
+        """Upload arbitrary binary content to Supabase storage and return a public URL."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Binary upload skipped.")
+            return None
+
+        normalized_path = (path or "").strip().lstrip("/")
+        if not normalized_path:
+            logger.warning("Supabase upload path is required for binary upload.")
+            return None
+
+        try:
+            self.client.storage.from_(self.bucket_name).upload(
+                path=normalized_path,
+                file=file_data,
+                file_options={
+                    "content-type": content_type or "application/octet-stream",
+                    "upsert": "true" if upsert else "false",
+                },
+            )
+            public_url = self.client.storage.from_(self.bucket_name).get_public_url(
+                normalized_path
+            )
+            logger.info(f"Binary file uploaded: {normalized_path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload binary file: {e}")
             return None
 
     def delete_file(self, file_path: str) -> bool:

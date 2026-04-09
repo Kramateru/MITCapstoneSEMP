@@ -1,11 +1,9 @@
 'use client';
 
+import { Award, Calendar, FileText, ShieldCheck } from 'lucide-react';
 import { type ReactNode } from 'react';
-import { Award, Calendar, Copy, Download, FileText, ShieldCheck } from 'lucide-react';
-import { toast } from 'sonner';
 import { Badge } from '../ui/badge';
-import { Button } from '../ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Card, CardContent } from '../ui/card';
 import { Separator } from '../ui/separator';
 
 export type CertificateSettingsView = {
@@ -41,8 +39,6 @@ interface CertificatePreviewProps {
   certificate: CertificatePreviewData;
   settings: CertificateSettingsView;
   actions?: ReactNode;
-  showVerifyAction?: boolean;
-  showCopyLinkAction?: boolean;
 }
 
 function formatDate(value: string) {
@@ -64,62 +60,8 @@ export default function CertificatePreview({
   certificate,
   settings,
   actions,
-  showVerifyAction = true,
-  showCopyLinkAction = true,
 }: CertificatePreviewProps) {
   const logoSource = settings.logo_url || '/st-peter-seal.png';
-
-  const handleCopy = async () => {
-    if (!certificate.verification_url) {
-      toast.error('No verification link available for this certificate.');
-      return;
-    }
-    await navigator.clipboard.writeText(certificate.verification_url);
-    toast.success('Verification link copied.');
-  };
-
-  const handleDownload = async () => {
-    if (!certificate.pdf_url) {
-      toast.error('No PDF is available for this certificate yet.');
-      return;
-    }
-
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(certificate.pdf_url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      });
-
-      if (!response.ok) {
-        throw new Error('Unable to download the selected certificate PDF.');
-      }
-
-      const pdfBlob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(pdfBlob);
-      const contentDisposition = response.headers.get('Content-Disposition') || '';
-      const matchedFilename = contentDisposition.match(/filename="?([^"]+)"?/i)?.[1];
-      const fallbackFilename = `certificate_${certificate.certificate_no || 'download'}.pdf`;
-      const link = document.createElement('a');
-      link.href = downloadUrl;
-      link.download = matchedFilename || fallbackFilename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(downloadUrl);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unable to download the selected certificate PDF.';
-      toast.error(message);
-    }
-  };
-
-  const handleVerify = () => {
-    if (!certificate.verification_url) {
-      toast.error('No verification link available for this certificate.');
-      return;
-    }
-    window.open(certificate.verification_url, '_blank');
-  };
 
   return (
     <div className="space-y-5">
@@ -223,27 +165,7 @@ export default function CertificatePreview({
         </CardContent>
       </Card>
 
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={() => void handleDownload()} disabled={!certificate.pdf_url}>
-            <Download className="size-4" />
-            Download PDF
-          </Button>
-          {showVerifyAction ? (
-            <Button type="button" variant="outline" onClick={handleVerify} disabled={!certificate.verification_url}>
-              <ShieldCheck className="size-4" />
-              Verify
-            </Button>
-          ) : null}
-          {showCopyLinkAction ? (
-            <Button type="button" variant="outline" onClick={() => void handleCopy()} disabled={!certificate.verification_url}>
-              <Copy className="size-4" />
-              Copy Link
-            </Button>
-          ) : null}
-        </div>
-        {actions}
-      </div>
+      {actions ? <div className="text-sm text-muted-foreground">{actions}</div> : null}
     </div>
   );
 }

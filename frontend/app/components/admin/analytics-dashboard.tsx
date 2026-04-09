@@ -1,6 +1,5 @@
 'use client';
 
-import { type ReactNode, useEffect, useState } from 'react';
 import {
   Activity,
   Award,
@@ -11,6 +10,7 @@ import {
   Target,
   Users,
 } from 'lucide-react';
+import { type ReactNode, useEffect, useState } from 'react';
 import {
   Bar,
   BarChart,
@@ -55,13 +55,6 @@ type CategoryScorePoint = {
   value: number;
 };
 
-type LobBreakdownPoint = {
-  name: string;
-  agents: number;
-  avgScore: number;
-  sessions: number;
-};
-
 type LeaderboardRow = {
   trainee_id: string;
   trainee_name: string;
@@ -71,12 +64,33 @@ type LeaderboardRow = {
   latest_session_at: string | null;
 };
 
+type TrainerAnalytics = {
+  trainer_id: string;
+  trainer_name: string;
+  batches_managed: number;
+  total_trainees: number;
+  avg_batch_performance: number;
+  pass_rate: number;
+  total_sessions: number;
+  certifications_issued: number;
+  last_activity: string | null;
+};
+
 type AdminPerformanceHubResponse = {
   summary: AdminSummary;
   performance_trend: PerformanceTrendPoint[];
   category_scores: CategoryScorePoint[];
-  lob_breakdown: LobBreakdownPoint[];
   leaderboard: LeaderboardRow[];
+  trainer_analytics: TrainerAnalytics[];
+};
+
+type SimFloorLiveAnalytics = {
+  active_simulations: number;
+  completed_today: number;
+  pass_rate: number;
+  total_passed: number;
+  total_failed: number;
+  top_failed_kpis: Record<string, number>;
 };
 
 function formatScore(value: number) {
@@ -122,6 +136,7 @@ function getPerformanceClass(score: number, target: number) {
 
 export default function AnalyticsDashboard() {
   const [data, setData] = useState<AdminPerformanceHubResponse | null>(null);
+  const [simFloorData, setSimFloorData] = useState<SimFloorLiveAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,8 +150,12 @@ export default function AnalyticsDashboard() {
     setError(null);
 
     try {
-      const payload = await apiFetch<AdminPerformanceHubResponse>('/api/analytics/admin/performance-hub');
+      const [payload, simFloorPayload] = await Promise.all([
+        apiFetch<AdminPerformanceHubResponse>('/api/analytics/admin/performance-hub'),
+        apiFetch<SimFloorLiveAnalytics>('/api/sim-floor/analytics/live'),
+      ]);
       setData(payload);
+      setSimFloorData(simFloorPayload);
     } catch (loadError) {
       setError(getErrorMessage(loadError));
     } finally {
@@ -221,6 +240,57 @@ export default function AnalyticsDashboard() {
         />
       </div>
 
+      {simFloorData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sim Floor Live Snapshot</CardTitle>
+            <CardDescription>
+              Active Speech Enabler simulations and the KPI areas missing the passing target most often.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 lg:grid-cols-[1fr,1.1fr]">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <SummaryCard
+                label="Active Sims"
+                value={simFloorData.active_simulations}
+                hint="Currently in progress"
+                icon={<Activity className="size-5 text-sky-600" />}
+              />
+              <SummaryCard
+                label="Completed Today"
+                value={simFloorData.completed_today}
+                hint="Finished recorded runs"
+                icon={<Gauge className="size-5 text-emerald-600" />}
+              />
+              <SummaryCard
+                label="Sim Floor Pass"
+                value={formatScore(simFloorData.pass_rate)}
+                hint="Across completed Sim Floor sessions"
+                icon={<Target className="size-5 text-amber-600" />}
+              />
+              <SummaryCard
+                label="Retake Needed"
+                value={simFloorData.total_failed}
+                hint={`${simFloorData.total_passed} passed`}
+                icon={<GraduationCap className="size-5 text-rose-600" />}
+              />
+            </div>
+
+            <div className="rounded-2xl border p-4">
+              <div className="text-sm font-medium text-foreground">Top Failed KPIs</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {Object.entries(simFloorData.top_failed_kpis || {}).slice(0, 8).map(([metric, count]) => (
+                  <div key={metric} className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-sm">
+                    <span className="capitalize">{metric.replace(/_/g, ' ')}</span>
+                    <Badge variant="outline">{count}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {!loading && !hasActivity && (
         <Card className="border-dashed">
           <CardHeader>
@@ -273,28 +343,6 @@ export default function AnalyticsDashboard() {
           </CardContent>
         </Card>
       </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>LOB Breakdown</CardTitle>
-          <CardDescription>Active trainees, score averages, and session counts by line of business.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ResponsiveContainer width="100%" height={340}>
-            <ComposedChart data={data?.lob_breakdown || []}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" interval={0} angle={-10} textAnchor="end" height={60} />
-              <YAxis yAxisId="left" allowDecimals={false} />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} />
-              <Tooltip />
-              <Legend />
-              <Bar yAxisId="left" dataKey="agents" fill="#0f766e" name="Trainees" radius={[8, 8, 0, 0]} />
-              <Bar yAxisId="left" dataKey="sessions" fill="#f59e0b" name="Sessions" radius={[8, 8, 0, 0]} />
-              <Line yAxisId="right" type="monotone" dataKey="avgScore" stroke="#7c3aed" strokeWidth={3} name="Avg Score" />
-            </ComposedChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
 
       <div className="grid gap-6 xl:grid-cols-[1.35fr,0.95fr]">
         <Card>
@@ -371,6 +419,55 @@ export default function AnalyticsDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Trainer Analytics Section */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Trainer Performance Analytics</CardTitle>
+          <CardDescription>
+            Management-level view of trainer effectiveness and batch performance metrics.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {(data?.trainer_analytics || []).map((trainer, index) => (
+            <div key={trainer.trainer_id} className="rounded-2xl border p-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="outline">#{index + 1}</Badge>
+                    <span className="font-semibold text-foreground">{trainer.trainer_name}</span>
+                  </div>
+                  <div className="grid gap-2 text-sm text-muted-foreground md:grid-cols-2 lg:grid-cols-4">
+                    <div>{trainer.batches_managed} batches managed</div>
+                    <div>{trainer.total_trainees} trainees supervised</div>
+                    <div>{trainer.total_sessions} sessions conducted</div>
+                    <div>{trainer.certifications_issued} certificates issued</div>
+                  </div>
+                </div>
+                <div className="flex flex-col gap-2 lg:items-end">
+                  <div className="flex gap-2">
+                    <Badge className={getPerformanceClass(trainer.avg_batch_performance, targetScore)}>
+                      {formatScore(trainer.avg_batch_performance)} Avg Score
+                    </Badge>
+                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">
+                      {formatScore(trainer.pass_rate)} Pass Rate
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Last activity: {formatDateTime(trainer.last_activity)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+
+          {!loading && !(data?.trainer_analytics || []).length && (
+            <div className="text-sm text-muted-foreground text-center py-8">
+              Trainer analytics will appear once trainer activity is recorded in the system.
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

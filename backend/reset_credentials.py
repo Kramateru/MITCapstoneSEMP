@@ -36,6 +36,17 @@ def reset_credentials() -> None:
         _upsert_user(db, TRAINER_EMAIL, "Trainer User", UserRole.TRAINER, TRAINER_PASSWORD)
         _upsert_user(db, TRAINEE_EMAIL, "Trainee User", UserRole.TRAINEE, TRAINEE_PASSWORD)
 
+        # 1.5) Migrate legacy seeded emails to the new stpetervelle.edu.ph domain.
+        for old_email, new_email in {
+            "admin@stpeterville.edu.ph": ADMIN_EMAIL,
+            "training@stpeterville.edu.ph": "training@stpetervelle.edu.ph",
+            "sample.trainee1@stpeterville.edu.ph": "sample.trainee1@stpetervelle.edu.ph",
+            "sample.trainee2@stpeterville.edu.ph": "sample.trainee2@stpetervelle.edu.ph",
+        }.items():
+            existing = db.query(User).filter(User.email == old_email).first()
+            if existing:
+                existing.email = new_email
+
         # 2) Reset all other trainee passwords to default
         trainees = db.query(User).filter(User.role == UserRole.TRAINEE).all()
         for trainee in trainees:

@@ -55,7 +55,7 @@ export default function TrainerUsersPage() {
   const [isSavingTrainee, setIsSavingTrainee] = useState(false);
   const [isRemovingTrainee, setIsRemovingTrainee] = useState(false);
   const [isAssigningRegistered, setIsAssigningRegistered] = useState(false);
-  const [isUpdatingTraineeStatus, setIsUpdatingTraineeStatus] = useState(false);
+  const [isUpdatingTraineeStatus, setIsUpdatingTraineeStatus] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
   const [editingTraineeId, setEditingTraineeId] = useState<string | null>(null);
@@ -100,6 +100,7 @@ export default function TrainerUsersPage() {
       return fetch(input, {
         ...init,
         headers: nextHeaders,
+        cache: 'no-store',
       });
     };
 
@@ -493,7 +494,7 @@ export default function TrainerUsersPage() {
   };
 
   const updateTraineeStatus = async (trainee: TraineeRecord, isActive: boolean) => {
-    setIsUpdatingTraineeStatus(true);
+    setIsUpdatingTraineeStatus(trainee.id);
     setStatus(null);
     setBulkErrors([]);
 
@@ -517,7 +518,7 @@ export default function TrainerUsersPage() {
       const message = error instanceof Error ? error.message : 'Failed to update trainee status.';
       showStatus('error', message);
     } finally {
-      setIsUpdatingTraineeStatus(false);
+      setIsUpdatingTraineeStatus(null);
     }
   };
 
@@ -610,7 +611,8 @@ export default function TrainerUsersPage() {
         <div>
           <h2 className="mb-2 text-2xl font-bold text-gray-900">Trainee Access</h2>
           <p className="text-gray-600">
-            Register trainees one by one, bulk upload accounts, and assign saved batch or wave records to your class list.
+            Register trainees one by one, bulk upload accounts, activate or deactivate existing trainee records, and
+            assign saved batch or wave records to your class list.
           </p>
         </div>
 
@@ -707,6 +709,7 @@ export default function TrainerUsersPage() {
                 value={form.batch_id}
                 onChange={(event) => setForm((current) => ({ ...current, batch_id: event.target.value }))}
                 disabled={!activeBatches.length}
+                title="Select batch for trainee assignment"
               >
                 <option value="">{activeBatches.length ? 'Select batch / wave number' : 'No active batches available'}</option>
                 {activeBatches.map((batch) => (
@@ -759,6 +762,9 @@ export default function TrainerUsersPage() {
             </div>
 
             <div className="space-y-3">
+              <label htmlFor="bulk-upload-file" className="block text-sm font-medium text-gray-700">
+                Upload CSV/XLSX File
+              </label>
               <input
                 id="bulk-upload-file"
                 type="file"
@@ -817,6 +823,7 @@ export default function TrainerUsersPage() {
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
                   className="rounded border border-gray-200 px-3 py-2 text-sm"
+                  title="Filter trainees by status"
                 >
                   <option value="all">All Status</option>
                   <option value="active">Active</option>
@@ -870,9 +877,10 @@ export default function TrainerUsersPage() {
           <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4">
             <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
-                <h4 className="text-sm font-semibold uppercase tracking-wide text-sky-700">Trainee Status Panel</h4>
+                <h4 className="text-sm font-semibold uppercase tracking-wide text-sky-700">Trainee Status Management</h4>
                 <p className="mt-1 text-sm text-slate-600">
-                  Search by trainee name or email, filter by active or inactive status, and only add active trainees to the selected batch.
+                  Search by trainee name or email, filter by active or inactive status, update trainee activation from
+                  this roster, and only add active trainees to the selected batch.
                 </p>
               </div>
               <div className="rounded-full bg-white px-3 py-1 text-xs font-medium text-slate-600 shadow-sm">
@@ -905,6 +913,7 @@ export default function TrainerUsersPage() {
                   onChange={(event) =>
                     setStatusFilter(event.target.value as StatusFilter)
                   }
+                  title="Filter trainees by status"
                 >
                   <option value="all">All trainees</option>
                   <option value="active">Active</option>
@@ -920,6 +929,7 @@ export default function TrainerUsersPage() {
                   value={assignmentBatchId}
                   onChange={(event) => setAssignmentBatchId(event.target.value)}
                   disabled={!activeBatches.length}
+                  title="Select target batch for trainee assignment"
                 >
                   <option value="">{activeBatches.length ? 'Select target batch / wave' : 'No active batches available'}</option>
                   {activeBatches.map((batch) => (
@@ -974,7 +984,7 @@ export default function TrainerUsersPage() {
                   key={trainee.id}
                   className={`flex cursor-pointer flex-col gap-3 rounded-lg border p-3 transition md:flex-row md:items-start md:justify-between ${
                     isInactive
-                      ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-500'
+                      ? 'border-gray-200 bg-gray-100 text-gray-600'
                       : alreadyInTargetBatch
                         ? 'border-emerald-200 bg-emerald-50'
                         : isSelected
@@ -1060,6 +1070,26 @@ export default function TrainerUsersPage() {
                         No batch yet
                       </span>
                     )}
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        void updateTraineeStatus(trainee, trainee.is_active === false);
+                      }}
+                      disabled={isUpdatingTraineeStatus === trainee.id}
+                      className={`rounded-full px-3 py-1 font-medium transition ${
+                        isInactive
+                          ? 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100'
+                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                    >
+                      {isUpdatingTraineeStatus === trainee.id
+                        ? 'Updating...'
+                        : isInactive
+                          ? 'Activate'
+                          : 'Deactivate'}
+                    </button>
                   </div>
                 </label>
               );
@@ -1154,6 +1184,7 @@ export default function TrainerUsersPage() {
                           setEditForm((current) => ({ ...current, batch_id: event.target.value }))
                         }
                         disabled={!activeBatches.length}
+                        title="Select batch for trainee assignment"
                       >
                         <option value="">{activeBatches.length ? 'Select batch / wave number' : 'No active batches available'}</option>
                         {activeBatches.map((batch) => (
@@ -1169,15 +1200,16 @@ export default function TrainerUsersPage() {
                           onClick={() => {
                             const trainee = trainees.find((t) => t.id === editingTraineeId);
                             if (trainee) {
-                              updateTraineeStatus(trainee, !trainee.is_active);
+                              void updateTraineeStatus(trainee, trainee.is_active === false);
                             }
                           }}
-                          disabled={isUpdatingTraineeStatus}
+                          disabled={isUpdatingTraineeStatus === trainee.id}
                           className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
                             trainees.find((t) => t.id === editingTraineeId)?.is_active
                               ? 'bg-green-600'
                               : 'bg-gray-200'
                           }`}
+                          aria-label={`Toggle trainee status to ${trainees.find((t) => t.id === editingTraineeId)?.is_active ? 'inactive' : 'active'}`}
                         >
                           <span
                             className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
@@ -1190,7 +1222,7 @@ export default function TrainerUsersPage() {
                         <span className="text-sm text-gray-600">
                           {trainees.find((t) => t.id === editingTraineeId)?.is_active ? 'Active' : 'Inactive'}
                         </span>
-                        {isUpdatingTraineeStatus && (
+                        {isUpdatingTraineeStatus === trainee.id && (
                           <span className="text-xs text-blue-600">Updating...</span>
                         )}
                       </div>

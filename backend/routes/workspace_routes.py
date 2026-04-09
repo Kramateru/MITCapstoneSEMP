@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
@@ -41,10 +41,28 @@ class ProbingQuestion(BaseModel):
 
 class ForbiddenWord(BaseModel):
     id: Optional[str] = None
-    word: str
-    reason: str  # "Offensive", "Jargon", "Competitor name", "Confidential"
-    severity: str = "medium"  # low, medium, high
-    replacement: Optional[str] = None  # Suggested alternative
+    word: str = Field(
+        ..., 
+        min_length=1, 
+        max_length=50,
+        pattern=r"^[\w\-\s']+$",  # Only alphanumeric, hyphens, spaces, apostrophes
+        description="The forbidden word"
+    )
+    reason: str = Field(
+        ..., 
+        max_length=200,
+        description="Why this word is forbidden"
+    )
+    severity: str = Field(
+        ..., 
+        pattern=r"^(low|medium|high)$",
+        description="Violation severity"
+    )
+    replacement: Optional[str] = Field(
+        None,
+        max_length=50,
+        description="Suggested alternative word"
+    )
     is_active: bool = True
 
 

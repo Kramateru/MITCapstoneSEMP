@@ -1,0 +1,61 @@
+import { NextResponse } from 'next/server'
+
+import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
+import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
+import { deleteQuestion, updateQuestion } from '@/app/lib/assessment/service'
+
+export const runtime = 'nodejs'
+
+export async function PATCH(
+  request: Request,
+  context: { params: Promise<{ questionId: string }> },
+) {
+  try {
+    const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
+    const { questionId } = await context.params
+    const body = (await request.json()) as {
+      assessmentId?: string
+      questionText?: string
+      questionType?: 'multiple_choice' | 'fill_blank'
+      options?: string[]
+      correctAnswer?: string
+      explanation?: string
+      orderIndex?: number
+    }
+
+    if (!body.assessmentId || !body.questionText?.trim() || !body.questionType || !body.correctAnswer?.trim()) {
+      return NextResponse.json(
+        { error: 'Assessment, prompt, type, and correct answer are required.' },
+        { status: 400 },
+      )
+    }
+
+    const question = await updateQuestion(sessionUser, questionId, {
+      assessmentId: body.assessmentId,
+      questionText: body.questionText,
+      questionType: body.questionType,
+      options: body.options || [],
+      correctAnswer: body.correctAnswer,
+      explanation: body.explanation,
+      orderIndex: body.orderIndex || 0,
+    })
+
+    return NextResponse.json(question)
+  } catch (error) {
+    return handleAssessmentRouteError(error)
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ questionId: string }> },
+) {
+  try {
+    const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
+    const { questionId } = await context.params
+    await deleteQuestion(sessionUser, questionId)
+    return NextResponse.json({ ok: true })
+  } catch (error) {
+    return handleAssessmentRouteError(error)
+  }
+}

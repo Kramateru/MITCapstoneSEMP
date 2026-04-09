@@ -91,6 +91,15 @@ type TrainerPerformanceHubResponse = {
   needs_attention: TraineeInsight[];
 };
 
+type SimFloorLiveAnalytics = {
+  active_simulations: number;
+  completed_today: number;
+  pass_rate: number;
+  total_passed: number;
+  total_failed: number;
+  top_failed_kpis: Record<string, number>;
+};
+
 type CoachingHubSummary = {
   completed_categories: number;
   ready_for_coaching: number;
@@ -229,6 +238,7 @@ function averageSessionsPerUnit(totalSessions: number, totalUnits: number) {
 export default function TrainerAnalytics() {
   const { token, isLoading: isAuthLoading, isAuthenticated, refreshToken, logout } = useAuth();
   const [data, setData] = useState<TrainerPerformanceHubResponse | null>(null);
+  const [simFloorData, setSimFloorData] = useState<SimFloorLiveAnalytics | null>(null);
   const [coachingSummary, setCoachingSummary] = useState<CoachingHubSummary>(EMPTY_COACHING_SUMMARY);
   const [coachingCompliance, setCoachingCompliance] = useState<CoachingComplianceResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -279,6 +289,7 @@ export default function TrainerAnalytics() {
 
       if (!isAuthenticated || !token) {
         setData(null);
+        setSimFloorData(null);
         setCoachingSummary(EMPTY_COACHING_SUMMARY);
         setCoachingCompliance(null);
         setError(null);
@@ -296,13 +307,14 @@ export default function TrainerAnalytics() {
       setError(null);
 
       try {
-        const [performanceResponse, coachingHubResponse, coachingComplianceResponse] = await Promise.all([
+        const [performanceResponse, coachingHubResponse, coachingComplianceResponse, simFloorResponse] = await Promise.all([
           fetchWithAuthRetry('/api/analytics/trainer/performance-hub'),
           fetchWithAuthRetry('/api/certification/coaching/hub'),
           fetchWithAuthRetry('/api/certification/coaching/compliance'),
+          fetchWithAuthRetry('/api/sim-floor/analytics/live'),
         ]);
 
-        const [performancePayload, coachingHubPayload, coachingCompliancePayload] = await Promise.all([
+        const [performancePayload, coachingHubPayload, coachingCompliancePayload, simFloorPayload] = await Promise.all([
           parseJsonResponse<TrainerPerformanceHubResponse>(
             performanceResponse,
             'Unable to load trainer performance analytics.',
@@ -315,9 +327,14 @@ export default function TrainerAnalytics() {
             coachingComplianceResponse,
             'Unable to load coaching compliance analytics.',
           ),
+          parseJsonResponse<SimFloorLiveAnalytics>(
+            simFloorResponse,
+            'Unable to load Sim Floor live analytics.',
+          ),
         ]);
 
         setData(performancePayload);
+        setSimFloorData(simFloorPayload);
         setCoachingSummary(coachingHubPayload.summary || EMPTY_COACHING_SUMMARY);
         setCoachingCompliance(coachingCompliancePayload);
         setLiveStatus('Live trainer analytics are synced with Supabase-backed trainee activity.');
@@ -442,9 +459,9 @@ export default function TrainerAnalytics() {
 
   const summary = data?.summary;
   const hasActivity = (summary?.total_sessions || 0) > 0;
-  const batchRows = data?.batch_comparison || [];
+  const batchRows = useMemo(() => data?.batch_comparison || [], [data?.batch_comparison]);
   const categoryRows = data?.category_scores || [];
-  const scenarioRows = data?.scenario_breakdown || [];
+  const scenarioRows = useMemo(() => data?.scenario_breakdown || [], [data?.scenario_breakdown]);
   const bestBatch = useMemo(
     () => [...batchRows].sort((left, right) => right.score - left.score)[0] || null,
     [batchRows],
@@ -548,6 +565,57 @@ export default function TrainerAnalytics() {
           icon={<Mic className="size-5 text-cyan-600" />}
         />
       </div>
+
+      {simFloorData && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Sim Floor Live Ops</CardTitle>
+            <CardDescription>
+              Active Speech Enabler simulations, completed attempts, and the KPI areas causing the most retakes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-6 xl:grid-cols-[1.15fr,1fr]">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <SummaryCard
+                label="Active Sims"
+                value={simFloorData.active_simulations}
+                hint="Sessions in progress"
+                icon={<Mic className="size-5 text-sky-600" />}
+              />
+              <SummaryCard
+                label="Completed Today"
+                value={simFloorData.completed_today}
+                hint="Finished recorded runs"
+                icon={<Activity className="size-5 text-emerald-600" />}
+              />
+              <SummaryCard
+                label="Sim Pass Rate"
+                value={formatScore(simFloorData.pass_rate)}
+                hint={`${simFloorData.total_passed} passed`}
+                icon={<CheckCircle2 className="size-5 text-amber-600" />}
+              />
+              <SummaryCard
+                label="Need Retake"
+                value={simFloorData.total_failed}
+                hint="Below the passing score"
+                icon={<AlertTriangle className="size-5 text-rose-600" />}
+              />
+            </div>
+
+            <div className="rounded-2xl border p-4">
+              <div className="text-sm font-medium text-foreground">Top Failed KPIs</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                {Object.entries(simFloorData.top_failed_kpis || {}).slice(0, 8).map(([metric, count]) => (
+                  <div key={metric} className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-sm">
+                    <span className="capitalize">{metric.replace(/_/g, ' ')}</span>
+                    <Badge variant="outline">{count}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <SummaryCard

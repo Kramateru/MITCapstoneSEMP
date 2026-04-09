@@ -618,7 +618,7 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
 
               <div className="flex flex-wrap gap-3">
                 <Button onClick={startRetake}>Retake Assessment</Button>
-                <Button variant="outline" onClick={() => window.location.assign('/trainee/reports')}>
+                <Button variant="outline" onClick={() => window.location.assign('/trainee/certificates')}>
                   View Certificates
                 </Button>
               </div>

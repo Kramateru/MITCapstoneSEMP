@@ -13,6 +13,7 @@ import {
 } from '@/app/components/ui/select';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 import {
+    Download,
     Filter,
     LineChart as LineChartIcon,
     Loader2,
@@ -233,6 +234,122 @@ type FilterDataResponse = {
   };
 };
 
+type SimFloorBatchReportResponse = {
+  batch_id: string;
+  batch_name: string;
+  wave_number?: number;
+  period: string;
+  summary: {
+    total_trainees: number;
+    active_scenarios: number;
+    total_sessions: number;
+    average_score: number;
+    pass_rate: number;
+    retakes: number;
+    passing_score: number;
+  };
+  coaching_summary: {
+    total_logs: number;
+    pending_acknowledgement: number;
+    acknowledged: number;
+    draft_logs: number;
+    competent: number;
+    not_competent: number;
+  };
+  kpi_scores: Record<string, number>;
+  top_failed_kpis: Record<string, number>;
+  scenario_performance: Array<{
+    scenario_id: string;
+    title: string;
+    members_assigned: number;
+    unique_takers: number;
+    csr_response_count: number;
+    variation_scores: Array<{ actor_name: string; score: number }>;
+    completed_sessions: number;
+    passed_sessions: number;
+    average_score: number;
+    pass_rate: number;
+    latest_attempt_at?: string | null;
+  }>;
+  trainee_performance: Array<{
+    trainee_id: string;
+    trainee_name: string;
+    total_sessions: number;
+    retakes: number;
+    average_score: number;
+    pass_rate: number;
+    latest_attempt_at?: string | null;
+  }>;
+};
+
+type SimFloorTraineeReportResponse = {
+  trainee_id: string;
+  trainee_name: string;
+  period: string;
+  summary: {
+    total_sessions: number;
+    average_score: number;
+    pass_rate: number;
+    retakes: number;
+    latest_score: number;
+    passing_score: number;
+    assigned_batches: Array<{
+      batch_id: string;
+      batch_name: string;
+      wave_number?: number;
+    }>;
+  };
+  coaching_summary: {
+    total_logs: number;
+    pending_acknowledgement: number;
+    acknowledged: number;
+    draft_logs: number;
+    competent: number;
+    not_competent: number;
+  };
+  kpi_scores: Record<string, number>;
+  top_failed_kpis: Record<string, number>;
+  scenario_performance: Array<{
+    scenario_id: string;
+    title: string;
+    attempts: number;
+    average_score: number;
+    best_score: number;
+    pass_rate: number;
+    latest_attempt_at?: string | null;
+  }>;
+  recent_sessions: Array<{
+    session_id: string;
+    scenario_title: string;
+    score: number;
+    status: string;
+    attempt_number: number;
+    created_at?: string | null;
+    audio_url?: string | null;
+    trainer_verdict_status?: string | null;
+    certificate_id?: string | null;
+    coaching_id?: string | null;
+    coaching_status?: string | null;
+    coaching_acknowledged_at?: string | null;
+  }>;
+  coaching_logs: Array<{
+    id: string;
+    coaching_id: string;
+    sim_session_id?: string | null;
+    status: string;
+    competency_status: string;
+    trainer_remarks?: string | null;
+    acknowledged_at?: string | null;
+    created_at?: string | null;
+  }>;
+  certificates: Array<{
+    certificate_id: string;
+    certificate_no: string;
+    scenario_session_id: string;
+    issued_at?: string | null;
+  }>;
+};
+
 type CombinedReportData = {
   improvement: BatchImprovementResponse | null;
   pronunciation: BatchPronunciationResponse | null;
@@ -240,6 +357,8 @@ type CombinedReportData = {
   monthly: BatchMonthlyReportResponse | null;
   trainee: TraineeDetailedReportResponse | null;
   filterData: FilterDataResponse | null;
+  simFloorBatch: SimFloorBatchReportResponse | null;
+  simFloorTrainee: SimFloorTraineeReportResponse | null;
 };
 
 const BATCH_GRAPH_OPTIONS: Array<{ value: GraphView; label: string }> = [
@@ -339,6 +458,8 @@ export default function ReportsPage() {
     monthly: null,
     trainee: null,
     filterData: null,
+    simFloorBatch: null,
+    simFloorTrainee: null,
   });
   const [initialLoading, setInitialLoading] = useState(true);
   const [loadingReport, setLoadingReport] = useState(false);
@@ -467,7 +588,7 @@ export default function ReportsPage() {
           filterQuery.set('year', selectedYear);
         }
 
-        const [improvement, pronunciation, progress, monthly, filterData] = await Promise.all([
+        const [improvement, pronunciation, progress, monthly, filterData, simFloorBatch] = await Promise.all([
           fetchJson<BatchImprovementResponse>(
             `/api/analytics/reports/batch/${selectedBatchId}/improvement-areas`,
           ),
@@ -481,6 +602,11 @@ export default function ReportsPage() {
             }`,
           ),
           fetchJson<FilterDataResponse>(`/api/analytics/reports/filter-data?${filterQuery.toString()}`),
+          fetchJson<SimFloorBatchReportResponse>(
+            `/api/sim-floor/reports/batch/${selectedBatchId}${
+              batchQuery.toString() ? `?${batchQuery.toString()}` : ''
+            }`,
+          ),
         ]);
 
         setReportData({
@@ -490,6 +616,8 @@ export default function ReportsPage() {
           monthly,
           trainee: null,
           filterData,
+          simFloorBatch,
+          simFloorTrainee: null,
         });
         return;
       }
@@ -518,13 +646,18 @@ export default function ReportsPage() {
         traineeQuery.set('year', selectedYear);
       }
 
-      const [trainee, filterData] = await Promise.all([
+      const [trainee, filterData, simFloorTrainee] = await Promise.all([
         fetchJson<TraineeDetailedReportResponse>(
           `/api/analytics/reports/trainee/${selectedTraineeId}/detailed-report${
             traineeQuery.toString() ? `?${traineeQuery.toString()}` : ''
           }`,
         ),
         fetchJson<FilterDataResponse>(`/api/analytics/reports/filter-data?${filterQuery.toString()}`),
+        fetchJson<SimFloorTraineeReportResponse>(
+          `/api/sim-floor/reports/trainee/${selectedTraineeId}${
+            traineeQuery.toString() ? `?${traineeQuery.toString()}` : ''
+          }`,
+        ),
       ]);
 
       setReportData({
@@ -534,6 +667,8 @@ export default function ReportsPage() {
         monthly: null,
         trainee,
         filterData,
+        simFloorBatch: null,
+        simFloorTrainee,
       });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Unable to generate report.');
@@ -563,7 +698,7 @@ export default function ReportsPage() {
         return [];
       }
 
-      return [
+      const cards: SummaryCard[] = [
         {
           label: 'Total Sessions',
           value: String(monthly.summary.total_sessions || 0),
@@ -585,6 +720,23 @@ export default function ReportsPage() {
           helper: 'Auto-generated from recorded practice sessions',
         },
       ];
+
+      if (reportData.simFloorBatch) {
+        cards.push(
+          {
+            label: 'Sim Floor Sessions',
+            value: String(reportData.simFloorBatch.summary.total_sessions || 0),
+            helper: `${reportData.simFloorBatch.summary.active_scenarios || 0} active scenarios`,
+          },
+          {
+            label: 'Sim Floor Pass',
+            value: formatScore(reportData.simFloorBatch.summary.pass_rate, '%'),
+            helper: `${reportData.simFloorBatch.summary.retakes || 0} retakes`,
+          },
+        );
+      }
+
+      return cards;
     }
 
     const trainee = reportData.trainee;
@@ -593,7 +745,7 @@ export default function ReportsPage() {
       return [];
     }
 
-    return [
+    const cards: SummaryCard[] = [
       {
         label: 'Total Sessions',
         value: String(trainee.overall_metrics.total_sessions || 0),
@@ -615,7 +767,24 @@ export default function ReportsPage() {
         helper: `${filterData.summary.count || 0} filtered data points`,
       },
     ];
-  }, [reportData.filterData, reportData.monthly, reportData.pronunciation, reportData.trainee, reportType]);
+
+    if (reportData.simFloorTrainee) {
+      cards.push(
+        {
+          label: 'Sim Floor',
+          value: String(reportData.simFloorTrainee.summary.total_sessions || 0),
+          helper: `${formatScore(reportData.simFloorTrainee.summary.pass_rate, '%')} pass rate`,
+        },
+        {
+          label: 'Sim Floor Retakes',
+          value: String(reportData.simFloorTrainee.summary.retakes || 0),
+          helper: `Latest ${formatScore(reportData.simFloorTrainee.summary.latest_score)}`,
+        },
+      );
+    }
+
+    return cards;
+  }, [reportData.filterData, reportData.monthly, reportData.pronunciation, reportData.simFloorBatch, reportData.simFloorTrainee, reportData.trainee, reportType]);
 
   const skillCategoryChart = useMemo(() => {
     if (reportType === 'batch' && reportData.improvement) {
@@ -704,7 +873,9 @@ export default function ReportsPage() {
         reportData.progress ||
         reportData.monthly ||
         reportData.trainee ||
-        reportData.filterData,
+        reportData.filterData ||
+        reportData.simFloorBatch ||
+        reportData.simFloorTrainee,
     );
   }, [reportData]);
 
@@ -800,9 +971,9 @@ export default function ReportsPage() {
             </div>
             <h1 className="text-3xl font-bold tracking-tight text-slate-900">Report</h1>
             <p className="max-w-3xl text-sm text-slate-600">
-              Generate instant pronunciation summaries, improvement plans, progress graphs, monthly performance
-              reports, and print-ready analytics for each trainee or batch/wave. Data is sourced from the backend
-              analytics APIs and your configured database connection.
+              Generate instant pronunciation summaries, improvement plans, progress graphs, Sim Floor performance
+              breakdowns, monthly performance reports, and print-ready analytics for each trainee or batch/wave.
+              Data is sourced from the backend analytics APIs and your configured database connection.
             </p>
           </div>
 
@@ -949,6 +1120,10 @@ export default function ReportsPage() {
                 {loadingReport ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
                 Refresh Report
               </Button>
+              <Button variant="outline" onClick={() => void handleDownloadPdf()} disabled={!hasReportContent || downloadingPdf}>
+                {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
+                Download PDF
+              </Button>
             </div>
 
             {error ? <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div> : null}
@@ -1052,6 +1227,225 @@ export default function ReportsPage() {
                 ) : null}
               </CardContent>
             </Card>
+
+            {reportType === 'batch' && reportData.simFloorBatch ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sim Floor Batch Summary</CardTitle>
+                  <CardDescription>
+                    Scenario assignment, retake volume, and KPI performance for the selected batch / wave.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Active Scenarios</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorBatch.summary.active_scenarios}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Sim Floor Sessions</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorBatch.summary.total_sessions}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Pass Rate</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{formatScore(reportData.simFloorBatch.summary.pass_rate, '%')}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Retakes</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorBatch.summary.retakes}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Pending Coaching Ack</div>
+                      <div className="mt-2 text-2xl font-bold text-amber-700">{reportData.simFloorBatch.coaching_summary.pending_acknowledgement}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 xl:grid-cols-[1.35fr,0.95fr]">
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                      <table className="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold text-slate-700">Scenario</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Members</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">CSR Responses</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Completed</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Average</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {reportData.simFloorBatch.scenario_performance.slice(0, 10).map((scenario) => (
+                            <tr key={scenario.scenario_id}>
+                              <td className="px-4 py-3">
+                                <div className="font-medium text-slate-900">{scenario.title}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {scenario.variation_scores.slice(0, 2).map((variation) => `${variation.actor_name} (${variation.score}/5)`).join(', ') || 'No response variations'}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-center">{scenario.members_assigned}</td>
+                              <td className="px-4 py-3 text-center">{scenario.csr_response_count}</td>
+                              <td className="px-4 py-3 text-center">{scenario.completed_sessions}</td>
+                              <td className="px-4 py-3 text-center">{formatScore(scenario.average_score)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="rounded-2xl border border-slate-200 p-4">
+                        <div className="text-sm font-medium text-slate-700">Passing Threshold</div>
+                        <div className="mt-2 text-2xl font-bold text-slate-900">{formatScore(reportData.simFloorBatch.summary.passing_score)}</div>
+                      </div>
+                      {Object.entries(reportData.simFloorBatch.top_failed_kpis).slice(0, 6).map(([metric, value]) => (
+                        <div key={metric} className="rounded-2xl border border-slate-200 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-medium capitalize text-slate-900">{metric.replace(/_/g, ' ')}</div>
+                            <Badge variant="outline">{value}</Badge>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
+
+            {reportType === 'trainee' && reportData.simFloorTrainee ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sim Floor Trainee Summary</CardTitle>
+                  <CardDescription>
+                    Recorded scenario attempts, retakes, and KPI averages for the selected trainee.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Sessions</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorTrainee.summary.total_sessions}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Pass Rate</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{formatScore(reportData.simFloorTrainee.summary.pass_rate, '%')}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Retakes</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorTrainee.summary.retakes}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Latest Score</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{formatScore(reportData.simFloorTrainee.summary.latest_score)}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Certificates</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorTrainee.certificates.length}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Pending Coaching Ack</div>
+                      <div className="mt-2 text-2xl font-bold text-amber-700">{reportData.simFloorTrainee.coaching_summary.pending_acknowledgement}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Coaching Logs</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorTrainee.coaching_summary.total_logs}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Acknowledged</div>
+                      <div className="mt-2 text-2xl font-bold text-emerald-700">{reportData.simFloorTrainee.coaching_summary.acknowledged}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Competent Logs</div>
+                      <div className="mt-2 text-2xl font-bold text-slate-900">{reportData.simFloorTrainee.coaching_summary.competent}</div>
+                    </div>
+                    <div className="rounded-2xl border border-slate-200 p-4">
+                      <div className="text-sm font-medium text-slate-700">Retake Logs</div>
+                      <div className="mt-2 text-2xl font-bold text-rose-700">{reportData.simFloorTrainee.coaching_summary.not_competent}</div>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-6 xl:grid-cols-[1.2fr,1fr]">
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                      <table className="min-w-full divide-y divide-slate-200 text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="px-4 py-3 text-left font-semibold text-slate-700">Scenario</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Attempts</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Average</th>
+                            <th className="px-4 py-3 text-center font-semibold text-slate-700">Best</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 bg-white">
+                          {reportData.simFloorTrainee.scenario_performance.slice(0, 10).map((scenario) => (
+                            <tr key={scenario.scenario_id}>
+                              <td className="px-4 py-3 font-medium text-slate-900">{scenario.title}</td>
+                              <td className="px-4 py-3 text-center">{scenario.attempts}</td>
+                              <td className="px-4 py-3 text-center">{formatScore(scenario.average_score)}</td>
+                              <td className="px-4 py-3 text-center">{formatScore(scenario.best_score)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="space-y-3">
+                      {reportData.simFloorTrainee.recent_sessions.slice(0, 5).map((session) => (
+                        <div key={session.session_id} className="rounded-2xl border border-slate-200 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="font-medium text-slate-900">{session.scenario_title}</div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={session.status === 'Passed' ? 'default' : 'destructive'}>{session.status}</Badge>
+                              {session.coaching_status ? (
+                                <Badge variant={session.coaching_status === 'acknowledged' ? 'default' : session.coaching_status === 'sent' ? 'outline' : 'secondary'}>
+                                  {session.coaching_status === 'acknowledged'
+                                    ? 'Coaching Ack'
+                                    : session.coaching_status === 'sent'
+                                      ? 'Coaching Sent'
+                                      : 'Coaching Draft'}
+                                </Badge>
+                              ) : null}
+                              {session.certificate_id ? <Badge variant="secondary">Certificate</Badge> : null}
+                            </div>
+                          </div>
+                          <div className="mt-2 text-sm text-slate-600">
+                            Score {formatScore(session.score)} | Attempt {session.attempt_number}
+                          </div>
+                          {session.coaching_acknowledged_at ? (
+                            <div className="mt-1 text-xs text-emerald-700">
+                              Acknowledged {new Date(session.coaching_acknowledged_at).toLocaleString()}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-sm font-medium text-slate-700">Issued Sim Floor Certificates</div>
+                    {reportData.simFloorTrainee.certificates.length ? (
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {reportData.simFloorTrainee.certificates.map((certificate) => (
+                          <div key={certificate.certificate_id} className="rounded-xl bg-slate-50 p-3 text-sm">
+                            <div className="font-medium text-slate-900">{certificate.certificate_no}</div>
+                            <div className="mt-1 text-slate-600">
+                              Session {certificate.scenario_session_id}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {certificate.issued_at ? new Date(certificate.issued_at).toLocaleString() : 'No issue date'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="mt-3 text-sm text-slate-500">
+                        No Sim Floor certificates have been issued for this trainee yet.
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
 
             {(graphView === 'overview' || graphView === 'progress') && progressChartData.length > 0 ? (
               <Card>

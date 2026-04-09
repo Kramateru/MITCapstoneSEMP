@@ -762,6 +762,200 @@ class PerformanceReportGenerator:
         self.buffer.seek(0)
         return self.buffer
 
+    def generate_trainer_report(
+        self,
+        *,
+        trainer_name: str,
+        trainer_email: str,
+        report_period: str,
+        generated_at: datetime,
+        total_batches: int,
+        total_trainees: int,
+        avg_batch_performance: float,
+        total_sessions: int,
+        pass_rate: float,
+        top_performing_batch: Optional[Dict[str, Any]] = None,
+        needs_attention_batches: int = 0,
+        batch_rows: List[Dict[str, Any]],
+        category_rows: List[Dict[str, Any]],
+        trend_rows: List[Dict[str, Any]],
+    ) -> BytesIO:
+        story = []
+
+        self._append_st_peter_header(
+            story,
+            report_title="Trainer Performance Report",
+            report_subtitle="Comprehensive Trainer Analytics Overview",
+        )
+
+        report_info = [
+            ['Trainer Name:', trainer_name],
+            ['Email:', trainer_email],
+            ['Report Period:', report_period],
+            ['Generated:', generated_at.strftime("%B %d, %Y at %I:%M %p")],
+        ]
+
+        report_table = Table(
+            [[self._table_cell(label, 'TableBodyLabel'), self._table_cell(value)] for label, value in report_info],
+            colWidths=[1.8 * inch, 5.2 * inch],
+        )
+        report_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        story.append(report_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Paragraph("EXECUTIVE SUMMARY", self.styles['CustomHeading']))
+        summary_text = (
+            f"This trainer report covers <b>{total_batches}</b> batches with "
+            f"<b>{total_trainees}</b> trainees and <b>{total_sessions}</b> practice sessions. "
+            f"The average batch performance is <b>{avg_batch_performance:.1f}%</b> with an overall "
+            f"pass rate of <b>{pass_rate:.1f}%</b>."
+        )
+        story.append(Paragraph(summary_text, self.styles['Normal']))
+        story.append(Spacer(1, 0.15 * inch))
+
+        summary_table = Table(
+            [
+                [self._table_cell('Metric', 'TableHeaderLeft'), self._table_cell('Value', 'TableHeaderCenter')],
+                [self._table_cell('Total Batches', 'TableBodyLabel'), self._table_cell(str(total_batches), 'TableBodyCenter')],
+                [self._table_cell('Total Trainees', 'TableBodyLabel'), self._table_cell(str(total_trainees), 'TableBodyCenter')],
+                [self._table_cell('Total Sessions', 'TableBodyLabel'), self._table_cell(str(total_sessions), 'TableBodyCenter')],
+                [self._table_cell('Avg Batch Performance', 'TableBodyLabel'), self._table_cell(f"{avg_batch_performance:.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Pass Rate', 'TableBodyLabel'), self._table_cell(f"{pass_rate:.1f}%", 'TableBodyCenter')],
+                [self._table_cell('Needs Attention', 'TableBodyLabel'), self._table_cell(str(needs_attention_batches), 'TableBodyCenter')],
+            ],
+            colWidths=[4.1 * inch, 2.9 * inch],
+        )
+        summary_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F5F5F5')]),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 0.2 * inch))
+
+        if top_performing_batch:
+            story.append(Paragraph("TOP PERFORMING BATCH", self.styles['CustomHeading']))
+            top_batch_text = (
+                f"<b>{top_performing_batch['batch_name']}</b> with an average score of "
+                f"<b>{top_performing_batch['avg_score']:.1f}%</b>."
+            )
+            story.append(Paragraph(top_batch_text, self.styles['Normal']))
+            story.append(Spacer(1, 0.15 * inch))
+
+        if batch_rows:
+            story.append(Paragraph("BATCH PERFORMANCE DETAILS", self.styles['CustomHeading']))
+            batch_table = Table(
+                [
+                    [
+                        self._table_cell('Batch Name', 'TableHeaderLeft'),
+                        self._table_cell('Trainees', 'TableHeaderCenter'),
+                        self._table_cell('Avg Score', 'TableHeaderCenter'),
+                        self._table_cell('Pass Rate', 'TableHeaderCenter'),
+                        self._table_cell('Sessions', 'TableHeaderCenter'),
+                    ],
+                    *[
+                        [
+                            self._table_cell(row['batch_name'], 'TableBodyLabel'),
+                            self._table_cell(str(int(row['total_trainees'])), 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['avg_performance']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['pass_rate']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(str(int(row['total_sessions'])), 'TableBodyCenter'),
+                        ]
+                        for row in batch_rows
+                    ],
+                ],
+                colWidths=[2.5 * inch, 1.0 * inch, 1.2 * inch, 1.2 * inch, 1.1 * inch],
+                repeatRows=1,
+            )
+            batch_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(batch_table)
+            story.append(Spacer(1, 0.2 * inch))
+
+        if category_rows:
+            story.append(Paragraph("CATEGORY PERFORMANCE", self.styles['CustomHeading']))
+            category_table = Table(
+                [
+                    [
+                        self._table_cell('Category', 'TableHeaderLeft'),
+                        self._table_cell('Average Score', 'TableHeaderCenter'),
+                        self._table_cell('Improvement', 'TableHeaderCenter'),
+                    ],
+                    *[
+                        [
+                            self._table_cell(row['category'], 'TableBodyLabel'),
+                            self._table_cell(f"{float(row['average_score']):.1f}%", 'TableBodyCenter'),
+                            self._table_cell(f"{float(row['improvement_trend']):.1f}%", 'TableBodyCenter'),
+                        ]
+                        for row in category_rows
+                    ],
+                ],
+                colWidths=[3.0 * inch, 2.0 * inch, 2.0 * inch],
+                repeatRows=1,
+            )
+            category_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#007BFF')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(category_table)
+            story.append(Spacer(1, 0.2 * inch))
+
+        story.append(Spacer(1, 0.25 * inch))
+        story.append(
+            Paragraph(
+                "<i>Generated from trainer analytics data stored in the active platform database.</i>",
+                self.styles['MetricLabel'],
+            )
+        )
+
+        doc = SimpleDocTemplate(
+            self.buffer,
+            pagesize=letter,
+            rightMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.65 * inch,
+            title=self.title,
+        )
+        doc.build(story)
+        self.buffer.seek(0)
+        return self.buffer
+
     def generate_trainer_trainee_report(
         self,
         *,

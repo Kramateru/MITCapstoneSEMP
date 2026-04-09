@@ -68,6 +68,8 @@ type CoachingLogRecord = {
   id: string;
   coaching_id: string;
   practice_session_id?: string | null;
+  sim_session_id?: string | null;
+  source_type?: string | null;
   scenario_id?: string | null;
   scenario_title?: string | null;
   trainer_id: string;
@@ -117,7 +119,8 @@ type CompletedCategory = {
   wave_number?: number | null;
   scenario_id: string;
   scenario_title?: string | null;
-  practice_session_id: string;
+  practice_session_id?: string | null;
+  sim_session_id?: string | null;
   audio_file_url?: string | null;
   transcription?: string | null;
   transcription_confidence?: number | null;
@@ -264,6 +267,10 @@ function DetailBlock({
       <p className="whitespace-pre-wrap text-sm text-muted-foreground">{value}</p>
     </div>
   );
+}
+
+function getCategorySessionId(category: CompletedCategory) {
+  return category.sim_session_id || category.practice_session_id || '';
 }
 
 export default function TrainerCoachingHub({
@@ -465,14 +472,14 @@ export default function TrainerCoachingHub({
       return;
     }
 
-    if (!filteredCategories.some((item) => item.practice_session_id === selectedCategoryId)) {
-      setSelectedCategoryId(filteredCategories[0].practice_session_id);
+    if (!filteredCategories.some((item) => getCategorySessionId(item) === selectedCategoryId)) {
+      setSelectedCategoryId(getCategorySessionId(filteredCategories[0]));
     }
   }, [filteredCategories, selectedCategoryId]);
 
   const selectedCategory = useMemo(
     () =>
-      filteredCategories.find((item) => item.practice_session_id === selectedCategoryId) || null,
+      filteredCategories.find((item) => getCategorySessionId(item) === selectedCategoryId) || null,
     [filteredCategories, selectedCategoryId],
   );
 
@@ -550,7 +557,7 @@ export default function TrainerCoachingHub({
 
   const submitCoachingLog = async (publish: boolean) => {
     if (!selectedCategory) {
-      toast.error('Choose a finished category before creating a coaching log.');
+      toast.error('Choose a finished mock call before creating a coaching log.');
       return;
     }
 
@@ -576,7 +583,8 @@ export default function TrainerCoachingHub({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          practice_session_id: selectedCategory.practice_session_id,
+          practice_session_id: selectedCategory.practice_session_id || undefined,
+          sim_session_id: selectedCategory.sim_session_id || undefined,
           trainee_id: selectedCategory.trainee_id,
           coaching_minutes: formState.coachingMinutes,
           strengths: formState.strengths,
@@ -640,7 +648,7 @@ export default function TrainerCoachingHub({
       )}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <SummaryCard label="Finished Categories" value={summary.completedCategories} icon={<FileText className="size-5" />} />
+        <SummaryCard label="Finished Mock Calls" value={summary.completedCategories} icon={<FileText className="size-5" />} />
         <SummaryCard label="Ready for Coaching" value={summary.readyForCoaching} icon={<MessageSquare className="size-5" />} />
         <SummaryCard label="Pending Ack" value={summary.pendingAcknowledgement} icon={<Clock3 className="size-5" />} />
         <SummaryCard label="Acknowledged" value={summary.acknowledged} icon={<CheckCircle2 className="size-5" />} />
@@ -650,7 +658,7 @@ export default function TrainerCoachingHub({
 
       <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as CoachingTab)} className="space-y-4">
         <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="hub">Finished Categories</TabsTrigger>
+          <TabsTrigger value="hub">Finished Mock Calls</TabsTrigger>
           <TabsTrigger value="logs">Coaching Logs</TabsTrigger>
         </TabsList>
 
@@ -702,19 +710,19 @@ export default function TrainerCoachingHub({
           <div className="grid gap-6 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
             <Card>
               <CardHeader>
-                <CardTitle>Finished Categories</CardTitle>
+                <CardTitle>Finished Mock Calls</CardTitle>
                 <CardDescription>
-                  The latest trainee attempts saved in the database.
+                  The latest Sim Floor trainee attempts saved in the database.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {filteredCategories.map((category) => (
                   <button
-                    key={category.practice_session_id}
+                    key={getCategorySessionId(category)}
                     type="button"
-                    onClick={() => setSelectedCategoryId(category.practice_session_id)}
+                    onClick={() => setSelectedCategoryId(getCategorySessionId(category))}
                     className={`w-full rounded-2xl border p-4 text-left transition ${
-                      selectedCategoryId === category.practice_session_id
+                      selectedCategoryId === getCategorySessionId(category)
                         ? 'border-primary bg-primary/5'
                         : 'border-border hover:border-primary/35'
                     }`}
@@ -738,7 +746,7 @@ export default function TrainerCoachingHub({
 
                 {!isLoading && !filteredCategories.length && (
                   <div className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-                    No finished categories are available for the selected filters yet.
+                    No finished mock calls are available for the selected filters yet.
                   </div>
                 )}
               </CardContent>
@@ -796,7 +804,7 @@ export default function TrainerCoachingHub({
                     </div>
                   ) : (
                     <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-                      Select a finished category to review the interaction recording and transcript.
+                    Select a finished mock call to review the interaction recording and transcript.
                     </div>
                   )}
                 </CardContent>
@@ -812,7 +820,7 @@ export default function TrainerCoachingHub({
                 <CardContent className="space-y-4">
                   {selectedCategoryIsLocked && (
                     <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
-                      This category is already marked competent. The trainee button in the training hub stays disabled.
+                      This mock call is already marked competent. The trainee button in the training hub stays disabled.
                     </div>
                   )}
 
@@ -878,7 +886,7 @@ export default function TrainerCoachingHub({
                 <CardHeader>
                   <CardTitle>Coaching History for this Category</CardTitle>
                   <CardDescription>
-                    Every coaching log for the selected trainee and category stays visible in the database history.
+                    Every coaching log for the selected trainee and mock call stays visible in the database history.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -896,7 +904,7 @@ export default function TrainerCoachingHub({
                   ))}
                   {!relatedLogs.length && (
                     <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
-                      No coaching logs have been saved for this trainee and category yet.
+                      No coaching logs have been saved for this trainee and mock call yet.
                     </div>
                   )}
                 </CardContent>
@@ -915,7 +923,7 @@ export default function TrainerCoachingHub({
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 md:grid-cols-4">
-                <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search trainee, category, or coaching ID" />
+                <Input value={searchTerm} onChange={(event) => setSearchTerm(event.target.value)} placeholder="Search trainee, mock call, or coaching ID" />
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
                   <SelectTrigger><SelectValue placeholder="Delivery status" /></SelectTrigger>
                   <SelectContent>

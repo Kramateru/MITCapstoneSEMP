@@ -22,6 +22,7 @@ from ..models import (
     MicrolearningAssignment,
     NotificationRead,
     PracticeSession,
+    SimSession,
     SystemLog,
     User,
     UserRole,
@@ -311,6 +312,70 @@ def _build_trainee_notifications(
             )
         )
 
+    latest_reviewed_session = (
+        db.query(SimSession)
+        .filter(
+            SimSession.trainee_id == current_user.id,
+            SimSession.trainer_evaluated_at.isnot(None),
+            SimSession.trainer_verdict_status.in_(["competent", "retake"]),
+        )
+        .order_by(SimSession.trainer_evaluated_at.desc(), SimSession.updated_at.desc())
+        .first()
+    )
+    if latest_reviewed_session:
+        verdict_status = (latest_reviewed_session.trainer_verdict_status or "").lower()
+        is_competent = verdict_status == "competent"
+        notifications.append(
+            _serialize_notification(
+                notification_id=_notification_key(
+                    "trainee-sim-floor-verdict",
+                    current_user.id,
+                    latest_reviewed_session.id,
+                    verdict_status,
+                    latest_reviewed_session.trainer_evaluated_at,
+                ),
+                title="Sim Floor verdict received",
+                message=(
+                    "Your trainer marked the latest mock call as competent."
+                    if is_competent
+                    else "Your trainer marked the latest mock call for retake."
+                ),
+                href="/trainee/reports?tab=certificates" if is_competent else "/trainee/sim-floor",
+                level="success" if is_competent else "warning",
+                action_label="View update" if is_competent else "Open Sim Floor",
+                created_at=latest_reviewed_session.trainer_evaluated_at,
+            )
+        )
+
+    latest_sim_floor_certificate = (
+        db.query(CertificateRecord)
+        .filter(
+            CertificateRecord.trainee_id == current_user.id,
+            CertificateRecord.source_type == "sim_floor_session",
+        )
+        .order_by(CertificateRecord.issued_at.desc(), CertificateRecord.created_at.desc())
+        .first()
+    )
+    if latest_sim_floor_certificate:
+        notifications.append(
+            _serialize_notification(
+                notification_id=_notification_key(
+                    "trainee-sim-floor-certificate",
+                    current_user.id,
+                    latest_sim_floor_certificate.id,
+                    latest_sim_floor_certificate.issued_at or latest_sim_floor_certificate.created_at,
+                ),
+                title="Sim Floor certificate unlocked",
+                message=(
+                    f"Certificate {latest_sim_floor_certificate.certificate_no} is now available in your certificates tab."
+                ),
+                href="/trainee/reports?tab=certificates",
+                level="success",
+                action_label="Open certificates",
+                created_at=latest_sim_floor_certificate.issued_at or latest_sim_floor_certificate.created_at,
+            )
+        )
+
     certificate_count = (
         db.query(func.count(CertificateRecord.id))
         .filter(CertificateRecord.trainee_id == current_user.id)
@@ -330,9 +395,9 @@ def _build_trainee_notifications(
                     f"You currently have {certificate_count} certificate"
                     f"{'' if certificate_count == 1 else 's'} saved in the database."
                 ),
-                href="/trainee/reports",
+                href="/trainee/reports?tab=certificates",
                 level="success",
-                action_label="View reports",
+                action_label="View certificates",
             )
         )
 

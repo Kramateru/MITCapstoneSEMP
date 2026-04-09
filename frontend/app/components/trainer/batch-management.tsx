@@ -17,6 +17,8 @@ type TrainerBatch = {
   name: string;
   description?: string | null;
   wave_number?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
   lob?: string | null;
   is_active?: boolean;
   users_count?: number;
@@ -27,6 +29,8 @@ type BatchFormState = {
   name: string;
   wave_number: string;
   description: string;
+  start_date: string;
+  end_date: string;
   is_active: boolean;
 };
 
@@ -34,6 +38,8 @@ const emptyBatchForm = (): BatchFormState => ({
   name: '',
   wave_number: '',
   description: '',
+  start_date: '',
+  end_date: '',
   is_active: true,
 });
 
@@ -121,11 +127,17 @@ export default function BatchManagement() {
     name: batchForm.name.trim() || undefined,
     wave_number: batchForm.wave_number ? Number(batchForm.wave_number) : undefined,
     description: batchForm.description.trim() || undefined,
+    start_date: batchForm.start_date || undefined,
+    end_date: batchForm.end_date || undefined,
   });
 
   const validateBatchForm = () => {
     if (!batchForm.name.trim() && !batchForm.wave_number.trim()) {
       toast.error('Enter a batch name or a batch number.');
+      return false;
+    }
+    if (batchForm.start_date && batchForm.end_date && batchForm.end_date < batchForm.start_date) {
+      toast.error('End date cannot be earlier than start date.');
       return false;
     }
     return true;
@@ -146,6 +158,8 @@ export default function BatchManagement() {
       name: batch.name || '',
       wave_number: typeof batch.wave_number === 'number' ? String(batch.wave_number) : '',
       description: batch.description || '',
+      start_date: batch.start_date ? String(batch.start_date).slice(0, 10) : '',
+      end_date: batch.end_date ? String(batch.end_date).slice(0, 10) : '',
       is_active: batch.is_active !== false,
     });
   };
@@ -227,6 +241,8 @@ export default function BatchManagement() {
           name: batch.name,
           description: batch.description,
           wave_number: batch.wave_number,
+          start_date: batch.start_date || undefined,
+          end_date: batch.end_date || undefined,
           lob: batch.lob,
           is_active: !batch.is_active,
         }),
@@ -296,6 +312,15 @@ export default function BatchManagement() {
       parts.push(`Wave ${batch.wave_number}`);
     }
     return parts.join(' | ') || 'Unnamed batch';
+  };
+
+  const formatBatchWindow = (batch: TrainerBatch) => {
+    if (!batch.start_date && !batch.end_date) {
+      return 'Dates not set';
+    }
+    const start = batch.start_date ? new Date(batch.start_date).toLocaleDateString() : 'Open start';
+    const end = batch.end_date ? new Date(batch.end_date).toLocaleDateString() : 'Open end';
+    return `${start} - ${end}`;
   };
 
   return (
@@ -369,6 +394,26 @@ export default function BatchManagement() {
                         onChange={(event) => setBatchForm((current) => ({ ...current, description: event.target.value }))}
                       />
                     </div>
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="batch-start-date">Start Date</Label>
+                        <Input
+                          id="batch-start-date"
+                          type="date"
+                          value={batchForm.start_date}
+                          onChange={(event) => setBatchForm((current) => ({ ...current, start_date: event.target.value }))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="batch-end-date">End Date</Label>
+                        <Input
+                          id="batch-end-date"
+                          type="date"
+                          value={batchForm.end_date}
+                          onChange={(event) => setBatchForm((current) => ({ ...current, end_date: event.target.value }))}
+                        />
+                      </div>
+                    </div>
                     <div className="flex items-center space-x-2">
                       <input
                         type="checkbox"
@@ -410,6 +455,7 @@ export default function BatchManagement() {
                     {batch.description && (
                       <p className="mt-2 text-sm text-slate-600">{batch.description}</p>
                     )}
+                    <p className="mt-2 text-sm text-slate-500">Batch window: {formatBatchWindow(batch)}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <Button
@@ -508,6 +554,26 @@ export default function BatchManagement() {
                 value={batchForm.description}
                 onChange={(event) => setBatchForm((current) => ({ ...current, description: event.target.value }))}
               />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="edit-batch-start-date">Start Date</Label>
+                <Input
+                  id="edit-batch-start-date"
+                  type="date"
+                  value={batchForm.start_date}
+                  onChange={(event) => setBatchForm((current) => ({ ...current, start_date: event.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-batch-end-date">End Date</Label>
+                <Input
+                  id="edit-batch-end-date"
+                  type="date"
+                  value={batchForm.end_date}
+                  onChange={(event) => setBatchForm((current) => ({ ...current, end_date: event.target.value }))}
+                />
+              </div>
             </div>
             <div className="flex items-center space-x-2">
               <input

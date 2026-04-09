@@ -16,15 +16,19 @@ from ..models import User, UserRole
 router = APIRouter(prefix="/api/support", tags=["support"])
 logger = logging.getLogger(__name__)
 
-GREETING = "Hello! I'm St. Peter Buddy. How can I assist you with the system today?"
-ROLE_QUESTION = "Hi! I'm St. Peter Buddy. What is your role? (Trainee, Trainer, or Admin)"
+GREETING = "Hello. I am St. Peter Buddy."
+ROLE_QUESTION = "Hello. I am St. Peter Buddy. Please confirm your role: Trainee, Trainer, or Admin."
 HUMAN_SUPPORT_DESK = "stpetervelle2003@yahoo.com.ph"
+SENIOR_SUPERVISOR_FALLBACK = (
+    "I am unable to find that specific detail in our BPO manual. Let me route you to a Senior Supervisor."
+)
 SUPPORT_CHAT_MODEL = os.getenv("OPENAI_SUPPORT_MODEL", "gpt-4o-mini")
 GEMINI_SUPPORT_MODEL = os.getenv("GEMINI_SUPPORT_MODEL", "gemini-2.5-flash")
 GEMINI_TRANSCRIBE_MODEL = os.getenv("GEMINI_TRANSCRIBE_MODEL", "gemini-3-flash-preview")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 GEMINI_TIMEOUT_SECONDS = 60
 UNCLEAR_AUDIO_SENTINEL = "UNCLEAR_AUDIO"
+MAX_CONCISE_WORDS = 100
 
 ROLE_ALIASES = {
     "trainee": "trainee",
@@ -41,18 +45,103 @@ ROLE_ALIASES = {
 
 ROLE_FOCUS = {
     "trainee": (
-        "I can help with assigned learning, MCQ tests, assessment records, coaching feedback, certificates, and "
-        "speech-enabled practice tasks."
+        "I can help with learning modules, simplified St. Peter plan guidance, and Speech Enabled BPO Platform navigation."
     ),
     "trainer": (
-        "I can help with workspace tools, batch management, trainee management, microlearning delivery, MCQ workflows, "
-        "grading, coaching, and live analytics."
+        "I can help with teaching materials, coaching workflows, performance metrics, routing decisions, and platform guidance."
     ),
     "admin": (
-        "I can help with configuration, users, roles, certificate settings, LOB management, scenarios, coaching "
-        "oversight, and analytics."
+        "I can help with system health summaries, routing oversight, department visibility, and sensitive operational guidance."
     ),
 }
+
+ROLE_ACCESS_SUMMARY = {
+    "trainee": "Restricted access. Focus on learning modules, basic plan FAQs, and BPO platform navigation only.",
+    "trainer": "Elevated access. Can review teaching guidance, performance metrics, and routing procedures.",
+    "admin": "Full access. Can review system health, department routing logs, and sensitive oversight details.",
+}
+
+ROUTE_DEFINITIONS = {
+    "CLAIMS": {
+        "department": "Claims & Benefits",
+        "reason": "Urgent death benefit, bereavement, or plan activation request.",
+        "phrases": (
+            "death claim",
+            "death benefit",
+            "benefit claim",
+            "claim activation",
+            "plan activation",
+            "passed away",
+            "deceased",
+            "died",
+            "funeral assistance",
+            "burial assistance",
+            "memorial claim",
+        ),
+    },
+    "SALES": {
+        "department": "Sales/Marketing",
+        "reason": "Pricing, promos, availability, or new plan purchase request.",
+        "phrases": (
+            "price",
+            "pricing",
+            "how much",
+            "cost",
+            "buy",
+            "purchase",
+            "new plan",
+            "avail",
+            "availability",
+            "promo",
+            "quotation",
+            "quote",
+            "st anne",
+            "st. anne",
+            "st bernadette",
+            "st. bernadette",
+        ),
+    },
+    "CUSTOMER_ACCOUNTS": {
+        "department": "Customer Accounts",
+        "reason": "Existing plan payment, billing, receipt, or member account update request.",
+        "phrases": (
+            "existing plan",
+            "payment",
+            "billing",
+            "installment",
+            "due date",
+            "receipt",
+            "official receipt",
+            "account update",
+            "update my plan",
+            "change beneficiary",
+            "change address",
+            "missed payment",
+            "plan update",
+        ),
+    },
+    "IT_SUPPORT": {
+        "department": "IT Support",
+        "reason": "Speech Enabled BPO Platform issue, bug, microphone problem, or system error.",
+        "phrases": (
+            "platform bug",
+            "system bug",
+            "error message",
+            "not loading",
+            "crash",
+            "broken",
+            "system down",
+            "website issue",
+            "microphone not working",
+            "voice not working",
+            "audio not working",
+            "speech enabled bpo platform",
+            "technical issue",
+        ),
+    },
+}
+
+ROUTE_TAG_PATTERN = re.compile(r"\[ROUTE:\s*([A-Z_]+)\s*\]", re.IGNORECASE)
 
 GLOBAL_ROUTE_GUIDES = (
     {
@@ -73,6 +162,11 @@ ROLE_ROUTE_GUIDES = {
             "label": "Dashboard",
             "path": "/trainee/dashboard",
             "description": "Review assigned work, current status, and trainee updates.",
+        },
+        {
+            "label": "Sim Floor",
+            "path": "/trainee/sim-floor",
+            "description": "Practice assigned Sim Floor scenarios and submit speech-enabled responses.",
         },
         {
             "label": "Microlearning",
@@ -105,6 +199,11 @@ ROLE_ROUTE_GUIDES = {
             "description": "Review saved assessment records, latest verdicts, and certificate status.",
         },
         {
+            "label": "Trainee Status",
+            "path": "/trainee/status",
+            "description": "View all registered trainees and manage your own active or inactive account status.",
+        },
+        {
             "label": "Settings",
             "path": "/trainee/settings",
             "description": "Update personal platform preferences and account options.",
@@ -117,11 +216,6 @@ ROLE_ROUTE_GUIDES = {
             "description": "Open trainer summary metrics and recent activity.",
         },
         {
-            "label": "Workspace",
-            "path": "/trainer/workspace",
-            "description": "Manage workspace language libraries and trainer NLP configuration.",
-        },
-        {
             "label": "Batches",
             "path": "/trainer/batches",
             "description": "Create, edit, delete, and manage trainer-owned batches.",
@@ -129,7 +223,7 @@ ROLE_ROUTE_GUIDES = {
         {
             "label": "Trainees",
             "path": "/trainer/users",
-            "description": "Review and manage trainees assigned to trainer batches.",
+            "description": "Review all registered trainees, update active or inactive status, and manage batch assignment.",
         },
         {
             "label": "Microlearning",
@@ -137,14 +231,14 @@ ROLE_ROUTE_GUIDES = {
             "description": "Create activities, assign microlearning to batches, and track delivery.",
         },
         {
-            "label": "Grading",
-            "path": "/trainer/grading",
-            "description": "Review trainee interactions, transcripts, and trainer feedback actions.",
-        },
-        {
             "label": "MCQ",
             "path": "/trainer/mcq",
             "description": "Assign MCQ tests, monitor results, and manage the question bank.",
+        },
+        {
+            "label": "Sim Floor",
+            "path": "/trainer/sim-floor",
+            "description": "Monitor trainer-side Sim Floor scenario activity and participation.",
         },
         {
             "label": "Coaching",
@@ -155,6 +249,11 @@ ROLE_ROUTE_GUIDES = {
             "label": "Live Analytics",
             "path": "/trainer/realtime",
             "description": "Monitor live analytics, performance signals, and training activity.",
+        },
+        {
+            "label": "Report",
+            "path": "/trainer/reports",
+            "description": "Review trainer-facing reports and exported cohort summaries.",
         },
         {
             "label": "Settings",
@@ -221,11 +320,83 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     role: Optional[str] = None
+    route_tag: Optional[str] = None
+    route_department: Optional[str] = None
 
 
 class TranscriptionResponse(BaseModel):
     transcript: str
 
+
+DEATHCARE_KNOWLEDGE_BASE = (
+    {
+        "title": "General St. Peter Buddy purpose",
+        "roles": ("trainee", "trainer", "admin"),
+        "keywords": (
+            "st peter buddy",
+            "st. peter buddy",
+            "what can you do",
+            "deathcare support",
+            "life plan",
+            "chapels",
+        ),
+        "answer": (
+            "St. Peter Buddy gives concise plan guidance, routing help, and Speech Enabled BPO Platform support. "
+            "For prices, claims, existing account updates, or platform bugs, I will direct you to the correct department."
+        ),
+        "routes": ("/support/chat",),
+    },
+    {
+        "title": "Basic plan FAQ",
+        "roles": ("trainee", "trainer", "admin"),
+        "keywords": (
+            "plan faq",
+            "basic plan",
+            "memorial plan",
+            "life plan details",
+            "plan information",
+            "st gregory",
+            "st george",
+        ),
+        "answer": (
+            "I can share basic plan orientation only. Exact contract terms, prices, and benefit specifics should be "
+            "confirmed by the proper department so we do not give inaccurate deathcare information."
+        ),
+        "routes": ("/support/chat",),
+    },
+    {
+        "title": "Trainer teaching support",
+        "roles": ("trainer",),
+        "keywords": (
+            "teaching materials",
+            "trainer guide",
+            "coaching materials",
+            "performance metrics",
+            "routing procedure",
+        ),
+        "answer": (
+            "Use St. Peter Buddy for teaching guidance, routing simulations, and concise performance-related answers. "
+            "Sensitive claims outcomes and admin-only system oversight should still be escalated appropriately."
+        ),
+        "routes": ("/trainer/dashboard", "/support/chat"),
+    },
+    {
+        "title": "Admin oversight",
+        "roles": ("admin",),
+        "keywords": (
+            "system health",
+            "routing log",
+            "department routing",
+            "sensitive data",
+            "oversight",
+        ),
+        "answer": (
+            "Admins may review system health summaries, routing visibility, and sensitive operational context inside "
+            "the platform. Detailed case handling still belongs to the responsible business department."
+        ),
+        "routes": ("/admin/dashboard", "/support/chat"),
+    },
+)
 
 KNOWLEDGE_BASE = (
     {
@@ -276,7 +447,7 @@ KNOWLEDGE_BASE = (
             "device is selected, and background noise is low. A headset usually gives the most stable results. If a "
             "recording still fails, refresh the activity page and try the task again."
         ),
-        "routes": ("/trainee/mcq", "/trainee/microlearning", "/trainer/grading"),
+        "routes": ("/trainee/mcq", "/trainee/microlearning", "/trainer/coaching"),
     },
     {
         "title": "Trainee learning access",
@@ -345,15 +516,22 @@ KNOWLEDGE_BASE = (
         "routes": ("/trainee/assessment", "/trainee/reports"),
     },
     {
-        "title": "Trainer workspace and language libraries",
+        "title": "Trainer trainee status and class access",
         "roles": ("trainer",),
-        "keywords": ("workspace", "nlp", "empathy statements", "probing questions", "forbidden words", "required keywords"),
-        "answer": (
-            "Use the trainer Workspace page to manage language libraries and related NLP configuration such as empathy "
-            "statements, probing questions, forbidden words, and required keywords. Those changes are saved through "
-            "the backend workflow for the active workspace."
+        "keywords": (
+            "trainee status",
+            "activate trainee",
+            "deactivate trainee",
+            "inactive trainee",
+            "reactivate trainee",
+            "manage trainees",
         ),
-        "routes": ("/trainer/workspace",),
+        "answer": (
+            "Use the Trainees page to review every registered trainee in the system, toggle accounts between active "
+            "and inactive, and manage which batch or wave each trainee belongs to. Inactive trainees stay visible in "
+            "the roster so trainers can reactivate them later when needed."
+        ),
+        "routes": ("/trainer/users",),
     },
     {
         "title": "Trainer batches and trainees",
@@ -413,22 +591,22 @@ KNOWLEDGE_BASE = (
         "routes": ("/trainer/mcq",),
     },
     {
-        "title": "Trainer grading and coaching",
+        "title": "Trainer coaching review and follow-up",
         "roles": ("trainer",),
         "keywords": (
-            "grading",
+            "coaching",
             "review recordings",
             "interaction review",
             "feedback",
-            "coaching",
-            "grade trainees",
             "review trainee session",
+            "session review",
         ),
         "answer": (
-            "Use Grading to review trainee interactions, transcripts, recordings, and feedback actions. Use Coaching "
-            "to manage follow-up logs, competency progress, and coaching communication after trainee work is reviewed."
+            "Use Coaching to review trainee interactions, transcripts, recordings, competency progress, and follow-up "
+            "logs after trainee work is submitted. This is the trainer workflow for reviewing attempts and managing "
+            "next-step coaching communication."
         ),
-        "routes": ("/trainer/grading", "/trainer/coaching"),
+        "routes": ("/trainer/coaching",),
     },
     {
         "title": "Trainer analytics",
@@ -531,6 +709,12 @@ TRAINEE_RESTRICTED_KEYWORDS = (
     "permissions",
     "line of business",
     "manage trainees",
+    "performance metrics",
+    "system health",
+    "routing log",
+    "department routing",
+    "sensitive data",
+    "system override",
 )
 
 TRAINER_RESTRICTED_KEYWORDS = (
@@ -543,6 +727,11 @@ TRAINER_RESTRICTED_KEYWORDS = (
     "role assignment",
     "user permissions",
     "platform analytics for all users",
+    "system health",
+    "routing log",
+    "department routing",
+    "sensitive data",
+    "routing oversight",
 )
 
 STOP_WORDS = {
@@ -571,20 +760,18 @@ STOP_WORDS = {
 }
 
 SYSTEM_PROMPT = """
-You are St. Peter Buddy, the official support assistant for the Speech-Enabled BPO Platform.
+You are St. Peter Buddy, the primary AI interface for St. Peter Life Plan and Chapels inside the Speech-Enabled BPO Platform.
 
 Rules:
-- Answer platform questions for the authenticated role only.
-- Use the supplied role, route guide, and platform knowledge as the source of truth.
-- You may answer beyond exact FAQ wording if the route guide and feature summaries support the answer.
-- Use recent chat history to resolve follow-up questions.
-- Never leak trainer-only or admin-only details to lower roles.
-- Write answers in short, easy-to-follow numbered steps whenever possible.
-- Keep replies concise, direct, practical, and easy for non-technical users to follow.
-- When navigation helps, include exact route paths inside the steps.
-- If a question belongs to another role, clearly say which role owns it and tell the user to contact that role.
-- If the question is outside the platform or truly unsupported, say so briefly and direct the user to the Human Support Desk.
-- Do not invent database records, permissions, or pages that are not present in the supplied knowledge.
+- Answer only within the identified role scope.
+- Trainees get simplified coaching, basic plan FAQs, and platform navigation.
+- Trainers get advanced teaching guidance, performance context, and routing procedures.
+- Admins may receive system health, routing oversight, and sensitive operational summaries.
+- Keep replies under 100 words unless documentation is explicitly requested.
+- Keep wording compassionate, professional, precise, and optimized for text to speech.
+- Do not invent prices, benefits, claim outcomes, contract details, or hidden system data.
+- If routing is required, put one tag on the first line only: [ROUTE: SALES], [ROUTE: CUSTOMER_ACCOUNTS], [ROUTE: CLAIMS], or [ROUTE: IT_SUPPORT].
+- If you do not know a specific answer, say exactly: "I am unable to find that specific detail in our BPO manual. Let me route you to a Senior Supervisor."
 """
 
 
@@ -641,6 +828,145 @@ def _get_authenticated_role(request: Request, db: Session) -> Optional[str]:
 
     role_value = user.role.value if isinstance(user.role, UserRole) else str(user.role)
     return _normalize_role(role_value)
+
+
+def _get_role_from_header(request: Request) -> Optional[str]:
+    for header_name in ("User_Role", "User-Role", "X-User-Role"):
+        role = _normalize_role(request.headers.get(header_name))
+        if role:
+            return role
+    return None
+
+
+def _is_documentation_request(message: str) -> bool:
+    lowered = message.lower()
+    return any(
+        phrase in lowered
+        for phrase in (
+            "documentation",
+            "document this",
+            "full process",
+            "full procedure",
+            "detailed procedure",
+            "step by step guide",
+            "manual",
+        )
+    )
+
+
+def _limit_words(value: str, limit: int = MAX_CONCISE_WORDS) -> str:
+    words = re.findall(r"\S+", value)
+    if len(words) <= limit:
+        return value.strip()
+
+    trimmed = " ".join(words[:limit]).rstrip(" ,;:-")
+    if not trimmed.endswith((".", "!", "?")):
+        trimmed += "..."
+    return trimmed
+
+
+def _clean_reply_text(value: str) -> str:
+    if not value:
+        return ""
+
+    normalized_lines = [" ".join(line.split()) for line in value.strip().splitlines()]
+    compact = "\n".join(line for line in normalized_lines if line)
+    compact = re.sub(r"\n{3,}", "\n\n", compact)
+    return compact.strip()
+
+
+def _resolve_route_department(route_tag: Optional[str]) -> Optional[str]:
+    if not route_tag:
+        return None
+    definition = ROUTE_DEFINITIONS.get(route_tag.upper())
+    if not definition:
+        return None
+    return str(definition["department"])
+
+
+def _extract_route_tag(reply: str) -> tuple[str, Optional[str]]:
+    if not reply:
+        return "", None
+
+    matches = [match.upper() for match in ROUTE_TAG_PATTERN.findall(reply)]
+    route_tag = next((match for match in reversed(matches) if match in ROUTE_DEFINITIONS), None)
+    cleaned = _clean_reply_text(ROUTE_TAG_PATTERN.sub("", reply))
+    return cleaned, route_tag
+
+
+def _finalize_reply(
+    *,
+    message: str,
+    reply: str,
+    route_tag: Optional[str] = None,
+) -> tuple[str, Optional[str], Optional[str]]:
+    cleaned_reply, extracted_route_tag = _extract_route_tag(reply)
+    resolved_route_tag = route_tag or extracted_route_tag
+
+    if not cleaned_reply:
+        cleaned_reply = SENIOR_SUPERVISOR_FALLBACK
+
+    if not _is_documentation_request(message):
+        cleaned_reply = _limit_words(cleaned_reply)
+
+    route_department = _resolve_route_department(resolved_route_tag)
+    return cleaned_reply, resolved_route_tag, route_department
+
+
+def _contains_route_phrase(message: str, phrases: tuple[str, ...]) -> bool:
+    normalized = " ".join(message.lower().split())
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _detect_department_route(message: str) -> Optional[dict[str, str]]:
+    normalized = " ".join(message.lower().split())
+    if not normalized:
+        return None
+
+    if _contains_route_phrase(normalized, ROUTE_DEFINITIONS["CLAIMS"]["phrases"]):
+        return {"tag": "CLAIMS", **ROUTE_DEFINITIONS["CLAIMS"]}
+
+    if _contains_route_phrase(normalized, ROUTE_DEFINITIONS["SALES"]["phrases"]):
+        return {"tag": "SALES", **ROUTE_DEFINITIONS["SALES"]}
+
+    if _contains_route_phrase(normalized, ROUTE_DEFINITIONS["CUSTOMER_ACCOUNTS"]["phrases"]):
+        return {"tag": "CUSTOMER_ACCOUNTS", **ROUTE_DEFINITIONS["CUSTOMER_ACCOUNTS"]}
+
+    if _contains_route_phrase(normalized, ROUTE_DEFINITIONS["IT_SUPPORT"]["phrases"]):
+        return {"tag": "IT_SUPPORT", **ROUTE_DEFINITIONS["IT_SUPPORT"]}
+
+    return None
+
+
+def _build_department_route_reply(role: str, route: dict[str, str]) -> str:
+    tag = route["tag"]
+    department = route["department"]
+
+    if tag == "CLAIMS":
+        reply = (
+            f"This needs {department}. Please route death benefit or plan activation concerns immediately. "
+            "Include the member name, plan reference, and urgency if available."
+        )
+    elif tag == "SALES":
+        reply = (
+            f"This belongs to {department}. Please route pricing, promos, availability, or new St. Anne and "
+            "St. Bernadette plan requests to that team."
+        )
+    elif tag == "CUSTOMER_ACCOUNTS":
+        reply = (
+            f"This looks like a {department} concern. Please route existing plan payment, billing, receipt, or "
+            "account update requests to that department."
+        )
+    else:
+        reply = (
+            f"This appears to be an {department} issue. Please route the case with the page name, device, browser, "
+            "and any error or microphone details."
+        )
+
+    if role in {"trainer", "admin"} and tag != "IT_SUPPORT":
+        reply += " Log the handoff reason for follow-up."
+
+    return reply
 
 
 def _role_confirmation(role: str) -> str:
@@ -799,7 +1125,7 @@ def _find_relevant_entries(role: str, message: str, limit: int = 3) -> list[dict
     message_tokens = _tokenize(normalized_message)
     ranked: list[tuple[int, dict]] = []
 
-    for entry in KNOWLEDGE_BASE:
+    for entry in DEATHCARE_KNOWLEDGE_BASE + KNOWLEDGE_BASE:
         score = _score_entry(role, normalized_message, message_tokens, entry)
         if score > 0:
             ranked.append((score, entry))
@@ -872,16 +1198,7 @@ def _compose_rule_based_reply(role: str, message: str) -> str:
     routes = _merge_route_matches(role, entries, _find_relevant_routes(role, message))
 
     if not entries and not routes:
-        steps = [
-            "Ask the question using the page name, task, or workflow you are trying to complete",
-            "If the request belongs to another role, contact the correct role for that action",
-            f"If you still need help, contact the Human Support Desk at {HUMAN_SUPPORT_DESK}",
-        ]
-        return (
-            f"{_build_role_help_reply(role)}\n\n"
-            "I could not match that request to a saved workflow yet.\n"
-            f"{_format_numbered_steps(steps)}"
-        )
+        return SENIOR_SUPERVISOR_FALLBACK
 
     steps: list[str] = []
 
@@ -903,12 +1220,18 @@ def _build_knowledge_context(role: str, message: str) -> str:
 
     parts = [
         f"Role focus: {ROLE_FOCUS[role]}",
+        f"Access level: {ROLE_ACCESS_SUMMARY[role]}",
+        "Department routing rules:",
+        "- [ROUTE: CLAIMS] for death benefits, plan activation, or urgent bereavement support.",
+        "- [ROUTE: SALES] for new plans, pricing, promos, and St. Anne or St. Bernadette purchase requests.",
+        "- [ROUTE: CUSTOMER_ACCOUNTS] for existing plan payments, billing, receipts, or account updates.",
+        "- [ROUTE: IT_SUPPORT] for Speech Enabled BPO Platform bugs or technical issues.",
         "Primary route guide:",
         _format_routes(list(_all_route_guides(role))),
     ]
 
     if entries:
-        parts.append("Relevant platform knowledge:")
+        parts.append("Relevant platform and deathcare knowledge:")
         for entry in entries:
             parts.append(f"- {entry['title']}: {entry['answer']}")
 
@@ -926,6 +1249,7 @@ def _build_system_prompt(role: str, knowledge_context: str) -> str:
         f"Human Support Desk: {HUMAN_SUPPORT_DESK}\n\n"
         f"Platform knowledge context:\n{knowledge_context}\n\n"
         "If the role is already known, do not ask for it again. Answer directly. "
+        "If a department route clearly applies, use the route tag on the first line and keep the explanation short. "
         "When the question is about navigation, give the exact route path. "
         "When a question is broad, combine the best matching workflow guidance and route suggestions. "
         "Default to numbered steps."
@@ -1143,36 +1467,105 @@ def chat(request_body: ChatRequest, request: Request, db: Session = Depends(get_
     message = (request_body.message or "").strip()
 
     authenticated_role = _get_authenticated_role(request, db)
+    header_role = _get_role_from_header(request)
     requested_role = _normalize_role(request_body.role)
     inferred_role = _extract_role_from_message(message)
-    role = authenticated_role or requested_role or inferred_role
+    role = authenticated_role or header_role or requested_role or inferred_role
 
     if not role:
         return ChatResponse(reply=ROLE_QUESTION)
 
     if _is_role_declaration(message):
-        return ChatResponse(reply=_role_confirmation(role), role=role)
+        reply, route_tag, route_department = _finalize_reply(
+            message=message,
+            reply=_role_confirmation(role),
+        )
+        return ChatResponse(
+            reply=reply,
+            role=role,
+            route_tag=route_tag,
+            route_department=route_department,
+        )
 
     restricted_reply = _handle_restricted_scope(role, message.lower())
     if restricted_reply:
-        return ChatResponse(reply=restricted_reply, role=role)
+        reply, route_tag, route_department = _finalize_reply(
+            message=message,
+            reply=restricted_reply,
+        )
+        return ChatResponse(
+            reply=reply,
+            role=role,
+            route_tag=route_tag,
+            route_department=route_department,
+        )
+
+    routed_department = _detect_department_route(message)
+    if routed_department:
+        reply, route_tag, route_department = _finalize_reply(
+            message=message,
+            reply=_build_department_route_reply(role, routed_department),
+            route_tag=routed_department["tag"],
+        )
+        return ChatResponse(
+            reply=reply,
+            role=role,
+            route_tag=route_tag,
+            route_department=route_department,
+        )
 
     shared_reply = _handle_shared_questions(role, message.lower())
     if shared_reply:
-        return ChatResponse(reply=shared_reply, role=role)
+        reply, route_tag, route_department = _finalize_reply(
+            message=message,
+            reply=shared_reply,
+        )
+        return ChatResponse(
+            reply=reply,
+            role=role,
+            route_tag=route_tag,
+            route_department=route_department,
+        )
 
     knowledge_context = _build_knowledge_context(role, message)
-    
+
     # Try Gemini first
     gemini_reply = _gemini_reply(role, message, request_body.history, knowledge_context)
     if gemini_reply:
-        return ChatResponse(reply=gemini_reply, role=role)
-    
+        reply, route_tag, route_department = _finalize_reply(
+            message=message,
+            reply=gemini_reply,
+        )
+        return ChatResponse(
+            reply=reply,
+            role=role,
+            route_tag=route_tag,
+            route_department=route_department,
+        )
+
     # Fallback to OpenAI
     api_key = os.getenv("OPENAI_API_KEY")
     if api_key:
         ai_reply = _openai_reply(api_key, role, message, request_body.history, knowledge_context)
         if ai_reply:
-            return ChatResponse(reply=ai_reply, role=role)
+            reply, route_tag, route_department = _finalize_reply(
+                message=message,
+                reply=ai_reply,
+            )
+            return ChatResponse(
+                reply=reply,
+                role=role,
+                route_tag=route_tag,
+                route_department=route_department,
+            )
 
-    return ChatResponse(reply=_compose_rule_based_reply(role, message), role=role)
+    reply, route_tag, route_department = _finalize_reply(
+        message=message,
+        reply=_compose_rule_based_reply(role, message),
+    )
+    return ChatResponse(
+        reply=reply,
+        role=role,
+        route_tag=route_tag,
+        route_department=route_department,
+    )

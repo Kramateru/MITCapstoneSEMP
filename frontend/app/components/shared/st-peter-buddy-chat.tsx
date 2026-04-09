@@ -15,6 +15,8 @@ import {
 type ChatMessage = {
   sender: 'user' | 'bot'
   text: string
+  routeTag?: string | null
+  routeDepartment?: string | null
 }
 
 export function StPeterBuddyChat({
@@ -35,6 +37,8 @@ export function StPeterBuddyChat({
     {
       sender: 'bot',
       text: getChatWelcomeMessage(user?.user_role ?? null),
+      routeTag: null,
+      routeDepartment: null,
     },
   ])
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -49,7 +53,14 @@ export function StPeterBuddyChat({
       if (prev.length !== 1 || prev[0]?.sender !== 'bot') {
         return prev
       }
-      return [{ sender: 'bot', text: getChatWelcomeMessage(resolvedRole) }]
+      return [
+        {
+          sender: 'bot',
+          text: getChatWelcomeMessage(resolvedRole),
+          routeTag: null,
+          routeDepartment: null,
+        },
+      ]
     })
   }, [user?.user_role])
 
@@ -68,8 +79,19 @@ export function StPeterBuddyChat({
 
   const quickPrompts = useMemo(() => getChatQuickPrompts(chatRole), [chatRole])
 
-  const pushBotMessage = (text: string) => {
-    setMessages((prev) => [...prev, { sender: 'bot', text }])
+  const pushBotMessage = (
+    text: string,
+    options?: { routeTag?: string | null; routeDepartment?: string | null },
+  ) => {
+    setMessages((prev) => [
+      ...prev,
+      {
+        sender: 'bot',
+        text,
+        routeTag: options?.routeTag ?? null,
+        routeDepartment: options?.routeDepartment ?? null,
+      },
+    ])
   }
 
   const stopMicrophoneTracks = () => {
@@ -133,6 +155,8 @@ export function StPeterBuddyChat({
       const data = (await response.json()) as {
         reply?: string
         role?: string | null
+        route_tag?: string | null
+        route_department?: string | null
         detail?: string
       }
 
@@ -147,6 +171,10 @@ export function StPeterBuddyChat({
       pushBotMessage(
         data.reply ||
           "I'm sorry, I don't have information about that yet. Please contact support for further help.",
+        {
+          routeTag: data.route_tag ?? null,
+          routeDepartment: data.route_department ?? null,
+        },
       )
     } catch {
       pushBotMessage(
@@ -271,7 +299,7 @@ export function StPeterBuddyChat({
               <Sparkles size={14} className="text-yellow-300" />
             </div>
             <p className="text-xs text-blue-100/85">
-              Role-aware support for trainee, trainer, and admin users
+              Role-aware deathcare and platform support for trainee, trainer, and admin users
             </p>
           </div>
         </div>
@@ -294,7 +322,7 @@ export function StPeterBuddyChat({
             {chatRole ? `Role: ${chatRole}` : 'Role will be detected automatically'}
           </span>
           <span className="text-xs text-muted-foreground">
-            Ask system-related questions only. Type or use the microphone.
+            Routing tags are generated for Claims, Sales, Customer Accounts, and IT Support.
           </span>
         </div>
       </div>
@@ -315,6 +343,18 @@ export function StPeterBuddyChat({
                     : 'border border-border bg-background/80 text-foreground'
                 }`}
               >
+                {message.sender === 'bot' && message.routeTag && (
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-900">
+                      {message.routeTag}
+                    </span>
+                    {message.routeDepartment && (
+                      <span className="text-[11px] font-medium text-slate-500">
+                        {message.routeDepartment}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {message.text}
               </div>
             </div>

@@ -13,6 +13,10 @@ from ..models import (
     MicrolearningModule,
     ScenarioDifficulty,
 )
+from .microlearning_catalog import (
+    build_type_specific_exercises,
+    normalize_module_type,
+)
 
 
 def _enum_value(value: Any) -> Any:
@@ -762,21 +766,51 @@ def serialize_assessment_method(
     }
 
 
+def _assignment_average_score(assignment: MicrolearningAssignment) -> float:
+    responses = dict(assignment.responses or {})
+    completed_scores = [
+        float(attempt.get("score") or 0.0)
+        for attempt in responses.values()
+        if isinstance(attempt, dict) and attempt.get("is_completed")
+    ]
+    if not completed_scores:
+        return 0.0
+    return round(sum(completed_scores) / len(completed_scores), 2)
+
+
+def _assignment_is_passed(assignment: MicrolearningAssignment) -> bool:
+    module = getattr(assignment, "module", None)
+    passing_score = float(getattr(module, "passing_score", 0) or 0)
+    if not module:
+        return False
+    if int(assignment.completed_exercises or 0) < len(module.exercises or []):
+        return False
+    return _assignment_average_score(assignment) >= passing_score
+
+
 def serialize_microlearning_module(
     module: MicrolearningModule,
     *,
     assignment_count: int = 0,
 ) -> dict[str, Any]:
     assessment_method = getattr(module, "assessment_method", None)
+    topic_category = getattr(module, "topic_category", None)
     return {
         "id": module.id,
         "title": module.title,
         "description": module.description,
         "category": _enum_value(module.category),
+        "module_type": normalize_module_type(getattr(module, "type", None)),
         "duration_minutes": module.duration_minutes,
+        "passing_score": int(getattr(module, "passing_score", 0) or 0),
         "skill_focus": module.skill_focus,
         "content_url": module.content_url,
+        "content_data": module.content_data or {},
         "difficulty": _enum_value(module.difficulty),
+        "topic_category_id": getattr(topic_category, "id", None) or module.topic_category_id,
+        "topic_category_name": getattr(topic_category, "name", None),
+        "topic_category_slug": getattr(topic_category, "slug", None),
+        "topic_category_description": getattr(topic_category, "description", None),
         "assessment_method_id": getattr(assessment_method, "id", None) or module.assessment_method_id,
         "assessment_method_slug": getattr(assessment_method, "slug", None),
         "assessment_method_name": getattr(assessment_method, "name", None),
@@ -794,7 +828,13 @@ def ensure_module_exercises(module: Optional[MicrolearningModule]) -> bool:
         return False
 
     assessment_method_slug = getattr(getattr(module, "assessment_method", None), "slug", None)
-    module.exercises = generate_default_exercises(
+    generated_exercises = build_type_specific_exercises(
+        getattr(module, "type", None),
+        getattr(module, "content_data", None),
+        title=module.title,
+        skill_focus=module.skill_focus,
+    )
+    module.exercises = generated_exercises or generate_default_exercises(
         module.category,
         title=module.title,
         skill_focus=module.skill_focus,
@@ -815,6 +855,7 @@ def refresh_assignment_progress(assignment: MicrolearningAssignment) -> None:
     assignment.completion_percentage = (
         round((completed_exercises / total_exercises) * 100, 2) if total_exercises else 0.0
     )
+    is_passed = _assignment_is_passed(assignment)
 
     if completed_exercises == 0:
         assignment.status = "assigned"
@@ -822,7 +863,7 @@ def refresh_assignment_progress(assignment: MicrolearningAssignment) -> None:
         return
 
     if total_exercises and completed_exercises >= total_exercises:
-        assignment.status = "completed"
+        assignment.status = "certified" if assignment.certificate_id else "completed"
         if assignment.completed_at is None:
             assignment.completed_at = datetime.utcnow()
         return
@@ -834,21 +875,29 @@ def refresh_assignment_progress(assignment: MicrolearningAssignment) -> None:
 def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[str, Any]:
     module = assignment.module
     assessment_method = getattr(module, "assessment_method", None) if module else None
+    topic_category = getattr(module, "topic_category", None) if module else None
     batch = getattr(assignment, "batch", None)
     trainee = getattr(assignment, "trainee", None)
     trainer = getattr(assignment, "trainer", None)
+    certificate = getattr(assignment, "certificate", None)
+    average_score = _assignment_average_score(assignment)
+    is_passed = _assignment_is_passed(assignment)
     return {
         "id": assignment.id,
         "module_id": assignment.module_id,
         "title": module.title if module else None,
         "description": module.description if module else None,
         "category": _enum_value(module.category) if module else None,
+        "module_type": normalize_module_type(getattr(module, "type", None)) if module else None,
         "skill_focus": module.skill_focus if module else None,
         "duration_minutes": module.duration_minutes if module else None,
+        "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
         "difficulty": _enum_value(module.difficulty) if module else None,
         "content_url": module.content_url if module else None,
         "status": assignment.status,
         "completion_percentage": float(assignment.completion_percentage or 0.0),
+        "average_score": average_score,
+        "is_passed": is_passed,
         "exercise_count": len(module.exercises or []) if module else 0,
         "completed_exercises": int(assignment.completed_exercises or 0),
         "assigned_at": assignment.assigned_at,
@@ -856,10 +905,16 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
         "completed_at": assignment.completed_at,
         "notes": assignment.notes,
         "is_mandatory": bool(assignment.is_mandatory),
+        "certificate_id": assignment.certificate_id,
+        "certificate_no": getattr(certificate, "certificate_no", None),
+        "certificate_issued_at": getattr(certificate, "issued_at", None),
         "user_id": assignment.trainee_id,
         "trainee_name": getattr(trainee, "full_name", None),
         "module_title": module.title if module else None,
         "module_category": _enum_value(module.category) if module else None,
+        "topic_category_id": getattr(topic_category, "id", None) or getattr(module, "topic_category_id", None),
+        "topic_category_name": getattr(topic_category, "name", None),
+        "topic_category_slug": getattr(topic_category, "slug", None),
         "assessment_method_id": getattr(assessment_method, "id", None),
         "assessment_method_slug": getattr(assessment_method, "slug", None),
         "assessment_method_name": getattr(assessment_method, "name", None),
@@ -890,6 +945,7 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
                 "required_keywords": exercise.get("required_keywords") or [],
                 "tips": exercise.get("tips") or [],
                 "explanation": exercise.get("explanation"),
+                "option_feedback": exercise.get("option_feedback") or {},
                 "sample_answer": exercise.get("sample_answer"),
                 "attempt": attempt,
             }
@@ -897,6 +953,13 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
 
     return {
         "assignment": serialize_assignment_summary(assignment),
+        "module": {
+            "id": module.id if module else None,
+            "module_type": normalize_module_type(getattr(module, "type", None)) if module else None,
+            "content_data": module.content_data or {} if module else {},
+            "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
+            "content_url": module.content_url if module else None,
+        },
         "exercises": exercises,
     }
 
@@ -906,6 +969,7 @@ def evaluate_exercise_submission(
     *,
     response_text: Optional[str],
     selected_option: Optional[str],
+    input_mode: Optional[str] = None,
 ) -> dict[str, Any]:
     exercise_type = (exercise.get("type") or "").strip().lower()
     normalized_text = (response_text or "").strip()
@@ -913,8 +977,9 @@ def evaluate_exercise_submission(
 
     if exercise_type == "multiple_choice":
         correct_option = (exercise.get("correct_option") or "").strip()
+        option_feedback = dict(exercise.get("option_feedback") or {})
         score = 100.0 if normalized_option and normalized_option == correct_option else 0.0
-        feedback = exercise.get("explanation") or (
+        feedback = option_feedback.get(normalized_option) or exercise.get("explanation") or (
             "Correct answer selected."
             if score == 100.0
             else f"The strongest answer is: {correct_option or 'not available'}."
@@ -923,6 +988,7 @@ def evaluate_exercise_submission(
             "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
             "response_text": response_text,
             "selected_option": selected_option,
+            "input_mode": input_mode or "selection",
             "score": score,
             "feedback": feedback,
             "is_completed": bool(normalized_option),
@@ -961,6 +1027,9 @@ def evaluate_exercise_submission(
         "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
         "response_text": response_text,
         "selected_option": selected_option,
+        "input_mode": input_mode or "typed",
+        "matched_keywords": matched_keywords,
+        "missing_keywords": missing_keywords,
         "score": score,
         "feedback": feedback,
         "is_completed": bool(normalized_text),

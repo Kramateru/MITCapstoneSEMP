@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock, FileText, MessageSquare, Target } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertCircle, CheckCircle2, FileText, MessageSquare, Target } from 'lucide-react';
 import { toast } from 'sonner';
+
+import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-client';
 
 import { Alert, AlertDescription } from '../ui/alert';
 import { Badge } from '../ui/badge';
@@ -53,7 +55,7 @@ export default function MyCoaching() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     try {
       setIsLoading(true);
       setLoadError('');
@@ -74,11 +76,38 @@ export default function MyCoaching() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     void loadLogs();
-  }, []);
+  }, [loadLogs]);
+
+  useEffect(() => {
+    let stream: EventSource | null = null;
+    try {
+      stream = openSimFloorRealtimeStream();
+      stream.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data) as { type?: string };
+          if (
+            payload.type === 'coaching_changed' ||
+            payload.type === 'session_changed' ||
+            payload.type === 'certificate_changed'
+          ) {
+            void loadLogs();
+          }
+        } catch {
+          // Ignore malformed realtime payloads.
+        }
+      };
+    } catch {
+      // Realtime updates are optional for this view.
+    }
+
+    return () => {
+      stream?.close();
+    };
+  }, [loadLogs]);
 
   const handleAcknowledge = async (logId: string) => {
     try {

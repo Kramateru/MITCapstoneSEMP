@@ -38,7 +38,7 @@ export default function AdminUsersPage() {
   };
 
   const loadUsers = async () => {
-    const res = await fetch('/api/admin/users', { headers: authHeaders() });
+    const res = await fetch('/api/admin/users', { headers: authHeaders(), cache: 'no-store' });
     if (!res.ok) {
       setStatus('Unable to load admin and trainer accounts right now.');
       return;

@@ -7,13 +7,13 @@ export function isChatRole(value: unknown): value is ChatRole {
 export function getChatWelcomeMessage(role: ChatRole | null): string {
   switch (role) {
     case 'trainee':
-      return "Hello! I'm St. Peter Buddy. I can help with course access, schedules, assignments, submissions, and progress tracking."
+      return "Hello. I am St. Peter Buddy. I can help with learning modules, basic St. Peter plan FAQs, and platform navigation."
     case 'trainer':
-      return "Hello! I'm St. Peter Buddy. I can help with trainee management, grading workflows, content updates, and training reports."
+      return "Hello. I am St. Peter Buddy. I can help with coaching guidance, routing procedures, performance support, and training workflows."
     case 'admin':
-      return "Hello! I'm St. Peter Buddy. I can help with user management, system configuration, permissions, analytics, and maintenance."
+      return "Hello. I am St. Peter Buddy. I can help with routing oversight, system health guidance, and sensitive operational summaries."
     default:
-      return "Hello! I'm St. Peter Buddy. How can I assist you with the system today?"
+      return "Hello. I am St. Peter Buddy. Ask about St. Peter plan routing, learning support, or Speech Enabled BPO Platform issues."
   }
 }
 
@@ -21,21 +21,21 @@ export function getChatQuickPrompts(role: ChatRole | null): string[] {
   switch (role) {
     case 'trainee':
       return [
-        'How do I access my training modules?',
-        'Where can I track my progress?',
-        'How do I use the speech recognition feature?',
+        'Where do I open my learning modules?',
+        'Which questions should be routed to Sales?',
+        'How do I report a platform issue?',
       ]
     case 'trainer':
       return [
-        'How do I grade trainees?',
-        'Where can I review trainee sessions?',
-        'How do I create training modules?',
+        'Which requests go to Customer Accounts?',
+        'How should I coach trainees on claims routing?',
+        'Where can I review trainee performance?',
       ]
     case 'admin':
       return [
-        'How do I create user accounts?',
-        'Where can I update system settings?',
-        'How do I view system-wide reports?',
+        'What should be tagged to Claims?',
+        'How do I review routing oversight?',
+        'What system issues should go to IT Support?',
       ]
     default:
       return ['I am Trainee', 'I am Trainer', 'I am Admin']
@@ -44,7 +44,7 @@ export function getChatQuickPrompts(role: ChatRole | null): string[] {
 
 export function getChatPlaceholder(role: ChatRole | null): string {
   if (!role) {
-    return 'Enter your role or ask a system question'
+    return 'Enter your role or ask a routing question'
   }
-  return 'Ask St. Peter Buddy a question'
+  return 'Ask St. Peter Buddy about plans, routing, or platform support'
 }

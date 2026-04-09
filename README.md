@@ -73,6 +73,45 @@ npm run dev
 
 The app will be available at `http://localhost:3000`
 
+## Sim Floor Prompt and Spec
+
+The codebase now includes a reusable Sim Floor implementation prompt and supporting schema notes for the full stack mock-call platform described in this project.
+
+- Prompt module: `frontend/app/lib/assessment/sim-floor-implementation-prompt.ts`
+- Prompt API: `GET /api/sim-floor/implementation-prompt`
+- Supabase schema: `backend/sim_floor_schema.sql`
+- Trainee Sim Floor UI: `frontend/app/trainee/sim-floor/page.tsx`
+- Trainer Sim Floor UI: `frontend/app/trainer/sim-floor/page.tsx`
+- Google ASR hook: `frontend/hooks/useSpeechToText.ts`
+
+The Sim Floor spec covers:
+- Google ASR for CSR speech capture
+- Supabase-backed recordings, transcripts, logs, reports, and certificates
+- Trainer scenario creation, editing, and upload
+- Ping-pong CSR and Member turn logic
+- Post-call KPI insights
+- Competent vs retake workflow
+- Certificate visibility in trainee reporting
+
+## Microlearning Prompt and Seed Pack
+
+The codebase now also includes a reusable Microlearning implementation prompt and a Supabase-ready BPO seed pack for trainer and trainee microlearning workflows.
+
+- Prompt module: `frontend/app/lib/assessment/microlearning-implementation-prompt.ts`
+- Prompt API: `GET /api/microlearning/implementation-prompt`
+- Prompt document: `MICROLEARNING_FULLSTACK_IMPLEMENTATION_PROMPT.md`
+- Supabase SQL seed: `supabase/microlearning_seed.sql`
+- Trainer microlearning UI: `frontend/app/trainer/microlearning/page.tsx`
+- Trainee microlearning UI: `frontend/app/trainee/microlearning/page.tsx`
+
+The Microlearning spec covers:
+- trainer topic category CRUD
+- trainer module authoring and Supabase asset upload
+- trainer assignment of selected modules to a batch or a trainee
+- trainee completion, passing score, certificate unlock, and accomplishment reporting
+- trainer progress reporting by batch and by trainee
+- a default 10-module BPO seed pack with answers for language, grammar, tone, empathy, pronunciation, escalation, billing, and product knowledge
+
 ## How It Works
 
 ### Audio Capture Flow:
@@ -277,6 +316,20 @@ python -m backend.seed_supabase
 ```
 
 Sample accounts are created only when you run the seed script against the target database.
+
+That seed command now also creates the trainer-owned microlearning topic categories and the default 10-module BPO microlearning pack in the active database. If `DATABASE_URL` points to Supabase and `USE_LOCAL_SQLITE=0`, those microlearning records are written to and read from Supabase as well.
+
+If you want to upload only the BPO microlearning pack without running the full sample dataset, use:
+
+```bash
+python -m backend.seed_microlearning
+```
+
+If you want to seed the BPO microlearning library directly from the Supabase SQL editor for a specific trainer account, run the SQL helper in `supabase/microlearning_seed.sql` and then execute:
+
+```sql
+select public.seed_bpo_microlearning_pack('trainer@st.peterville.edu.ph');
+```
 
 That seed command now also creates trainer workspace libraries in the active database, including
 database-backed empathy statements, probing questions, forbidden words, and required keywords.

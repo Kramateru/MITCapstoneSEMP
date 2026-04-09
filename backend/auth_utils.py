@@ -53,22 +53,42 @@ class TokenResponse(BaseModel):
 
 # ===================== Password Management =====================
 
+def _bcrypt_secret(password: str) -> bytes:
+    """Normalize bcrypt input to its 72-byte maximum."""
+    return (password or "").encode("utf-8")[:72]
+
+
+def _bcrypt_secret_text(password: str) -> str:
+    """Return a text form that matches the truncated bcrypt bytes."""
+    return _bcrypt_secret(password).decode("utf-8", "ignore")
+
+
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
-    # Bcrypt has a 72-byte limit; truncate to handle edge cases
-    return pwd_context.hash(password[:72])
+    normalized_password = _bcrypt_secret_text(password)
+    try:
+        return pwd_context.hash(normalized_password)
+    except ValueError as exc:
+        logger.warning(f"Falling back to direct bcrypt hashing: {str(exc)}")
+        return bcrypt.hashpw(_bcrypt_secret(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash"""
     try:
-        # Bcrypt has a 72-byte limit; truncate plain password to match hash behavior
-        return pwd_context.verify(plain_password[:72], hashed_password)
+        return pwd_context.verify(_bcrypt_secret_text(plain_password), hashed_password)
     except (ValueError, TypeError) as e:
-        # Handle any bcrypt errors (corrupted hash, encoding issues, etc.)
-        # If verification fails, treat as invalid credentials
         logger.warning(f"Password verification error: {str(e)}")
-        return False
+        try:
+            hashed_bytes = (
+                hashed_password.encode("utf-8")
+                if isinstance(hashed_password, str)
+                else hashed_password
+            )
+            return bcrypt.checkpw(_bcrypt_secret(plain_password), hashed_bytes)
+        except (ValueError, TypeError, AttributeError) as fallback_error:
+            logger.warning(f"Direct bcrypt verification error: {str(fallback_error)}")
+            return False
 
 
 # ===================== JWT Token Management =====================
