@@ -19,7 +19,7 @@ import {
     TrendingUp,
 } from 'lucide-react';
 import Link from 'next/link';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -74,6 +74,16 @@ interface SimFloorDashboardReport {
   }>;
 }
 
+interface SimFloorAssignedScenario {
+  id: string;
+  title: string;
+  description?: string | null;
+  assigned_at?: string | null;
+  attempt_count: number;
+  retake_required: boolean;
+  competent: boolean;
+}
+
 function verdictLabel(status?: string) {
   const normalized = (status || '').toLowerCase();
   if (normalized === 'competent') return 'Competent';
@@ -87,6 +97,7 @@ export default function TraineeDashboard() {
   const [sessions, setSessions] = useState<PracticeSession[]>([]);
   const [coachingLogs, setCoachingLogs] = useState<CoachingLogSummary[]>([]);
   const [simFloorReport, setSimFloorReport] = useState<SimFloorDashboardReport | null>(null);
+  const [assignedSimFloorScenarios, setAssignedSimFloorScenarios] = useState<SimFloorAssignedScenario[]>([]);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -131,31 +142,41 @@ export default function TraineeDashboard() {
   }
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    fetchTraineeData();
+    void fetchTraineeData();
   }, []);
 
   useEffect(() => {
     if (!user?.user_id) return;
 
-    const loadSimFloorReport = async () => {
+    const loadSimFloorWorkspace = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch(`/api/sim-floor/reports/trainee/${user.user_id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          return;
+        const [reportResponse, availableResponse] = await Promise.all([
+          fetch(`/api/sim-floor/reports/trainee/${user.user_id}`, {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+          }),
+          fetch('/api/sim-floor/available', {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-store',
+          }),
+        ]);
+
+        if (reportResponse.ok) {
+          const payload = (await reportResponse.json()) as SimFloorDashboardReport;
+          setSimFloorReport(payload);
         }
-        const payload = (await response.json()) as SimFloorDashboardReport;
-        setSimFloorReport(payload);
+
+        if (availableResponse.ok) {
+          const payload = (await availableResponse.json()) as { scenarios?: SimFloorAssignedScenario[] };
+          setAssignedSimFloorScenarios(payload.scenarios || []);
+        }
       } catch (error) {
         console.error('Error loading Sim Floor report:', error);
       }
     };
 
-    void loadSimFloorReport();
+    void loadSimFloorWorkspace();
   }, [user?.user_id]);
 
   useEffect(() => {
@@ -169,6 +190,35 @@ export default function TraineeDashboard() {
     acknowledged: coachingLogs.filter((log) => log.status === 'acknowledged').length,
     retake: coachingLogs.filter((log) => log.competency_status === 'not_competent').length,
   };
+
+  const prioritizedSimFloorScenario = useMemo(() => {
+    return [...assignedSimFloorScenarios].sort((left, right) => {
+      const leftPriority = left.retake_required ? 0 : left.attempt_count === 0 ? 1 : left.competent ? 3 : 2;
+      const rightPriority = right.retake_required ? 0 : right.attempt_count === 0 ? 1 : right.competent ? 3 : 2;
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+
+      const leftAssignedAt = left.assigned_at ? new Date(left.assigned_at).getTime() : 0;
+      const rightAssignedAt = right.assigned_at ? new Date(right.assigned_at).getTime() : 0;
+      if (leftAssignedAt !== rightAssignedAt) {
+        return rightAssignedAt - leftAssignedAt;
+      }
+
+      return left.title.localeCompare(right.title);
+    })[0] || null;
+  }, [assignedSimFloorScenarios]);
+
+  const simFloorHref = prioritizedSimFloorScenario
+    ? `/trainee/sim-floor?scenarioId=${encodeURIComponent(prioritizedSimFloorScenario.id)}`
+    : '/trainee/sim-floor';
+  const simFloorDescription = prioritizedSimFloorScenario
+    ? prioritizedSimFloorScenario.retake_required
+      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest Sim Floor verdict.`
+      : `Open "${prioritizedSimFloorScenario.title}" and launch your assigned mock call right away.`
+    : simFloorReport?.summary.retakes
+      ? `${simFloorReport.summary.retakes} retake${simFloorReport.summary.retakes === 1 ? '' : 's'} still need completion.`
+      : 'Resume mock calls, record your CSR turns, and view trainer coaching results.';
 
   const strengthChecks = {
     length: newPassword.length >= 8,
@@ -355,7 +405,7 @@ export default function TraineeDashboard() {
         {/* Stats Cards */}
         {stats && (
           <div className="mb-8 rounded-2xl border border-blue-200 bg-[linear-gradient(135deg,rgba(219,234,254,0.85),rgba(240,249,255,0.98))] p-6">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-4">
               <div>
                 <div className="text-sm font-semibold uppercase tracking-[0.16em] text-blue-700">
                   Training Snapshot
@@ -364,20 +414,6 @@ export default function TraineeDashboard() {
                 <div className="mt-2 text-sm text-slate-700">
                   Recorded activity sessions saved in the database
                 </div>
-              </div>
-              <div className="flex flex-wrap gap-3">
-                <Link
-                  href="/trainee/microlearning"
-                  className="inline-flex items-center justify-center rounded-lg bg-blue-700 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-800"
-                >
-                  Open Microlearning
-                </Link>
-                <Link
-                  href="/trainee/coaching"
-                  className="inline-flex items-center justify-center rounded-lg border border-blue-200 bg-white px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
-                >
-                  View Coaching
-                </Link>
               </div>
             </div>
             <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -450,12 +486,8 @@ export default function TraineeDashboard() {
               <div className="grid gap-4 md:grid-cols-2">
                 <QuickLinkCard
                   title="Sim Floor"
-                  description={
-                    simFloorReport?.summary.retakes
-                      ? `${simFloorReport.summary.retakes} retake${simFloorReport.summary.retakes === 1 ? '' : 's'} still need completion.`
-                      : 'Resume mock calls, record your CSR turns, and view trainer coaching results.'
-                  }
-                  href="/trainee/sim-floor"
+                  description={simFloorDescription}
+                  href={simFloorHref}
                   icon={<Mic size={20} />}
                   accent="violet"
                 />

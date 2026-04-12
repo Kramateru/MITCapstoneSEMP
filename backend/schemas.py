@@ -1080,6 +1080,10 @@ class SimSessionTurnResponse(BaseModel):
     rate_of_speech: float = 0.0
     dead_air_seconds: float = 0.0
     ai_feedback: Optional[str] = None
+    requires_repeat: bool = False
+    repeat_prompt: Optional[str] = None
+    repeat_reason: Optional[str] = None
+    script_similarity: float = 0.0
     next_step: Optional[int] = None
     is_complete: bool = False
     transcript_log: List[Dict[str, Any]] = Field(default_factory=list)

@@ -58,6 +58,7 @@ Trainee workflow requirements:
 - This ping-pong flow continues until the final scenario step.
 - The trainee should clearly see when CSR is speaking versus when Member is speaking.
 - The UI should include call timer, scenario title, mic controls, mute, hold, hang-up, waveform or listening indicator, member CRM card, and script assistant.
+- If the trainee speaks too differently from the expected scripted CSR line, the system must save that attempt, keep the same CSR step active, and respond with: Repeat, I can't understand what you're saying.
 
 Required ping-pong turn logic:
 1. Trainee clicks the mic icon for a CSR turn.
@@ -65,6 +66,7 @@ Required ping-pong turn logic:
 3. Google Cloud Speech-to-Text transcribes the CSR response.
 4. The CSR turn recording is uploaded and linked to the active attempt.
 5. Transcript, timing, keywords, and turn scoring are saved.
+5a. Even failed or retry CSR turns must still be stored so the trainer can replay and coach them later.
 6. CSR input pauses automatically.
 7. The system switches to Member-speaking mode.
 8. The Member script is shown on screen.
@@ -76,6 +78,7 @@ Required ping-pong turn logic:
 Post-call behavior:
 - As soon as the trainee finishes the mock call, automatically display insight about the trainee's performance aligned with the KPI configuration defined by the trainer.
 - Show a post-call scorecard with overall score, KPI breakdown, transcript insight, ASR quality indicators, and actionable feedback.
+- Hanging up must save the full mock-call recording first, then finalize the session and display the post-call insight.
 - Persist the completed session so trainers can coach and evaluate later.
 - The final trainee result must feed trainee performance result views, trainer analytics, and trainer reports.
 

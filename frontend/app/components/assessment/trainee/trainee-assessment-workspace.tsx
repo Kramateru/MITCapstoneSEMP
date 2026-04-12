@@ -12,6 +12,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import {
   Bar,
   BarChart,
@@ -393,12 +394,46 @@ export function TraineeAssessmentWorkspace({
     }
   }, [progressPage, progressPageCount])
 
-  if (loading || !dashboard) {
+  if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
         Loading assessment workspace...
       </div>
+    )
+  }
+
+  if (!dashboard) {
+    return (
+      <Card className="border-amber-200 bg-amber-50/70">
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-slate-950">Assessment workspace is temporarily unavailable</CardTitle>
+          <CardDescription className="text-sm text-slate-700">
+            Your assessment dashboard could not load right now. You can still continue with the working trainee
+            assessment tools below while the shared data service is unavailable.
+          </CardDescription>
+          {error ? (
+            <div className="rounded-2xl border border-amber-200 bg-white/90 px-4 py-3 text-sm text-amber-900">
+              {error}
+            </div>
+          ) : null}
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button type="button" onClick={() => void refreshDashboard('refresh')} disabled={refreshing}>
+            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            Retry
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainee/mcq">Open MCQ Assessments</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainee/reports">Open Reports</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainee/coaching">Open Coaching</Link>
+          </Button>
+        </CardContent>
+      </Card>
     )
   }
 

@@ -19,6 +19,10 @@ export interface SimFloorTurnResult {
   rate_of_speech: number;
   dead_air_seconds: number;
   ai_feedback?: string | null;
+  requires_repeat?: boolean;
+  repeat_prompt?: string | null;
+  repeat_reason?: string | null;
+  script_similarity?: number;
   next_step?: number | null;
   is_complete: boolean;
   transcript_log: Array<Record<string, unknown>>;

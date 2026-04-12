@@ -1,8 +1,8 @@
 # Scope and Limitations of the Speech-Enabled BPO Platform
 
-**Last Updated:** April 4, 2026  
+**Last Updated:** April 12, 2026  
 **Platform Version:** 2.0.0  
-**Status:** Production-Ready with Advanced Features  
+**Status:** Production-ready for local SQLite smoke testing, with Supabase-backed integrations available when external services are configured  
 
 ---
 
@@ -26,7 +26,7 @@
 14. **Support & Help Module** (`support_routes.py`) - Help content, system health, support tickets
 15. **Notification Module** (`notification_routes.py`) - Role-based in-app notifications, dismissal tracking, notification delivery
 16. **Microlearning Module** (`microlearning_routes.py`) - Microlearning CRUD, assignments, exercise submissions
-17. **Simulation Floor Modules** (`sim_floor_routes.py`, `sim_floor_recordings.py`) - Live simulation sessions, audio recording, participant management
+17. **Simulation Floor Modules** (`sim_floor_routes.py`, `sim_floor_recordings.py`) - Trainer-authored mock calls, per-turn capture, session recording, coaching, and reporting
 18. **Branching Engine Service** (`branching_engine.py`) - Scenario flow logic evaluation, conditional branching
 
 ### **Sim Floor Build Prompt and Specification Assets**
@@ -40,8 +40,11 @@
 
 **Sim Floor Scope Notes**
 - Trainer can create, edit, assign, and bulk upload Sim Floor scenarios using the sample workbook structure `Actor`, `Script`, `Score`, and optional `Branching Logic`.
-- Trainee follows a ping-pong mock-call flow: accept call, speak CSR turn, wait while member audio or script plays, then continue until the scenario ends.
-- All CSR turn audio, transcript logs, KPI results, retake counts, and trainer verdicts are persisted for playback and reporting.
+- Trainee follows a mic-driven ping-pong mock-call flow: click the mic to speak the CSR line, pause, wait for the member turn to play, then click the mic again for the next CSR step.
+- Member turns can be delivered by uploaded audio assets or by script-driven TTS playback in the Sim Floor UI.
+- Every CSR mic stop saves the trainee turn, and hang-up finalizes the session with post-call KPI feedback.
+- If the trainee response does not match the expected spiel closely enough, the same step stays active and Sim Floor responds with `Repeat, I can't understand what you're saying.`
+- All CSR turn audio, transcript logs, repeat prompts, KPI results, retake counts, and trainer verdicts are persisted for playback and reporting.
 - Competent verdicts issue certificates that are visible from trainee reporting and certificate navigation.
 - Supabase is the intended system of record for storage, reporting, and secure access policies.
 
@@ -330,14 +333,17 @@ Orchestrates short learning modules with flexible assessment methods. Supports m
 - `GET /api/microlearning/progress` - Retrieve trainee microlearning progress
 
 ### **15. Simulation Floor Module** (`/api/sim-floor`, ~20 endpoints)
-Manages live simulation sessions with real-time collaboration. Handles session creation, participant management, audio recording during simulation, and recording data storage in Supabase.
+Manages trainer-authored mock-call scenarios, trainee call execution, per-turn submission, recording uploads, KPI scoring, retakes, coaching notes, verdicts, analytics, and reporting. The trainee flow supports alternating CSR/member turns, uploaded member audio, TTS-driven member playback, and end-of-call feedback.
 
 **Key Endpoints:**
-- `POST /api/sim-floor/session` - Create simulation session
-- `GET /api/sim-floor/session/{id}` - Get session details and participant list
-- `POST /api/sim-floor/session/{id}/join` - Join simulation session
-- `POST /api/sim-floor/session/{id}/start-recording` - Start audio recording
-- `POST /api/sim-floor/session/{id}/stop-recording` - Stop recording and upload to Supabase
+- `GET /api/sim-floor/available` - List scenarios available to the trainee
+- `POST /api/sim-floor/start` - Start a Sim Floor session for the selected scenario
+- `GET /api/sim-floor/session/{id}` - Get the latest session state, logs, and scoring data
+- `POST /api/sim-floor/session/{id}/turn` - Submit a trainee turn and evaluate the active step
+- `POST /api/sim-floor/session/{id}/recording` - Upload a recorded call asset
+- `POST /api/sim-floor/session/{id}/finalize` - Hang up and calculate the post-call result
+- `POST /api/sim-floor/session/{id}/retake` - Start a retake attempt when trainer workflow allows it
+- `PUT /api/sim-floor/coaching/interactions/{session_id}/verdict` - Mark the attempt competent or not competent
 
 ### **16. Support & Help Module** (`/api/support`, ~10 endpoints)
 Provides help content, system status information, and support ticket management.
@@ -763,7 +769,7 @@ All file uploads integrated with Supabase cloud storage:
 ✅ **Color-Coded Transcript** - Word-by-word feedback (Green/Yellow/Red), filler word analysis, keyword tracking  
 ✅ **Extended Analytics** - Pronunciation error summaries, per-trainee error details, improvement recommendations  
 ✅ **Trainer Reports** - Comprehensive analytics page with error analysis, progress graphs, monthly performance reports  
-✅ **Simulation Floor** - Live simulation sessions with participant management and audio recording  
+✅ **Simulation Floor** - Trainer-authored mock calls with mic-driven trainee turns, member audio or TTS playback, per-turn save, session recording, feedback, coaching, retakes, and report linkage  
 ✅ **UI Preferences** - Theme customization, layout options, accessibility settings (high contrast, daltonism mode, font scaling)  
 ✅ **Excel Bulk Operations** - Scenario upload templates, user bulk creation, trainee bulk assignment  
 ✅ **Language Dialect Support** - Configurable language variants (en-US, en-PH, en-IN, etc.) for ASR optimization  
@@ -803,7 +809,7 @@ All file uploads integrated with Supabase cloud storage:
 ❌ **Advanced Branching AI** - Scenario responses currently evaluated by keyword matching only, not semantic AI  
 ❌ **Automated Certificate Distribution** - Certificates generated manually; no email distribution workflow  
 ❌ **Mobile Offline Mode** - No offline practice capability; internet required  
-❌ **Voice Cloning** - No text-to-speech or voice cloning features  
+❌ **Custom Voice Cloning** - Sim Floor supports uploaded member audio and script-driven TTS playback, but does not implement custom cloned voices  
 ❌ **Custom Pronunciation Dictionary** - ASR uses default pronunciation; custom dictionaries not supported  
 ❌ **Biometric Security** - Fingerprint/face authentication not implemented  
 
@@ -861,14 +867,14 @@ All file uploads integrated with Supabase cloud storage:
 | **Settings** | ✅ Complete | 95% | User and system settings functional; SSO not active |
 | **Notification** | ✅ Complete | 100% | In-app notifications with persistent dismissal working |
 | **Microlearning** | ✅ Complete | 95% | Modules, assignments, exercise submissions working |
-| **Simulation Floor** | ✅ Complete | 90% | Session creation, recording; live coaching features pending |
+| **Simulation Floor** | ✅ Complete | 92% | Per-turn save, playback, coaching verdicts, retakes, and reports are working; live trainer-in-call coaching is still pending |
 | **Support & Help** | ⚠️ Partial | 60% | Help articles structure exists; content not populated |
 
 ---
 
 ## Known Issues & Workarounds
 
-### **Current Known Issues (As of April 4, 2026)**
+### **Current Known Issues (As of April 12, 2026)**
 
 **Issue 1: Browser Audio Codec Support**
 - **Problem:** Some browsers (Safari) have limited WebAudio codec support for MP3
@@ -895,6 +901,11 @@ All file uploads integrated with Supabase cloud storage:
 - **Impact:** May timeout on servers with <2GB RAM
 - **Workaround:** Upgrade server RAM or use smaller batch size for exports
 
+**Issue 6: Browser TTS Capture In Mixed Call Recording**
+- **Problem:** Browser-native speech synthesis does not always get embedded into the mixed session WAV in every browser/runtime path
+- **Impact:** The member line can play live in Sim Floor, but fallback TTS playback may not always be present in the saved mixed recording
+- **Workaround:** Upload member audio assets for high-fidelity playback capture; transcript logs, turn data, and coaching notes are still saved
+
 ### **Recommended Workarounds**
 1. For batch creation: Keep under 1,000 trainees per batch for optimal performance
 2. For analytics: Use filtered reports (time-period specific) rather than full history
@@ -904,38 +915,40 @@ All file uploads integrated with Supabase cloud storage:
 
 ---
 
-## Frontend Route Coverage (55 Routes Verified)
+## Frontend Route Smoke Test (April 12, 2026)
 
-### **Role-Based Navigation Structure**
+### **Validated Login And Navigation Paths**
 
-**Admin Routes (7 menu items):**
-- Dashboard
-- Users (with bulk upload)
-- Certification Management
-- Coaching Configuration
-- Analytics & Insights
-- Reports & Exports
-- System Settings
+The following seeded credentials were verified in local SQLite mode:
 
-**Trainer Routes (10 menu items):**
-- Dashboard
-- Batches (create, manage, activate/deactivate)
-- Trainees (assign, manage, bulk upload)
-- Courses (create, manage, assign)
-- Microlearning (create, assign)
-- Assessments (review, grade, feedback)
-- Sim Floor (session management)
-- Coaching (templates, logs, verdicts)
-- Reports & Analytics
-- Settings & Preferences
+- Admin: `admin@stpetervelle.edu.ph` / `SPVAdmin2026`
+- Trainer: `trainer@st.peterville.edu.ph` / `SPVTrainer2026`
+- Trainee: `mcureta@fatima.edu.ph` / `SPVTrainee2026`
 
-**Trainee Routes (6 menu items):**
-- Dashboard (progress overview)
-- Scenarios (assigned, published, self-enroll)
-- Sim Floor (live sessions)
-- Microlearning (assigned modules, exercises)
-- Progress & Analytics (personal metrics)
-- Settings & Preferences
+Verified login routing:
+
+- Admin -> `/admin/dashboard`
+- Trainer -> `/trainer/dashboard`
+- Trainee -> `/trainee/dashboard`
+
+Verified admin pages:
+
+- `/admin/dashboard`
+- `/admin/users`
+- `/admin/settings`
+
+Verified trainer pages:
+
+- `/trainer/dashboard`
+- `/trainer/sim-floor`
+- `/trainer/reports`
+
+Verified trainee pages:
+
+- `/trainee/dashboard`
+- `/trainee/sim-floor`
+- `/trainee/reports`
+- `/trainee/certificates`
 
 ---
 

@@ -57,8 +57,10 @@ export function useWavCallRecorder() {
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const mixGainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
+  const playbackSourcesRef = useRef<Map<HTMLMediaElement, MediaElementAudioSourceNode>>(new Map());
   const sampleRateRef = useRef(44100);
   const chunksRef = useRef<Float32Array[]>([]);
   const recordedSamplesRef = useRef(0);
@@ -77,6 +79,14 @@ export function useWavCallRecorder() {
     if (sourceRef.current) {
       sourceRef.current.disconnect();
       sourceRef.current = null;
+    }
+    playbackSourcesRef.current.forEach((playbackSource) => {
+      playbackSource.disconnect();
+    });
+    playbackSourcesRef.current.clear();
+    if (mixGainRef.current) {
+      mixGainRef.current.disconnect();
+      mixGainRef.current = null;
     }
     if (gainRef.current) {
       gainRef.current.disconnect();
@@ -122,9 +132,10 @@ export function useWavCallRecorder() {
 
       const audioContext = new AudioContextClass();
       const source = audioContext.createMediaStreamSource(stream);
+      const mixGain = audioContext.createGain();
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      const gain = audioContext.createGain();
-      gain.gain.value = 0;
+      const monitorGain = audioContext.createGain();
+      monitorGain.gain.value = 0;
 
       processor.onaudioprocess = (event) => {
         if (pausedRef.current) {
@@ -135,15 +146,17 @@ export function useWavCallRecorder() {
         recordedSamplesRef.current += input.length;
       };
 
-      source.connect(processor);
-      processor.connect(gain);
-      gain.connect(audioContext.destination);
+      source.connect(mixGain);
+      mixGain.connect(processor);
+      processor.connect(monitorGain);
+      monitorGain.connect(audioContext.destination);
 
       streamRef.current = stream;
       audioContextRef.current = audioContext;
       sourceRef.current = source;
+      mixGainRef.current = mixGain;
       processorRef.current = processor;
-      gainRef.current = gain;
+      gainRef.current = monitorGain;
       sampleRateRef.current = audioContext.sampleRate || 44100;
       setIsCapturing(true);
     } catch (captureError) {
@@ -153,6 +166,34 @@ export function useWavCallRecorder() {
       setIsCapturing(false);
     }
   }, [cleanup, isCapturing]);
+
+  const registerPlaybackElement = useCallback((element: HTMLMediaElement | null) => {
+    if (!element) {
+      return false;
+    }
+
+    const audioContext = audioContextRef.current;
+    const mixGain = mixGainRef.current;
+    if (!audioContext || !mixGain) {
+      return false;
+    }
+
+    const existingSource = playbackSourcesRef.current.get(element);
+    if (existingSource) {
+      return true;
+    }
+
+    try {
+      const playbackSource = audioContext.createMediaElementSource(element);
+      playbackSource.connect(mixGain);
+      playbackSource.connect(audioContext.destination);
+      playbackSourcesRef.current.set(element, playbackSource);
+      return true;
+    } catch (error) {
+      console.error('Unable to register playback audio for mixed recording.', error);
+      return false;
+    }
+  }, []);
 
   const setCapturePaused = useCallback((paused: boolean) => {
     pausedRef.current = paused;
@@ -201,6 +242,7 @@ export function useWavCallRecorder() {
     startCapture,
     stopCapture,
     discardCapture,
+    registerPlaybackElement,
     setCapturePaused,
     isCapturing,
     isPaused,

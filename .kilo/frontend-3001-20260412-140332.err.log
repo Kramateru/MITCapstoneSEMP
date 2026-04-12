@@ -1,0 +1,60 @@
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+⨯ TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+⨯ TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+⨯ TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+⨯ TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}
+TypeError: Invalid URL
+    at ignore-listed frames {
+  code: 'ERR_INVALID_URL',
+  input: 'http://127.0.0.1:8001 /api/__ESC_COLON_path*'
+}

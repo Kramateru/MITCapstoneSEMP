@@ -2,6 +2,7 @@
 
 import { Activity, BookOpenCheck, ClipboardList, Loader2, RefreshCw, Trophy } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card'
 import { Button } from '@/app/components/ui/button'
@@ -79,12 +80,46 @@ export function TrainerAssessmentStudio() {
     }
   }, [refreshWorkspace, workspace])
 
-  if (loading || !workspace) {
+  if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
         Loading assessment studio...
       </div>
+    )
+  }
+
+  if (!workspace) {
+    return (
+      <Card className="border-amber-200 bg-amber-50/70">
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-slate-950">Assessment studio is temporarily unavailable</CardTitle>
+          <p className="text-sm text-slate-700">
+            The advanced assessment workspace could not load right now. Trainer assessment work can still continue
+            from the working tools below while the shared data service is unavailable.
+          </p>
+          {error ? (
+            <div className="rounded-2xl border border-amber-200 bg-white/90 px-4 py-3 text-sm text-amber-900">
+              {error}
+            </div>
+          ) : null}
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button type="button" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
+            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            Retry
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainer/mcq">Open MCQ Workspace</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainer/assign">Open Assignment Queue</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/trainer/grading">Open Grading Review</Link>
+          </Button>
+        </CardContent>
+      </Card>
     )
   }
 

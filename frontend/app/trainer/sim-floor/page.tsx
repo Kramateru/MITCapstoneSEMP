@@ -1861,16 +1861,23 @@ export default function TrainerSimFloorPage() {
                     Recorded CSR Turns
                   </div>
                   {selectedInteraction.turn_logs.map((turn, index) => (
-                    <div key={`${turn.step_number || index}`} className="rounded-lg bg-slate-50 p-3">
+                    <div key={`${turn.turn_attempt_id || turn.step_number || index}-${index}`} className="rounded-lg bg-slate-50 p-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="font-medium text-slate-900">
-                          Turn {String(turn.step_number || index + 1)} {turn.speaker_label ? `- ${String(turn.speaker_label)}` : ''}
+                          Turn {String(turn.step_number || index + 1)}
+                          {turn.turn_attempt_number ? ` • Attempt ${String(turn.turn_attempt_number)}` : ''}
+                          {turn.speaker_label ? ` - ${String(turn.speaker_label)}` : ''}
                         </div>
                         <div className="text-xs text-slate-500">
                           Accuracy {Number(turn.speech_to_text_accuracy || 0).toFixed(0)}% | Grammar {Number(turn.grammar_score || 0).toFixed(0)}%
                         </div>
                       </div>
                       <p className="mt-2 text-sm text-slate-600">{String(turn.transcript || 'No transcript captured.')}</p>
+                      {turn.requires_repeat ? (
+                        <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                          Repeat requested: {String(turn.repeat_reason || "The saved response did not match the expected spiel closely enough.")}
+                        </div>
+                      ) : null}
                       {typeof turn.audio_url === 'string' && turn.audio_url ? (
                         <audio controls className="mt-3 w-full" src={turn.audio_url}>
                           Your browser does not support the audio player.

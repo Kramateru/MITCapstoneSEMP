@@ -353,7 +353,7 @@ def _build_trainee_notifications(
             CertificateRecord.trainee_id == current_user.id,
             CertificateRecord.source_type == "sim_floor_session",
         )
-        .order_by(CertificateRecord.issued_at.desc(), CertificateRecord.created_at.desc())
+        .order_by(CertificateRecord.issued_at.desc())
         .first()
     )
     if latest_sim_floor_certificate:
@@ -363,7 +363,7 @@ def _build_trainee_notifications(
                     "trainee-sim-floor-certificate",
                     current_user.id,
                     latest_sim_floor_certificate.id,
-                    latest_sim_floor_certificate.issued_at or latest_sim_floor_certificate.created_at,
+                    latest_sim_floor_certificate.issued_at,
                 ),
                 title="Sim Floor certificate unlocked",
                 message=(
@@ -372,7 +372,7 @@ def _build_trainee_notifications(
                 href="/trainee/reports?tab=certificates",
                 level="success",
                 action_label="Open certificates",
-                created_at=latest_sim_floor_certificate.issued_at or latest_sim_floor_certificate.created_at,
+                created_at=latest_sim_floor_certificate.issued_at,
             )
         )
 

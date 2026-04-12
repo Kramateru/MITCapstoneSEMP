@@ -1,103 +1,133 @@
 # Quick Start
 
-This guide is the shortest path to run the active platform locally.
+This is the fastest verified way to run the platform locally from PowerShell.
 
 ## Prerequisites
 
 - Python 3.11 or newer
 - Node.js 20 or newer
 - Backend virtual environment already created in `backend/venv`
-- Frontend dependencies installed in `frontend/node_modules`
+- Frontend dependencies already installed in `frontend/node_modules`
 
-## 1. Configure backend environment
+## Recommended Local Mode
 
-Create `backend/.env` from `backend/.env.example`.
+For local testing, use the bundled SQLite mode first. It avoids external Supabase/Postgres connectivity issues and was the mode used for the latest smoke test.
 
-Minimum recommended values:
+Backend URL:
 
-```env
-DATABASE_URL=postgresql://postgres:password@db.project-id.supabase.co:5432/postgres
-SUPABASE_URL=https://project-id.supabase.co
-SUPABASE_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_KEY=your_supabase_service_key
-AZURE_SPEECH_KEY=your_azure_speech_key
-AZURE_SPEECH_REGION=eastus
-JWT_SECRET=your_jwt_secret_key
-```
+- `http://127.0.0.1:8000`
 
-Optional for the active upload-based ASR flow:
+Frontend URL:
 
-```env
-OPENAI_API_KEY=your_openai_api_key
-OPENAI_TRANSCRIPTION_MODEL=whisper-1
-```
+- `http://localhost:3000`
 
-## 2. Start the backend
+## Start The Backend
 
-`.\run-backend.cmd` now starts in local SQLite mode by default so the platform can run even when Supabase is unavailable:
-- Default: bundled local SQLite database
-- Optional: set `USE_LOCAL_SQLITE=0` to force Supabase/Postgres
+Open a PowerShell terminal at the project root and run either the launcher or the direct command.
 
-### Default mode
-
-```powershell
-.\run-backend.cmd
-```
-
-### Force local SQLite mode
+### Option A: Root launcher
 
 ```powershell
 $env:USE_LOCAL_SQLITE='1'
 .\run-backend.cmd
 ```
 
-### Force Supabase/Postgres mode
+### Option B: Direct backend command
 
 ```powershell
-$env:USE_LOCAL_SQLITE='0'
-.\run-backend.cmd
+cd backend
+$env:USE_LOCAL_SQLITE='1'
+venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-## 3. Build and start the frontend
+## Start The Frontend
 
-Build the frontend once before starting it, and rebuild after frontend code changes:
+Open a second PowerShell terminal at the project root.
+
+Build once before `start`, then run the frontend server:
+
+### Option A: Root launcher
 
 ```powershell
 cd frontend
 npm run build
 cd ..
-```
-
-Then start the frontend server:
-
-```powershell
 .\run-frontend.cmd
 ```
 
-This starts the frontend at `http://localhost:3000` by default.
-
-If port `3000` is already in use, you can override the launcher port:
+### Option B: Direct frontend command
 
 ```powershell
-$env:FRONTEND_PORT='3001'
-.\run-frontend.cmd
+cd frontend
+npm run build
+$env:BACKEND_URL='http://127.0.0.1:8000'
+$env:NODE_OPTIONS='--no-deprecation'
+npm run start -- --hostname localhost --port 3000
 ```
 
-## 4. Verify the app
+### Optional hot-reload mode
 
-Open:
+If you want frontend hot reload during UI work, use:
+
+```powershell
+cd frontend
+$env:BACKEND_URL='http://127.0.0.1:8000'
+$env:NODE_OPTIONS='--no-deprecation'
+npm run dev -- --hostname localhost --port 3000
+```
+
+## Default Local Credentials
+
+These seeded credentials were verified in local SQLite mode.
+
+| Role | Email | Password |
+| --- | --- | --- |
+| Admin | `admin@stpetervelle.edu.ph` | `SPVAdmin2026` |
+| Trainer | `trainer@st.peterville.edu.ph` | `SPVTrainer2026` |
+| Trainee | `mcureta@fatima.edu.ph` | `SPVTrainee2026` |
+
+Notes:
+
+- The trainee account is configured to require a password change after first login.
+- Authentication routes map users to `/admin/dashboard`, `/trainer/dashboard`, and `/trainee/dashboard`.
+
+## Quick Verification
+
+After both servers are running, open:
 
 - `http://localhost:3000/login`
 - `http://127.0.0.1:8000/docs`
 - `http://127.0.0.1:8000/openapi.json`
 
-## 5. Recommended first checks
+Recommended smoke check:
 
-- Log in as admin and open `Users & Access`, `LOB Management`, and `MCQ Manager`.
-- Log in as trainer and open `Trainee Access` and `Assign Content`.
-- Log in as trainee and open `Training Hub`, `MCQ Assessment`, and `Microlearning`.
+1. Sign in as admin and open `Dashboard`, `Users`, and `Settings`.
+2. Sign in as trainer and open `Dashboard`, `Sim Floor`, and `Reports`.
+3. Sign in as trainee and open `Dashboard`, `Sim Floor`, `Reports`, and `Certificates`.
 
-## Common Commands
+## Supabase Mode
+
+Use Supabase/Postgres only when the backend environment is fully configured and external connectivity is available.
+
+Required backend variables include:
+
+- `DATABASE_URL`
+- `SUPABASE_URL`
+- `SUPABASE_KEY`
+- `SUPABASE_SERVICE_KEY`
+- `JWT_SECRET`
+
+To force backend startup against Supabase/Postgres:
+
+```powershell
+cd backend
+$env:USE_LOCAL_SQLITE='0'
+venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+If `USE_LOCAL_SQLITE=0` is set and `DATABASE_URL` is unreachable, backend startup will fail.
+
+## Useful Commands
 
 Install backend dependencies:
 
@@ -114,13 +144,6 @@ cd frontend
 npm install
 ```
 
-Build the frontend:
-
-```powershell
-cd frontend
-npm run build
-```
-
 Compile-check the backend:
 
 ```powershell
@@ -128,8 +151,8 @@ cd backend
 venv\Scripts\python.exe -m compileall .
 ```
 
-## When To Use Other Docs
+## Related Docs
 
-- Use [backend/SUPABASE_SETUP.md](backend/SUPABASE_SETUP.md) if you are pointing the app to a live Supabase project.
-- Use [backend/AZURE_SETUP.md](backend/AZURE_SETUP.md) if you need Azure speech configuration.
-- Use [TESTING_GUIDE.md](TESTING_GUIDE.md) for full smoke tests and troubleshooting.
+- [backend/SUPABASE_SETUP.md](backend/SUPABASE_SETUP.md) for live Supabase setup
+- [backend/AZURE_SETUP.md](backend/AZURE_SETUP.md) for Azure speech configuration
+- [TESTING_GUIDE.md](TESTING_GUIDE.md) for broader smoke testing and troubleshooting

@@ -14,6 +14,7 @@ import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-clien
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import { useSpeechToText } from '@/hooks/useSpeechToText';
 import { useWavCallRecorder } from '@/hooks/useWavCallRecorder';
+import { useSearchParams } from 'next/navigation';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -217,6 +218,54 @@ function getAsrProviderLabel(provider?: string | null, explicitLabel?: string | 
   return normalized.replace(/_/g, ' ').replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
+function getRepeatPromptMessage(prompt?: string | null) {
+  return prompt?.trim() || "Repeat, I can't understand what you're saying."
+}
+
+function getScenarioPriorityScore(scenario: ScenarioCard) {
+  if (scenario.retake_required) {
+    return 0;
+  }
+  if (scenario.attempt_count === 0) {
+    return 1;
+  }
+  if (!scenario.competent) {
+    return 2;
+  }
+  return 3;
+}
+
+function getPreferredScenarioId(
+  scenarios: ScenarioCard[],
+  currentScenarioId: string,
+  requestedScenarioId: string,
+) {
+  if (currentScenarioId && scenarios.some((scenario) => scenario.id === currentScenarioId)) {
+    return currentScenarioId;
+  }
+
+  if (requestedScenarioId && scenarios.some((scenario) => scenario.id === requestedScenarioId)) {
+    return requestedScenarioId;
+  }
+
+  const prioritizedScenario = [...scenarios].sort((left, right) => {
+    const priorityDelta = getScenarioPriorityScore(left) - getScenarioPriorityScore(right);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+
+    const leftAssignedAt = left.assigned_at ? new Date(left.assigned_at).getTime() : 0;
+    const rightAssignedAt = right.assigned_at ? new Date(right.assigned_at).getTime() : 0;
+    if (leftAssignedAt !== rightAssignedAt) {
+      return rightAssignedAt - leftAssignedAt;
+    }
+
+    return left.title.localeCompare(right.title);
+  })[0];
+
+  return prioritizedScenario?.id || '';
+}
+
 function statusLabel(callState: CallState, isOnHold: boolean) {
   if (isOnHold) return 'On Hold';
   if (callState === 'ringing') return 'Incoming Call';
@@ -230,6 +279,7 @@ function statusLabel(callState: CallState, isOnHold: boolean) {
 
 export default function TraineeSimFloorPage() {
   const { user } = useAuth();
+  const searchParams = useSearchParams();
   const [scenarios, setScenarios] = useState<ScenarioCard[]>([]);
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
@@ -244,6 +294,9 @@ export default function TraineeSimFloorPage() {
   const [showIncomingAudio, setShowIncomingAudio] = useState(false);
   const [showSilenceAlert, setShowSilenceAlert] = useState(false);
   const [isUploadingCall, setIsUploadingCall] = useState(false);
+  const [activePlaybackScript, setActivePlaybackScript] = useState('');
+  const [activePlaybackSpeaker, setActivePlaybackSpeaker] = useState<'member' | 'system' | null>(null);
+  const requestedScenarioId = searchParams.get('scenarioId')?.trim() || '';
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -272,6 +325,10 @@ export default function TraineeSimFloorPage() {
       'Follow the uploaded script.',
   );
   const agentName = user?.user_name || 'CSR Trainee';
+  const selectedScenario = useMemo(
+    () => scenarios.find((scenario) => scenario.id === selectedScenarioId) || null,
+    [scenarios, selectedScenarioId],
+  );
 
   const {
     startRecording,
@@ -289,6 +346,7 @@ export default function TraineeSimFloorPage() {
     startCapture,
     stopCapture,
     discardCapture,
+    registerPlaybackElement,
     setCapturePaused,
     isCapturing,
     error: callRecorderError,
@@ -321,9 +379,9 @@ export default function TraineeSimFloorPage() {
     const nextScenarios = (payload.scenarios || []) as ScenarioCard[];
     setScenarios(nextScenarios);
     setSelectedScenarioId((current) =>
-      nextScenarios.some((scenario) => scenario.id === current) ? current : nextScenarios[0]?.id || '',
+      getPreferredScenarioId(nextScenarios, current, requestedScenarioId),
     );
-  }, []);
+  }, [requestedScenarioId]);
 
   const refreshCurrentSession = useCallback(async () => {
     if (!sessionData?.session_id) {
@@ -487,6 +545,64 @@ export default function TraineeSimFloorPage() {
     activeRingtone.volume = startingVolume;
   }, [stopRingtone]);
 
+  const playPlaybackPrompt = useCallback(
+    async ({
+      script,
+      audioUrl,
+      speaker,
+    }: {
+      script: string;
+      audioUrl?: string | null;
+      speaker: 'member' | 'system';
+    }) => {
+      setActivePlaybackScript(script);
+      setActivePlaybackSpeaker(speaker);
+
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      if (audioUrl) {
+        await new Promise<void>((resolve) => {
+          const audio = new Audio();
+          audio.crossOrigin = 'anonymous';
+          audio.src = audioUrl;
+          registerPlaybackElement(audio);
+          audioRef.current = audio;
+          audio.onended = () => {
+            if (audioRef.current === audio) {
+              audioRef.current = null;
+            }
+            resolve();
+          };
+          audio.onerror = () => {
+            if (audioRef.current === audio) {
+              audioRef.current = null;
+            }
+            resolve();
+          };
+          void audio.play().catch(() => {
+            if (audioRef.current === audio) {
+              audioRef.current = null;
+            }
+            resolve();
+          });
+        });
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        const utterance = new SpeechSynthesisUtterance(script);
+        utterance.onend = () => resolve();
+        utterance.onerror = () => resolve();
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+      });
+    },
+    [registerPlaybackElement],
+  );
+
   const uploadFinalCallRecording = useCallback(async () => {
     if (!sessionData?.session_id || !isCapturing) {
       return;
@@ -563,12 +679,15 @@ export default function TraineeSimFloorPage() {
       trainer_verdict_status: payload.trainer_verdict_status,
       certificate_id: payload.certificate_id,
     });
+    setActivePlaybackScript('');
+    setActivePlaybackSpeaker(null);
     setCallState('completed');
+    await fetchScenarios().catch(() => undefined);
 
     if (payload.certificate_id) {
       toast.success('Competency certificate is now being tracked in your certificates tab.');
     }
-  }, [sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
+  }, [fetchScenarios, sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
 
   const moveToStep = useCallback(
     async (stepIndex: number) => {
@@ -584,24 +703,11 @@ export default function TraineeSimFloorPage() {
         setShowIncomingAudio(true);
         toast.info('Incoming audio from the Member Actor. Your mic is temporarily locked.');
         setCallState('member-speaking');
-
-        if (step.audio_url) {
-          await new Promise<void>((resolve) => {
-            const audio = new Audio(step.audio_url || '');
-            audioRef.current = audio;
-            audio.onended = () => resolve();
-            audio.onerror = () => resolve();
-            void audio.play().catch(() => resolve());
-          });
-        } else {
-          await new Promise<void>((resolve) => {
-            const utterance = new SpeechSynthesisUtterance(step.script);
-            utterance.onend = () => resolve();
-            utterance.onerror = () => resolve();
-            window.speechSynthesis.cancel();
-            window.speechSynthesis.speak(utterance);
-          });
-        }
+        await playPlaybackPrompt({
+          script: step.script,
+          audioUrl: step.audio_url,
+          speaker: 'member',
+        });
 
         const nextIndex = stepIndex + 1;
         if (!steps[nextIndex]) {
@@ -613,9 +719,13 @@ export default function TraineeSimFloorPage() {
         setCurrentStepIndex(nextIndex);
       }
 
+      if (step.actor === 'csr') {
+        setActivePlaybackSpeaker(null);
+        setActivePlaybackScript('');
+      }
       setCallState('connected');
     },
-    [finalizeSession, steps],
+    [finalizeSession, playPlaybackPrompt, steps],
   );
 
   const startSimulation = useCallback(async () => {
@@ -647,6 +757,8 @@ export default function TraineeSimFloorPage() {
     setIsOnHold(false);
     setShowIncomingAudio(false);
     setShowSilenceAlert(false);
+    setActivePlaybackScript('');
+    setActivePlaybackSpeaker(null);
     silenceStartRef.current = null;
     setCallState('ringing');
     startRingtone((payload as SessionData).ringer_audio_url);
@@ -695,6 +807,27 @@ export default function TraineeSimFloorPage() {
       }
 
       setLiveTranscript(result.transcript || '');
+      toast.success(
+        result.requires_repeat
+          ? `Turn ${result.step_number} saved. Repeat the spiel before the call can continue.`
+          : `Turn ${result.step_number} saved to Sim Floor.`,
+      );
+
+      if (result.requires_repeat) {
+        const repeatPrompt = getRepeatPromptMessage(result.repeat_prompt);
+        setShowSilenceAlert(false);
+        setShowIncomingAudio(true);
+        setCallState('member-speaking');
+        toast.error(result.repeat_reason ? `${repeatPrompt} ${result.repeat_reason}` : repeatPrompt);
+        await playPlaybackPrompt({
+          script: repeatPrompt,
+          speaker: 'system',
+        });
+        silenceStartRef.current = performance.now();
+        setCallState('connected');
+        return;
+      }
+
       if (result.is_complete || result.next_step == null) {
         await finalizeSession();
         return;
@@ -716,6 +849,7 @@ export default function TraineeSimFloorPage() {
     isRecording,
     liveTranscript,
     moveToStep,
+    playPlaybackPrompt,
     startBrowserTranscript,
     startRecording,
     steps,
@@ -748,6 +882,8 @@ export default function TraineeSimFloorPage() {
     setIsOnHold(false);
     setShowIncomingAudio(false);
     setShowSilenceAlert(false);
+    setActivePlaybackScript('');
+    setActivePlaybackSpeaker(null);
     silenceStartRef.current = null;
     setCallState('ringing');
     startRingtone(sessionData.ringer_audio_url);
@@ -767,6 +903,8 @@ export default function TraineeSimFloorPage() {
     setIsOnHold(false);
     setShowIncomingAudio(false);
     setShowSilenceAlert(false);
+    setActivePlaybackScript('');
+    setActivePlaybackSpeaker(null);
     silenceStartRef.current = null;
     await fetchScenarios();
   }, [discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
@@ -792,6 +930,14 @@ export default function TraineeSimFloorPage() {
       void discardCapture();
     };
   }, [discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
+
+  useEffect(() => {
+    if (!requestedScenarioId || !scenarios.some((scenario) => scenario.id === requestedScenarioId)) {
+      return;
+    }
+
+    setSelectedScenarioId((current) => (current === requestedScenarioId ? current : requestedScenarioId));
+  }, [requestedScenarioId, scenarios]);
 
   useEffect(() => {
     let stream: EventSource | null = null;
@@ -848,6 +994,15 @@ export default function TraineeSimFloorPage() {
   }, [showIncomingAudio]);
 
   useEffect(() => {
+    if (!showIncomingAudio && callState !== 'member-speaking') {
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+    }
+  }, [callState, showIncomingAudio]);
+
+  useEffect(() => {
+    setCapturePaused(isOnHold);
+
     if (!sessionData?.hold_audio_url) {
       if (holdAudioRef.current) {
         holdAudioRef.current.pause();
@@ -856,12 +1011,13 @@ export default function TraineeSimFloorPage() {
       return;
     }
 
-    setCapturePaused(isOnHold);
-
     if (isOnHold && callState !== 'idle' && callState !== 'completed') {
       let activeHoldAudio = holdAudioRef.current;
       if (!activeHoldAudio) {
-        const nextHoldAudio = new Audio(sessionData.hold_audio_url);
+        const nextHoldAudio = new Audio();
+        nextHoldAudio.crossOrigin = 'anonymous';
+        nextHoldAudio.src = sessionData.hold_audio_url;
+        registerPlaybackElement(nextHoldAudio);
         nextHoldAudio.loop = true;
         holdAudioRef.current = nextHoldAudio;
         activeHoldAudio = nextHoldAudio;
@@ -874,7 +1030,7 @@ export default function TraineeSimFloorPage() {
       holdAudioRef.current.pause();
       holdAudioRef.current.currentTime = 0;
     }
-  }, [callState, isOnHold, sessionData?.hold_audio_url, setCapturePaused]);
+  }, [callState, isOnHold, registerPlaybackElement, sessionData?.hold_audio_url, setCapturePaused]);
 
   useEffect(() => {
     if (callRecorderError) {
@@ -1009,6 +1165,21 @@ export default function TraineeSimFloorPage() {
                 <div className="rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-sm text-cyan-50">
                   Google-first ASR scoring, Supabase recording storage, scripted turn guidance, and trainer playback are all wired into this flow.
                 </div>
+                {selectedScenario ? (
+                  <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                    <div className="text-xs uppercase tracking-[0.26em] text-slate-400">Loaded Mock Call</div>
+                    <div className="mt-2 text-lg font-semibold text-white">{selectedScenario.title}</div>
+                    <div className="mt-2 text-sm text-slate-300">
+                      {selectedScenario.description || 'Trainer-assigned Sim Floor mock call.'}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
+                      {selectedScenario.assignment_batch_name ? <span>Batch: {selectedScenario.assignment_batch_name}</span> : null}
+                      {selectedScenario.assigned_by_name ? <span>Assigned by {selectedScenario.assigned_by_name}</span> : null}
+                      <span>{selectedScenario.steps_count} turns</span>
+                      {selectedScenario.retake_required ? <span className="text-amber-300">Retake required</span> : null}
+                    </div>
+                  </div>
+                ) : null}
                 <Button
                   className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                   size="lg"
@@ -1150,8 +1321,14 @@ export default function TraineeSimFloorPage() {
                         <div className="flex items-center gap-3">
                           <Headphones className="h-5 w-5 text-amber-600" />
                           <div>
-                            <div className="font-semibold">Incoming Audio</div>
-                            <div>The Member Actor is speaking. Your mic is temporarily locked.</div>
+                            <div className="font-semibold">
+                              {activePlaybackSpeaker === 'system' ? 'Sim Floor Prompt' : 'Incoming Audio'}
+                            </div>
+                            <div>
+                              {activePlaybackSpeaker === 'system'
+                                ? 'The platform is asking you to repeat the scripted CSR line before the call can continue.'
+                                : 'The Member Actor is speaking. Your mic is temporarily locked.'}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1207,7 +1384,13 @@ export default function TraineeSimFloorPage() {
                             <div>
                               <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Sim Floor Icons</div>
                               <div className="mt-2 text-lg font-semibold">
-                                {callState === 'member-speaking' ? 'Member Actor talking' : isRecording ? 'CSR talking' : 'CSR ready to speak'}
+                                {callState === 'member-speaking'
+                                  ? activePlaybackSpeaker === 'system'
+                                    ? 'Sim Floor prompt active'
+                                    : 'Member Actor talking'
+                                  : isRecording
+                                    ? 'CSR talking'
+                                    : 'CSR ready to speak'}
                               </div>
                             </div>
                             <Badge variant="outline" className="border-white/15 bg-white/10 text-white">
@@ -1239,7 +1422,13 @@ export default function TraineeSimFloorPage() {
                                   <div>
                                     <div className="text-sm font-semibold">Member Actor Icon</div>
                                     <div className="text-xs text-slate-300">
-                                      {callState === 'member-speaking' ? 'Talking now' : showIncomingAudio ? 'Just finished' : 'Waiting'}
+                                      {callState === 'member-speaking'
+                                        ? activePlaybackSpeaker === 'system'
+                                          ? 'Repeat prompt'
+                                          : 'Talking now'
+                                        : showIncomingAudio
+                                          ? 'Just finished'
+                                          : 'Waiting'}
                                     </div>
                                   </div>
                                 </div>
@@ -1294,17 +1483,17 @@ export default function TraineeSimFloorPage() {
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">On-screen actor script</div>
                             <div className="mt-3 min-h-[168px] rounded-2xl bg-slate-950 p-4 text-sm leading-7 text-slate-100">
-                              {callState === 'member-speaking' && currentStep?.actor === 'member'
-                                ? currentStep.script
-                                : showIncomingAudio
-                                  ? 'Member audio just completed. Prepare your response and speak when ready.'
-                                  : 'No active member audio yet.'}
+                              {callState === 'member-speaking' || showIncomingAudio
+                                ? activePlaybackScript || 'Incoming audio is loading.'
+                                : 'No active member audio yet.'}
                             </div>
                           </div>
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                             {isOnHold
                               ? 'Hold music is active and full-call recording is paused.'
-                              : 'Hanging up uploads the full call, finalizes the transcript, and calculates sentiment, keyword compliance, and AHT.'}
+                              : activePlaybackSpeaker === 'system'
+                                ? 'If the saved turn does not match the scripted spiel closely enough, Sim Floor asks for a repeat and keeps the same CSR step active.'
+                                : 'Hanging up uploads the full call, finalizes the transcript, and calculates sentiment, keyword compliance, and AHT.'}
                           </div>
                         </CardContent>
                       </Card>
@@ -1328,7 +1517,9 @@ export default function TraineeSimFloorPage() {
                     </div>
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                       {callState === 'member-speaking'
-                        ? 'Member Actor icon is active while scripted audio is playing.'
+                        ? activePlaybackSpeaker === 'system'
+                          ? 'Sim Floor is playing a repeat prompt because the last saved CSR turn did not match the expected spiel.'
+                          : 'Member Actor icon is active while scripted audio is playing.'
                         : 'Member Actor icon lights up whenever incoming audio or script overlay is active.'}
                     </div>
                   </CardContent>

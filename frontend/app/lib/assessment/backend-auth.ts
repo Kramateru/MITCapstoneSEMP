@@ -1,5 +1,7 @@
 import 'server-only'
 
+import { createHmac, timingSafeEqual } from 'node:crypto'
+
 import { getConfigValue } from './env'
 import { createSupabaseAdminClient } from './supabase-admin'
 import type { BackendSessionUser, PlatformRole } from './types'
@@ -28,8 +30,115 @@ type SupabasePublicUserRow = {
   email?: string | null
 }
 
+type BackendJwtHeader = {
+  alg?: string
+  typ?: string
+}
+
+type BackendJwtPayload = {
+  user_id?: string
+  email?: string
+  role?: PlatformRole
+  exp?: number
+  type?: string
+}
+
 function isPlatformRole(value: unknown): value is PlatformRole {
   return value === 'admin' || value === 'trainer' || value === 'trainee'
+}
+
+function normalizeConfigValue(value: string | null | undefined) {
+  const trimmed = (value || '').trim()
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') {
+    return ''
+  }
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+
+  return trimmed
+}
+
+function decodeBase64UrlBytes(value: string) {
+  try {
+    const normalized = value
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(value.length / 4) * 4, '=')
+
+    return Buffer.from(normalized, 'base64')
+  } catch {
+    return null
+  }
+}
+
+function decodeBase64UrlJson<T>(value: string) {
+  try {
+    const decoded = decodeBase64UrlBytes(value)
+    if (!decoded) {
+      return null
+    }
+
+    return JSON.parse(decoded.toString('utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+function tryResolveBackendJwtSessionUser(accessToken: string) {
+  const secret = normalizeConfigValue(getConfigValue([
+    'SECRET_KEY',
+    'JWT_SECRET',
+  ], ''))
+  if (!secret) {
+    return null
+  }
+
+  const segments = accessToken.split('.')
+  if (segments.length !== 3) {
+    return null
+  }
+
+  const [encodedHeader, encodedPayload, encodedSignature] = segments
+  const header = decodeBase64UrlJson<BackendJwtHeader>(encodedHeader)
+  if (!header || header.alg !== 'HS256') {
+    return null
+  }
+
+  const providedSignature = decodeBase64UrlBytes(encodedSignature)
+  if (!providedSignature) {
+    return null
+  }
+
+  const expectedSignature = createHmac('sha256', secret)
+    .update(`${encodedHeader}.${encodedPayload}`)
+    .digest()
+
+  if (
+    providedSignature.length !== expectedSignature.length
+    || !timingSafeEqual(providedSignature, expectedSignature)
+  ) {
+    return null
+  }
+
+  const payload = decodeBase64UrlJson<BackendJwtPayload>(encodedPayload)
+  if (!payload?.user_id || !isPlatformRole(payload.role) || payload.type !== 'access') {
+    return null
+  }
+
+  if (typeof payload.exp === 'number' && payload.exp * 1000 <= Date.now()) {
+    return null
+  }
+
+  return {
+    userId: payload.user_id,
+    role: payload.role,
+    userName: payload.email || 'Platform User',
+  } satisfies BackendSessionUser
 }
 
 function readBearerToken(request: Request) {
@@ -163,6 +272,13 @@ export async function requireBackendSessionUser(
   }
 
   if (accessToken) {
+    if (backendError?.status === 503) {
+      const backendJwtSessionUser = tryResolveBackendJwtSessionUser(accessToken)
+      if (backendJwtSessionUser) {
+        return assertAllowedRole(backendJwtSessionUser, allowedRoles)
+      }
+    }
+
     const supabaseSessionUser = await tryResolveSupabaseSessionUser(accessToken)
     if (supabaseSessionUser) {
       return assertAllowedRole(supabaseSessionUser, allowedRoles)

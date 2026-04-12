@@ -76,6 +76,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_PASSING_SCORE = 90.0
 DEFAULT_MAX_ATTEMPTS = 99
+TURN_REPEAT_PROMPT = "Repeat, I can't understand what you're saying."
+MIN_SCRIPT_SIMILARITY_FOR_PROGRESS = 0.58
+MIN_STT_ACCURACY_FOR_PROGRESS = 55.0
+MIN_KEYWORD_COVERAGE_FOR_PROGRESS = 0.34
 
 
 def _require_trainer(current_user: User) -> None:
@@ -252,6 +256,63 @@ def _extract_closing_spiel(steps: list[SimFloorScenarioStepResponse]) -> str:
         None,
     )
     return (closing_step.script or "").strip() if closing_step else ""
+
+
+def _determine_repeat_requirement(
+    *,
+    transcript: str,
+    step: SimFloorScenarioStepResponse,
+    evaluation: dict[str, Any],
+    assessment: dict[str, Any],
+    matched_keywords: list[str],
+) -> tuple[bool, Optional[str], float]:
+    cleaned_transcript = normalize_text(transcript or "")
+    cleaned_script = normalize_text(step.script or "")
+    similarity = _phrase_similarity(cleaned_transcript, cleaned_script) if cleaned_transcript and cleaned_script else 0.0
+
+    if not cleaned_transcript:
+        return True, "No recognizable speech was detected for this spiel.", similarity
+
+    if assessment.get("status") != "completed":
+        fallback_reason = str(assessment.get("error") or "").strip() or "Speech recognition could not validate the spiel."
+        return True, fallback_reason, similarity
+
+    speech_accuracy = float(evaluation.get("speech_to_text_accuracy") or 0.0)
+    required_keywords = _normalize_keyword_list(step.expected_keywords)
+    keyword_coverage = (
+        len(matched_keywords) / len(required_keywords)
+        if required_keywords
+        else 1.0
+    )
+
+    accuracy_failed = speech_accuracy < MIN_STT_ACCURACY_FOR_PROGRESS
+    similarity_failed = similarity < MIN_SCRIPT_SIMILARITY_FOR_PROGRESS
+    keyword_failed = bool(required_keywords) and keyword_coverage < MIN_KEYWORD_COVERAGE_FOR_PROGRESS
+
+    strong_script_match = similarity >= 0.82
+    enough_keyword_coverage = not required_keywords or keyword_coverage >= MIN_KEYWORD_COVERAGE_FOR_PROGRESS
+    should_repeat = (
+        not strong_script_match
+        and (
+            similarity < 0.46
+            or (similarity_failed and accuracy_failed)
+            or (keyword_failed and similarity < 0.74)
+        )
+    )
+
+    if not should_repeat and enough_keyword_coverage:
+        return False, None, similarity
+
+    reasons: list[str] = []
+    if similarity_failed:
+        reasons.append("the saved response did not follow the scripted spiel closely enough")
+    if accuracy_failed:
+        reasons.append("the recognized words were still too far from the target script")
+    if keyword_failed:
+        reasons.append("required keywords were missing")
+
+    reason_text = "; ".join(reasons) if reasons else "the response needs to be repeated"
+    return True, reason_text[0].upper() + reason_text[1:], similarity
 
 
 def _build_keyword_compliance_summary(
@@ -1422,20 +1483,36 @@ def _session_transcript_log(session: SimSession) -> list[dict[str, Any]]:
     return list(session.transcript_log or []) if isinstance(session.transcript_log, list) else []
 
 
+def _selected_csr_turns_for_scoring(session: SimSession) -> list[dict[str, Any]]:
+    grouped_turns: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for item in _session_turn_logs(session):
+        if str(item.get("actor", "")).lower() != "csr":
+            continue
+        step_number = int(item.get("step_number") or 0)
+        if step_number <= 0:
+            continue
+        grouped_turns[step_number].append(item)
+
+    selected_turns: list[dict[str, Any]] = []
+    for step_number in sorted(grouped_turns):
+        attempts = grouped_turns[step_number]
+        accepted_attempts = [item for item in attempts if bool(item.get("accepted_for_progress"))]
+        selected_turns.append((accepted_attempts or attempts)[-1])
+    return selected_turns
+
+
 def _aggregate_turn_based_evaluation(
     *,
     session: SimSession,
     kpi_config: BatchKPIConfig,
 ) -> tuple[str, int, dict[str, Any], str]:
-    turn_logs = _session_turn_logs(session)
-    transcript_log = _session_transcript_log(session)
-    csr_turns = [item for item in turn_logs if str(item.get("actor", "")).lower() == "csr"]
+    csr_turns = _selected_csr_turns_for_scoring(session)
     combined_transcript = " ".join(
-        str(item.get("text") or "").strip()
-        for item in transcript_log
-        if str(item.get("actor", "")).lower() == "csr" and str(item.get("text") or "").strip()
+        str(item.get("transcript") or item.get("text") or "").strip()
+        for item in csr_turns
+        if str(item.get("transcript") or item.get("text") or "").strip()
     ).strip()
-    total_duration = int(round(sum(float(item.get("duration_seconds") or 0.0) for item in csr_turns)))
+    spoken_turn_duration = int(round(sum(float(item.get("duration_seconds") or 0.0) for item in csr_turns)))
 
     if not csr_turns:
         evaluation = _evaluate_submission(
@@ -1458,7 +1535,7 @@ def _aggregate_turn_based_evaluation(
             kpi_config=kpi_config,
             fallback_message="No CSR turn was recorded for this attempt.",
         )
-        return combined_transcript, total_duration, evaluation, ai_feedback
+        return combined_transcript, spoken_turn_duration, evaluation, ai_feedback
 
     speech_accuracy = _average([float(item.get("speech_to_text_accuracy") or 0.0) for item in csr_turns])
     grammar_score = _average([float(item.get("grammar_score") or 0.0) for item in csr_turns])
@@ -1466,11 +1543,11 @@ def _aggregate_turn_based_evaluation(
     pacing_score = _average([float(item.get("pacing_score") or 0.0) for item in csr_turns])
     dead_air_seconds = round(sum(float(item.get("dead_air_seconds") or 0.0) for item in csr_turns), 2)
     total_words = len(combined_transcript.split())
-    rate_of_speech = round((total_words / max(total_duration, 1)) * 60.0, 2) if total_duration else 0.0
+    rate_of_speech = round((total_words / max(spoken_turn_duration, 1)) * 60.0, 2) if spoken_turn_duration else 0.0
 
     evaluation = _evaluate_submission(
         transcript=combined_transcript,
-        audio_duration_seconds=total_duration,
+        audio_duration_seconds=spoken_turn_duration,
         kpi_config=kpi_config,
         overrides={
             "speech_to_text_accuracy": speech_accuracy,
@@ -1488,11 +1565,39 @@ def _aggregate_turn_based_evaluation(
             ),
         },
     )
+    session_level_duration = int(
+        round(
+            float(session.audio_duration_seconds or 0.0)
+            or sum(float(item.get("duration_seconds") or 0.0) for item in _session_turn_logs(session))
+            or spoken_turn_duration
+        )
+    )
+    evaluation["aht_actual"] = session_level_duration
+    evaluation["aht_score"] = _score_aht(
+        session_level_duration,
+        int(kpi_config.target_aht_seconds or evaluation.get("aht_target") or 120),
+    )
+    evaluation["weighted_score"] = _calculate_weighted_score(
+        speech_to_text_accuracy=float(evaluation.get("speech_to_text_accuracy") or 0.0),
+        aht_score=float(evaluation.get("aht_score") or 0.0),
+        rate_of_speech_score=float(evaluation.get("rate_of_speech_score") or 0.0),
+        dead_air_score=float(evaluation.get("dead_air_score") or 0.0),
+        empathy_score=float(evaluation.get("empathy_score") or 0.0),
+        probing_score=float(evaluation.get("probing_score") or 0.0),
+        grammar_score=float(evaluation.get("grammar_score") or 0.0),
+        pronunciation_score=float(evaluation.get("pronunciation_score") or 0.0),
+        pacing_score=float(evaluation.get("pacing_score") or 0.0),
+        forbidden_word_penalty=float(evaluation.get("forbidden_penalty") or 0.0),
+        kpi_config=kpi_config,
+    )
+    evaluation["pass_fail"] = evaluation["weighted_score"] >= float(
+        kpi_config.passing_score or DEFAULT_PASSING_SCORE
+    )
     ai_feedback = _build_ai_feedback(
         evaluation=evaluation,
         kpi_config=kpi_config,
     )
-    return combined_transcript, total_duration, evaluation, ai_feedback
+    return combined_transcript, session_level_duration, evaluation, ai_feedback
 
 
 def _failed_kpi_counts(
@@ -2912,8 +3017,24 @@ async def submit_session_turn(
         assessment=assessment if assessment.get("status") == "completed" else None,
         fallback_message=assessment.get("error") if assessment.get("status") != "completed" else None,
     )
+    matched_keywords = assessment.get("matched_keywords") or _find_keyword_matches(transcript, step.expected_keywords)
+    requires_repeat, repeat_reason, script_similarity = _determine_repeat_requirement(
+        transcript=transcript,
+        step=step,
+        evaluation=evaluation,
+        assessment=assessment,
+        matched_keywords=list(matched_keywords),
+    )
+
+    turn_logs = _session_turn_logs(session)
+    transcript_log = _session_transcript_log(session)
+    step_attempt_number = (
+        len([item for item in turn_logs if int(item.get("step_number") or 0) == step.step_number]) + 1
+    )
 
     turn_log = {
+        "turn_attempt_id": str(uuid.uuid4()),
+        "turn_attempt_number": step_attempt_number,
         "step_number": step.step_number,
         "actor": "csr",
         "speaker_label": step.speaker_label or "CSR",
@@ -2925,7 +3046,7 @@ async def submit_session_turn(
         "asr_provider": asr_provider,
         "asr_provider_label": _format_asr_provider_label(asr_provider),
         "transcript_confidence": transcript_confidence,
-        "matched_keywords": assessment.get("matched_keywords") or _find_keyword_matches(transcript, step.expected_keywords),
+        "matched_keywords": list(matched_keywords),
         "speech_to_text_accuracy": float(evaluation.get("speech_to_text_accuracy") or 0.0),
         "grammar_score": float(evaluation.get("grammar_score") or 0.0),
         "pronunciation_score": float(evaluation.get("pronunciation_score") or 0.0),
@@ -2934,18 +3055,18 @@ async def submit_session_turn(
         "dead_air_seconds": float(evaluation.get("dead_air_seconds") or 0.0),
         "forbidden_matches": list(evaluation.get("forbidden_matches") or []),
         "ai_feedback": ai_feedback,
+        "accepted_for_progress": not requires_repeat,
+        "requires_repeat": requires_repeat,
+        "repeat_prompt": TURN_REPEAT_PROMPT if requires_repeat else None,
+        "repeat_reason": repeat_reason,
+        "script_similarity": round(script_similarity * 100.0, 2),
         "created_at": datetime.utcnow().isoformat(),
     }
-    transcript_log = _session_transcript_log(session)
-    turn_logs = _session_turn_logs(session)
-
-    turn_logs = [item for item in turn_logs if int(item.get("step_number") or 0) != step.step_number]
     turn_logs.append(turn_log)
-    turn_logs.sort(key=lambda item: int(item.get("step_number") or 0))
-
-    transcript_log = [item for item in transcript_log if int(item.get("step_number") or 0) != step.step_number]
     transcript_log.append(
         {
+            "turn_attempt_id": turn_log["turn_attempt_id"],
+            "turn_attempt_number": step_attempt_number,
             "step_number": step.step_number,
             "actor": "csr",
             "speaker_label": step.speaker_label or "CSR",
@@ -2955,13 +3076,31 @@ async def submit_session_turn(
             "expected_script": step.script,
             "asr_provider": asr_provider,
             "transcript_confidence": transcript_confidence,
-            "matched_keywords": list(turn_log["matched_keywords"]),
+            "matched_keywords": list(matched_keywords),
             "duration_seconds": round(duration_seconds, 2),
+            "accepted_for_progress": not requires_repeat,
+            "requires_repeat": requires_repeat,
+            "repeat_prompt": TURN_REPEAT_PROMPT if requires_repeat else None,
+            "repeat_reason": repeat_reason,
+            "script_similarity": round(script_similarity * 100.0, 2),
+            "created_at": datetime.utcnow().isoformat(),
         }
     )
-    transcript_log.sort(key=lambda item: int(item.get("step_number") or 0))
+    turn_logs.sort(
+        key=lambda item: (
+            int(item.get("step_number") or 0),
+            int(item.get("turn_attempt_number") or 0),
+        )
+    )
+    transcript_log.sort(
+        key=lambda item: (
+            int(item.get("step_number") or 0),
+            int(item.get("turn_attempt_number") or 0),
+        )
+    )
 
-    next_step = next((item.step_number for item in steps if item.step_number > step.step_number), None)
+    progress_next_step = next((item.step_number for item in steps if item.step_number > step.step_number), None)
+    next_step = step.step_number if requires_repeat else progress_next_step
     session.turn_logs = turn_logs
     session.transcript_log = transcript_log
     session.current_step = next_step or step.step_number
@@ -2987,8 +3126,12 @@ async def submit_session_turn(
         rate_of_speech=float(turn_log["rate_of_speech"]),
         dead_air_seconds=float(turn_log["dead_air_seconds"]),
         ai_feedback=ai_feedback,
+        requires_repeat=requires_repeat,
+        repeat_prompt=TURN_REPEAT_PROMPT if requires_repeat else None,
+        repeat_reason=repeat_reason,
+        script_similarity=round(script_similarity * 100.0, 2),
         next_step=next_step,
-        is_complete=next_step is None,
+        is_complete=(not requires_repeat and progress_next_step is None),
         transcript_log=transcript_log,
         turn_logs=turn_logs,
     )
@@ -3092,7 +3235,7 @@ async def finalize_session(
     full_transcript_log: list[dict[str, Any]] = []
     turn_lookup = {
         int(item.get("step_number") or 0): item
-        for item in _session_turn_logs(session)
+        for item in _selected_csr_turns_for_scoring(session)
     }
     existing_transcript_lookup = {
         int(item.get("step_number") or 0): item

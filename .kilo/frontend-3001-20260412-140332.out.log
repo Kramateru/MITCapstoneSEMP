@@ -1,0 +1,24 @@
+
+> frontend@0.1.0 dev
+> next dev --hostname localhost --port 3001
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://localhost:3001
+- Environments: .env.local
+
+✓ Starting...
+Creating turbopack project {
+  dir: 'c:\\Users\\Mark Ureta\\Documents\\MIT CAPSTONE\\SYSTEM\\SYSTEM - Speech Enabled BPO Platform\\frontend',
+  testMode: true
+}
+Failed to benchmark file I/O: The system cannot find the path specified. (os error 3)
+✓ Ready in 1481ms
+○ Compiling /login ...
+ GET /login 200 in 76ms (compile: 6ms, render: 70ms)
+ GET /api/export/cloud-storage-status 500 in 1393ms (compile: 1361ms, render: 32ms)
+ GET /login 200 in 46ms (compile: 6ms, render: 40ms)
+ GET /api/export/cloud-storage-status 500 in 99ms (compile: 69ms, render: 30ms)
+ GET /api/export/cloud-storage-status 500 in 129ms (compile: 109ms, render: 20ms)
+ GET /api/export/health 500 in 164ms (compile: 124ms, render: 41ms)
+[?25h
