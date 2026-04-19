@@ -1,48 +1,18 @@
 'use client';
 
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { BookOpen, ClipboardList, Loader2, MessageSquare, Mic, RefreshCw } from 'lucide-react';
+
 import { adminSidebarItems } from '@/app/admin/nav';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from '@/app/components/ui/select';
-import {
-    Download,
-    FileBarChart,
-    Filter,
-    LineChart as LineChartIcon,
-    Loader2,
-    RefreshCw,
-    UserCheck,
-    Users
-} from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-    Bar,
-    BarChart,
-    CartesianGrid,
-    Line,
-    LineChart,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis
-} from 'recharts';
+import { Progress } from '@/app/components/ui/progress';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
+import { apiFetch } from '@/app/utils/api';
 
-type Batch = {
-  id: string;
-  name: string;
-  wave_number?: number;
-  users_count?: number;
-  description?: string | null;
-  lob?: string | null;
-};
+type ReportScope = 'trainer' | 'batch';
 
 type Trainer = {
   id: string;
@@ -52,610 +22,633 @@ type Trainer = {
   trainees_count?: number;
 };
 
-type ReportScope = 'trainer' | 'batch';
-type GraphView = 'overview' | 'progress' | 'categories' | 'performance' | 'rankings';
-
-type SummaryCard = {
-  label: string;
-  value: string;
-  helper?: string;
+type Batch = {
+  id: string;
+  name: string;
+  wave_number?: number | null;
+  users_count?: number;
+  trainer_id?: string | null;
+  trainer_name?: string | null;
 };
 
-type TrainerPerformanceSummary = {
-  trainer_id: string;
-  trainer_name: string;
-  total_batches: number;
-  total_trainees: number;
-  avg_batch_performance: number;
-  total_sessions: number;
-  pass_rate: number;
-  top_performing_batch?: {
-    batch_name: string;
-    avg_score: number;
-  };
-  needs_attention_batches: number;
+type TrainersResponse = {
+  trainers: Trainer[];
 };
 
-type BatchPerformanceSummary = {
-  batch_id: string;
-  batch_name: string;
-  trainer_name: string;
-  total_trainees: number;
-  avg_performance: number;
-  pass_rate: number;
-  total_sessions: number;
-  completion_rate: number;
-  top_performers: number;
-  needs_improvement: number;
+type BatchesResponse = {
+  batches: Batch[];
 };
 
-type PerformanceTrend = {
-  period: string;
-  avg_score: number;
-  sessions: number;
-  pass_rate: number;
-};
-
-type CategoryPerformance = {
-  category: string;
+type MicrolearningAssignment = {
+  id: string;
+  title?: string | null;
+  trainee_name?: string | null;
+  batch_id?: string | null;
+  batch_name?: string | null;
+  status: string;
+  completion_percentage: number;
   average_score: number;
-  improvement_trend: number;
+  certificate_id?: string | null;
+  assigned_by?: string | null;
+  assigned_by_name?: string | null;
 };
 
-type TrainerReportResponse = {
-  trainer: Trainer;
-  batches: BatchPerformanceSummary[];
-  summary: TrainerPerformanceSummary;
-  trends: PerformanceTrend[];
-  category_performance: CategoryPerformance[];
-};
-
-type BatchReportResponse = {
-  batch: Batch;
-  trainer: Trainer;
-  summary: BatchPerformanceSummary;
-  trends: PerformanceTrend[];
-  category_performance: CategoryPerformance[];
-  trainee_performance: Array<{
-    trainee_id: string;
-    trainee_name: string;
-    sessions_completed: number;
-    avg_score: number;
+type AdminMicrolearningOverview = {
+  summary: {
+    assignment_count: number;
+    in_progress_count: number;
+    completed_count: number;
+    certified_count: number;
+    average_score: number;
     pass_rate: number;
-    latest_session: string;
+  };
+  assignments: MicrolearningAssignment[];
+  recent_certificates: Array<{
+    certificate_id?: string | null;
+    certificate_no?: string | null;
+    module_title?: string | null;
+    trainee_name?: string | null;
+    assigned_by?: string | null;
+    batch_id?: string | null;
+    issued_at?: string | null;
   }>;
 };
 
-function authHeaders() {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
-  return token ? { Authorization: `Bearer ${token}` } : undefined;
+type AssessmentTrainee = {
+  id: string;
+  full_name: string;
+  batch_id?: string | null;
+  score_percentage?: number | null;
+  is_passed?: boolean | null;
+  certificate_id?: string | null;
+};
+
+type AssessmentAssignment = {
+  id: string;
+  title: string;
+  category_name?: string | null;
+  assigned_batch_id?: string | null;
+  assigned_by?: string | null;
+  completion_rate: number;
+  total_trainees: number;
+  completed_trainees: number;
+  passed_trainees: number;
+  certificate_count: number;
+  trainees: AssessmentTrainee[];
+};
+
+type AssessmentAssignmentsResponse = {
+  assignments: AssessmentAssignment[];
+};
+
+type CoachingHubResponse = {
+  summary?: {
+    completed_categories: number;
+    ready_for_coaching: number;
+    pending_acknowledgement: number;
+    acknowledged: number;
+    competent: number;
+    not_competent: number;
+  };
+  recent_logs?: Array<{
+    id: string;
+    coaching_id: string;
+    trainee_name?: string | null;
+    scenario_title?: string | null;
+    status: string;
+    competency_status: string;
+    created_at?: string | null;
+  }>;
+};
+
+type SimFloorBatchReport = {
+  batch_id: string;
+  batch_name: string;
+  wave_number?: number | null;
+  summary: {
+    total_trainees: number;
+    total_sessions: number;
+    average_score: number;
+    pass_rate: number;
+    retakes: number;
+  };
+  trainee_performance: Array<{
+    trainee_id: string;
+    trainee_name: string;
+    total_sessions: number;
+    average_score: number;
+    pass_rate: number;
+  }>;
+};
+
+function formatPercent(value?: number | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '0.0%';
+  }
+  return `${value.toFixed(1)}%`;
 }
 
-async function extractErrorMessage(response: Response, fallback: string) {
-  try {
-    const payload = await response.json();
-    return payload?.detail || payload?.message || fallback;
-  } catch {
-    return fallback;
+function formatDateLabel(value?: string | null) {
+  if (!value) {
+    return 'No date yet';
   }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return 'No date yet';
+  }
+  return parsed.toLocaleDateString();
+}
+
+function average(values: number[]) {
+  if (!values.length) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function SummaryCard({
+  icon,
+  label,
+  value,
+  helper,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <Card>
+      <CardContent className="flex items-center justify-between gap-4 p-5">
+        <div>
+          <div className="text-sm text-muted-foreground">{label}</div>
+          <div className="mt-2 text-3xl font-semibold text-foreground">{value}</div>
+          <div className="mt-2 text-xs text-muted-foreground">{helper}</div>
+        </div>
+        <div className="rounded-full bg-muted p-3 text-primary">{icon}</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border bg-slate-50 px-4 py-3">
+      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
+    </div>
+  );
 }
 
 export default function AdminReportsPage() {
-  const [reportScope, setReportScope] = useState<ReportScope>('trainer');
-  const [selectedTrainer, setSelectedTrainer] = useState('');
-  const [selectedBatch, setSelectedBatch] = useState('');
-  const [graphView, setGraphView] = useState<GraphView>('overview');
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState('');
+  const [scope, setScope] = useState<ReportScope>('trainer');
   const [trainers, setTrainers] = useState<Trainer[]>([]);
   const [batches, setBatches] = useState<Batch[]>([]);
-  const [trainerReport, setTrainerReport] = useState<TrainerReportResponse | null>(null);
-  const [batchReport, setBatchReport] = useState<BatchReportResponse | null>(null);
+  const [selectedTrainerId, setSelectedTrainerId] = useState('');
+  const [selectedBatchId, setSelectedBatchId] = useState('');
+  const [microlearningReport, setMicrolearningReport] = useState<AdminMicrolearningOverview | null>(null);
+  const [assessmentAssignments, setAssessmentAssignments] = useState<AssessmentAssignment[]>([]);
+  const [coachingHub, setCoachingHub] = useState<CoachingHubResponse | null>(null);
+  const [simFloorReports, setSimFloorReports] = useState<SimFloorBatchReport[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [messages, setMessages] = useState<string[]>([]);
 
-  // Load trainers and batches
-  const loadData = useCallback(async () => {
-    try {
-      setStatus('');
-      const [trainersRes, batchesRes] = await Promise.all([
-        fetch('/api/admin/trainers', { headers: authHeaders(), cache: 'no-store' }),
-        fetch('/api/admin/batches', { headers: authHeaders(), cache: 'no-store' })
-      ]);
-      const [trainersData, batchesData] = await Promise.all([
-        trainersRes.json().catch(() => null),
-        batchesRes.json().catch(() => null),
-      ]);
+  const selectedTrainer = useMemo(
+    () => trainers.find((trainer) => trainer.id === selectedTrainerId) || null,
+    [selectedTrainerId, trainers],
+  );
+  const selectedBatch = useMemo(
+    () => batches.find((batch) => batch.id === selectedBatchId) || null,
+    [batches, selectedBatchId],
+  );
+  const trainerBatchIds = useMemo(
+    () => batches.filter((batch) => batch.trainer_id === selectedTrainerId).map((batch) => batch.id),
+    [batches, selectedTrainerId],
+  );
 
-      if (trainersRes.ok) {
-        setTrainers(trainersData?.trainers || []);
-      } else {
-        setTrainers([]);
-      }
+  const loadBaseData = useCallback(async () => {
+    const results = await Promise.allSettled([
+      apiFetch<TrainersResponse>('/api/admin/trainers'),
+      apiFetch<BatchesResponse>('/api/admin/batches'),
+      apiFetch<AdminMicrolearningOverview>('/api/admin/microlearning-reports/overview'),
+      apiFetch<AssessmentAssignmentsResponse>('/api/certification/mcq/assignments'),
+    ]);
 
-      if (batchesRes.ok) {
-        setBatches(batchesData?.batches || []);
-      } else {
-        setBatches([]);
-      }
+    const nextMessages: string[] = [];
 
-      if (!trainersRes.ok || !batchesRes.ok) {
-        const trainerMessage =
-          !trainersRes.ok
-            ? trainersData?.detail || trainersData?.message || 'Unable to load trainer list.'
-            : '';
-        const batchMessage =
-          !batchesRes.ok
-            ? batchesData?.detail || batchesData?.message || 'Unable to load batch list.'
-            : '';
-        throw new Error([trainerMessage, batchMessage].filter(Boolean).join(' '));
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to load report filters.';
-      setStatus(message);
-      console.error('Failed to load data:', error);
+    if (results[0].status === 'fulfilled') {
+      const nextTrainers = results[0].value.trainers || [];
+      setTrainers(nextTrainers);
+      setSelectedTrainerId((current) =>
+        nextTrainers.some((trainer) => trainer.id === current) ? current : nextTrainers[0]?.id || '',
+      );
+    } else {
+      setTrainers([]);
+      nextMessages.push(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load trainers.');
     }
+
+    if (results[1].status === 'fulfilled') {
+      const nextBatches = results[1].value.batches || [];
+      setBatches(nextBatches);
+      setSelectedBatchId((current) =>
+        nextBatches.some((batch) => batch.id === current) ? current : nextBatches[0]?.id || '',
+      );
+    } else {
+      setBatches([]);
+      nextMessages.push(results[1].reason instanceof Error ? results[1].reason.message : 'Unable to load batches.');
+    }
+
+    if (results[2].status === 'fulfilled') {
+      setMicrolearningReport(results[2].value);
+    } else {
+      setMicrolearningReport(null);
+      nextMessages.push(results[2].reason instanceof Error ? results[2].reason.message : 'Unable to load microlearning reports.');
+    }
+
+    if (results[3].status === 'fulfilled') {
+      setAssessmentAssignments(results[3].value.assignments || []);
+    } else {
+      setAssessmentAssignments([]);
+      nextMessages.push(results[3].reason instanceof Error ? results[3].reason.message : 'Unable to load assessment reports.');
+    }
+
+    setMessages(nextMessages);
   }, []);
 
-  // Load report data based on scope
-  const loadReport = useCallback(async () => {
-    if ((reportScope === 'trainer' && !selectedTrainer) ||
-        (reportScope === 'batch' && !selectedBatch)) {
+  const loadScopeData = useCallback(async () => {
+    if (scope === 'trainer' && !selectedTrainerId) {
+      setSimFloorReports([]);
+      setCoachingHub(null);
       return;
     }
 
-    setLoading(true);
-    try {
-      setStatus('');
-      let url = '';
-      if (reportScope === 'trainer') {
-        url = `/api/admin/reports/trainer/${selectedTrainer}`;
-      } else {
-        url = `/api/admin/reports/batch/${selectedBatch}`;
-      }
+    if (scope === 'batch' && !selectedBatchId) {
+      setSimFloorReports([]);
+      setCoachingHub(null);
+      return;
+    }
 
-      const response = await fetch(url, {
-        headers: authHeaders(),
-        cache: 'no-store',
-      });
-      if (!response.ok) {
-        throw new Error(
-          await extractErrorMessage(response, 'Unable to load the selected report.'),
-        );
-      }
+    const coachingPromise = apiFetch<CoachingHubResponse>(
+      scope === 'trainer'
+        ? `/api/certification/coaching/hub?trainer_id=${selectedTrainerId}`
+        : `/api/certification/coaching/hub?batch_id=${selectedBatchId}`,
+    );
 
-      const data = await response.json();
-      if (reportScope === 'trainer') {
-        setTrainerReport(data);
-        setBatchReport(null);
-      } else {
-        setBatchReport(data);
-        setTrainerReport(null);
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to load report.';
-      setStatus(message);
-      setTrainerReport(null);
-      setBatchReport(null);
-      console.error('Failed to load report:', error);
-    } finally {
+    const simFloorRequests =
+      scope === 'trainer'
+        ? trainerBatchIds.map((batchId) => apiFetch<SimFloorBatchReport>(`/api/sim-floor/reports/batch/${batchId}`))
+        : [apiFetch<SimFloorBatchReport>(`/api/sim-floor/reports/batch/${selectedBatchId}`)];
+
+    const [coachingResult, simFloorResults] = await Promise.all([
+      coachingPromise.then((value) => ({ status: 'fulfilled' as const, value })).catch((reason) => ({ status: 'rejected' as const, reason })),
+      Promise.allSettled(simFloorRequests),
+    ]);
+
+    const nextMessages: string[] = [];
+
+    if (coachingResult.status === 'fulfilled') {
+      setCoachingHub(coachingResult.value);
+    } else {
+      setCoachingHub(null);
+      nextMessages.push(coachingResult.reason instanceof Error ? coachingResult.reason.message : 'Unable to load coaching reports.');
+    }
+
+    const fulfilledReports = simFloorResults
+      .filter((result): result is PromiseFulfilledResult<SimFloorBatchReport> => result.status === 'fulfilled')
+      .map((result) => result.value);
+    setSimFloorReports(fulfilledReports);
+
+    if (simFloorResults.some((result) => result.status === 'rejected')) {
+      nextMessages.push('Some Sim Floor reports could not be loaded for the selected scope.');
+    }
+
+    setMessages((current) => [...current.filter((message) => !message.includes('Sim Floor') && !message.includes('coaching')), ...nextMessages]);
+  }, [scope, selectedBatchId, selectedTrainerId, trainerBatchIds]);
+
+  useEffect(() => {
+    void (async () => {
+      setLoading(true);
+      await loadBaseData();
       setLoading(false);
-    }
-  }, [reportScope, selectedTrainer, selectedBatch]);
+    })();
+  }, [loadBaseData]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    void loadScopeData();
+  }, [loadScopeData]);
 
-  useEffect(() => {
-    if (selectedTrainer || selectedBatch) {
-      loadReport();
-    }
-  }, [loadReport]);
-
-  const summaryCards: SummaryCard[] = useMemo(() => {
-    if (reportScope === 'trainer' && trainerReport) {
-      return [
-        {
-          label: 'Total Batches',
-          value: trainerReport.summary.total_batches.toString(),
-          helper: 'Batches managed by this trainer'
-        },
-        {
-          label: 'Total Trainees',
-          value: trainerReport.summary.total_trainees.toString(),
-          helper: 'Trainees across all batches'
-        },
-        {
-          label: 'Avg Performance',
-          value: `${trainerReport.summary.avg_batch_performance.toFixed(1)}%`,
-          helper: 'Average score across all batches'
-        },
-        {
-          label: 'Pass Rate',
-          value: `${trainerReport.summary.pass_rate.toFixed(1)}%`,
-          helper: 'Overall pass rate for trainees'
-        }
-      ];
-    } else if (reportScope === 'batch' && batchReport) {
-      return [
-        {
-          label: 'Total Trainees',
-          value: batchReport.summary.total_trainees.toString(),
-          helper: 'Trainees in this batch'
-        },
-        {
-          label: 'Avg Performance',
-          value: `${batchReport.summary.avg_performance.toFixed(1)}%`,
-          helper: 'Average score for the batch'
-        },
-        {
-          label: 'Pass Rate',
-          value: `${batchReport.summary.pass_rate.toFixed(1)}%`,
-          helper: 'Percentage of passed sessions'
-        },
-        {
-          label: 'Completion Rate',
-          value: `${batchReport.summary.completion_rate.toFixed(1)}%`,
-          helper: 'Sessions completed vs assigned'
-        }
-      ];
-    }
-    return [];
-  }, [reportScope, trainerReport, batchReport]);
-
-  const handleDownloadPDF = async () => {
-    try {
-      setStatus('');
-      let url = '';
-      const params = new URLSearchParams();
-
-      if (reportScope === 'trainer' && selectedTrainer) {
-        url = `/api/admin/reports/trainer/${selectedTrainer}/pdf`;
-        params.set('trainer_id', selectedTrainer);
-      } else if (reportScope === 'batch' && selectedBatch) {
-        url = `/api/admin/reports/batch/${selectedBatch}/pdf`;
-        params.set('batch_id', selectedBatch);
-      }
-
-      const response = await fetch(`${url}?${params}`, {
-        headers: authHeaders(),
-      });
-      if (!response.ok) {
-        throw new Error(
-          await extractErrorMessage(response, 'Unable to download the selected PDF report.'),
-        );
-      }
-
-      const blob = await response.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = `${reportScope}_report_${new Date().toISOString().split('T')[0]}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(downloadUrl);
-      document.body.removeChild(a);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Failed to download PDF.';
-      setStatus(message);
-      console.error('Failed to download PDF:', error);
-    }
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadBaseData();
+    await loadScopeData();
+    setRefreshing(false);
   };
+
+  const filteredMicrolearningAssignments = useMemo(() => {
+    const rows = microlearningReport?.assignments || [];
+    if (scope === 'trainer') {
+      return rows.filter(
+        (assignment) =>
+          assignment.assigned_by === selectedTrainerId ||
+          (assignment.batch_id ? trainerBatchIds.includes(assignment.batch_id) : false),
+      );
+    }
+    return rows.filter((assignment) => assignment.batch_id === selectedBatchId);
+  }, [microlearningReport, scope, selectedTrainerId, selectedBatchId, trainerBatchIds]);
+
+  const microlearningSummary = useMemo(() => {
+    const completed = filteredMicrolearningAssignments.filter((assignment) => ['completed', 'certified'].includes(assignment.status)).length;
+    const certified = filteredMicrolearningAssignments.filter((assignment) => Boolean(assignment.certificate_id)).length;
+    return {
+      assignmentCount: filteredMicrolearningAssignments.length,
+      completed,
+      certified,
+      averageScore: average(filteredMicrolearningAssignments.map((assignment) => Number(assignment.average_score || 0))),
+      passRate: filteredMicrolearningAssignments.length ? (certified / filteredMicrolearningAssignments.length) * 100 : 0,
+    };
+  }, [filteredMicrolearningAssignments]);
+
+  const filteredAssessmentAssignments = useMemo(() => {
+    if (scope === 'trainer') {
+      return assessmentAssignments.filter(
+        (assignment) =>
+          assignment.assigned_by === selectedTrainerId ||
+          (assignment.assigned_batch_id ? trainerBatchIds.includes(assignment.assigned_batch_id) : false) ||
+          assignment.trainees.some((trainee) => (trainee.batch_id ? trainerBatchIds.includes(trainee.batch_id) : false)),
+      );
+    }
+
+    return assessmentAssignments.filter(
+      (assignment) =>
+        assignment.assigned_batch_id === selectedBatchId ||
+        assignment.trainees.some((trainee) => trainee.batch_id === selectedBatchId),
+    );
+  }, [assessmentAssignments, scope, selectedTrainerId, selectedBatchId, trainerBatchIds]);
+
+  const assessmentSummary = useMemo(() => {
+    return {
+      totalAssigned: filteredAssessmentAssignments.reduce((sum, assignment) => sum + assignment.total_trainees, 0),
+      completed: filteredAssessmentAssignments.reduce((sum, assignment) => sum + assignment.completed_trainees, 0),
+      passed: filteredAssessmentAssignments.reduce((sum, assignment) => sum + assignment.passed_trainees, 0),
+      certificates: filteredAssessmentAssignments.reduce((sum, assignment) => sum + assignment.certificate_count, 0),
+    };
+  }, [filteredAssessmentAssignments]);
+
+  const simFloorSummary = useMemo(() => {
+    const totalSessions = simFloorReports.reduce((sum, report) => sum + report.summary.total_sessions, 0);
+    const totalTrainees = simFloorReports.reduce((sum, report) => sum + report.summary.total_trainees, 0);
+    const totalRetakes = simFloorReports.reduce((sum, report) => sum + report.summary.retakes, 0);
+    const weightedAverageScore = totalSessions
+      ? simFloorReports.reduce((sum, report) => sum + report.summary.average_score * report.summary.total_sessions, 0) / totalSessions
+      : 0;
+    const weightedPassRate = totalSessions
+      ? simFloorReports.reduce((sum, report) => sum + report.summary.pass_rate * report.summary.total_sessions, 0) / totalSessions
+      : 0;
+
+    return {
+      totalSessions,
+      totalTrainees,
+      retakes: totalRetakes,
+      averageScore: weightedAverageScore,
+      passRate: weightedPassRate,
+    };
+  }, [simFloorReports]);
+
+  const coachingSummary = coachingHub?.summary;
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 className="text-3xl font-bold">Reports</h1>
             <p className="text-muted-foreground">
-              Performance reports by trainer or batch
+              Admin reports now stay focused on microlearning, Sim Floor, assessments, and coaching.
             </p>
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={loadReport}
-              disabled={loading || (!selectedTrainer && !selectedBatch)}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              Refresh
-            </Button>
-            <Button
-              onClick={handleDownloadPDF}
-              disabled={!trainerReport && !batchReport}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Download PDF
-            </Button>
-          </div>
+          <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
+            {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
+            Refresh
+          </Button>
         </div>
 
-        {status && (
-          <Card className="border-rose-200 bg-rose-50">
-            <CardContent className="p-4 text-sm text-rose-700">
-              {status}
-            </CardContent>
+        {messages.length ? (
+          <Card className="border-amber-200 bg-amber-50">
+            <CardContent className="p-4 text-sm text-amber-800">{messages.join(' ')}</CardContent>
           </Card>
-        )}
+        ) : null}
 
-        {/* Filters */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Filter className="h-5 w-5" />
-              Report Filters
-            </CardTitle>
+            <CardTitle>Report Scope</CardTitle>
+            <CardDescription>Review the same four report categories by trainer or by batch.</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <CardContent className="grid gap-4 md:grid-cols-3">
+            <div className="space-y-2">
+              <div className="text-sm font-medium">View By</div>
+              <Select value={scope} onValueChange={(value: ReportScope) => setScope(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="trainer">Trainer</SelectItem>
+                  <SelectItem value="batch">Batch</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {scope === 'trainer' ? (
               <div className="space-y-2">
-                <label className="text-sm font-medium">Report Scope</label>
-                <Select value={reportScope} onValueChange={(value: ReportScope) => {
-                  setReportScope(value);
-                  setSelectedTrainer('');
-                  setSelectedBatch('');
-                  setTrainerReport(null);
-                  setBatchReport(null);
-                }}>
+                <div className="text-sm font-medium">Trainer</div>
+                <Select value={selectedTrainerId} onValueChange={setSelectedTrainerId}>
                   <SelectTrigger>
-                    <SelectValue />
+                    <SelectValue placeholder="Select a trainer" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="trainer">
-                      <div className="flex items-center gap-2">
-                        <UserCheck className="h-4 w-4" />
-                        By Trainer
-                      </div>
-                    </SelectItem>
-                    <SelectItem value="batch">
-                      <div className="flex items-center gap-2">
-                        <Users className="h-4 w-4" />
-                        By Batch
-                      </div>
-                    </SelectItem>
+                    {trainers.map((trainer) => (
+                      <SelectItem key={trainer.id} value={trainer.id}>
+                        {trainer.full_name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="text-sm font-medium">Batch</div>
+                <Select value={selectedBatchId} onValueChange={setSelectedBatchId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a batch" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {batches.map((batch) => (
+                      <SelectItem key={batch.id} value={batch.id}>
+                        {batch.wave_number !== null && batch.wave_number !== undefined
+                          ? `${batch.name} | Wave ${batch.wave_number}`
+                          : batch.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
-              {reportScope === 'trainer' && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Select Trainer</label>
-                  <Select value={selectedTrainer} onValueChange={setSelectedTrainer}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose a trainer" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {trainers.map((trainer) => (
-                        <SelectItem key={trainer.id} value={trainer.id}>
-                          {trainer.full_name} ({trainer.batches_count || 0} batches)
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
-
-              {reportScope === 'batch' && (
-                <div className="space-y-2">
-                  <label className="text-sm font-medium">Select Batch</label>
-                  <Select value={selectedBatch} onValueChange={setSelectedBatch}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose a batch" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {batches.map((batch) => (
-                        <SelectItem key={batch.id} value={batch.id}>
-                          {batch.name} ({batch.users_count || 0} trainees)
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+            <div className="rounded-2xl border bg-slate-50 px-4 py-3">
+              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Current Scope</div>
+              <div className="mt-2 text-sm font-semibold text-slate-900">
+                {scope === 'trainer' ? selectedTrainer?.full_name || 'Select a trainer' : selectedBatch?.name || 'Select a batch'}
+              </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Summary Cards */}
-        {(trainerReport || batchReport) && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            {summaryCards.map((card, index) => (
-              <Card key={index}>
-                <CardContent className="p-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-medium text-muted-foreground">
-                        {card.label}
-                      </p>
-                      <p className="text-2xl font-bold">{card.value}</p>
-                      {card.helper && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {card.helper}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-
-        {/* Report Content */}
-        {loading && (
+        {loading ? (
           <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin" />
-                <span className="ml-2">Loading report...</span>
-              </div>
+            <CardContent className="flex min-h-[260px] items-center justify-center text-sm text-muted-foreground">
+              <Loader2 className="mr-2 size-4 animate-spin" />
+              Loading admin reports...
             </CardContent>
           </Card>
-        )}
+        ) : (
+          <>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <SummaryCard icon={<BookOpen className="size-5" />} label="Microlearning" value={`${microlearningSummary.completed}/${microlearningSummary.assignmentCount}`} helper={`${microlearningSummary.certified} certified | Avg ${formatPercent(microlearningSummary.averageScore)}`} />
+              <SummaryCard icon={<Mic className="size-5" />} label="Sim Floor" value={String(simFloorSummary.totalSessions)} helper={`Avg ${formatPercent(simFloorSummary.averageScore)} | Pass ${formatPercent(simFloorSummary.passRate)}`} />
+              <SummaryCard icon={<ClipboardList className="size-5" />} label="Assessments" value={`${assessmentSummary.completed}/${assessmentSummary.totalAssigned}`} helper={`${assessmentSummary.passed} passed | ${assessmentSummary.certificates} certificates`} />
+              <SummaryCard icon={<MessageSquare className="size-5" />} label="Coaching" value={String(coachingSummary?.completed_categories || 0)} helper={`${coachingSummary?.pending_acknowledgement || 0} pending ack | ${coachingSummary?.acknowledged || 0} acknowledged`} />
+            </div>
 
-        {!loading && (trainerReport || batchReport) && (
-          <div className="space-y-6">
-            {/* Graph View Selector */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <LineChartIcon className="h-5 w-5" />
-                  View Options
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-2 flex-wrap">
-                  {(['overview', 'progress', 'categories', 'performance', 'rankings'] as GraphView[]).map((view) => (
-                    <Button
-                      key={view}
-                      variant={graphView === view ? 'default' : 'outline'}
-                      size="sm"
-                      onClick={() => setGraphView(view)}
-                    >
-                      {view.charAt(0).toUpperCase() + view.slice(1)}
-                    </Button>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+            <div className="grid gap-6 xl:grid-cols-2">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Microlearning Completion and Analytics</CardTitle>
+                  <CardDescription>Assignments, completion, and certification by the selected admin scope.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <MiniMetric label="Assigned" value={String(microlearningSummary.assignmentCount)} />
+                    <MiniMetric label="Completed" value={String(microlearningSummary.completed)} />
+                    <MiniMetric label="Certified" value={String(microlearningSummary.certified)} />
+                    <MiniMetric label="Pass Rate" value={formatPercent(microlearningSummary.passRate)} />
+                  </div>
 
-            {/* Charts */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Performance Trend */}
-              {graphView === 'overview' && (trainerReport?.trends || batchReport?.trends) && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Performance Trend</CardTitle>
-                    <CardDescription>
-                      Score trends over time
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <LineChart data={trainerReport?.trends || batchReport?.trends}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="period" />
-                        <YAxis />
-                        <Tooltip />
-                        <Line
-                          type="monotone"
-                          dataKey="avg_score"
-                          stroke="#8884d8"
-                          strokeWidth={2}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Category Performance */}
-              {graphView === 'categories' && (trainerReport?.category_performance || batchReport?.category_performance) && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Category Performance</CardTitle>
-                    <CardDescription>
-                      Average scores by assessment category
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={trainerReport?.category_performance || batchReport?.category_performance}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="category" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="average_score" fill="#8884d8" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Batch Performance (for trainer reports) */}
-              {graphView === 'performance' && trainerReport && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Batch Performance</CardTitle>
-                    <CardDescription>
-                      Performance across all batches managed by this trainer
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
-                      <BarChart data={trainerReport.batches}>
-                        <CartesianGrid strokeDasharray="3 3" />
-                        <XAxis dataKey="batch_name" />
-                        <YAxis />
-                        <Tooltip />
-                        <Bar dataKey="avg_performance" fill="#82ca9d" />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Trainee Performance (for batch reports) */}
-              {graphView === 'rankings' && batchReport && (
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Trainee Rankings</CardTitle>
-                    <CardDescription>
-                      Top performers in this batch
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-4">
-                      {batchReport.trainee_performance
-                        .slice()
-                        .sort((a, b) => b.avg_score - a.avg_score)
-                        .slice(0, 10)
-                        .map((trainee, index) => (
-                        <div key={trainee.trainee_id} className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <Badge variant={index < 3 ? 'default' : 'secondary'}>
-                              #{index + 1}
-                            </Badge>
-                            <div>
-                              <p className="font-medium">{trainee.trainee_name}</p>
-                              <p className="text-sm text-muted-foreground">
-                                {trainee.sessions_completed} sessions
-                              </p>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-bold">{trainee.avg_score.toFixed(1)}%</p>
-                            <p className="text-sm text-muted-foreground">
-                              {trainee.pass_rate.toFixed(1)}% pass rate
-                            </p>
+                  {filteredMicrolearningAssignments.slice(0, 5).map((assignment) => (
+                    <div key={assignment.id} className="rounded-2xl border p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-slate-900">{assignment.title || 'Module'}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {assignment.trainee_name || assignment.batch_name || assignment.assigned_by_name || 'Database assignment'}
                           </div>
                         </div>
-                      ))}
+                        <Badge variant={assignment.certificate_id ? 'default' : 'secondary'}>{assignment.status.replace(/_/g, ' ')}</Badge>
+                      </div>
+                      <div className="mt-3">
+                        <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                          <span>Progress</span>
+                          <span>{Math.round(assignment.completion_percentage || 0)}%</span>
+                        </div>
+                        <Progress value={assignment.completion_percentage || 0} />
+                      </div>
                     </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          </div>
-        )}
+                  ))}
+                </CardContent>
+              </Card>
 
-        {/* Empty State */}
-        {!loading && !trainerReport && !batchReport && (
-          <Card>
-            <CardContent className="p-12">
-              <div className="text-center">
-                <FileBarChart className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                <h3 className="text-lg font-semibold mb-2">No Report Selected</h3>
-                <p className="text-muted-foreground">
-                  Choose a trainer or batch to view performance reports
-                </p>
-              </div>
-            </CardContent>
-          </Card>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Sim Floor Completion and Analytics</CardTitle>
+                  <CardDescription>Batch-level Sim Floor reporting from the selected admin scope.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <MiniMetric label="Batches" value={String(simFloorReports.length)} />
+                    <MiniMetric label="Trainees" value={String(simFloorSummary.totalTrainees)} />
+                    <MiniMetric label="Sessions" value={String(simFloorSummary.totalSessions)} />
+                    <MiniMetric label="Retakes" value={String(simFloorSummary.retakes)} />
+                  </div>
+
+                  {simFloorReports.slice(0, 5).map((report) => (
+                    <div key={report.batch_id} className="rounded-2xl border p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-slate-900">{report.batch_name}</div>
+                          <div className="mt-1 text-xs text-slate-500">{report.summary.total_trainees} trainees</div>
+                        </div>
+                        <Badge variant="outline">{formatPercent(report.summary.average_score)}</Badge>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        {report.summary.total_sessions} sessions | Pass rate {formatPercent(report.summary.pass_rate)}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Assessment Completion and Analytics</CardTitle>
+                  <CardDescription>Completion, pass, and certificate performance for assigned assessments.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <MiniMetric label="Assigned" value={String(assessmentSummary.totalAssigned)} />
+                    <MiniMetric label="Completed" value={String(assessmentSummary.completed)} />
+                    <MiniMetric label="Passed" value={String(assessmentSummary.passed)} />
+                    <MiniMetric label="Certificates" value={String(assessmentSummary.certificates)} />
+                  </div>
+
+                  {filteredAssessmentAssignments.slice(0, 5).map((assignment) => (
+                    <div key={assignment.id} className="rounded-2xl border p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-slate-900">{assignment.title}</div>
+                          <div className="mt-1 text-xs text-slate-500">{assignment.category_name || 'Assessment category'}</div>
+                        </div>
+                        <Badge variant="outline">{formatPercent(assignment.completion_rate)}</Badge>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        {assignment.completed_trainees}/{assignment.total_trainees} completed | {assignment.passed_trainees} passed
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>My Coaching Completion and Analytics</CardTitle>
+                  <CardDescription>Coaching readiness, acknowledgement, and competency outcomes for the selected scope.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <MiniMetric label="Ready" value={String(coachingSummary?.ready_for_coaching || 0)} />
+                    <MiniMetric label="Pending Ack" value={String(coachingSummary?.pending_acknowledgement || 0)} />
+                    <MiniMetric label="Acknowledged" value={String(coachingSummary?.acknowledged || 0)} />
+                    <MiniMetric label="Retake" value={String(coachingSummary?.not_competent || 0)} />
+                  </div>
+
+                  {(coachingHub?.recent_logs || []).slice(0, 5).map((log) => (
+                    <div key={log.id} className="rounded-2xl border p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-semibold text-slate-900">{log.trainee_name || 'Trainee'}</div>
+                          <div className="mt-1 text-xs text-slate-500">{log.scenario_title || log.coaching_id}</div>
+                        </div>
+                        <Badge variant={log.status === 'acknowledged' ? 'default' : 'secondary'}>
+                          {log.status.replace(/_/g, ' ')}
+                        </Badge>
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        {log.competency_status.replace(/_/g, ' ')} | {formatDateLabel(log.created_at)}
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </div>
+          </>
         )}
       </div>
     </DashboardLayout>

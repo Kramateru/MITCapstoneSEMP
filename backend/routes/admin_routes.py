@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import auth_utils
 from ..database import get_db
@@ -41,6 +41,8 @@ from ..models import (
     MCQCategory,
     MCQQuestion,
     MCQSubmission,
+    MicrolearningAssignment,
+    MicrolearningModule,
     PracticeSession,
     Scenario,
     ScenarioDifficulty,
@@ -49,6 +51,11 @@ from ..models import (
     SystemLog,
     User,
     UserRole,
+)
+from ..services.microlearning import (
+    ensure_module_exercises,
+    refresh_assignment_progress,
+    serialize_assignment_summary,
 )
 from ..services.lob_catalog import (
     list_active_lobs,
@@ -2376,7 +2383,11 @@ async def admin_dashboard(
                 "detail": (
                     "Audio uploads are stored through Supabase."
                     if supabase.is_available
-                    else "Supabase storage is not configured, so audio uploads are blocked."
+                    else getattr(
+                        supabase,
+                        "status_detail",
+                        "Supabase storage is not configured, so audio uploads are blocked.",
+                    )
                 ),
                 "utilization": {
                     "sessions_with_audio": audio_sessions,
@@ -2453,6 +2464,7 @@ async def get_all_batches(
             "users_count": trainee_count,
             "description": batch.description,
             "lob": batch.lob,
+            "trainer_id": batch.created_by,
             "trainer_name": trainer.full_name if trainer else "Unknown",
         })
     
@@ -2543,6 +2555,119 @@ def _get_sessions_for_trainee_ids(db: Session, trainee_ids: List[str]) -> List[P
         .filter(PracticeSession.user_id.in_(trainee_ids))
         .all()
     )
+
+
+def _build_admin_microlearning_report_overview(db: Session) -> dict[str, Any]:
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module),
+            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.certificate),
+        )
+        .order_by(MicrolearningAssignment.assigned_at.desc())
+        .all()
+    )
+
+    did_update = False
+    serialized_assignments: list[dict[str, Any]] = []
+
+    for assignment in assignments:
+        did_update = ensure_module_exercises(assignment.module) or did_update
+        before = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+            assignment.certificate_id,
+        )
+        refresh_assignment_progress(assignment)
+        after = (
+            assignment.status,
+            assignment.completion_percentage,
+            assignment.completed_exercises,
+            assignment.completed_at,
+            assignment.certificate_id,
+        )
+        did_update = before != after or did_update
+        serialized_assignments.append(serialize_assignment_summary(assignment))
+
+    if did_update:
+        db.commit()
+
+    def _average(values: list[float]) -> float:
+        if not values:
+            return 0.0
+        return round(sum(values) / len(values), 2)
+
+    modules = (
+        db.query(MicrolearningModule)
+        .filter(MicrolearningModule.is_active == True)
+        .all()
+    )
+
+    score_values = [
+        float(row.get("average_score") or 0.0)
+        for row in serialized_assignments
+        if int(row.get("completed_exercises") or 0) > 0
+    ]
+    completed_count = sum(
+        1 for row in serialized_assignments if row.get("status") in {"completed", "certified"}
+    )
+    certified_count = sum(1 for row in serialized_assignments if row.get("certificate_id"))
+    in_progress_count = sum(
+        1 for row in serialized_assignments if row.get("status") in {"assigned", "in_progress"}
+    )
+    recent_certificates = [
+        {
+            "assignment_id": row["id"],
+            "certificate_id": row.get("certificate_id"),
+            "certificate_no": row.get("certificate_no"),
+            "module_title": row.get("module_title") or row.get("title"),
+            "trainee_name": row.get("trainee_name"),
+            "assigned_by": row.get("assigned_by"),
+            "assigned_by_name": row.get("assigned_by_name"),
+            "batch_id": row.get("batch_id"),
+            "batch_name": row.get("batch_name"),
+            "issued_at": row.get("certificate_issued_at") or row.get("completed_at"),
+        }
+        for row in serialized_assignments
+        if row.get("certificate_id")
+    ]
+    recent_certificates.sort(
+        key=lambda entry: str(entry.get("issued_at") or ""),
+        reverse=True,
+    )
+
+    return {
+        "summary": {
+            "module_count": len(modules),
+            "assignment_count": len(serialized_assignments),
+            "in_progress_count": in_progress_count,
+            "completed_count": completed_count,
+            "certified_count": certified_count,
+            "average_score": _average(score_values),
+            "pass_rate": round(
+                (certified_count / len(serialized_assignments) * 100)
+                if serialized_assignments
+                else 0.0,
+                2,
+            ),
+        },
+        "assignments": serialized_assignments,
+        "recent_certificates": recent_certificates[:12],
+    }
+
+
+@router.get("/microlearning-reports/overview")
+async def get_admin_microlearning_reports_overview(
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Return admin-wide microlearning reporting data backed by the active database."""
+    return _build_admin_microlearning_report_overview(db)
 
 
 @router.get("/reports/trainer/{trainer_id}")

@@ -754,6 +754,8 @@ async def cloud_storage_status():
     return {
         "is_available": supabase.is_available,
         "service": "Supabase" if supabase.is_available else "Not configured",
+        "config_status": getattr(supabase, "config_status", "unknown"),
+        "detail": getattr(supabase, "status_detail", None),
         "bucket_name": supabase.bucket_name if supabase.is_available else None,
         "capabilities": {
             "audio_storage": supabase.is_available,

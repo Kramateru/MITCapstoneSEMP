@@ -215,7 +215,57 @@ def serialize_coaching_log(log: CoachingLog) -> dict[str, Any]:
     trainee = log.trainee
     competency_status = normalize_competency_status(log.competency_status)
     source_type = normalize_coaching_source_type(log.source_type)
+    if log.sim_session_id and source_type != "sim_floor_session":
+        source_type = "sim_floor_session"
+    elif log.practice_session_id and source_type == "general":
+        source_type = "practice_session"
+
     is_sim_session = source_type == "sim_floor_session"
+    audio_file_url = (
+        getattr(session, "audio_url", None)
+        if is_sim_session
+        else getattr(session, "audio_file_url", None)
+    )
+    transcription = (
+        getattr(session, "transcript", None)
+        if is_sim_session
+        else getattr(session, "transcription", None)
+    )
+    overall_score = (
+        getattr(session, "weighted_score", None)
+        if is_sim_session
+        else getattr(session, "overall_score", None)
+    )
+    response_duration = (
+        getattr(session, "audio_duration_seconds", None)
+        if is_sim_session
+        else getattr(session, "response_duration", None)
+    )
+    accuracy_score = (
+        getattr(session, "speech_to_text_accuracy", None)
+        if is_sim_session
+        else getattr(session, "accuracy_score", None)
+    )
+    fluency_score = (
+        getattr(session, "pronunciation_score", None)
+        if is_sim_session
+        else getattr(session, "fluency_score", None)
+    )
+    clarity_score = (
+        getattr(session, "pacing_score", None)
+        if is_sim_session
+        else getattr(session, "clarity_score", None)
+    )
+    keyword_adherence_score = (
+        (getattr(session, "keyword_compliance", None) or {}).get("score")
+        if is_sim_session
+        else getattr(session, "keyword_adherence_score", None)
+    )
+    soft_skills_score = (
+        getattr(session, "sentiment_score", None)
+        if is_sim_session
+        else getattr(session, "soft_skills_score", None)
+    )
 
     return {
         "id": log.id,
@@ -244,41 +294,19 @@ def serialize_coaching_log(log: CoachingLog) -> dict[str, Any]:
         "acknowledged_at": log.acknowledged_at,
         "created_at": log.created_at,
         "updated_at": log.updated_at,
-        "audio_file_url": (
-            session.audio_url if is_sim_session and session else session.audio_file_url if session else None
-        ),
-        "transcription": (
-            session.transcript if is_sim_session and session else session.transcription if session else None
-        ),
-        "transcription_confidence": (
-            session.transcript_confidence if session else None
-        ),
+        "audio_file_url": audio_file_url,
+        "transcription": transcription,
+        "transcription_confidence": getattr(session, "transcript_confidence", None),
         "attempt_number": session.attempt_number if session else None,
-        "overall_score": (
-            session.weighted_score if is_sim_session and session else session.overall_score if session else None
-        ),
+        "overall_score": overall_score,
         "session_created_at": session.created_at if session else None,
-        "response_duration": (
-            session.audio_duration_seconds if is_sim_session and session else session.response_duration if session else None
-        ),
+        "response_duration": response_duration,
         "scores": {
-            "accuracy": (
-                session.speech_to_text_accuracy if is_sim_session and session else session.accuracy_score if session else None
-            ),
-            "fluency": (
-                session.pronunciation_score if is_sim_session and session else session.fluency_score if session else None
-            ),
-            "clarity": (
-                session.pacing_score if is_sim_session and session else session.clarity_score if session else None
-            ),
-            "keyword_adherence": (
-                (session.keyword_compliance or {}).get("score")
-                if is_sim_session and session
-                else session.keyword_adherence_score if session else None
-            ),
-            "soft_skills": (
-                session.sentiment_score if is_sim_session and session else session.soft_skills_score if session else None
-            ),
+            "accuracy": accuracy_score,
+            "fluency": fluency_score,
+            "clarity": clarity_score,
+            "keyword_adherence": keyword_adherence_score,
+            "soft_skills": soft_skills_score,
         },
         "trainer_verdict_status": (
             session.trainer_verdict_status if is_sim_session and session else None

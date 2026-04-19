@@ -55,7 +55,9 @@ BPO_MICROLEARNING_LIBRARY: list[dict[str, Any]] = [
         "passing_score": 80,
         "skill_focus": "Compassionate opening statements for grieving callers",
         "difficulty": ScenarioDifficulty.BASIC,
+        "content_url": "https://www.youtube.com/watch?v=1Evwgu369Jw",
         "content_data": {
+            "asset_url": "https://www.youtube.com/watch?v=1Evwgu369Jw",
             "practice_prompt": "The caller says, 'My mother passed away this morning, and I do not know what to do with her St. Peter plan.' Deliver a calm, compassionate first response.",
             "required_keywords": ["sorry", "help", "verify", "next step"],
             "sample_answer": "I am very sorry for your loss. I will help you through this, verify the plan details, and explain the next step clearly.",
@@ -232,7 +234,9 @@ BPO_MICROLEARNING_LIBRARY: list[dict[str, Any]] = [
         "passing_score": 80,
         "skill_focus": "Clear spoken delivery for sensitive support updates",
         "difficulty": ScenarioDifficulty.INTERMEDIATE,
+        "content_url": "https://www.youtube.com/watch?v=U3CWxNGNn3k",
         "content_data": {
+            "asset_url": "https://www.youtube.com/watch?v=U3CWxNGNn3k",
             "practice_prompt": "Say a short update that explains the family will receive a reference number, claim review guidance, and the next callback window.",
             "required_keywords": ["reference number", "claim review", "callback"],
             "sample_answer": "I will provide your reference number, explain the claim review process, and confirm the callback window for the next update.",

@@ -32,7 +32,7 @@ const DEFAULT_SETTINGS: CertificationSettingsPayload = {
   registrar_name: 'St. Peter Velle Registrar',
   signatory_title: 'Authorized Signatory',
   asr_passing_threshold: 80,
-  mcq_passing_threshold: 100,
+  mcq_passing_threshold: 90,
   certificate_prefix: 'SPV',
   certificate_title: 'Certificate of Completion',
   certificate_subtitle: 'Issued for completed trainee tasks and assessments',

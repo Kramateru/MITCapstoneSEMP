@@ -2,10 +2,12 @@
 Certificate issuance helpers for completion-based and competency-based awards.
 """
 
+import re
 import secrets
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models import (
@@ -24,6 +26,7 @@ from ..models import (
 SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES = {
     "sim_floor_session",
     "mcq_assessment",
+    "mcq_assessment_completion",
     "microlearning_assignment",
 }
 LEGACY_MICROLEARNING_SOURCES = {"microlearning"}
@@ -88,12 +91,24 @@ def resolve_issuer_id(
 def _next_certificate_number(db: Session, settings: CertificationSettings) -> str:
     prefix = (settings.certificate_prefix or "SPV").strip().upper()
     year = datetime.utcnow().year
-    count = (
-        db.query(CertificateRecord)
+    pattern = re.compile(rf"^{re.escape(prefix)}-{year}-(\d+)$")
+    existing_numbers = (
+        db.query(CertificateRecord.certificate_no)
         .filter(CertificateRecord.certificate_no.like(f"{prefix}-{year}-%"))
-        .count()
+        .all()
     )
-    return f"{prefix}-{year}-{count + 1:04d}"
+
+    highest_suffix = 0
+    for (certificate_no,) in existing_numbers:
+        match = pattern.match(str(certificate_no or "").strip().upper())
+        if not match:
+            continue
+        try:
+            highest_suffix = max(highest_suffix, int(match.group(1)))
+        except ValueError:
+            continue
+
+    return f"{prefix}-{year}-{highest_suffix + 1:04d}"
 
 
 def award_certificate(
@@ -269,6 +284,14 @@ def _is_supported_certificate_record(
         )
         return bool(submission and submission.is_passed)
 
+    if normalized_source_type == "mcq_assessment_completion":
+        trainee = db.query(User).filter(User.id == certificate.trainee_id).first()
+        return bool(
+            trainee
+            and certificate.source_id == certificate.trainee_id
+            and _trainee_has_passed_all_active_mcq_assessments(db, trainee)
+        )
+
     if normalized_source_type == "microlearning_assignment":
         assignment = (
             db.query(MicrolearningAssignment)
@@ -281,6 +304,112 @@ def _is_supported_certificate_record(
         return bool(assignment and _microlearning_assignment_is_passed(assignment))
 
     return False
+
+
+def _mcq_completion_assignment_title(
+    trainee: User,
+) -> str:
+    active_batches = [batch for batch in trainee.batches if getattr(batch, "is_active", True)]
+    if len(active_batches) == 1:
+        batch = active_batches[0]
+        if batch.wave_number is not None:
+            return f"{batch.name} Wave {batch.wave_number} Assessment Completion"
+        return f"{batch.name} Assessment Completion"
+    return "Trainer-Assigned Assessment Completion"
+
+
+def _get_active_mcq_assessments_for_trainee(
+    db: Session,
+    trainee: User,
+) -> list[MCQAssessment]:
+    batch_ids = [batch.id for batch in trainee.batches if getattr(batch, "is_active", True)]
+    filters = [MCQAssessment.assigned_user_id == trainee.id]
+    if batch_ids:
+        filters.append(MCQAssessment.assigned_batch_id.in_(batch_ids))
+
+    return (
+        db.query(MCQAssessment)
+        .filter(
+            MCQAssessment.is_active == True,
+            or_(*filters),
+        )
+        .all()
+    )
+
+
+def _get_passed_active_mcq_submission_map(
+    db: Session,
+    trainee: User,
+) -> tuple[list[MCQAssessment], dict[str, MCQSubmission]]:
+    active_assessments = _get_active_mcq_assessments_for_trainee(db, trainee)
+    if not active_assessments:
+        return [], {}
+
+    assessment_ids = [assessment.id for assessment in active_assessments]
+    passed_rows = (
+        db.query(MCQSubmission)
+        .filter(
+            MCQSubmission.trainee_id == trainee.id,
+            MCQSubmission.assessment_id.in_(assessment_ids),
+            MCQSubmission.is_passed == True,
+        )
+        .all()
+    )
+    return active_assessments, {row.assessment_id: row for row in passed_rows}
+
+
+def _trainee_has_passed_all_active_mcq_assessments(
+    db: Session,
+    trainee: User,
+) -> bool:
+    active_assessments, passed_by_assessment = _get_passed_active_mcq_submission_map(
+        db,
+        trainee,
+    )
+    return bool(active_assessments) and all(
+        assessment.id in passed_by_assessment for assessment in active_assessments
+    )
+
+
+def _sync_mcq_completion_certificate(
+    db: Session,
+    trainee: User,
+) -> tuple[Optional[CertificateRecord], bool]:
+    active_assessments, passed_by_assessment = _get_passed_active_mcq_submission_map(
+        db,
+        trainee,
+    )
+    if not active_assessments:
+        return None, False
+
+    if any(assessment.id not in passed_by_assessment for assessment in active_assessments):
+        return None, False
+
+    passed_rows = list(passed_by_assessment.values())
+    if not passed_rows:
+        return None, False
+
+    latest_submission = max(
+        passed_rows,
+        key=lambda row: row.submitted_at or datetime.utcnow(),
+    )
+    average_score = round(
+        sum(float(row.score_percentage or 0.0) for row in passed_rows) / max(len(passed_rows), 1),
+        2,
+    )
+
+    return award_certificate(
+        db,
+        trainee_id=trainee.id,
+        issuer_id=active_assessments[0].assigned_by,
+        source_type="mcq_assessment_completion",
+        source_id=trainee.id,
+        achievement_title=_mcq_completion_assignment_title(trainee),
+        achievement_type="completion",
+        remarks=f"Completed {len(active_assessments)} trainer-assigned assessments.",
+        score=average_score,
+        issued_at=latest_submission.submitted_at,
+    )
 
 
 def prune_trainee_activity_certificates(db: Session, trainee_id: str) -> int:
@@ -374,6 +503,10 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
         )
         if created:
             created_certificates.append(certificate)
+
+    completion_certificate, completion_created = _sync_mcq_completion_certificate(db, trainee)
+    if completion_certificate and completion_created:
+        created_certificates.append(completion_certificate)
 
     microlearning_assignments = (
         db.query(MicrolearningAssignment)

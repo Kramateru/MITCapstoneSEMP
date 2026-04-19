@@ -13,6 +13,8 @@ from typing import Any, Optional
 
 import requests
 
+from ..config_validation import is_usable_azure_speech_key, normalize_env_value
+
 try:
     import azure.cognitiveservices.speech as speechsdk
 
@@ -239,15 +241,14 @@ class AzureTextToSpeechEngine:
     """Optional server-side TTS provider for audio responses."""
 
     def __init__(self) -> None:
-        self.speech_key = os.getenv("AZURE_SPEECH_KEY")
-        self.speech_region = os.getenv("AZURE_SPEECH_REGION", "eastus")
-        self.default_voice = os.getenv("AZURE_TTS_VOICE", "en-US-JennyNeural")
+        self.speech_key = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
+        self.speech_region = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
+        self.default_voice = normalize_env_value(os.getenv("AZURE_TTS_VOICE")) or "en-US-JennyNeural"
 
     def is_available(self) -> bool:
         return bool(
             AZURE_TTS_AVAILABLE
-            and self.speech_key
-            and self.speech_key != "your_key_here"
+            and is_usable_azure_speech_key(self.speech_key)
             and self.speech_region
         )
 

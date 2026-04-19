@@ -11,6 +11,13 @@ from typing import Optional, Dict, Any
 from datetime import datetime
 from urllib.parse import urlparse
 
+from .config_validation import (
+    classify_supabase_api_key,
+    is_usable_supabase_service_key,
+    is_usable_supabase_url,
+    normalize_env_value,
+)
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -26,12 +33,12 @@ class SupabaseClient:
 
     def __init__(self):
         self.client: Optional[Client] = None
-        self.url = (
+        self.url = normalize_env_value(
             os.getenv("SUPABASE_URL")
             or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
             or os.getenv("REACT_APP_SUPABASE_URL")
         )
-        self.key = (
+        self.key = normalize_env_value(
             os.getenv("SUPABASE_SERVICE_ROLE_KEY")
             or os.getenv("SUPABASE_SERVICE_KEY")
             or os.getenv("SUPABASE_SERVICE_ROLE")
@@ -41,19 +48,49 @@ class SupabaseClient:
             "SIM_FLOOR_STORAGE_BUCKET_NAME", "sim-floor-audio"
         )
         self.is_available = False
+        self.config_status = "not_configured"
+        self.status_detail = (
+            "Supabase service credentials are not configured. "
+            "Set SUPABASE_URL and SUPABASE_SERVICE_KEY to enable storage features."
+        )
+        self.key_kind = classify_supabase_api_key(self.key)
 
-        if SUPABASE_AVAILABLE and self.url and self.key:
+        if SUPABASE_AVAILABLE and is_usable_supabase_url(self.url) and is_usable_supabase_service_key(self.key):
             try:
                 self.client = create_client(self.url, self.key)
                 self.is_available = True
+                self.config_status = "configured"
+                self.status_detail = "Supabase storage client initialized successfully."
                 logger.info("✓ Supabase client initialized successfully")
             except Exception as e:
+                self.config_status = "invalid"
+                self.status_detail = f"Supabase client initialization failed: {e}"
                 logger.warning(f"Failed to initialize Supabase: {e}")
         else:
             if not SUPABASE_AVAILABLE:
+                self.config_status = "missing_dependency"
+                self.status_detail = (
+                    "Supabase Python client is not installed. Install the backend dependencies to enable storage features."
+                )
                 logger.info("Supabase library not available. Install with: pip install supabase")
-            elif not self.url or not self.key:
-                logger.info("Supabase credentials not configured. Set SUPABASE_URL and SUPABASE_SERVICE_KEY")
+            elif not self.url:
+                self.config_status = "invalid"
+                self.status_detail = (
+                    "SUPABASE_URL is missing or malformed. Use the project URL from Supabase settings."
+                )
+                logger.warning(self.status_detail)
+            elif not self.key:
+                self.config_status = "invalid"
+                self.status_detail = (
+                    "SUPABASE_SERVICE_KEY is missing. Use a service-role JWT or an sb_secret key."
+                )
+                logger.warning(self.status_detail)
+            else:
+                self.config_status = "invalid"
+                self.status_detail = (
+                    "SUPABASE_SERVICE_KEY is malformed. Use a full service-role JWT or an sb_secret key."
+                )
+                logger.warning(self.status_detail)
 
     def upload_audio(
         self,

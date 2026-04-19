@@ -11,6 +11,7 @@ import {
   Clock3,
   FileText,
   Mic,
+  RefreshCw,
   RotateCcw,
   Square,
 } from 'lucide-react';
@@ -172,19 +173,6 @@ function formatDate(value?: string | null) {
   return parsed.toLocaleString();
 }
 
-function formatShortDate(value?: string | null) {
-  if (!value) {
-    return 'No due date';
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-
-  return parsed.toLocaleDateString();
-}
-
 function formatBatchLabel(assignment?: AssignmentSummary | null) {
   if (!assignment) {
     return 'No batch assigned';
@@ -209,21 +197,58 @@ function formatBatchLabel(assignment?: AssignmentSummary | null) {
   return 'No batch assigned';
 }
 
-function isAssignmentOverdue(assignment?: AssignmentSummary | null) {
-  if (!assignment?.due_date || !assignment?.status) {
+function getYouTubeEmbedUrl(url?: string | null) {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    const hostname = parsed.hostname.toLowerCase();
+    let videoId = '';
+
+    if (hostname === 'youtu.be') {
+      videoId = parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
+    } else if (hostname.includes('youtube.com') || hostname.includes('youtube-nocookie.com')) {
+      if (parsed.pathname === '/watch') {
+        videoId = parsed.searchParams.get('v') || '';
+      } else if (parsed.pathname.startsWith('/embed/')) {
+        videoId = parsed.pathname.split('/embed/')[1]?.split('/')[0] || '';
+      } else if (parsed.pathname.startsWith('/shorts/')) {
+        videoId = parsed.pathname.split('/shorts/')[1]?.split('/')[0] || '';
+      }
+    }
+
+    return /^[A-Za-z0-9_-]{11}$/.test(videoId)
+      ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDirectVideoFile(url?: string | null) {
+  if (!url) {
     return false;
   }
 
-  if (assignment.status === 'completed' || assignment.status === 'certified') {
-    return false;
+  return /(^\/|\.mp4($|[?#])|\.webm($|[?#])|\.ogg($|[?#])|\.mov($|[?#])|\.m4v($|[?#]))/i.test(url);
+}
+
+function getVideoAssetKind(url?: string | null) {
+  if (!url) {
+    return 'none' as const;
   }
 
-  const dueDate = new Date(assignment.due_date);
-  if (Number.isNaN(dueDate.getTime())) {
-    return false;
+  if (getYouTubeEmbedUrl(url)) {
+    return 'youtube' as const;
   }
 
-  return dueDate.getTime() < Date.now();
+  if (isDirectVideoFile(url)) {
+    return 'file' as const;
+  }
+
+  return 'external' as const;
 }
 
 function collectSpeechTranscript(event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) {
@@ -284,6 +309,34 @@ function getInputModeLabel(inputMode?: string | null) {
   return 'Typed Response';
 }
 
+async function readApiPayload<T>(response: Response): Promise<T | string | null> {
+  const contentType = response.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    return (await response.json().catch(() => null)) as T | null;
+  }
+
+  const text = await response.text().catch(() => '');
+  return text.trim() || null;
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string) {
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload;
+  }
+
+  if (payload && typeof payload === 'object') {
+    const candidate = payload as { detail?: unknown; error?: unknown; message?: unknown };
+    for (const value of [candidate.detail, candidate.error, candidate.message]) {
+      if (typeof value === 'string' && value.trim()) {
+        return value;
+      }
+    }
+  }
+
+  return fallback;
+}
+
 export default function MicrolearningHub() {
   const { token, isLoading: isAuthLoading } = useAuth();
 
@@ -293,6 +346,7 @@ export default function MicrolearningHub() {
   const [exerciseResponses, setExerciseResponses] = useState<Record<string, ExerciseResponseState>>({});
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [refreshingAssignments, setRefreshingAssignments] = useState(false);
   const [submittingExerciseId, setSubmittingExerciseId] = useState('');
   const [videoCompleted, setVideoCompleted] = useState<Record<string, boolean>>({});
   const [flippedFlashcardAssignments, setFlippedFlashcardAssignments] = useState<Record<string, boolean>>({});
@@ -320,13 +374,17 @@ export default function MicrolearningHub() {
       headers,
     });
 
-    const contentType = response.headers.get('content-type') || '';
-    const payload = contentType.includes('application/json') ? await response.json() : null;
+    const payload = await readApiPayload<T>(response);
 
     if (!response.ok) {
-      const message =
-        (payload as { detail?: string } | null)?.detail || 'Request failed. Please try again.';
-      throw new Error(message);
+      throw new Error(getApiErrorMessage(payload, 'Request failed. Please try again.'));
+    }
+
+    if (payload === null || payload === undefined || typeof payload === 'string') {
+      if (response.status === 204) {
+        return undefined as T;
+      }
+      throw new Error('The server returned an invalid response. Please try again.');
     }
 
     return payload as T;
@@ -375,10 +433,15 @@ export default function MicrolearningHub() {
   async function loadAssignments(preferredAssignmentId?: string) {
     if (!token) {
       setIsLoadingAssignments(false);
+      setRefreshingAssignments(false);
       return;
     }
 
-    setIsLoadingAssignments(true);
+    if (assignments.length === 0 && !preferredAssignmentId) {
+      setIsLoadingAssignments(true);
+    } else {
+      setRefreshingAssignments(true);
+    }
 
     try {
       const response = await apiRequest<{ assignments: AssignmentSummary[] }>(
@@ -412,6 +475,7 @@ export default function MicrolearningHub() {
       toast.error(message);
     } finally {
       setIsLoadingAssignments(false);
+      setRefreshingAssignments(false);
     }
   }
 
@@ -428,6 +492,25 @@ export default function MicrolearningHub() {
     recognitionRef.current?.stop();
     recognitionRef.current = null;
   }, []);
+
+  useEffect(() => {
+    if (isAuthLoading || !token) {
+      return;
+    }
+
+    const syncAssignments = () => {
+      void loadAssignments(activeAssignmentId || undefined);
+    };
+
+    const intervalId = window.setInterval(syncAssignments, 30000);
+    window.addEventListener('focus', syncAssignments);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', syncAssignments);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeAssignmentId, isAuthLoading, token]);
 
   function updateExerciseResponse(exerciseId: string, patch: Partial<ExerciseResponseState>) {
     setExerciseResponses((current) => ({
@@ -616,6 +699,8 @@ export default function MicrolearningHub() {
     const moduleDetail = assignmentDetail.module;
     const content = moduleDetail.content_data || {};
     const assetUrl = moduleDetail.content_url || content.asset_url || activeAssignment.content_url;
+    const youtubeEmbedUrl = getYouTubeEmbedUrl(assetUrl);
+    const assetKind = getVideoAssetKind(assetUrl);
 
     if (moduleDetail.module_type === 'video') {
       const unlocked = !assetUrl || videoCompleted[activeAssignment.id] || Boolean(activeAssignment.completed_exercises);
@@ -623,22 +708,65 @@ export default function MicrolearningHub() {
       return (
         <div className="rounded-xl border bg-white p-4">
           <p className="text-sm font-medium text-slate-700">Video Module</p>
-          {assetUrl ? (
+          {assetKind === 'file' && assetUrl ? (
             <video
               controls
               className="mt-3 w-full rounded-lg border"
               src={assetUrl}
               onEnded={() => setVideoCompleted((current) => ({ ...current, [activeAssignment.id]: true }))}
             />
+          ) : null}
+          {assetKind === 'youtube' && youtubeEmbedUrl ? (
+            <div className="mt-3 overflow-hidden rounded-lg border">
+              <div className="aspect-video bg-slate-100">
+                <iframe
+                  className="h-full w-full"
+                  src={youtubeEmbedUrl}
+                  title={activeAssignment.title}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                />
+              </div>
+            </div>
+          ) : null}
+          {assetKind === 'external' && assetUrl ? (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm text-slate-600">
+                This lesson uses an external media reference. Open it in a new tab, review it, then confirm below to unlock the practice prompt.
+              </p>
+              <Button asChild className="mt-3" variant="outline">
+                <a href={assetUrl} target="_blank" rel="noreferrer">
+                  Open Lesson Reference
+                </a>
+              </Button>
+            </div>
           ) : (
-            <p className="mt-3 text-sm text-slate-500">
-              No video file is attached yet, so the practice prompt is available immediately.
-            </p>
+            assetKind === 'none' ? (
+              <p className="mt-3 text-sm text-slate-500">
+                No video file is attached yet, so the practice prompt is available immediately.
+              </p>
+            ) : null
           )}
+          {assetKind !== 'none' && assetKind !== 'file' && !videoCompleted[activeAssignment.id] ? (
+            <div className="mt-3 flex flex-col gap-3 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-sky-800">
+                Review the lesson reference, then confirm so your practice activity unlocks.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setVideoCompleted((current) => ({ ...current, [activeAssignment.id]: true }))}
+              >
+                I reviewed this lesson
+              </Button>
+            </div>
+          ) : null}
           <p className="mt-3 text-sm text-slate-600">
             {unlocked
               ? 'The practice prompt is unlocked. Submit your response below.'
-              : 'Finish the video first to unlock the practice prompt and complete the activity.'}
+              : assetKind === 'file'
+                ? 'Finish the video first to unlock the practice prompt and complete the activity.'
+                : 'Review the lesson reference first, then confirm it to unlock the practice prompt and complete the activity.'}
           </p>
           {unlocked ? (
             <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
@@ -800,9 +928,9 @@ export default function MicrolearningHub() {
     <div className="space-y-6">
       <Card className="overflow-hidden border-none bg-gradient-to-r from-sky-50 via-white to-emerald-50 shadow-sm">
         <CardHeader>
-          <CardTitle>Microlearning Assignment Center</CardTitle>
+          <CardTitle>Microlearning Queue</CardTitle>
           <CardDescription>
-            Work through your assigned tasks, complete the activity type shown, and unlock certification automatically once you pass.
+            Pick a module from the left, study the lesson on the right, answer the exercises, and earn a certificate once you pass.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -847,8 +975,25 @@ export default function MicrolearningHub() {
       <div className="grid gap-6 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
         <Card>
           <CardHeader>
-            <CardTitle>Your Assigned Modules</CardTitle>
-            <CardDescription>Select a module to open its exercises and continue your work.</CardDescription>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <CardTitle>Your Assigned Modules</CardTitle>
+                <CardDescription>
+                  The left panel keeps things simple with just the module title and progress. Select one to open the
+                  full lesson on the right.
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void loadAssignments(activeAssignmentId || undefined)}
+                disabled={isLoadingAssignments || refreshingAssignments}
+              >
+                <RefreshCw className={`mr-2 size-4 ${refreshingAssignments ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             {isLoadingAssignments ? (
@@ -859,7 +1004,6 @@ export default function MicrolearningHub() {
               <div className="space-y-3">
                 {assignments.map((assignment) => {
                   const isActive = assignment.id === activeAssignmentId;
-                  const overdue = isAssignmentOverdue(assignment);
 
                   return (
                     <button
@@ -870,47 +1014,17 @@ export default function MicrolearningHub() {
                         isActive ? 'border-sky-400 bg-sky-50' : 'border-slate-200 hover:border-sky-200'
                       }`}
                     >
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-medium">{assignment.title}</p>
-                        {assignment.category ? (
-                          <Badge className={CATEGORY_BADGE_STYLES[assignment.category]}>
-                            {formatLabel(assignment.category)}
-                          </Badge>
-                        ) : null}
-                        {assignment.topic_category_name ? <Badge variant="outline">{assignment.topic_category_name}</Badge> : null}
-                      </div>
-
-                      <p className="mt-2 text-sm text-slate-600">
-                        {assignment.description || 'No description provided yet.'}
-                      </p>
-
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                        <Badge className={STATUS_BADGE_STYLES[assignment.status]}>
-                          {formatStatusLabel(assignment.status)}
-                        </Badge>
-                        {assignment.is_mandatory ? <Badge variant="outline">Mandatory</Badge> : null}
-                        {assignment.module_type ? <Badge variant="outline">{formatLabel(assignment.module_type)}</Badge> : null}
-                        {assignment.due_date ? (
-                          <Badge
-                            variant="outline"
-                            className={overdue ? 'border-rose-300 text-rose-700' : ''}
-                          >
-                            {overdue ? 'Overdue' : `Due ${formatShortDate(assignment.due_date)}`}
-                          </Badge>
-                        ) : null}
-                        <span>{assignment.completed_exercises}/{assignment.exercise_count} exercises</span>
-                        <span>{assignment.duration_minutes || 0} minutes</span>
-                      </div>
-
-                      <div className="mt-2 text-xs text-slate-500">
-                        Batch / Wave: {formatBatchLabel(assignment)}
-                        {assignment.assigned_by_name ? ` | Assigned by: ${assignment.assigned_by_name}` : ''}
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="font-medium text-slate-900">{assignment.title}</p>
+                        <span className="text-sm font-semibold text-slate-600">
+                          {Math.round(assignment.completion_percentage)}%
+                        </span>
                       </div>
 
                       <div className="mt-3 space-y-2">
                         <div className="flex items-center justify-between text-xs text-slate-500">
                           <span>Progress</span>
-                          <span>{Math.round(assignment.completion_percentage)}%</span>
+                          <span>{assignment.completed_exercises}/{assignment.exercise_count} exercises done</span>
                         </div>
                         <Progress value={assignment.completion_percentage || 0} />
                       </div>
@@ -926,7 +1040,7 @@ export default function MicrolearningHub() {
           <CardHeader>
             <CardTitle>{activeAssignment?.title || 'Module Detail'}</CardTitle>
             <CardDescription>
-              {activeAssignment?.skill_focus || 'Open a module to view the exercise instructions and save your answers.'}
+              {activeAssignment?.skill_focus || 'Open a module to review the lesson, complete the exercises, and save your answers.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -936,6 +1050,25 @@ export default function MicrolearningHub() {
               </div>
             ) : (
               <div className="space-y-6">
+                <div className="grid gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-4 md:grid-cols-3">
+                  <div className="rounded-lg bg-white px-4 py-3">
+                    <div className="text-xs uppercase tracking-[0.16em] text-sky-700">Step 1</div>
+                    <div className="mt-2 font-semibold text-slate-900">
+                      {assignmentDetail.module.module_type === 'video' ? 'Watch or review the lesson' : 'Review the learning material'}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-white px-4 py-3">
+                    <div className="text-xs uppercase tracking-[0.16em] text-sky-700">Step 2</div>
+                    <div className="mt-2 font-semibold text-slate-900">Complete every exercise</div>
+                  </div>
+                  <div className="rounded-lg bg-white px-4 py-3">
+                    <div className="text-xs uppercase tracking-[0.16em] text-sky-700">Step 3</div>
+                    <div className="mt-2 font-semibold text-slate-900">
+                      {activeAssignment.certificate_id ? 'Certificate earned' : 'Pass to unlock your certificate'}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="rounded-xl border bg-slate-50 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="space-y-2">
@@ -1018,6 +1151,16 @@ export default function MicrolearningHub() {
                     </div>
                     <Progress value={activeAssignment.completion_percentage || 0} />
                   </div>
+
+                  <div className="mt-4 rounded-lg border bg-white p-3 text-sm text-slate-600">
+                    {activeAssignment.status === 'assigned'
+                      ? 'This module is ready to start. Review the lesson below, then answer each exercise.'
+                      : activeAssignment.status === 'in_progress'
+                        ? 'You already started this module. Continue where you left off and finish the remaining exercises.'
+                        : activeAssignment.certificate_id
+                          ? 'This module is complete and already recorded in your certificate list.'
+                          : 'You completed the exercises. Reach the passing score to unlock the certificate.'}
+                  </div>
                   {activeAssignment.notes ? (
                     <div className="mt-4 rounded-lg border bg-white p-3 text-sm text-slate-600">
                       <p className="font-medium text-slate-700">Trainer Notes</p>
@@ -1037,7 +1180,7 @@ export default function MicrolearningHub() {
                         <div className="text-sm text-emerald-800">
                           Certificate unlocked. This accomplishment now appears in your certificates and reports.
                         </div>
-                        <Button type="button" variant="outline" onClick={() => window.location.assign('/trainee/reports?tab=certificates')}>
+                        <Button type="button" variant="outline" onClick={() => window.location.assign('/trainee/certificates')}>
                           View Certificate
                         </Button>
                       </div>
@@ -1060,6 +1203,11 @@ export default function MicrolearningHub() {
                       assignmentDetail.module.content_data?.asset_url ||
                       activeAssignment.content_url,
                     );
+                    const videoAssetUrl =
+                      assignmentDetail.module.content_url ||
+                      assignmentDetail.module.content_data?.asset_url ||
+                      activeAssignment.content_url;
+                    const videoAssetKind = getVideoAssetKind(videoAssetUrl);
                     const videoUnlocked =
                       assignmentDetail.module.module_type !== 'video' ||
                       !hasVideoAsset ||
@@ -1256,7 +1404,9 @@ export default function MicrolearningHub() {
 
                           {isVideoLocked ? (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                              Complete the video first to unlock this practice prompt.
+                              {videoAssetKind === 'file'
+                                ? 'Complete the video first to unlock this practice prompt.'
+                                : 'Review the lesson reference and confirm it first to unlock this practice prompt.'}
                             </div>
                           ) : null}
 

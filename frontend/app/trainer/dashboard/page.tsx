@@ -4,6 +4,7 @@ import {
     AlertCircle,
     ArrowRight,
     BookOpen,
+    ClipboardList,
     ClipboardCheck,
     FileText,
     Layers3,
@@ -365,6 +366,13 @@ export default function TrainerDashboardPage() {
               >
                 <BookOpen className="size-4" />
                 Microlearning
+              </Link>
+              <Link
+                href="/trainer/assessments"
+                className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition hover:bg-muted"
+              >
+                <ClipboardList className="size-4" />
+                Assessments
               </Link>
             </div>
           </div>

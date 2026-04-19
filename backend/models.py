@@ -690,6 +690,10 @@ class MCQCategory(Base):
     passing_threshold = Column(Float, default=90.0)
     is_global = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)
+    selected_question_ids = Column(
+        JSONB().with_variant(JSON, "sqlite"),
+        default=list,
+    )
     created_by = Column(String(36), ForeignKey("user.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -733,10 +737,15 @@ class MCQAssessment(Base):
     description = Column(Text, nullable=True)
     category_id = Column(String(36), ForeignKey("mcq_category.id"), nullable=False)
     question_ids = Column(JSON, default=list)  # explicit pinned question ids
+    question_snapshot = Column(
+        JSONB().with_variant(JSON, "sqlite"),
+        default=list,
+    )
     assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
     assigned_user_id = Column(String(36), ForeignKey("user.id"), nullable=True)
     assigned_batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
     due_date = Column(DateTime, nullable=True)
+    time_limit_minutes = Column(Integer, default=30)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -751,8 +760,13 @@ class MCQSubmission(Base):
     assessment_id = Column(String(36), ForeignKey("mcq_assessment.id"), nullable=False)
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     answers = Column(JSON, default=dict)  # {question_id: "A"}
+    review = Column(
+        JSONB().with_variant(JSON, "sqlite"),
+        default=list,
+    )
     score_percentage = Column(Float, default=0.0)
     is_passed = Column(Boolean, default=False)
+    attempt_count = Column(Integer, default=1)
     submitted_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -856,7 +870,7 @@ class CertificationSettings(Base):
         ),
     )
     asr_passing_threshold = Column(Float, default=80.0)
-    mcq_passing_threshold = Column(Float, default=100.0)
+    mcq_passing_threshold = Column(Float, default=90.0)
     unit_of_competency = Column(
         String(255), default="Communication effectively in English for CCS"
     )

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import VoiceActivityBars from '@/app/components/trainee/voice-activity-bars';
@@ -277,7 +277,25 @@ function statusLabel(callState: CallState, isOnHold: boolean) {
   return 'Connected';
 }
 
-export default function TraineeSimFloorPage() {
+function TraineeSimFloorPageFallback() {
+  return (
+    <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
+      <div className="space-y-6">
+        <Card className="border-slate-200 bg-white shadow-sm">
+          <CardHeader>
+            <CardTitle>Loading Sim Floor</CardTitle>
+            <CardDescription>Preparing your assigned mock-call workspace.</CardDescription>
+          </CardHeader>
+          <CardContent className="text-sm text-slate-600">
+            Please wait while the session context is loaded.
+          </CardContent>
+        </Card>
+      </div>
+    </DashboardLayout>
+  );
+}
+
+function TraineeSimFloorPageContent() {
   const { user } = useAuth();
   const searchParams = useSearchParams();
   const [scenarios, setScenarios] = useState<ScenarioCard[]>([]);
@@ -1737,7 +1755,7 @@ export default function TraineeSimFloorPage() {
                             type="button"
                             variant="outline"
                             className="border-white/15 bg-transparent text-white hover:bg-white/10"
-                            onClick={() => window.location.assign('/trainee/reports?tab=certificates')}
+                            onClick={() => window.location.assign('/trainee/certificates')}
                           >
                             <CheckCircle2 className="mr-2 h-4 w-4" />
                             Open Certificates
@@ -1777,6 +1795,14 @@ export default function TraineeSimFloorPage() {
         ) : null}
       </div>
     </DashboardLayout>
+  );
+}
+
+export default function TraineeSimFloorPage() {
+  return (
+    <Suspense fallback={<TraineeSimFloorPageFallback />}>
+      <TraineeSimFloorPageContent />
+    </Suspense>
   );
 }
 

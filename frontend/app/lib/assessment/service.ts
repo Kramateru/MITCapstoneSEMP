@@ -303,7 +303,16 @@ async function assertSupabaseResult<T>(
   promise: PromiseLike<{ data: T | null; error: { message: string } | null }>,
   fallback: string,
 ) {
-  const result = await promise
+  let result: { data: T | null; error: { message: string } | null }
+  try {
+    result = await promise
+  } catch {
+    throw new AssessmentHttpError(
+      503,
+      'Unable to reach the Supabase assessment service right now. Please try again shortly.',
+    )
+  }
+
   if (result.error) {
     throw new AssessmentHttpError(500, result.error.message || fallback)
   }

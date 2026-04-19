@@ -293,7 +293,7 @@ export default function TrainerMicrolearningStudio() {
   const needsMediaAsset = ['video', 'infographic', 'case_study'].includes(moduleForm.module_type);
   const mediaAssetLabel =
     moduleForm.module_type === 'video'
-      ? 'Video Upload'
+      ? 'Video or YouTube Link'
       : moduleForm.module_type === 'infographic'
         ? 'Infographic / Image Upload'
         : moduleForm.module_type === 'case_study'
@@ -301,7 +301,7 @@ export default function TrainerMicrolearningStudio() {
           : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
-      ? 'Upload the trainer video for the de-escalation toolkit.'
+      ? 'Upload a trainer video or paste a YouTube link trainees should review before the practice prompt.'
       : moduleForm.module_type === 'infographic'
         ? 'Upload the infographic or image trainees should review.'
         : moduleForm.module_type === 'case_study'
@@ -726,7 +726,7 @@ export default function TrainerMicrolearningStudio() {
                     <input type="file" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAsset(file); event.currentTarget.value = ''; }} />
                   </label>
                 </div>
-                <Input className="mt-3" value={moduleForm.content_url} onChange={(event) => setModuleForm((current) => ({ ...current, content_url: event.target.value }))} placeholder="https://... or /media/..." />
+                <Input className="mt-3" value={moduleForm.content_url} onChange={(event) => setModuleForm((current) => ({ ...current, content_url: event.target.value }))} placeholder="https://youtube.com/... or /media/..." />
               </div>
             ) : null}
 

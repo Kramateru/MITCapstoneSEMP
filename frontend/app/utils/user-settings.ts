@@ -304,6 +304,15 @@ async function readResponseMessage(response: Response) {
   return response.statusText || 'Request failed';
 }
 
+async function readJsonPayload<T>(response: Response): Promise<T | null> {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    return null;
+  }
+
+  return (await response.json().catch(() => null)) as T | null;
+}
+
 export async function fetchUserSettingsBundle(): Promise<LoadedUserSettings> {
   const headers = createAuthHeaders();
   const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null;
@@ -317,9 +326,10 @@ export async function fetchUserSettingsBundle(): Promise<LoadedUserSettings> {
 
   let systemSettings = FALLBACK_SYSTEM_SETTINGS;
   if (systemResponse.ok) {
+    const systemPayload = await readJsonPayload<SystemSettingsPayload>(systemResponse);
     systemSettings = {
       ...FALLBACK_SYSTEM_SETTINGS,
-      ...(await systemResponse.json()),
+      ...(systemPayload || {}),
     };
   }
 
@@ -334,7 +344,7 @@ export async function fetchUserSettingsBundle(): Promise<LoadedUserSettings> {
     };
   }
 
-  const userPreferences = (await preferencesResponse.json()) as UserPreferencesPayload;
+  const userPreferences = (await readJsonPayload<UserPreferencesPayload>(preferencesResponse)) || {};
   const userSettings = normalizeUserSettings(systemSettings, userPreferences);
 
   cacheUserSettings(userSettings);

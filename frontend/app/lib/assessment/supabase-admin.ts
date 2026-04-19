@@ -4,6 +4,12 @@ import { createClient } from '@supabase/supabase-js'
 
 import { getConfigValue } from './env'
 
+type SupabaseApiKeyKind =
+  | 'sb_secret'
+  | 'sb_publishable'
+  | 'service_role_jwt'
+  | 'anon_jwt'
+
 function normalizeEnvValue(value: string) {
   const trimmed = value.trim()
   if (
@@ -23,6 +29,20 @@ function normalizeEnvValue(value: string) {
   }
 
   return trimmed
+}
+
+function isLikelySupabaseUrl(value: string) {
+  const normalized = normalizeEnvValue(value)
+  if (!normalized) {
+    return false
+  }
+
+  try {
+    const parsed = new URL(normalized)
+    return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !!parsed.host
+  } catch {
+    return false
+  }
 }
 
 function decodeJwtPayload(token: string) {
@@ -45,27 +65,35 @@ function decodeJwtPayload(token: string) {
   }
 }
 
-function isLikelySupabaseJwt(token: string, expectedRole?: 'service_role' | 'anon') {
+function getSupabaseApiKeyKind(token: string): SupabaseApiKeyKind | null {
   const normalized = normalizeEnvValue(token)
   if (!normalized) {
-    return false
+    return null
+  }
+
+  if (normalized.startsWith('sb_secret_')) {
+    return 'sb_secret'
+  }
+
+  if (normalized.startsWith('sb_publishable_')) {
+    return 'sb_publishable'
   }
 
   const segments = normalized.split('.')
-  if (segments.length !== 3 || segments.some((segment) => segment.length < 8)) {
-    return false
+  if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
+    return null
   }
 
   const payload = decodeJwtPayload(normalized)
-  if (!payload?.role) {
-    return false
+  if (payload?.role === 'service_role') {
+    return 'service_role_jwt'
   }
 
-  if (expectedRole && payload.role !== expectedRole) {
-    return false
+  if (payload?.role === 'anon') {
+    return 'anon_jwt'
   }
 
-  return true
+  return null
 }
 
 function resolveSupabaseApiKey() {
@@ -81,27 +109,39 @@ function resolveSupabaseApiKey() {
     'REACT_APP_ANON_KEY',
   ], ''))
 
-  if (isLikelySupabaseJwt(serviceRoleKey, 'service_role')) {
+  const serviceRoleKind = getSupabaseApiKeyKind(serviceRoleKey)
+  if (serviceRoleKind === 'sb_secret' || serviceRoleKind === 'service_role_jwt') {
     return serviceRoleKey
   }
 
-  if (isLikelySupabaseJwt(anonKey, 'anon')) {
+  const anonKeyKind = getSupabaseApiKeyKind(anonKey)
+  if (anonKeyKind === 'sb_publishable' || anonKeyKind === 'anon_jwt') {
     console.warn(
-      'Assessment workspace is falling back to the Supabase anon key because the configured service-role key is missing or malformed.',
+      'Assessment workspace is falling back to the Supabase publishable key because the configured service-role key is missing or malformed.',
     )
     return anonKey
   }
 
-  return serviceRoleKey || anonKey
+  return ''
 }
 
 export function createSupabaseAdminClient() {
-  const supabaseUrl = getConfigValue([
+  const supabaseUrl = normalizeEnvValue(getConfigValue([
     'NEXT_PUBLIC_SUPABASE_URL',
     'SUPABASE_URL',
     'REACT_APP_SUPABASE_URL',
-  ])
+  ], ''))
   const serviceRoleKey = resolveSupabaseApiKey()
+
+  if (!isLikelySupabaseUrl(supabaseUrl)) {
+    throw new Error('A valid Supabase URL is not configured for the assessment workspace.')
+  }
+
+  if (!serviceRoleKey) {
+    throw new Error(
+      'A valid Supabase service-role or publishable key is not configured for the assessment workspace.',
+    )
+  }
 
   return createClient(supabaseUrl, serviceRoleKey, {
     auth: {

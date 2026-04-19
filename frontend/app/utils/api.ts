@@ -7,6 +7,43 @@ export interface ApiResponse<T> {
   [key: string]: unknown
 }
 
+async function readResponsePayload(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type') || ''
+
+  if (contentType.includes('application/json')) {
+    return response.json().catch(() => null)
+  }
+
+  const text = await response.text().catch(() => '')
+  return text.trim() || null
+}
+
+function getPayloadErrorMessage(payload: unknown): string | null {
+  if (!payload) {
+    return null
+  }
+
+  if (typeof payload === 'string') {
+    return payload
+  }
+
+  if (typeof payload === 'object') {
+    const candidate = payload as {
+      detail?: unknown
+      error?: unknown
+      message?: unknown
+    }
+
+    for (const value of [candidate.detail, candidate.error, candidate.message]) {
+      if (typeof value === 'string' && value.trim()) {
+        return value
+      }
+    }
+  }
+
+  return null
+}
+
 export async function apiFetch<T>(
   input: RequestInfo,
   init?: RequestInit
@@ -27,12 +64,25 @@ export async function apiFetch<T>(
     headers,
   })
 
+  const payload = await readResponsePayload(response)
+
   if (!response.ok) {
-    const rtext = await response.text()
-    throw new Error(rtext || response.statusText)
+    const message = getPayloadErrorMessage(payload)
+    if (message) {
+      throw new Error(message)
+    }
+
+    if (response.status >= 500) {
+      throw new Error('Unable to reach the backend service right now.')
+    }
+
+    throw new Error(response.statusText || 'Request failed.')
   }
 
-  const payload = await response.json()
+  if (response.status === 204 || payload === null || payload === undefined) {
+    return undefined as T
+  }
+
   if (payload && typeof payload === 'object' && 'data' in payload) {
     return (payload as ApiResponse<T>).data as T
   }

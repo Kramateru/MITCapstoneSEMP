@@ -53,6 +53,7 @@ export interface MCQCategory {
   difficulty: 'basic' | 'intermediate' | 'advanced';
   passingThreshold: number;
   questionCount: number;
+  selectedQuestionCount?: number;
   canManage: boolean;
   createdById?: string;
   createdBy?: string;
@@ -68,6 +69,7 @@ type ApiCategory = {
   difficulty?: 'basic' | 'intermediate' | 'advanced';
   passing_threshold?: number;
   question_count?: number;
+  selected_question_count?: number;
   created_by?: string | null;
   created_by_name?: string | null;
   created_by_role?: string | null;
@@ -133,9 +135,10 @@ const formatDate = (value?: string | null) => {
 
 type MCQManagerProps = {
   scope?: 'owned' | 'all';
+  onDataChanged?: () => void | Promise<void>;
 };
 
-export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
+export default function MCQManager({ scope = 'owned', onDataChanged }: MCQManagerProps) {
   const { user } = useAuth();
   const [questions, setQuestions] = useState<MCQQuestion[]>([]);
   const [categories, setCategories] = useState<MCQCategory[]>([]);
@@ -174,10 +177,12 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         get<{ count: number; categories: ApiCategory[] }>('/api/certification/mcq/categories', { scope }),
         get<{ count: number; questions: ApiQuestion[] }>('/api/certification/mcq/questions', { scope }),
       ]);
-      const nextPassingThreshold =
+      const nextPassingThreshold = Math.max(
         typeof settingsResponse?.mcq_passing_threshold === 'number'
           ? settingsResponse.mcq_passing_threshold
-          : 90;
+          : 90,
+        90,
+      );
       setDefaultPassingThreshold(nextPassingThreshold);
       const mappedCategories: MCQCategory[] = (catResponse.categories || []).map((cat) => ({
         id: cat.id,
@@ -185,8 +190,10 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         description: cat.description,
         difficulty: cat.difficulty || 'basic',
         passingThreshold:
-          typeof cat.passing_threshold === 'number' ? cat.passing_threshold : 90,
+          typeof cat.passing_threshold === 'number' ? Math.max(cat.passing_threshold, 90) : 90,
         questionCount: typeof cat.question_count === 'number' ? cat.question_count : 0,
+        selectedQuestionCount:
+          typeof cat.selected_question_count === 'number' ? cat.selected_question_count : 0,
         canManage: user?.user_role === 'admin' || cat.created_by === user?.user_id,
         createdById: cat.created_by || undefined,
         createdBy: cat.created_by_name || 'Unknown user',
@@ -235,13 +242,13 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
       );
 
       if (showRefreshToast) {
-        toast.success('Trainer MCQ manager refreshed successfully.');
+        toast.success('Assessment category and question bank refreshed successfully.');
       }
     } catch (error) {
       console.error(error);
-      setLoadError('Unable to load MCQ data. Please try again.');
+      setLoadError('Unable to load assessment category data. Please try again.');
       if (showRefreshToast) {
-        toast.error('Failed to refresh MCQ data.');
+        toast.error('Failed to refresh the assessment category data.');
       }
     } finally {
       setIsLoading(false);
@@ -251,6 +258,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
 
   useEffect(() => {
     void loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scope, user?.user_id, user?.user_role]);
 
   const categoriesById = useMemo(
@@ -347,13 +355,14 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         correct_option: 'ABCD'[newQuestion.correctAnswer] || 'A',
         explanation: newQuestion.explanation.trim() || undefined,
       });
-      toast.success('MCQ question saved to the database.');
+      toast.success('Question bank item saved to the database.');
       resetCreateQuestionForm();
       setIsCreating(false);
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
-      toast.error('Failed to create the MCQ question.');
+      toast.error('Failed to create the question bank item.');
     }
   };
 
@@ -374,6 +383,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
       setNewCategory(emptyCategoryForm(defaultPassingThreshold));
       setIsCreatingCategory(false);
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to create the category.');
@@ -396,6 +406,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
       toast.success('Category updated successfully.');
       cancelCategoryEdit();
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to update the category.');
@@ -414,6 +425,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         cancelCategoryEdit();
       }
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to delete the category.');
@@ -444,6 +456,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
       toast.success('Question updated successfully.');
       cancelQuestionEdit();
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to update the question.');
@@ -462,6 +475,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         cancelQuestionEdit();
       }
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to delete the question.');
@@ -482,6 +496,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
       });
       toast.success('Question duplicated successfully.');
       await loadData();
+      await onDataChanged?.();
     } catch (error) {
       console.error(error);
       toast.error('Failed to duplicate the question.');
@@ -494,12 +509,12 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         <div>
           <h1 className="flex items-center gap-3 text-3xl">
             <ClipboardList className="size-8 text-blue-600" />
-            Trainer MCQ Manager
+            Assessment Category and Question Bank
           </h1>
           <p className="mt-2 text-sm text-gray-500">
             {scope === 'all'
-              ? 'Browse every active MCQ category and question saved in the database. You can edit only the records you created.'
-              : 'Create trainer-owned categories, build the question bank, and keep category question counts synced with the live database.'}
+              ? 'Browse every active assessment category and question-bank item saved in the database. You can edit only the records you created.'
+              : 'Create trainer-owned assessment categories, build the question bank, and keep the saved counts synced with the live database.'}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -528,7 +543,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         <CardContent className="pt-6 text-sm text-slate-700">
           {scope === 'all'
             ? 'The manager below shows the full active question bank from the database. Trainer-owned records remain editable, while other records stay visible as read-only references.'
-            : 'Best workflow: create a category first, then add or move questions under that category. The category cards below show the number of questions currently assigned in the database for each trainer-managed category.'}
+            : 'Best workflow: create the assessment category first, then add or move questions under that category. The cards below show the question-bank count and the saved category question-set count for each trainer-managed category.'}
         </CardContent>
       </Card>
 
@@ -607,13 +622,13 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
               <Label>Passing Threshold (%)</Label>
               <Input
                 type="number"
-                min={50}
+                min={90}
                 max={100}
                 value={newCategory.passingThreshold}
                 onChange={(e) =>
                   setNewCategory({
                     ...newCategory,
-                    passingThreshold: Number(e.target.value) || 90,
+                    passingThreshold: Math.min(Math.max(Number(e.target.value) || 90, 90), 100),
                   })
                 }
               />
@@ -640,7 +655,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         <Card className="border-blue-500">
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
-              <span>Create New MCQ Question</span>
+              <span>Create New Question Bank Item</span>
               <Button size="sm" variant="ghost" onClick={() => setIsCreating(false)}>
                 <X className="size-4" />
               </Button>
@@ -671,7 +686,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
               <Textarea
                 value={newQuestion.question}
                 onChange={(e) => setNewQuestion({ ...newQuestion, question: e.target.value })}
-                placeholder="Enter the MCQ question here"
+                placeholder="Enter the multiple-choice question here"
                 className="min-h-[80px]"
               />
             </div>
@@ -774,13 +789,13 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
                         <Label>Passing Threshold (%)</Label>
                         <Input
                           type="number"
-                          min={50}
+                          min={90}
                           max={100}
                           value={editingCategory.passingThreshold}
                           onChange={(e) =>
                             setEditingCategory({
                               ...editingCategory,
-                              passingThreshold: Number(e.target.value) || 90,
+                              passingThreshold: Math.min(Math.max(Number(e.target.value) || 90, 90), 100),
                             })
                           }
                         />
@@ -819,7 +834,8 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
                           <Badge variant="outline">
                             Passing: {category.passingThreshold}%
                           </Badge>
-                          <Badge>{category.questionCount} questions assigned</Badge>
+                          <Badge>{category.questionCount} bank items</Badge>
+                          <Badge variant="outline">{category.selectedQuestionCount || 0} saved to category</Badge>
                           {!category.canManage ? <Badge variant="secondary">Read Only</Badge> : null}
                         </div>
                         <p className="text-sm text-gray-500">
@@ -863,7 +879,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
               <div className="text-sm text-gray-500">
                 {scope === 'all'
                   ? 'No active categories are saved in the database yet.'
-                  : 'No trainer categories have been saved yet. Create a category first, then add questions under it.'}
+                  : 'No trainer categories have been saved yet. Create the category first, then add question-bank items under it.'}
               </div>
             )}
           </div>
@@ -872,7 +888,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle>{scope === 'all' ? 'All Database Questions' : 'MCQ Question Bank'}</CardTitle>
+          <CardTitle>{scope === 'all' ? 'All Database Questions' : 'Question Bank'}</CardTitle>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[600px]">
@@ -1074,7 +1090,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
                 <div className="text-sm text-gray-500">
                   {scope === 'all'
                     ? 'No active questions are saved in the database yet.'
-                    : 'No questions are saved yet. Create a category and add your first MCQ question.'}
+                    : 'No questions are saved yet. Create a category and add your first question-bank item.'}
                 </div>
               )}
             </div>
@@ -1082,7 +1098,7 @@ export default function MCQManager({ scope = 'owned' }: MCQManagerProps) {
         </CardContent>
       </Card>
 
-      {isLoading && <div className="text-sm text-gray-500">Loading MCQ data...</div>}
+      {isLoading && <div className="text-sm text-gray-500">Loading assessment category data...</div>}
       {loadError && <div className="text-sm text-red-600">{loadError}</div>}
     </div>
   );

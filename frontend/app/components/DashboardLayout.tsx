@@ -170,9 +170,10 @@ export function DashboardLayout({
           return;
         }
         const notifications = payload?.notifications || [];
-        const certificateBadge = notifications.filter((item) =>
-          (item.href || '').startsWith('/trainee/reports'),
-        ).length;
+        const certificateBadge = notifications.filter((item) => {
+          const href = item.href || '';
+          return href.startsWith('/trainee/certificates') || href.startsWith('/trainee/reports?tab=certificates');
+        }).length;
         const simFloorBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/sim-floor')).length;
         setSidebarBadgeMap({
           '/trainee/certificates': certificateBadge,

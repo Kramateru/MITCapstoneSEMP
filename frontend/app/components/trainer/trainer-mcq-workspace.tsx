@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { useAuth } from '@/app/context/AuthContext';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { BookOpenCheck, ClipboardList, Layers3, Loader2, Pencil, RefreshCw, Save, Trash2, Users } from 'lucide-react';
+import { toast } from 'sonner';
+
 import MCQManager from '@/app/components/shared/mcq-manager';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
@@ -20,16 +22,7 @@ import { Label } from '@/app/components/ui/label';
 import { Progress } from '@/app/components/ui/progress';
 import { ScrollArea } from '@/app/components/ui/scroll-area';
 import { Textarea } from '@/app/components/ui/textarea';
-import {
-  BookOpenCheck,
-  ClipboardList,
-  Loader2,
-  MessageSquarePlus,
-  RefreshCw,
-  Trophy,
-  Users,
-} from 'lucide-react';
-import { toast } from 'sonner';
+import { useAuth } from '@/app/context/AuthContext';
 
 type TrainerBatch = {
   id: string;
@@ -58,14 +51,18 @@ type TrainerMcqCategory = {
   difficulty: 'basic' | 'intermediate' | 'advanced';
   passing_threshold: number;
   question_count: number;
-  created_by_name?: string | null;
+  selected_question_ids?: string[];
+  selected_question_count?: number;
+  assignment_count?: number;
 };
 
 type TrainerMcqQuestion = {
   id: string;
+  category_id: string;
   question_text: string;
   options: Record<string, string>;
   explanation?: string | null;
+  is_selected_for_assessment?: boolean;
 };
 
 type TrainerMcqAssignmentTrainee = {
@@ -77,6 +74,7 @@ type TrainerMcqAssignmentTrainee = {
   status: 'pending' | 'completed';
   score_percentage?: number | null;
   is_passed?: boolean | null;
+  attempt_count?: number;
   submitted_at?: string | null;
   certificate_id?: string | null;
   certificate_no?: string | null;
@@ -88,15 +86,15 @@ type TrainerMcqAssignment = {
   description?: string | null;
   category_id: string;
   category_name?: string | null;
-  category_description?: string | null;
   passing_threshold: number;
-  assigned_by_name?: string | null;
+  time_limit_minutes: number;
   assigned_batch_id?: string | null;
   assigned_batch_name?: string | null;
   assigned_user_id?: string | null;
   assigned_user_name?: string | null;
   question_ids?: string[];
   category_question_count?: number;
+  question_bank_count?: number;
   question_count: number;
   total_trainees: number;
   completed_trainees: number;
@@ -104,82 +102,86 @@ type TrainerMcqAssignment = {
   passed_trainees: number;
   certificate_count: number;
   completion_rate: number;
-  is_complete: boolean;
   due_date?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
   trainees: TrainerMcqAssignmentTrainee[];
 };
 
 type AssignmentTargetType = 'batch' | 'trainee';
-type TrainerMcqPanel = 'assign' | 'progress' | 'manager';
+type TrainerPanel = 'builder' | 'question-set' | 'assigned';
 
 type AssignmentForm = {
-  categoryId: string;
+  targetType: AssignmentTargetType;
+  batchIds: string[];
+  traineeId: string;
   title: string;
   description: string;
+  dueDate: string;
+  timeLimitMinutes: number;
+};
+
+type AssignmentEditForm = {
+  categoryId: string;
   targetType: AssignmentTargetType;
   batchId: string;
   traineeId: string;
+  title: string;
+  description: string;
   dueDate: string;
+  timeLimitMinutes: number;
 };
 
-type McqCoachingForm = {
-  strengths: string;
-  opportunities: string;
-  actionPlan: string;
-  targetDate: string;
-  coachingMinutes: number;
-  trainerRemarks: string;
-  competencyStatus: 'pending' | 'competent' | 'not_competent';
-};
-
-type CoachingTarget = {
-  assignment: TrainerMcqAssignment;
-  trainee: TrainerMcqAssignmentTrainee;
-};
-
-const emptyForm = (): AssignmentForm => ({
-  categoryId: '',
+const emptyAssignmentForm = (): AssignmentForm => ({
+  targetType: 'batch',
+  batchIds: [],
+  traineeId: '',
   title: '',
   description: '',
+  dueDate: '',
+  timeLimitMinutes: 30,
+});
+
+const emptyAssignmentEditForm = (): AssignmentEditForm => ({
+  categoryId: '',
   targetType: 'batch',
   batchId: '',
   traineeId: '',
+  title: '',
+  description: '',
   dueDate: '',
+  timeLimitMinutes: 30,
 });
 
-const mcqPanels: {
-  id: TrainerMcqPanel;
+const panels: Array<{
+  id: TrainerPanel;
   label: string;
   description: string;
-  icon: typeof BookOpenCheck;
-}[] = [
+  icon: typeof ClipboardList;
+}> = [
   {
-    id: 'assign',
-    label: 'Assignment Center',
-    description: 'Select a category, choose the exact questions, and assign them to a batch or trainee.',
-    icon: BookOpenCheck,
-  },
-  {
-    id: 'progress',
-    label: 'Results and Coaching',
-    description: 'Monitor completion, scores, certificates, and trainer coaching follow-ups.',
-    icon: Users,
-  },
-  {
-    id: 'manager',
-    label: 'Question Bank Manager',
-    description: 'Create, edit, and review the saved categories and active MCQ questions.',
+    id: 'builder',
+    label: '1. Categories + Question Bank',
+    description: 'Create assessment categories and save multiple-choice question bank items with choices A to D.',
     icon: ClipboardList,
+  },
+  {
+    id: 'question-set',
+    label: '2. Assign Questions + Publish',
+    description: 'Assign question-bank items to the category, then assign the category to a batch, wave, or one trainee.',
+    icon: Layers3,
+  },
+  {
+    id: 'assigned',
+    label: '3. Assigned Categories',
+    description: 'Review assigned category progress and edit or delete active batch, wave, or trainee assignments.',
+    icon: Users,
   },
 ];
 
-function normalizePanel(value?: string | null): TrainerMcqPanel | null {
-  if (value === 'assign' || value === 'progress' || value === 'manager') {
+function normalizePanel(value?: string | null): TrainerPanel {
+  if (value === 'builder' || value === 'question-set' || value === 'assigned') {
     return value;
   }
-  return null;
+  return 'builder';
 }
 
 function formatDate(value?: string | null) {
@@ -199,14 +201,33 @@ function formatDate(value?: string | null) {
   }).format(parsed);
 }
 
+function formatInputDate(value?: string | null) {
+  if (!value) {
+    return '';
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
 function formatBatchLabel(batch?: TrainerBatch | null) {
   if (!batch) {
-    return 'Unassigned batch';
+    return 'No batch';
   }
+
   if (batch.wave_number !== null && batch.wave_number !== undefined) {
     return `${batch.name} | Wave ${batch.wave_number}`;
   }
+
   return batch.name;
+}
+
+function sortIds(values: string[]) {
+  return [...values].sort((left, right) => left.localeCompare(right));
 }
 
 function statusBadgeClass(isPassed?: boolean | null) {
@@ -219,67 +240,49 @@ function statusBadgeClass(isPassed?: boolean | null) {
   return 'bg-slate-100 text-slate-700 border-slate-200';
 }
 
-function buildMcqCoachingForm(target: CoachingTarget): McqCoachingForm {
-  const followUpDate = new Date();
-  followUpDate.setDate(followUpDate.getDate() + 3);
-  const scoreText =
-    typeof target.trainee.score_percentage === 'number'
-      ? `${target.trainee.score_percentage.toFixed(2)}%`
-      : 'No submitted score yet';
-  const passed = target.trainee.is_passed === true;
-
-  return {
-    strengths: passed
-      ? `${target.trainee.full_name} completed ${target.assignment.category_name || target.assignment.title} with a score of ${scoreText}.`
-      : '',
-    opportunities: passed
-      ? ''
-      : `Review the missed ${target.assignment.category_name || 'MCQ'} items and reinforce the language skills covered in this category. Latest score: ${scoreText}.`,
-    actionPlan: passed
-      ? 'Reinforce the strongest response patterns and prepare the trainee for the next assigned category.'
-      : 'Schedule a follow-up coaching session, review incorrect answers, and assign a focused retake plan before the next checkpoint.',
-    targetDate: followUpDate.toISOString().slice(0, 10),
-    coachingMinutes: 30,
-    trainerRemarks: `MCQ follow-up for ${target.assignment.title}.`,
-    competencyStatus: passed ? 'competent' : 'not_competent',
-  };
-}
-
 type TrainerMcqWorkspaceProps = {
-  panel?: TrainerMcqPanel;
+  panel?: TrainerPanel;
 };
 
 export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps) {
   const { token, isAuthenticated, isLoading: isAuthLoading, refreshToken, logout } = useAuth();
   const searchParams = useSearchParams();
+  const activePanel = normalizePanel(panel || searchParams.get('panel'));
+
   const [categories, setCategories] = useState<TrainerMcqCategory[]>([]);
   const [batches, setBatches] = useState<TrainerBatch[]>([]);
   const [trainees, setTrainees] = useState<TrainerTrainee[]>([]);
   const [assignments, setAssignments] = useState<TrainerMcqAssignment[]>([]);
   const [availableQuestions, setAvailableQuestions] = useState<TrainerMcqQuestion[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState('');
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [assignForm, setAssignForm] = useState<AssignmentForm>(emptyAssignmentForm());
+  const [editingAssignment, setEditingAssignment] = useState<TrainerMcqAssignment | null>(null);
+  const [editForm, setEditForm] = useState<AssignmentEditForm>(emptyAssignmentEditForm());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [assigning, setAssigning] = useState(false);
   const [loadingQuestions, setLoadingQuestions] = useState(false);
-  const [questionError, setQuestionError] = useState('');
-  const [coachingTarget, setCoachingTarget] = useState<CoachingTarget | null>(null);
-  const [coachingForm, setCoachingForm] = useState<McqCoachingForm | null>(null);
-  const [savingCoachingLog, setSavingCoachingLog] = useState(false);
+  const [savingQuestionSet, setSavingQuestionSet] = useState(false);
+  const [assigning, setAssigning] = useState(false);
+  const [savingAssignment, setSavingAssignment] = useState(false);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState('');
   const [error, setError] = useState('');
-  const [form, setForm] = useState<AssignmentForm>(emptyForm());
-  const activePanel = normalizePanel(panel) || normalizePanel(searchParams.get('panel')) || 'assign';
+  const [questionError, setQuestionError] = useState('');
+  const [questionSearch, setQuestionSearch] = useState('');
+  const [assignmentSearch, setAssignmentSearch] = useState('');
+  const [assignmentTargetFilter, setAssignmentTargetFilter] = useState<'all' | AssignmentTargetType>('all');
+  const [assignmentProgressFilter, setAssignmentProgressFilter] = useState<'all' | 'pending' | 'active' | 'passed'>('all');
 
   const fetchWithAuthRetry = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const sendRequest = async (authToken: string | null) => {
-        const nextHeaders = new Headers(init?.headers || undefined);
+        const headers = new Headers(init?.headers || undefined);
         if (authToken || token) {
-          nextHeaders.set('Authorization', `Bearer ${authToken || token}`);
+          headers.set('Authorization', `Bearer ${authToken || token}`);
         }
         return fetch(input, {
           ...init,
-          headers: nextHeaders,
+          headers,
           cache: 'no-store',
         });
       };
@@ -314,7 +317,7 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
   }, []);
 
   const loadCategoryQuestions = useCallback(
-    async (categoryId: string) => {
+    async (categoryId: string, categorySelection?: string[]) => {
       if (!categoryId) {
         setAvailableQuestions([]);
         setSelectedQuestionIds([]);
@@ -328,18 +331,17 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
         const response = await fetchWithAuthRetry(`/api/certification/mcq/questions/${categoryId}`);
         const payload = await readJson<{ questions: TrainerMcqQuestion[] }>(
           response,
-          'Unable to load the questions for this category.',
+          'Unable to load the question bank for this category.',
         );
-        const nextQuestions = payload.questions || [];
-        setAvailableQuestions(nextQuestions);
-        setSelectedQuestionIds(nextQuestions.map((question) => question.id));
+        setAvailableQuestions(payload.questions || []);
+        setSelectedQuestionIds(sortIds(categorySelection || []));
       } catch (loadQuestionError) {
         setAvailableQuestions([]);
         setSelectedQuestionIds([]);
         setQuestionError(
           loadQuestionError instanceof Error
             ? loadQuestionError.message
-            : 'Unable to load the questions for this category.',
+            : 'Unable to load the question bank for this category.',
         );
       } finally {
         setLoadingQuestions(false);
@@ -359,6 +361,8 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
         setBatches([]);
         setTrainees([]);
         setAssignments([]);
+        setAvailableQuestions([]);
+        setSelectedCategoryId('');
         setLoading(false);
         setRefreshing(false);
         return;
@@ -381,7 +385,7 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
 
         const categoryPayload = await readJson<{ categories: TrainerMcqCategory[] }>(
           categoryRes,
-          'Unable to load MCQ categories.',
+          'Unable to load assessment categories.',
         );
         const batchPayload = await readJson<{ batches: TrainerBatch[] }>(
           batchRes,
@@ -393,36 +397,34 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
         );
         const assignmentPayload = await readJson<{ assignments: TrainerMcqAssignment[] }>(
           assignmentRes,
-          'Unable to load assigned MCQ progress.',
+          'Unable to load assigned categories.',
         );
 
-        setCategories(categoryPayload.categories || []);
-        setBatches(batchPayload.batches || []);
-        setTrainees(traineePayload.trainees || []);
-        setAssignments(assignmentPayload.assignments || []);
-        setForm((current) => {
-          const nextCategoryId =
-            current.categoryId && categoryPayload.categories.some((category) => category.id === current.categoryId)
-              ? current.categoryId
-              : categoryPayload.categories[0]?.id || '';
-          const nextBatchId =
-            current.batchId && batchPayload.batches.some((batch) => batch.id === current.batchId)
-              ? current.batchId
-              : batchPayload.batches[0]?.id || '';
-          const nextTraineeId =
-            current.traineeId && traineePayload.trainees.some((trainee) => trainee.id === current.traineeId)
-              ? current.traineeId
-              : traineePayload.trainees[0]?.id || '';
+        const nextCategories = categoryPayload.categories || [];
+        const nextBatches = batchPayload.batches || [];
+        const nextTrainees = traineePayload.trainees || [];
+        const nextAssignments = assignmentPayload.assignments || [];
 
-          return {
-            ...current,
-            categoryId: nextCategoryId,
-            batchId: nextBatchId,
-            traineeId: nextTraineeId,
-          };
+        setCategories(nextCategories);
+        setBatches(nextBatches);
+        setTrainees(nextTrainees);
+        setAssignments(nextAssignments);
+        setSelectedCategoryId((current) => {
+          if (current && nextCategories.some((category) => category.id === current)) {
+            return current;
+          }
+          return nextCategories[0]?.id || '';
         });
+        setAssignForm((current) => ({
+          ...current,
+          batchIds: current.batchIds.filter((batchId) => nextBatches.some((batch) => batch.id === batchId)),
+          traineeId:
+            current.traineeId && nextTrainees.some((trainee) => trainee.id === current.traineeId)
+              ? current.traineeId
+              : '',
+        }));
       } catch (loadError) {
-        setError(loadError instanceof Error ? loadError.message : 'Unable to load the trainer MCQ workspace.');
+        setError(loadError instanceof Error ? loadError.message : 'Unable to load the assessment navigation.');
       } finally {
         setLoading(false);
         setRefreshing(false);
@@ -435,62 +437,120 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
     void loadWorkspace();
   }, [loadWorkspace]);
 
-  useEffect(() => {
-    void loadCategoryQuestions(form.categoryId);
-  }, [form.categoryId, loadCategoryQuestions]);
-
   const selectedCategory = useMemo(
-    () => categories.find((category) => category.id === form.categoryId) || null,
-    [categories, form.categoryId],
-  );
-  const selectedBatch = useMemo(
-    () => batches.find((batch) => batch.id === form.batchId) || null,
-    [batches, form.batchId],
-  );
-  const selectedTrainee = useMemo(
-    () => trainees.find((trainee) => trainee.id === form.traineeId) || null,
-    [form.traineeId, trainees],
-  );
-  const batchTrainees = useMemo(
-    () =>
-      trainees.filter((trainee) =>
-        trainee.batch_ids?.includes(form.batchId) || trainee.batch?.id === form.batchId,
-      ),
-    [form.batchId, trainees],
+    () => categories.find((category) => category.id === selectedCategoryId) || null,
+    [categories, selectedCategoryId],
   );
 
-  const autoGeneratedTitle = useMemo(() => {
+  useEffect(() => {
     if (!selectedCategory) {
-      return '';
+      setAvailableQuestions([]);
+      setSelectedQuestionIds([]);
+      return;
     }
-    if (form.targetType === 'batch' && selectedBatch) {
-      return `${selectedCategory.name} - ${selectedBatch.name}`;
-    }
-    if (form.targetType === 'trainee' && selectedTrainee) {
-      return `${selectedCategory.name} - ${selectedTrainee.full_name}`;
-    }
-    return selectedCategory.name;
-  }, [form.targetType, selectedBatch, selectedCategory, selectedTrainee]);
 
-  const categoryCoverage = useMemo(
-    () =>
-      categories.reduce(
-        (total, category) => total + (typeof category.question_count === 'number' ? category.question_count : 0),
-        0,
-      ),
+    void loadCategoryQuestions(selectedCategory.id, selectedCategory.selected_question_ids || []);
+  }, [loadCategoryQuestions, selectedCategory]);
+
+  const hasSelectionChanges = useMemo(() => {
+    const savedSelection = sortIds(selectedCategory?.selected_question_ids || []);
+    return JSON.stringify(savedSelection) !== JSON.stringify(sortIds(selectedQuestionIds));
+  }, [selectedCategory?.selected_question_ids, selectedQuestionIds]);
+
+  const selectedTrainee = useMemo(
+    () => trainees.find((trainee) => trainee.id === assignForm.traineeId) || null,
+    [assignForm.traineeId, trainees],
+  );
+
+  const questionBankCount = useMemo(
+    () => categories.reduce((total, category) => total + Number(category.question_count || 0), 0),
     [categories],
   );
-  const activeAssignments = useMemo(
-    () => assignments.filter((assignment) => !assignment.is_complete).length,
-    [assignments],
+
+  const savedQuestionSetCount = useMemo(
+    () => categories.reduce((total, category) => total + Number(category.selected_question_count || 0), 0),
+    [categories],
   );
-  const completedAssignments = useMemo(
-    () => assignments.filter((assignment) => assignment.is_complete).length,
-    [assignments],
+
+  const categoriesReadyToPublish = useMemo(
+    () => categories.filter((category) => Number(category.selected_question_count || 0) > 0).length,
+    [categories],
   );
-  const selectedQuestionCount = selectedQuestionIds.length;
-  const allQuestionsSelected =
-    !!availableQuestions.length && selectedQuestionCount === availableQuestions.length;
+
+  const categoriesNeedingQuestionSet = useMemo(
+    () => categories.filter((category) => Number(category.selected_question_count || 0) <= 0).length,
+    [categories],
+  );
+
+  const completionSummary = useMemo(() => {
+    const completed = assignments.reduce((total, assignment) => total + Number(assignment.completed_trainees || 0), 0);
+    const passed = assignments.reduce((total, assignment) => total + Number(assignment.passed_trainees || 0), 0);
+    return {
+      activeAssignments: assignments.length,
+      completed,
+      passed,
+    };
+  }, [assignments]);
+
+  const filteredAvailableQuestions = useMemo(() => {
+    const normalizedSearch = questionSearch.trim().toLowerCase();
+    if (!normalizedSearch) {
+      return availableQuestions;
+    }
+
+    return availableQuestions.filter((question) => {
+      const haystack = [
+        question.question_text,
+        question.explanation || '',
+        question.options?.A || '',
+        question.options?.B || '',
+        question.options?.C || '',
+        question.options?.D || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    });
+  }, [availableQuestions, questionSearch]);
+
+  const filteredAssignments = useMemo(() => {
+    const normalizedSearch = assignmentSearch.trim().toLowerCase();
+
+    return assignments.filter((assignment) => {
+      const targetType: AssignmentTargetType = assignment.assigned_batch_id ? 'batch' : 'trainee';
+      if (assignmentTargetFilter !== 'all' && targetType !== assignmentTargetFilter) {
+        return false;
+      }
+
+      const progressState: 'pending' | 'active' | 'passed' =
+        assignment.total_trainees > 0 && assignment.passed_trainees >= assignment.total_trainees
+          ? 'passed'
+          : assignment.completed_trainees > 0
+            ? 'active'
+            : 'pending';
+
+      if (assignmentProgressFilter !== 'all' && progressState !== assignmentProgressFilter) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const haystack = [
+        assignment.title,
+        assignment.description || '',
+        assignment.category_name || '',
+        assignment.assigned_batch_name || '',
+        assignment.assigned_user_name || '',
+      ]
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    });
+  }, [assignmentProgressFilter, assignmentSearch, assignmentTargetFilter, assignments]);
 
   const toggleQuestionSelection = (questionId: string) => {
     setSelectedQuestionIds((current) =>
@@ -500,95 +560,72 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
     );
   };
 
-  const openCoachingDialog = (assignment: TrainerMcqAssignment, trainee: TrainerMcqAssignmentTrainee) => {
-    const nextTarget = { assignment, trainee };
-    setCoachingTarget(nextTarget);
-    setCoachingForm(buildMcqCoachingForm(nextTarget));
-  };
-
-  const closeCoachingDialog = () => {
-    setCoachingTarget(null);
-    setCoachingForm(null);
-  };
-
-  const saveCoachingFollowUp = async (publish: boolean) => {
-    if (!coachingTarget || !coachingForm) {
-      toast.error('Select a trainee result before creating a coaching log.');
+  const saveQuestionSet = async () => {
+    if (!selectedCategory) {
+      toast.error('Select an assessment category first.');
+      return;
+    }
+    if (!availableQuestions.length) {
+      toast.error('This category does not have any saved question-bank items yet.');
+      return;
+    }
+    if (!selectedQuestionIds.length) {
+      toast.error('Select at least one question to save to this category.');
       return;
     }
 
-    if (
-      publish &&
-      (!coachingForm.strengths.trim() ||
-        !coachingForm.opportunities.trim() ||
-        !coachingForm.actionPlan.trim() ||
-        !coachingForm.targetDate)
-    ) {
-      toast.error('Complete the required coaching fields before sending the log.');
-      return;
-    }
-
-    setSavingCoachingLog(true);
+    setSavingQuestionSet(true);
     try {
-      const scoreText =
-        typeof coachingTarget.trainee.score_percentage === 'number'
-          ? ` Latest MCQ score: ${coachingTarget.trainee.score_percentage.toFixed(2)}%.`
-          : '';
-      const response = await fetchWithAuthRetry('/api/certification/coaching/logs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await fetchWithAuthRetry(
+        `/api/certification/mcq/categories/${selectedCategory.id}/selected-questions`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            question_ids: sortIds(selectedQuestionIds),
+          }),
         },
-        body: JSON.stringify({
-          trainee_id: coachingTarget.trainee.id,
-          coaching_minutes: coachingForm.coachingMinutes,
-          strengths: coachingForm.strengths.trim(),
-          opportunities: coachingForm.opportunities.trim(),
-          action_plan: coachingForm.actionPlan.trim(),
-          target_date: coachingForm.targetDate ? new Date(coachingForm.targetDate).toISOString() : undefined,
-          trainer_remarks: `${coachingForm.trainerRemarks.trim()}${scoreText}`.trim(),
-          status: publish ? 'sent' : 'draft',
-          competency_status: coachingForm.competencyStatus,
-        }),
-      });
-
-      await readJson<{ coaching_log_id: string }>(response, 'Unable to save the MCQ coaching follow-up.');
-      toast.success(
-        publish
-          ? `Coaching log sent to ${coachingTarget.trainee.full_name}.`
-          : `Draft coaching log saved for ${coachingTarget.trainee.full_name}.`,
       );
-      closeCoachingDialog();
-    } catch (coachingError) {
+      const payload = await readJson<{ category: TrainerMcqCategory }>(
+        response,
+        'Unable to save the selected questions for this category.',
+      );
+
+      setCategories((current) =>
+        current.map((category) => (category.id === payload.category.id ? payload.category : category)),
+      );
+      setSelectedQuestionIds(sortIds(payload.category.selected_question_ids || []));
+      toast.success(`Saved ${payload.category.selected_question_count || 0} question(s) to ${payload.category.name}.`);
+    } catch (saveError) {
       toast.error(
-        coachingError instanceof Error
-          ? coachingError.message
-          : 'Unable to save the MCQ coaching follow-up.',
+        saveError instanceof Error ? saveError.message : 'Unable to save the selected questions for this category.',
       );
     } finally {
-      setSavingCoachingLog(false);
+      setSavingQuestionSet(false);
     }
   };
 
   const assignCategory = async () => {
     if (!selectedCategory) {
-      toast.error('Select a category before assigning it.');
+      toast.error('Select an assessment category first.');
       return;
     }
-    if (availableQuestions.length <= 0 || selectedCategory.question_count <= 0) {
-      toast.error('This category has no active questions yet.');
+    if ((selectedCategory.selected_question_count || 0) <= 0) {
+      toast.error('Save the category question set before publishing it to a batch or trainee.');
       return;
     }
-    if (!selectedQuestionIds.length) {
-      toast.error('Select at least one question to include in this assignment.');
+    if (hasSelectionChanges) {
+      toast.error('Save the updated category question set before assigning it.');
       return;
     }
-    if (form.targetType === 'batch' && !form.batchId) {
-      toast.error('Select a target batch first.');
+    if (assignForm.targetType === 'batch' && !assignForm.batchIds.length) {
+      toast.error('Select at least one target batch or wave.');
       return;
     }
-    if (form.targetType === 'trainee' && !form.traineeId) {
-      toast.error('Select a trainee first.');
+    if (assignForm.targetType === 'trainee' && !assignForm.traineeId) {
+      toast.error('Select one trainee.');
       return;
     }
 
@@ -600,83 +637,249 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          title: form.title.trim() || autoGeneratedTitle,
-          description: form.description.trim() || selectedCategory.description || undefined,
           category_id: selectedCategory.id,
-          question_ids: selectedQuestionIds,
-          assigned_batch_id: form.targetType === 'batch' ? form.batchId : undefined,
-          assigned_user_id: form.targetType === 'trainee' ? form.traineeId : undefined,
-          due_date: form.dueDate ? new Date(form.dueDate).toISOString() : undefined,
+          title: assignForm.title.trim() || undefined,
+          description: assignForm.description.trim() || undefined,
+          assigned_batch_ids: assignForm.targetType === 'batch' ? assignForm.batchIds : undefined,
+          assigned_user_id: assignForm.targetType === 'trainee' ? assignForm.traineeId : undefined,
+          due_date: assignForm.dueDate ? new Date(assignForm.dueDate).toISOString() : undefined,
+          time_limit_minutes: Math.max(Number(assignForm.timeLimitMinutes) || 0, 1),
         }),
       });
-      const payload = await readJson<{ assessment: TrainerMcqAssignment }>(
+      const payload = await readJson<{ count: number }>(
         response,
-        'Unable to assign the selected MCQ category.',
+        'Unable to assign the selected assessment category.',
       );
+
       toast.success(
-        `Assigned ${payload.assessment.category_name || selectedCategory.name} to ${
-          payload.assessment.assigned_batch_name || payload.assessment.assigned_user_name || 'the target cohort'
-        }.`,
+        assignForm.targetType === 'batch'
+          ? `Published ${selectedCategory.name} to ${payload.count} batch${payload.count === 1 ? '' : 'es'}.`
+          : `Published ${selectedCategory.name} to ${selectedTrainee?.full_name || 'the trainee'}.`,
       );
-      setForm((current) => ({
-        ...current,
-        title: '',
-        description: '',
-        dueDate: '',
+
+      setAssignForm((current) => ({
+        ...emptyAssignmentForm(),
+        targetType: current.targetType,
       }));
       await loadWorkspace('refresh');
-      await loadCategoryQuestions(selectedCategory.id);
     } catch (assignError) {
-      toast.error(assignError instanceof Error ? assignError.message : 'Unable to assign the selected MCQ category.');
+      toast.error(assignError instanceof Error ? assignError.message : 'Unable to assign the selected category.');
     } finally {
       setAssigning(false);
     }
   };
+
+  const openAssignmentEditor = (assignment: TrainerMcqAssignment) => {
+    setEditingAssignment(assignment);
+    setEditForm({
+      categoryId: assignment.category_id,
+      targetType: assignment.assigned_batch_id ? 'batch' : 'trainee',
+      batchId: assignment.assigned_batch_id || '',
+      traineeId: assignment.assigned_user_id || '',
+      title: assignment.title || '',
+      description: assignment.description || '',
+      dueDate: formatInputDate(assignment.due_date),
+      timeLimitMinutes: assignment.time_limit_minutes || 30,
+    });
+  };
+
+  const closeAssignmentEditor = () => {
+    setEditingAssignment(null);
+    setEditForm(emptyAssignmentEditForm());
+  };
+
+  const saveAssignmentChanges = async () => {
+    if (!editingAssignment) {
+      return;
+    }
+    if (!editForm.categoryId) {
+      toast.error('Select an assessment category.');
+      return;
+    }
+    if (editForm.targetType === 'batch' && !editForm.batchId) {
+      toast.error('Select one batch or wave.');
+      return;
+    }
+    if (editForm.targetType === 'trainee' && !editForm.traineeId) {
+      toast.error('Select one trainee.');
+      return;
+    }
+
+    setSavingAssignment(true);
+    try {
+      const response = await fetchWithAuthRetry(`/api/certification/mcq/assignments/${editingAssignment.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          category_id: editForm.categoryId,
+          assigned_batch_id: editForm.targetType === 'batch' ? editForm.batchId : undefined,
+          assigned_user_id: editForm.targetType === 'trainee' ? editForm.traineeId : undefined,
+          title: editForm.title.trim(),
+          description: editForm.description.trim(),
+          due_date: editForm.dueDate ? new Date(editForm.dueDate).toISOString() : null,
+          time_limit_minutes: Math.max(Number(editForm.timeLimitMinutes) || 0, 1),
+        }),
+      });
+      await readJson<{ assessment: TrainerMcqAssignment }>(
+        response,
+        'Unable to update the assigned assessment category.',
+      );
+      toast.success('Assigned assessment category updated successfully.');
+      closeAssignmentEditor();
+      await loadWorkspace('refresh');
+    } catch (saveError) {
+      toast.error(
+        saveError instanceof Error ? saveError.message : 'Unable to update the assigned assessment category.',
+      );
+    } finally {
+      setSavingAssignment(false);
+    }
+  };
+
+  const deleteAssignment = async (assignment: TrainerMcqAssignment) => {
+    const confirmed = window.confirm(
+      `Delete the assigned category "${assignment.title}" from ${assignment.assigned_batch_name || assignment.assigned_user_name || 'this target'}?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingAssignmentId(assignment.id);
+    try {
+      const response = await fetchWithAuthRetry(`/api/certification/mcq/assignments/${assignment.id}`, {
+        method: 'DELETE',
+      });
+      await readJson<{ status: string }>(response, 'Unable to delete the assigned assessment category.');
+      toast.success('Assigned assessment category deleted successfully.');
+      await loadWorkspace('refresh');
+    } catch (deleteError) {
+      toast.error(
+        deleteError instanceof Error ? deleteError.message : 'Unable to delete the assigned assessment category.',
+      );
+    } finally {
+      setDeletingAssignmentId('');
+    }
+  };
+
+  const selectedCategoryTrainees = useMemo(() => {
+    if (assignForm.targetType === 'batch') {
+      const lookup = new Map<string, TrainerTrainee>();
+      for (const trainee of trainees) {
+        const belongsToBatch = assignForm.batchIds.some(
+          (batchId) => trainee.batch_ids?.includes(batchId) || trainee.batch?.id === batchId,
+        );
+        if (belongsToBatch) {
+          lookup.set(trainee.id, trainee);
+        }
+      }
+      return Array.from(lookup.values());
+    }
+
+    return selectedTrainee ? [selectedTrainee] : [];
+  }, [assignForm.batchIds, assignForm.targetType, selectedTrainee, trainees]);
+
+  if (loading) {
+    return (
+      <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 size-4 animate-spin" />
+        Loading assessment navigation...
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h2 className="flex items-center gap-3 text-3xl font-bold text-foreground">
-            <ClipboardList className="size-8 text-blue-700" />
-            Trainer MCQ Navigation
+            <BookOpenCheck className="size-8 text-blue-700" />
+            Assessment Navigation
           </h2>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            The trainer MCQ navigation is organized into separate panels for assignment, results and coaching, and
-            question-bank management so each workflow is easier to use.
+            Trainers now manage assessments in one Supabase-backed workflow: create the assessment category, create
+            multiple-choice question bank items, assign those questions to the category, then assign the category to
+            trainer-owned batches or waves with a time limit.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => void loadWorkspace('refresh')} disabled={loading || refreshing}>
-            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            Refresh
-          </Button>
-        </div>
+        <Button variant="outline" onClick={() => void loadWorkspace('refresh')} disabled={refreshing}>
+          {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          Refresh
+        </Button>
       </div>
 
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
       ) : null}
 
-      {activePanel !== 'manager' ? (
-        <Card className="border-sky-200 bg-sky-50/70">
-          <CardContent className="grid gap-4 pt-6 md:grid-cols-2 xl:grid-cols-4">
-            <MetricTile label="Question Categories" value={String(categories.length)} hint="Trainer-owned MCQ banks" />
-            <MetricTile label="Active Questions" value={String(categoryCoverage)} hint="Questions available for assignment" />
-            <MetricTile label="Open Assignments" value={String(activeAssignments)} hint="Cohorts still in progress" />
-            <MetricTile label="Completed Assignments" value={String(completedAssignments)} hint="All target trainees finished" />
-          </CardContent>
-        </Card>
-      ) : null}
+      <Card className="border-sky-200 bg-sky-50/70">
+        <CardContent className="grid gap-4 pt-6 md:grid-cols-2 xl:grid-cols-4">
+          <MetricTile label="Assessment Categories" value={String(categories.length)} hint="Trainer-created category records" />
+          <MetricTile label="Question Bank Items" value={String(questionBankCount)} hint="Saved multiple-choice questions" />
+          <MetricTile
+            label="Ready To Publish"
+            value={String(categoriesReadyToPublish)}
+            hint={`${categoriesNeedingQuestionSet} categories still need saved question sets`}
+          />
+          <MetricTile
+            label="Published Categories"
+            value={String(completionSummary.activeAssignments)}
+            hint={`${completionSummary.completed} completed | ${completionSummary.passed} passed`}
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="border-slate-200 bg-white/90">
+        <CardHeader className="pb-4">
+          <CardTitle>Trainer Workflow</CardTitle>
+          <CardDescription>
+            Follow the same sequence every time so category creation, question-bank authoring, assignment, and trainee delivery stay easy to track.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-4">
+          <WorkflowStepCard
+            step="1"
+            title="Create Category"
+            description="Add the assessment category and set the pass mark."
+            status={categories.length ? `${categories.length} saved` : 'Start here'}
+          />
+          <WorkflowStepCard
+            step="2"
+            title="Build Question Bank"
+            description="Save multiple-choice questions with options A to D."
+            status={questionBankCount ? `${questionBankCount} questions ready` : 'Add questions'}
+          />
+          <WorkflowStepCard
+            step="3"
+            title="Save Category Set"
+            description="Choose which item-bank questions belong to the category."
+            status={savedQuestionSetCount ? `${savedQuestionSetCount} mapped` : 'Map questions'}
+          />
+          <WorkflowStepCard
+            step="4"
+            title="Assign To Batch / Wave"
+            description="Publish the category with a timer and monitor trainee results."
+            status={completionSummary.activeAssignments ? `${completionSummary.activeAssignments} live` : 'Publish first assignment'}
+          />
+        </CardContent>
+      </Card>
 
       <div className="grid gap-3 lg:grid-cols-3">
-        {mcqPanels.map((item) => {
-          const Icon = item.icon;
-          const isActive = activePanel === item.id;
+        {panels.map((panelItem) => {
+          const Icon = panelItem.icon;
+          const isActive = activePanel === panelItem.id;
+          const panelBadge =
+            panelItem.id === 'builder'
+              ? 'Steps 1-2'
+              : panelItem.id === 'question-set'
+                ? 'Steps 3-4'
+                : 'Monitor';
+
           return (
             <Link
-              key={item.id}
-              href={`/trainer/mcq?panel=${item.id}`}
+              key={panelItem.id}
+              href={`/trainer/assessments?panel=${panelItem.id}`}
               className={`rounded-2xl border p-4 transition ${
                 isActive
                   ? 'border-blue-300 bg-blue-50/80 shadow-sm'
@@ -692,8 +895,11 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
                   <Icon className="size-5" />
                 </div>
                 <div className="min-w-0">
-                  <div className="font-semibold text-foreground">{item.label}</div>
-                  <div className="mt-1 text-sm text-muted-foreground">{item.description}</div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-semibold text-foreground">{panelItem.label}</div>
+                    <Badge variant={isActive ? 'default' : 'outline'}>{panelBadge}</Badge>
+                  </div>
+                  <div className="mt-1 text-sm text-muted-foreground">{panelItem.description}</div>
                 </div>
               </div>
             </Link>
@@ -701,87 +907,111 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
         })}
       </div>
 
-      {activePanel === 'assign' ? (
+      {activePanel === 'builder' ? (
         <>
           <Card className="border-amber-200 bg-amber-50/70">
             <CardContent className="pt-6 text-sm text-amber-900">
-              Pick a trainer-owned category, choose the exact questions to include, and assign that set to one batch,
-              wave, or trainee from this panel.
+              Use this manager to add, edit, delete, and save the assessment category records plus the multiple-choice
+              question bank items that belong to each category.
             </CardContent>
           </Card>
+          <MCQManager scope="owned" onDataChanged={() => loadWorkspace('refresh')} />
+        </>
+      ) : null}
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Assign Category to Batch / Trainee</CardTitle>
-            <CardDescription>
-              Pick one saved category, choose the exact questions to include, and assign only that selected set to the
-              target batch, wave, or trainee.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label htmlFor="mcq-category">Question Category</Label>
-              <select
-                id="mcq-category"
-                className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                value={form.categoryId}
-                onChange={(event) => setForm((current) => ({ ...current, categoryId: event.target.value }))}
-              >
-                <option value="">{categories.length ? 'Select category' : 'No categories available'}</option>
-                {categories.map((category) => (
-                  <option key={category.id} value={category.id}>
-                    {category.name} ({category.question_count} questions)
-                  </option>
-                ))}
-              </select>
-              {selectedCategory ? (
-                <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  Difficulty: <span className="font-semibold text-slate-900">{selectedCategory.difficulty}</span>
-                  {' '}| Passing threshold: <span className="font-semibold text-slate-900">{selectedCategory.passing_threshold}%</span>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <Label>Questions Included in this Assignment</Label>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    Choose the exact questions that should be sent to the selected batch or trainee.
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSelectedQuestionIds(availableQuestions.map((question) => question.id))}
-                    disabled={!availableQuestions.length || allQuestionsSelected}
-                  >
-                    Select All
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSelectedQuestionIds([])}
-                    disabled={!selectedQuestionIds.length}
-                  >
-                    Clear
-                  </Button>
-                </div>
+      {activePanel === 'question-set' ? (
+        <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Step 3: Assign Questions From Question Bank</CardTitle>
+              <CardDescription>
+                Pick one category, then choose which question-bank items should become the saved assessment question set.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="question-set-category">Assessment Category</Label>
+                <select
+                  id="question-set-category"
+                  className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  value={selectedCategoryId}
+                  onChange={(event) => setSelectedCategoryId(event.target.value)}
+                >
+                  <option value="">{categories.length ? 'Select category' : 'No categories available'}</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name} ({category.question_count} bank items)
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                {selectedCategory ? (
-                  <span>
-                    Selected <span className="font-semibold text-slate-950">{selectedQuestionCount}</span> of{' '}
-                    <span className="font-semibold text-slate-950">{availableQuestions.length}</span> active question(s)
-                    from <span className="font-semibold text-slate-950">{selectedCategory.name}</span>.
-                  </span>
-                ) : (
-                  'Select a category to load its question bank.'
-                )}
+              {selectedCategory ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                  <div>
+                    Difficulty: <span className="font-semibold text-slate-950">{selectedCategory.difficulty}</span>
+                  </div>
+                  <div className="mt-1">
+                    Passing threshold:{' '}
+                    <span className="font-semibold text-slate-950">{selectedCategory.passing_threshold}%</span>
+                  </div>
+                  <div className="mt-1">
+                    Saved question set:{' '}
+                    <span className="font-semibold text-slate-950">
+                      {selectedCategory.selected_question_count || 0}
+                    </span>
+                    {' '}of{' '}
+                    <span className="font-semibold text-slate-950">{selectedCategory.question_count}</span>
+                    {' '}question-bank item(s)
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedQuestionIds(availableQuestions.map((question) => question.id))}
+                  disabled={!availableQuestions.length}
+                >
+                  Select All
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedQuestionIds([])}
+                  disabled={!selectedQuestionIds.length}
+                >
+                  Clear
+                </Button>
+              </div>
+
+              <div
+                className={`rounded-2xl border px-4 py-3 text-sm ${
+                  hasSelectionChanges
+                    ? 'border-amber-200 bg-amber-50 text-amber-900'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                }`}
+              >
+                {hasSelectionChanges
+                  ? 'The question set changed. Save it before publishing this category.'
+                  : 'The saved question set is ready to publish.'}
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
+                <Input
+                  value={questionSearch}
+                  onChange={(event) => setQuestionSearch(event.target.value)}
+                  placeholder="Search question text, options, or explanation"
+                />
+                <Badge variant="outline" className="justify-center px-3 py-2">
+                  {selectedQuestionIds.length} selected
+                </Badge>
+                <Badge variant="outline" className="justify-center px-3 py-2">
+                  {filteredAvailableQuestions.length}/{availableQuestions.length} shown
+                </Badge>
               </div>
 
               {questionError ? (
@@ -790,25 +1020,31 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
                 </div>
               ) : null}
 
-              <ScrollArea className="h-[280px] rounded-2xl border bg-white">
+              <ScrollArea className="h-[420px] rounded-2xl border bg-white">
                 <div className="space-y-3 p-4">
                   {loadingQuestions ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <Loader2 className="size-4 animate-spin" />
-                      Loading category questions...
+                      Loading question bank...
                     </div>
                   ) : null}
 
                   {!loadingQuestions && !availableQuestions.length ? (
                     <div className="rounded-xl border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
                       {selectedCategory
-                        ? 'This category does not have active questions yet.'
-                        : 'Select a category to preview and choose questions.'}
+                        ? 'This category does not have any question-bank items yet.'
+                        : 'Select a category to load its question bank.'}
+                    </div>
+                  ) : null}
+
+                  {!loadingQuestions && !!availableQuestions.length && !filteredAvailableQuestions.length ? (
+                    <div className="rounded-xl border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
+                      No question-bank items match the current search.
                     </div>
                   ) : null}
 
                   {!loadingQuestions
-                    ? availableQuestions.map((question, index) => {
+                    ? filteredAvailableQuestions.map((question, index) => {
                         const isSelected = selectedQuestionIds.includes(question.id);
                         return (
                           <label
@@ -822,9 +1058,9 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
                             <div className="flex items-start gap-3">
                               <input
                                 type="checkbox"
-                                className="mt-1 size-4 rounded border-slate-300"
                                 checked={isSelected}
                                 onChange={() => toggleQuestionSelection(question.id)}
+                                className="mt-1 size-4 rounded border-slate-300"
                               />
                               <div className="min-w-0 flex-1">
                                 <div className="text-sm font-semibold text-foreground">
@@ -854,83 +1090,140 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
                     : null}
                 </div>
               </ScrollArea>
-            </div>
 
-            <div>
-              <Label>Assign To</Label>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => setForm((current) => ({ ...current, targetType: 'batch' }))}
-                  className={`rounded-full border px-3 py-2 text-sm ${
-                    form.targetType === 'batch'
-                      ? 'border-blue-600 bg-blue-50 text-blue-700'
-                      : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  Entire Batch
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setForm((current) => ({ ...current, targetType: 'trainee' }))}
-                  className={`rounded-full border px-3 py-2 text-sm ${
-                    form.targetType === 'trainee'
-                      ? 'border-blue-600 bg-blue-50 text-blue-700'
-                      : 'border-slate-200 text-slate-700 hover:bg-slate-50'
-                  }`}
-                >
-                  One Trainee
-                </button>
-              </div>
-            </div>
+              <Button type="button" onClick={() => void saveQuestionSet()} disabled={savingQuestionSet || !selectedCategory}>
+                {savingQuestionSet ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                Save Category Question Set
+              </Button>
+            </CardContent>
+          </Card>
 
-            {form.targetType === 'batch' ? (
-              <div className="space-y-3">
-                <div>
-                  <Label htmlFor="mcq-batch">Target Batch / Wave</Label>
-                  <select
-                    id="mcq-batch"
-                    className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                    value={form.batchId}
-                    onChange={(event) => setForm((current) => ({ ...current, batchId: event.target.value }))}
-                  >
-                    <option value="">{batches.length ? 'Select batch' : 'No batches available'}</option>
-                    {batches.map((batch) => (
-                      <option key={batch.id} value={batch.id}>
-                        {formatBatchLabel(batch)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-semibold text-slate-900">
-                    {selectedBatch ? formatBatchLabel(selectedBatch) : 'Batch preview'}
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    {batchTrainees.length
-                      ? `${batchTrainees.length} trainee(s) will receive this category assignment.`
-                      : 'No active trainees are assigned to this batch yet.'}
-                  </div>
-                  {batchTrainees.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {batchTrainees.map((trainee) => (
-                        <Badge key={trainee.id} variant="outline">
-                          {trainee.full_name}
-                        </Badge>
-                      ))}
+          <Card>
+            <CardHeader>
+              <CardTitle>Step 4: Assign Assessment Category to Batch / Wave</CardTitle>
+              <CardDescription>
+                Assign the saved category question set to one or more trainer-owned batches or waves, or to one trainee account, and add the assessment timer.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                {selectedCategory ? (
+                  <>
+                    <div>
+                      Category: <span className="font-semibold text-slate-950">{selectedCategory.name}</span>
                     </div>
-                  ) : null}
+                    <div className="mt-1">
+                      Saved questions:{' '}
+                      <span className="font-semibold text-slate-950">
+                        {selectedCategory.selected_question_count || 0}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  'Select an assessment category first.'
+                )}
+              </div>
+
+              <div>
+                <Label>Assign To</Label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAssignForm((current) => ({
+                        ...current,
+                        targetType: 'batch',
+                        traineeId: '',
+                      }))
+                    }
+                    className={`rounded-full border px-3 py-2 text-sm ${
+                      assignForm.targetType === 'batch'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    Batch / Wave
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setAssignForm((current) => ({
+                        ...current,
+                        targetType: 'trainee',
+                        batchIds: [],
+                      }))
+                    }
+                    className={`rounded-full border px-3 py-2 text-sm ${
+                      assignForm.targetType === 'trainee'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    One Trainee
+                  </button>
                 </div>
               </div>
-            ) : (
-              <div className="space-y-3">
+
+              {assignForm.targetType === 'batch' ? (
+                <div className="space-y-3">
+                  <div>
+                    <Label>Target Batch / Waves</Label>
+                    <div className="mt-2 grid gap-2 md:grid-cols-2">
+                      {batches.length ? (
+                        batches.map((batch) => {
+                          const isSelected = assignForm.batchIds.includes(batch.id);
+                          return (
+                            <label
+                              key={batch.id}
+                              className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 text-sm transition ${
+                                isSelected
+                                  ? 'border-blue-400 bg-blue-50 text-blue-900'
+                                  : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() =>
+                                  setAssignForm((current) => ({
+                                    ...current,
+                                    batchIds: current.batchIds.includes(batch.id)
+                                      ? current.batchIds.filter((batchId) => batchId !== batch.id)
+                                      : [...current.batchIds, batch.id],
+                                  }))
+                                }
+                                className="mt-1"
+                              />
+                              <div className="min-w-0">
+                                <div className="font-semibold text-current">{formatBatchLabel(batch)}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {(batch.users_count || 0)} trainee(s) currently assigned
+                                </div>
+                              </div>
+                            </label>
+                          );
+                        })
+                      ) : (
+                        <div className="rounded-xl border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                          No trainer-owned batches are available yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
                 <div>
-                  <Label htmlFor="mcq-trainee">Target Trainee</Label>
+                  <Label htmlFor="assign-trainee">Target Trainee</Label>
                   <select
-                    id="mcq-trainee"
+                    id="assign-trainee"
                     className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                    value={form.traineeId}
-                    onChange={(event) => setForm((current) => ({ ...current, traineeId: event.target.value }))}
+                    value={assignForm.traineeId}
+                    onChange={(event) =>
+                      setAssignForm((current) => ({
+                        ...current,
+                        traineeId: event.target.value,
+                      }))
+                    }
                   >
                     <option value="">{trainees.length ? 'Select trainee' : 'No trainees available'}</option>
                     {trainees.map((trainee) => (
@@ -940,200 +1233,292 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
                     ))}
                   </select>
                 </div>
-                {selectedTrainee ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                    <div className="font-semibold text-slate-900">{selectedTrainee.full_name}</div>
-                    <div>{selectedTrainee.email}</div>
-                    <div className="mt-1">
-                      Batch: {selectedTrainee.batch?.name || selectedTrainee.batch_names?.join(', ') || 'No batch'}
-                    </div>
+              )}
+
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Publish Preview</div>
+                <div className="mt-1 text-xs text-slate-600">
+                  {selectedCategoryTrainees.length
+                    ? `${selectedCategoryTrainees.length} trainee(s) will receive this category assignment.`
+                    : 'Select a batch, wave, or trainee to preview the targets.'}
+                </div>
+                {selectedCategoryTrainees.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedCategoryTrainees.map((trainee) => (
+                      <Badge key={trainee.id} variant="outline">
+                        {trainee.full_name}
+                      </Badge>
+                    ))}
                   </div>
                 ) : null}
               </div>
-            )}
 
-            <div>
-              <Label htmlFor="mcq-title">Assignment Title</Label>
-              <Input
-                id="mcq-title"
-                className="mt-2"
-                placeholder={autoGeneratedTitle || 'Language Assessment - Batch 1'}
-                value={form.title}
-                onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
-              />
-              {autoGeneratedTitle ? (
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Suggested title: <span className="font-semibold text-foreground">{autoGeneratedTitle}</span>
+              <div>
+                <Label htmlFor="assignment-title">Assignment Title</Label>
+                <Input
+                  id="assignment-title"
+                  className="mt-2"
+                  placeholder={selectedCategory ? `${selectedCategory.name} - WAVE 1` : 'Customer Service Essentials - WAVE 1'}
+                  value={assignForm.title}
+                  onChange={(event) =>
+                    setAssignForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="assignment-description">Assignment Notes</Label>
+                <Textarea
+                  id="assignment-description"
+                  className="mt-2"
+                  placeholder="Add context or instructions for this assessment category assignment."
+                  value={assignForm.description}
+                  onChange={(event) =>
+                    setAssignForm((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <Label htmlFor="assignment-due-date">Due Date</Label>
+                  <Input
+                    id="assignment-due-date"
+                    type="date"
+                    className="mt-2"
+                    value={assignForm.dueDate}
+                    onChange={(event) =>
+                      setAssignForm((current) => ({
+                        ...current,
+                        dueDate: event.target.value,
+                      }))
+                    }
+                  />
                 </div>
-              ) : null}
-            </div>
 
-            <div>
-              <Label htmlFor="mcq-description">Assignment Notes</Label>
-              <Textarea
-                id="mcq-description"
-                className="mt-2"
-                placeholder="Add context or instructions for this batch assignment."
-                value={form.description}
-                onChange={(event) => setForm((current) => ({ ...current, description: event.target.value }))}
-              />
-            </div>
+                <div>
+                  <Label htmlFor="assignment-time-limit">Assessment Timer (Minutes)</Label>
+                  <Input
+                    id="assignment-time-limit"
+                    type="number"
+                    min={1}
+                    className="mt-2"
+                    value={assignForm.timeLimitMinutes}
+                    onChange={(event) =>
+                      setAssignForm((current) => ({
+                        ...current,
+                        timeLimitMinutes: Math.max(Number(event.target.value) || 0, 1),
+                      }))
+                    }
+                  />
+                </div>
+              </div>
 
-            <div>
-              <Label htmlFor="mcq-due-date">Due Date</Label>
-              <Input
-                id="mcq-due-date"
-                type="date"
-                className="mt-2"
-                value={form.dueDate}
-                onChange={(event) => setForm((current) => ({ ...current, dueDate: event.target.value }))}
-              />
-            </div>
-
-            <Button onClick={() => void assignCategory()} disabled={assigning || !selectedCategory}>
-              {assigning ? <Loader2 className="size-4 animate-spin" /> : <BookOpenCheck className="size-4" />}
-              Assign Selected Questions
-            </Button>
-          </CardContent>
-        </Card>
-        </>
+              <Button type="button" onClick={() => void assignCategory()} disabled={assigning || !selectedCategory}>
+                {assigning ? <Loader2 className="size-4 animate-spin" /> : <BookOpenCheck className="size-4" />}
+                Publish Assessment Category
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
       ) : null}
 
-      {activePanel === 'progress' ? (
+      {activePanel === 'assigned' ? (
         <Card>
           <CardHeader>
-            <CardTitle>Assignment Progress</CardTitle>
+            <CardTitle>Assigned Categories to Batch / Wave</CardTitle>
             <CardDescription>
-              Completion, scores, and certificates update here when trainees finish the MCQ assigned to their batch or
-              account.
+              Edit or delete active category assignments and monitor each target batch or trainee progress.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ScrollArea className="h-[560px] pr-4">
+            <div className="mb-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+              <Input
+                value={assignmentSearch}
+                onChange={(event) => setAssignmentSearch(event.target.value)}
+                placeholder="Search assignment title, category, batch, or trainee"
+              />
+              <select
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                value={assignmentTargetFilter}
+                onChange={(event) => setAssignmentTargetFilter(event.target.value as 'all' | AssignmentTargetType)}
+              >
+                <option value="all">All targets</option>
+                <option value="batch">Batch / Wave only</option>
+                <option value="trainee">One trainee only</option>
+              </select>
+              <select
+                className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                value={assignmentProgressFilter}
+                onChange={(event) =>
+                  setAssignmentProgressFilter(event.target.value as 'all' | 'pending' | 'active' | 'passed')
+                }
+              >
+                <option value="all">All progress states</option>
+                <option value="pending">Pending only</option>
+                <option value="active">In progress</option>
+                <option value="passed">Fully passed</option>
+              </select>
+            </div>
+
+            <ScrollArea className="h-[720px] pr-4">
               <div className="space-y-4">
-                {assignments.map((assignment) => (
-                  <div key={assignment.id} className="rounded-2xl border p-4">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-lg font-semibold text-foreground">{assignment.title}</div>
-                          <Badge variant="outline">{assignment.category_name || 'Category'}</Badge>
-                          <Badge variant="outline">
-                            {assignment.question_count}
-                            {assignment.category_question_count &&
-                            assignment.category_question_count !== assignment.question_count
-                              ? ` / ${assignment.category_question_count}`
-                              : ''}
-                            {' '}questions
-                          </Badge>
-                          <Badge variant="outline">{assignment.passing_threshold}% pass mark</Badge>
+                {filteredAssignments.map((assignment) => {
+                  const progressState =
+                    assignment.total_trainees > 0 && assignment.passed_trainees >= assignment.total_trainees
+                      ? 'passed'
+                      : assignment.completed_trainees > 0
+                        ? 'active'
+                        : 'pending';
+                  const targetTypeLabel = assignment.assigned_batch_id ? 'Batch / Wave' : 'One Trainee';
+
+                  return (
+                    <div key={assignment.id} className="rounded-2xl border p-4">
+                      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-lg font-semibold text-foreground">{assignment.title}</div>
+                            <Badge variant="outline">{assignment.category_name || 'Assessment category'}</Badge>
+                            <Badge variant="outline">{assignment.question_count} saved question(s)</Badge>
+                            <Badge variant="outline">{assignment.time_limit_minutes} min timer</Badge>
+                            <Badge variant="outline">{assignment.passing_threshold}% pass mark</Badge>
+                            <Badge variant="outline">{targetTypeLabel}</Badge>
+                            <Badge
+                              className={
+                                progressState === 'passed'
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : progressState === 'active'
+                                    ? 'bg-amber-100 text-amber-700'
+                                    : 'bg-slate-100 text-slate-700'
+                              }
+                            >
+                              {progressState === 'passed'
+                                ? 'Fully Passed'
+                                : progressState === 'active'
+                                  ? 'In Progress'
+                                  : 'Pending Start'}
+                            </Badge>
+                          </div>
+                          <div className="mt-2 text-sm text-muted-foreground">
+                            {assignment.description || 'No assignment notes were added.'}
+                          </div>
+                          <div className="mt-2 text-xs text-muted-foreground">
+                            Target:{' '}
+                            <span className="font-semibold text-foreground">
+                              {assignment.assigned_batch_name || assignment.assigned_user_name || 'Unknown target'}
+                            </span>
+                            {' '}| Due: <span className="font-semibold text-foreground">{formatDate(assignment.due_date)}</span>
+                          </div>
                         </div>
-                        <div className="mt-2 text-sm text-muted-foreground">
-                          {assignment.description || assignment.category_description || 'No description provided.'}
-                        </div>
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          Target:{' '}
-                          <span className="font-semibold text-foreground">
-                            {assignment.assigned_batch_name || assignment.assigned_user_name || 'Unknown'}
-                          </span>
-                          {' '}| Due: <span className="font-semibold text-foreground">{formatDate(assignment.due_date)}</span>
-                          {assignment.assigned_by_name ? (
-                            <>
-                              {' '}| Assigned by:{' '}
-                              <span className="font-semibold text-foreground">{assignment.assigned_by_name}</span>
-                            </>
-                          ) : null}
+
+                        <div className="flex flex-wrap gap-2">
+                          <Button type="button" variant="outline" size="sm" onClick={() => openAssignmentEditor(assignment)}>
+                            <Pencil className="size-4" />
+                            Edit
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void deleteAssignment(assignment)}
+                            disabled={deletingAssignmentId === assignment.id}
+                          >
+                            {deletingAssignmentId === assignment.id ? (
+                              <Loader2 className="size-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="size-4" />
+                            )}
+                            Delete
+                          </Button>
                         </div>
                       </div>
-                      <div className="grid grid-cols-2 gap-2 text-sm xl:min-w-[220px]">
+
+                      <div className="mt-4 grid gap-3 sm:grid-cols-4">
                         <MiniStat label="Completed" value={`${assignment.completed_trainees}/${assignment.total_trainees}`} />
                         <MiniStat label="Passed" value={String(assignment.passed_trainees)} />
                         <MiniStat label="Pending" value={String(assignment.pending_trainees)} />
                         <MiniStat label="Certificates" value={String(assignment.certificate_count)} />
                       </div>
-                    </div>
 
-                    <div className="mt-4">
-                      <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-                        <span>Completion rate</span>
-                        <span>{assignment.completion_rate.toFixed(0)}%</span>
+                      <div className="mt-4">
+                        <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>Completion rate</span>
+                          <span>{assignment.completion_rate.toFixed(0)}%</span>
+                        </div>
+                        <Progress value={assignment.completion_rate} />
                       </div>
-                      <Progress value={assignment.completion_rate} />
-                    </div>
 
-                    <div className="mt-4 space-y-2">
-                      {assignment.trainees.map((trainee) => (
-                        <div key={trainee.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-                          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                            <div>
-                              <div className="font-medium text-foreground">{trainee.full_name}</div>
-                              <div className="text-xs text-muted-foreground">{trainee.email}</div>
-                              <div className="mt-1 text-xs text-muted-foreground">
-                                {trainee.batch_name || assignment.assigned_batch_name || 'No batch'}
+                      <div className="mt-4 space-y-2">
+                        {assignment.trainees.map((trainee) => (
+                          <div key={trainee.id} className="rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+                            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                              <div>
+                                <div className="font-medium text-foreground">{trainee.full_name}</div>
+                                <div className="text-xs text-muted-foreground">{trainee.email}</div>
+                                <div className="mt-1 text-xs text-muted-foreground">
+                                  {trainee.batch_name || assignment.assigned_batch_name || 'No batch'}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Badge className={statusBadgeClass(trainee.is_passed)}>
+                                  {trainee.status === 'completed'
+                                    ? trainee.is_passed
+                                      ? 'Completed / Passed'
+                                      : 'Completed / Failed'
+                                    : 'Pending'}
+                                </Badge>
+                                {trainee.certificate_no ? (
+                                  <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
+                                    {trainee.certificate_no}
+                                  </Badge>
+                                ) : null}
                               </div>
                             </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Badge className={statusBadgeClass(trainee.is_passed)}>
-                                {trainee.status === 'completed'
-                                  ? trainee.is_passed
-                                    ? 'Completed / Passed'
-                                    : 'Completed'
-                                  : 'Pending'}
-                              </Badge>
-                              {trainee.certificate_no ? (
-                                <Badge variant="outline" className="border-emerald-200 bg-emerald-50 text-emerald-700">
-                                  <Trophy className="mr-1 size-3.5" />
-                                  {trainee.certificate_no}
-                                </Badge>
-                              ) : null}
+
+                            <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
+                              <span>
+                                Score:{' '}
+                                <span className="font-semibold text-foreground">
+                                  {typeof trainee.score_percentage === 'number'
+                                    ? `${trainee.score_percentage.toFixed(2)}%`
+                                    : 'Not submitted'}
+                                </span>
+                              </span>
+                              <span>
+                                Attempts:{' '}
+                                <span className="font-semibold text-foreground">{trainee.attempt_count || 0}</span>
+                              </span>
+                              <span>
+                                Submitted:{' '}
+                                <span className="font-semibold text-foreground">
+                                  {trainee.submitted_at ? formatDate(trainee.submitted_at) : 'Waiting'}
+                                </span>
+                              </span>
                             </div>
                           </div>
+                        ))}
 
-                          <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
-                            <span>
-                              Score:{' '}
-                              <span className="font-semibold text-foreground">
-                                {typeof trainee.score_percentage === 'number'
-                                  ? `${trainee.score_percentage.toFixed(2)}%`
-                                  : 'Not submitted'}
-                              </span>
-                            </span>
-                            <span>
-                              Submitted:{' '}
-                              <span className="font-semibold text-foreground">
-                                {trainee.submitted_at ? formatDate(trainee.submitted_at) : 'Waiting'}
-                              </span>
-                            </span>
+                        {!assignment.trainees.length ? (
+                          <div className="rounded-xl border border-dashed px-3 py-4 text-sm text-muted-foreground">
+                            This assignment does not have any active target trainees yet.
                           </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => openCoachingDialog(assignment, trainee)}
-                              disabled={trainee.status !== 'completed'}
-                            >
-                              <MessageSquarePlus className="size-4" />
-                              Coach Trainee
-                            </Button>
-                          </div>
-                        </div>
-                      ))}
-
-                      {!assignment.trainees.length ? (
-                        <div className="rounded-xl border border-dashed px-3 py-4 text-sm text-muted-foreground">
-                          This assignment does not have any active target trainees yet.
-                        </div>
-                      ) : null}
+                        ) : null}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
 
-                {!assignments.length && !loading ? (
+                {!filteredAssignments.length ? (
                   <div className="rounded-2xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-                    No MCQ categories have been assigned yet. Create a category first, then assign it to a batch or
-                    trainee.
+                    {assignments.length
+                      ? 'No published category assignments match the current filters.'
+                      : 'No assessment categories have been published yet. Save a category question set first, then publish it to a trainer-owned batch, wave, or trainee.'}
                   </div>
                 ) : null}
               </div>
@@ -1142,192 +1527,196 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
         </Card>
       ) : null}
 
-      {activePanel === 'manager' ? (
-        <>
-          <Card className="border-amber-200 bg-amber-50/70">
-            <CardContent className="pt-6 text-sm text-amber-900">
-              The trainer manager below now shows every active MCQ question saved in the database. You can still create,
-              edit, and delete only the categories and questions owned by your trainer account.
-            </CardContent>
-          </Card>
-          <MCQManager scope="all" />
-        </>
-      ) : null}
-
-      <Dialog open={!!coachingTarget && !!coachingForm} onOpenChange={(open) => !open && closeCoachingDialog()}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
+      <Dialog open={!!editingAssignment} onOpenChange={(open) => !open && closeAssignmentEditor()}>
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>MCQ Coaching Follow-up</DialogTitle>
+            <DialogTitle>Edit Published Category</DialogTitle>
             <DialogDescription>
-              Save a draft or send a coaching log to the trainee based on the selected MCQ result.
+              Update the saved category assignment for the selected batch, wave, or trainee.
             </DialogDescription>
           </DialogHeader>
 
-          {coachingTarget && coachingForm ? (
-            <div className="space-y-5">
-              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                <MiniStat label="Trainee" value={coachingTarget.trainee.full_name} />
-                <MiniStat
-                  label="Score"
-                  value={
-                    typeof coachingTarget.trainee.score_percentage === 'number'
-                      ? `${coachingTarget.trainee.score_percentage.toFixed(2)}%`
-                      : 'Not submitted'
-                  }
-                />
-                <MiniStat
-                  label="Certificate"
-                  value={coachingTarget.trainee.certificate_no || 'Not issued'}
-                />
-                <MiniStat
-                  label="Verdict"
-                  value={
-                    coachingTarget.trainee.is_passed === true
-                      ? 'Passed'
-                      : coachingTarget.trainee.is_passed === false
-                        ? 'Needs follow-up'
-                        : 'Pending'
-                  }
-                />
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                Assignment: <span className="font-semibold text-slate-950">{coachingTarget.assignment.title}</span>
-                {' '}| Category:{' '}
-                <span className="font-semibold text-slate-950">
-                  {coachingTarget.assignment.category_name || 'MCQ Category'}
-                </span>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="mcq-coach-strengths">Strengths</Label>
-                <Textarea
-                  id="mcq-coach-strengths"
-                  rows={4}
-                  value={coachingForm.strengths}
+          {editingAssignment ? (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="edit-category">Assessment Category</Label>
+                <select
+                  id="edit-category"
+                  className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                  value={editForm.categoryId}
                   onChange={(event) =>
-                    setCoachingForm((current) =>
-                      current ? { ...current, strengths: event.target.value } : current,
-                    )
+                    setEditForm((current) => ({
+                      ...current,
+                      categoryId: event.target.value,
+                    }))
                   }
-                />
+                >
+                  <option value="">{categories.length ? 'Select category' : 'No categories available'}</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name} ({category.selected_question_count || 0} saved question(s))
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="mcq-coach-opportunities">Opportunities</Label>
-                <Textarea
-                  id="mcq-coach-opportunities"
-                  rows={4}
-                  value={coachingForm.opportunities}
-                  onChange={(event) =>
-                    setCoachingForm((current) =>
-                      current ? { ...current, opportunities: event.target.value } : current,
-                    )
-                  }
-                />
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="mcq-coach-action-plan">Action Plan</Label>
-                <Textarea
-                  id="mcq-coach-action-plan"
-                  rows={4}
-                  value={coachingForm.actionPlan}
-                  onChange={(event) =>
-                    setCoachingForm((current) =>
-                      current ? { ...current, actionPlan: event.target.value } : current,
-                    )
-                  }
-                />
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="space-y-2">
-                  <Label htmlFor="mcq-coach-target-date">Target Date</Label>
-                  <Input
-                    id="mcq-coach-target-date"
-                    type="date"
-                    value={coachingForm.targetDate}
-                    onChange={(event) =>
-                      setCoachingForm((current) =>
-                        current ? { ...current, targetDate: event.target.value } : current,
-                      )
+              <div>
+                <Label>Assign To</Label>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        targetType: 'batch',
+                        traineeId: '',
+                      }))
                     }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="mcq-coach-minutes">Coaching Minutes</Label>
-                  <Input
-                    id="mcq-coach-minutes"
-                    type="number"
-                    min={1}
-                    value={coachingForm.coachingMinutes}
-                    onChange={(event) =>
-                      setCoachingForm((current) =>
-                        current
-                          ? {
-                              ...current,
-                              coachingMinutes: Number(event.target.value) || 0,
-                            }
-                          : current,
-                      )
+                    className={`rounded-full border px-3 py-2 text-sm ${
+                      editForm.targetType === 'batch'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    Batch / Wave
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEditForm((current) => ({
+                        ...current,
+                        targetType: 'trainee',
+                        batchId: '',
+                      }))
                     }
-                  />
+                    className={`rounded-full border px-3 py-2 text-sm ${
+                      editForm.targetType === 'trainee'
+                        ? 'border-blue-600 bg-blue-50 text-blue-700'
+                        : 'border-slate-200 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    One Trainee
+                  </button>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="mcq-coach-verdict">Verdict</Label>
+              </div>
+
+              {editForm.targetType === 'batch' ? (
+                <div>
+                  <Label htmlFor="edit-batch">Target Batch / Wave</Label>
                   <select
-                    id="mcq-coach-verdict"
+                    id="edit-batch"
                     className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
-                    value={coachingForm.competencyStatus}
+                    value={editForm.batchId}
                     onChange={(event) =>
-                      setCoachingForm((current) =>
-                        current
-                          ? {
-                              ...current,
-                              competencyStatus: event.target.value as McqCoachingForm['competencyStatus'],
-                            }
-                          : current,
-                      )
+                      setEditForm((current) => ({
+                        ...current,
+                        batchId: event.target.value,
+                      }))
                     }
                   >
-                    <option value="pending">Pending</option>
-                    <option value="competent">Competent</option>
-                    <option value="not_competent">Not Competent</option>
+                    <option value="">{batches.length ? 'Select batch' : 'No batches available'}</option>
+                    {batches.map((batch) => (
+                      <option key={batch.id} value={batch.id}>
+                        {formatBatchLabel(batch)}
+                      </option>
+                    ))}
                   </select>
                 </div>
-              </div>
+              ) : (
+                <div>
+                  <Label htmlFor="edit-trainee">Target Trainee</Label>
+                  <select
+                    id="edit-trainee"
+                    className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                    value={editForm.traineeId}
+                    onChange={(event) =>
+                      setEditForm((current) => ({
+                        ...current,
+                        traineeId: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">{trainees.length ? 'Select trainee' : 'No trainees available'}</option>
+                    {trainees.map((trainee) => (
+                      <option key={trainee.id} value={trainee.id}>
+                        {trainee.full_name} ({trainee.batch?.name || trainee.batch_names?.[0] || 'No batch'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
-              <div className="space-y-2">
-                <Label htmlFor="mcq-coach-remarks">Trainer Remarks</Label>
-                <Textarea
-                  id="mcq-coach-remarks"
-                  rows={3}
-                  value={coachingForm.trainerRemarks}
+              <div>
+                <Label htmlFor="edit-title">Assignment Title</Label>
+                <Input
+                  id="edit-title"
+                  className="mt-2"
+                  value={editForm.title}
                   onChange={(event) =>
-                    setCoachingForm((current) =>
-                      current ? { ...current, trainerRemarks: event.target.value } : current,
-                    )
+                    setEditForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
                   }
                 />
+              </div>
+
+              <div>
+                <Label htmlFor="edit-description">Assignment Notes</Label>
+                <Textarea
+                  id="edit-description"
+                  className="mt-2"
+                  value={editForm.description}
+                  onChange={(event) =>
+                    setEditForm((current) => ({
+                      ...current,
+                      description: event.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <Label htmlFor="edit-due-date">Due Date</Label>
+                  <Input
+                    id="edit-due-date"
+                    type="date"
+                    className="mt-2"
+                    value={editForm.dueDate}
+                    onChange={(event) =>
+                      setEditForm((current) => ({
+                        ...current,
+                        dueDate: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="edit-time-limit">Assessment Timer (Minutes)</Label>
+                  <Input
+                    id="edit-time-limit"
+                    type="number"
+                    min={1}
+                    className="mt-2"
+                    value={editForm.timeLimitMinutes}
+                    onChange={(event) =>
+                      setEditForm((current) => ({
+                        ...current,
+                        timeLimitMinutes: Math.max(Number(event.target.value) || 0, 1),
+                      }))
+                    }
+                  />
+                </div>
               </div>
 
               <div className="flex flex-wrap justify-end gap-3">
-                <Button type="button" variant="outline" onClick={closeCoachingDialog} disabled={savingCoachingLog}>
+                <Button type="button" variant="outline" onClick={closeAssignmentEditor} disabled={savingAssignment}>
                   Cancel
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => void saveCoachingFollowUp(false)}
-                  disabled={savingCoachingLog}
-                >
-                  {savingCoachingLog ? <Loader2 className="size-4 animate-spin" /> : null}
-                  Save Draft
-                </Button>
-                <Button type="button" onClick={() => void saveCoachingFollowUp(true)} disabled={savingCoachingLog}>
-                  {savingCoachingLog ? <Loader2 className="size-4 animate-spin" /> : <MessageSquarePlus className="size-4" />}
-                  Send to Trainee
+                <Button type="button" onClick={() => void saveAssignmentChanges()} disabled={savingAssignment}>
+                  {savingAssignment ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                  Save Changes
                 </Button>
               </div>
             </div>
@@ -1361,6 +1750,29 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
       <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+}
+
+function WorkflowStepCard({
+  step,
+  title,
+  description,
+  status,
+}: {
+  step: string;
+  title: string;
+  description: string;
+  status: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Step {step}</div>
+      <div className="mt-2 text-lg font-semibold text-slate-950">{title}</div>
+      <div className="mt-2 text-sm text-slate-600">{description}</div>
+      <Badge variant="outline" className="mt-4">
+        {status}
+      </Badge>
     </div>
   );
 }

@@ -58,6 +58,11 @@ try:
 except ImportError:
     from env_loader import load_backend_environment, use_local_sqlite
 
+try:
+    from .config_validation import is_usable_azure_speech_key, normalize_env_value
+except ImportError:
+    from config_validation import is_usable_azure_speech_key, normalize_env_value
+
 # Load environment variables using the shared backend resolution order.
 load_backend_environment()
 MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
@@ -815,6 +820,146 @@ def ensure_certification_schema() -> None:
 ensure_certification_schema()
 
 
+def ensure_mcq_assessment_schema() -> None:
+    """Backfill MCQ navigation columns for persisted assessment data."""
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception:
+        logger.exception("Unable to inspect MCQ assessment schema")
+        return
+
+    if not {"mcq_category", "mcq_assessment", "mcq_submission"}.intersection(existing_tables):
+        return
+
+    try:
+        empty_array_literal = "'[]'::jsonb" if engine.dialect.name == "postgresql" else "'[]'"
+        with engine.begin() as connection:
+            if "certification_settings" in existing_tables:
+                settings_columns = {
+                    column["name"] for column in inspector.get_columns("certification_settings")
+                }
+                if "mcq_passing_threshold" in settings_columns:
+                    connection.execute(
+                        text(
+                            "UPDATE certification_settings SET "
+                            "mcq_passing_threshold = CASE "
+                            "WHEN mcq_passing_threshold IS NULL OR mcq_passing_threshold < 90 THEN 90 "
+                            "ELSE mcq_passing_threshold "
+                            "END"
+                        )
+                    )
+
+            if "mcq_category" in existing_tables:
+                category_columns = {
+                    column["name"] for column in inspector.get_columns("mcq_category")
+                }
+                if "selected_question_ids" not in category_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE mcq_category "
+                            "ADD COLUMN selected_question_ids JSONB DEFAULT '[]'::jsonb"
+                            if engine.dialect.name == "postgresql"
+                            else "ALTER TABLE mcq_category "
+                            "ADD COLUMN selected_question_ids JSON DEFAULT '[]'"
+                        )
+                    )
+                connection.execute(
+                    text(
+                        "UPDATE mcq_category SET "
+                        f"selected_question_ids = COALESCE(selected_question_ids, {empty_array_literal}), "
+                        "passing_threshold = CASE "
+                        "WHEN passing_threshold IS NULL OR passing_threshold < 90 THEN 90 "
+                        "ELSE passing_threshold "
+                        "END"
+                    )
+                )
+
+            if "mcq_assessment" in existing_tables:
+                assessment_columns = {
+                    column["name"] for column in inspector.get_columns("mcq_assessment")
+                }
+                if "time_limit_minutes" not in assessment_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE mcq_assessment "
+                            "ADD COLUMN time_limit_minutes INTEGER DEFAULT 30"
+                        )
+                    )
+                if "question_snapshot" not in assessment_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE mcq_assessment "
+                            "ADD COLUMN question_snapshot JSONB DEFAULT '[]'::jsonb"
+                            if engine.dialect.name == "postgresql"
+                            else "ALTER TABLE mcq_assessment "
+                            "ADD COLUMN question_snapshot JSON DEFAULT '[]'"
+                        )
+                    )
+                connection.execute(
+                    text(
+                        "UPDATE mcq_assessment SET "
+                        "time_limit_minutes = COALESCE(time_limit_minutes, 30), "
+                        f"question_snapshot = COALESCE(question_snapshot, {empty_array_literal})"
+                    )
+                )
+
+            if "mcq_submission" in existing_tables:
+                submission_columns = {
+                    column["name"] for column in inspector.get_columns("mcq_submission")
+                }
+                if "review" not in submission_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE mcq_submission "
+                            "ADD COLUMN review JSONB DEFAULT '[]'::jsonb"
+                            if engine.dialect.name == "postgresql"
+                            else "ALTER TABLE mcq_submission "
+                            "ADD COLUMN review JSON DEFAULT '[]'"
+                        )
+                    )
+                if "attempt_count" not in submission_columns:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE mcq_submission "
+                            "ADD COLUMN attempt_count INTEGER DEFAULT 1"
+                        )
+                    )
+                connection.execute(
+                    text(
+                        "UPDATE mcq_submission SET "
+                        f"review = COALESCE(review, {empty_array_literal}), "
+                        "attempt_count = CASE "
+                        "WHEN attempt_count IS NULL OR attempt_count < 1 THEN 1 "
+                        "ELSE attempt_count "
+                        "END"
+                    )
+                )
+            if {"mcq_submission", "mcq_assessment", "mcq_category"}.issubset(existing_tables):
+                connection.execute(
+                    text(
+                        "UPDATE mcq_submission SET "
+                        "is_passed = CASE "
+                        "WHEN COALESCE(score_percentage, 0) >= COALESCE(("
+                        "  SELECT CASE "
+                        "    WHEN c.passing_threshold IS NULL OR c.passing_threshold < 90 THEN 90 "
+                        "    ELSE c.passing_threshold "
+                        "  END "
+                        "  FROM mcq_assessment AS a "
+                        "  JOIN mcq_category AS c ON c.id = a.category_id "
+                        "  WHERE a.id = mcq_submission.assessment_id"
+                        "), 90) "
+                        "THEN TRUE ELSE FALSE END"
+                    )
+                )
+        logger.info("Applied MCQ assessment navigation schema backfill")
+    except Exception:
+        logger.exception("Failed to backfill MCQ assessment navigation schema")
+
+
+ensure_mcq_assessment_schema()
+
+
 def ensure_default_lob_catalog() -> None:
     """Keep the active LOB catalog aligned with the supported production list."""
     for attempt in range(1, 3):
@@ -916,15 +1061,17 @@ app.include_router(sim_floor_routes.router)
 app.include_router(sim_floor_recordings.router)
 
 # Azure Speech Configuration
-SPEECH_KEY = os.getenv("AZURE_SPEECH_KEY", "your_key_here")
-SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "eastus")
-if AZURE_AVAILABLE:
+SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
+SPEECH_REGION = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
+if AZURE_AVAILABLE and is_usable_azure_speech_key(SPEECH_KEY):
     SPEECH_CONFIG = speechsdk.SpeechConfig(
         subscription=SPEECH_KEY, region=SPEECH_REGION
     )
     SPEECH_CONFIG.speech_recognition_language = "en-US"
 else:
     SPEECH_CONFIG = None
+    if AZURE_AVAILABLE:
+        logger.info("Azure Speech credentials are not configured. Pronunciation assessment is disabled.")
 
 VOICE_PIPELINE_CONTROLLER = SpeechPipelineController()
 
@@ -944,6 +1091,11 @@ def assess_pronunciation(
     """
     if not AZURE_AVAILABLE:
         return {"status": "error", "error": "Azure Speech SDK not available"}
+    if not SPEECH_CONFIG:
+        return {
+            "status": "error",
+            "error": "Azure Speech credentials are not configured",
+        }
 
     try:
         # Create a push audio input stream

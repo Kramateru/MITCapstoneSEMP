@@ -99,6 +99,19 @@ export interface TrainerReportOverview {
     module_title: string | null;
     issued_at: string | null;
   }>;
+  assignments: Array<{
+    id: string;
+    title: string | null;
+    trainee_name: string | null;
+    user_id: string | null;
+    batch_id: string | null;
+    batch_label: string | null;
+    status: AssignmentStatus;
+    completion_percentage: number;
+    average_score: number;
+    completed_exercises: number;
+    certificate_id: string | null;
+  }>;
 }
 
 export interface CategoryFormState {

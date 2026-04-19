@@ -1,73 +1,30 @@
 # Quick Start
 
-This is the fastest verified way to run the platform locally from PowerShell.
+This guide uses PowerShell only. Open terminals in the project root:
+
+`C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform`
 
 ## Prerequisites
 
-- Python 3.11 or newer
-- Node.js 20 or newer
-- Backend virtual environment already created in `backend/venv`
-- Frontend dependencies already installed in `frontend/node_modules`
+- Python 3.11+
+- Node.js 20+
+- Backend virtual environment present at `backend\venv`
+- Frontend dependencies installed in `frontend\node_modules`
 
-## Recommended Local Mode
+## Recommended Supabase Run
 
-For local testing, use the bundled SQLite mode first. It avoids external Supabase/Postgres connectivity issues and was the mode used for the latest smoke test.
+The backend is configured to read Supabase/Postgres settings from `backend\.env` and the repo `.env`.
 
-Backend URL:
-
-- `http://127.0.0.1:8000`
-
-Frontend URL:
-
-- `http://localhost:3000`
-
-## Start The Backend
-
-Open a PowerShell terminal at the project root and run either the launcher or the direct command.
-
-### Option A: Root launcher
-
-```powershell
-$env:USE_LOCAL_SQLITE='1'
-.\run-backend.cmd
-```
-
-### Option B: Direct backend command
+### Terminal 1: Backend
 
 ```powershell
 cd backend
-$env:USE_LOCAL_SQLITE='1'
+$env:USE_LOCAL_SQLITE='0'
+$env:BACKEND_URL='http://127.0.0.1:8000'
 venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-## Start The Frontend
-
-Open a second PowerShell terminal at the project root.
-
-Build once before `start`, then run the frontend server:
-
-### Option A: Root launcher
-
-```powershell
-cd frontend
-npm run build
-cd ..
-.\run-frontend.cmd
-```
-
-### Option B: Direct frontend command
-
-```powershell
-cd frontend
-npm run build
-$env:BACKEND_URL='http://127.0.0.1:8000'
-$env:NODE_OPTIONS='--no-deprecation'
-npm run start -- --hostname localhost --port 3000
-```
-
-### Optional hot-reload mode
-
-If you want frontend hot reload during UI work, use:
+### Terminal 2: Frontend Dev Server
 
 ```powershell
 cd frontend
@@ -76,9 +33,36 @@ $env:NODE_OPTIONS='--no-deprecation'
 npm run dev -- --hostname localhost --port 3000
 ```
 
-## Default Local Credentials
+Frontend URL: `http://localhost:3000`
 
-These seeded credentials were verified in local SQLite mode.
+Backend URL: `http://127.0.0.1:8000`
+
+## Production-Style Frontend Start
+
+If you want to run the frontend the same way as `run-frontend.cmd`, build first, then start:
+
+```powershell
+cd frontend
+$env:BACKEND_URL='http://127.0.0.1:8000'
+$env:NODE_OPTIONS='--no-deprecation'
+npm run build
+npm run start -- --hostname localhost --port 3000
+```
+
+## SQLite Fallback
+
+If Supabase/Postgres is unavailable, use local SQLite for backend startup:
+
+```powershell
+cd backend
+$env:USE_LOCAL_SQLITE='1'
+$env:BACKEND_URL='http://127.0.0.1:8000'
+venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+```
+
+The frontend command stays the same.
+
+## Default Login Credentials
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -88,44 +72,15 @@ These seeded credentials were verified in local SQLite mode.
 
 Notes:
 
-- The trainee account is configured to require a password change after first login.
-- Authentication routes map users to `/admin/dashboard`, `/trainer/dashboard`, and `/trainee/dashboard`.
+- The trainee account may prompt for a password change on first login.
+- Role routing goes to `/admin/dashboard`, `/trainer/dashboard`, and `/trainee/dashboard`.
 
-## Quick Verification
+## Fast Smoke Check
 
-After both servers are running, open:
-
-- `http://localhost:3000/login`
-- `http://127.0.0.1:8000/docs`
-- `http://127.0.0.1:8000/openapi.json`
-
-Recommended smoke check:
-
-1. Sign in as admin and open `Dashboard`, `Users`, and `Settings`.
-2. Sign in as trainer and open `Dashboard`, `Sim Floor`, and `Reports`.
-3. Sign in as trainee and open `Dashboard`, `Sim Floor`, `Reports`, and `Certificates`.
-
-## Supabase Mode
-
-Use Supabase/Postgres only when the backend environment is fully configured and external connectivity is available.
-
-Required backend variables include:
-
-- `DATABASE_URL`
-- `SUPABASE_URL`
-- `SUPABASE_KEY`
-- `SUPABASE_SERVICE_KEY`
-- `JWT_SECRET`
-
-To force backend startup against Supabase/Postgres:
-
-```powershell
-cd backend
-$env:USE_LOCAL_SQLITE='0'
-venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
-```
-
-If `USE_LOCAL_SQLITE=0` is set and `DATABASE_URL` is unreachable, backend startup will fail.
+1. Open `http://localhost:3000/login`.
+2. Sign in as trainee and verify `Microlearning`, `Assessments`, `My Progress`, `Reports`, and `Certificates`.
+3. Sign in as trainer and verify `Microlearning`, `Assessments`, `Coaching`, and `Reports`.
+4. Open `http://127.0.0.1:8000/docs` to confirm backend API availability.
 
 ## Useful Commands
 
@@ -144,7 +99,7 @@ cd frontend
 npm install
 ```
 
-Compile-check the backend:
+Compile-check backend Python files:
 
 ```powershell
 cd backend
@@ -153,6 +108,6 @@ venv\Scripts\python.exe -m compileall .
 
 ## Related Docs
 
-- [backend/SUPABASE_SETUP.md](backend/SUPABASE_SETUP.md) for live Supabase setup
-- [backend/AZURE_SETUP.md](backend/AZURE_SETUP.md) for Azure speech configuration
-- [TESTING_GUIDE.md](TESTING_GUIDE.md) for broader smoke testing and troubleshooting
+- [INPUT_GUIDE.md](INPUT_GUIDE.md)
+- [backend/SUPABASE_SETUP.md](backend/SUPABASE_SETUP.md)
+- [frontend/README.md](frontend/README.md)

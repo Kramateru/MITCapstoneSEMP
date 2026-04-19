@@ -1,13 +1,13 @@
 'use client'
 
-import { TraineeAssessmentWorkspace } from '@/app/components/assessment/trainee/trainee-assessment-workspace'
 import { DashboardLayout } from '@/app/components/DashboardLayout'
+import MCQAssessment from '@/app/components/trainee/mcq-assessment'
 import { traineeSidebarItems } from '@/app/trainee/nav'
 
 export default function TraineeAssessmentPage() {
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
-      <TraineeAssessmentWorkspace initialTab="available" />
+      <MCQAssessment />
     </DashboardLayout>
   )
 }

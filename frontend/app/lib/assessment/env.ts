@@ -4,19 +4,30 @@ import path from 'node:path'
 const envCache = new Map<string, string>()
 let cacheHydrated = false
 
-const envFiles = [
-  path.resolve(process.cwd(), '.env.local'),
-  path.resolve(process.cwd(), '.env'),
-  path.resolve(process.cwd(), '../.env'),
-  path.resolve(process.cwd(), '../backend/.env'),
-]
+function buildEnvFiles() {
+  const candidateRoots = [
+    process.cwd(),
+    path.resolve(process.cwd(), 'frontend'),
+    path.resolve(process.cwd(), '..'),
+  ]
+
+  return Array.from(
+    new Set(
+      candidateRoots.flatMap((root) => ([
+        path.resolve(root, '.env.local'),
+        path.resolve(root, '.env'),
+        path.resolve(root, 'backend', '.env'),
+      ])),
+    ),
+  )
+}
 
 function hydrateEnvCache() {
   if (cacheHydrated) {
     return
   }
 
-  for (const filePath of envFiles) {
+  for (const filePath of buildEnvFiles()) {
     if (!fs.existsSync(filePath)) {
       continue
     }

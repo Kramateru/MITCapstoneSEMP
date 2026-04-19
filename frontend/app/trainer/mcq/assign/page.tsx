@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
 export default function TrainerMcqAssignPage() {
-  redirect('/trainer/mcq?panel=assign');
+  redirect('/trainer/assessments?panel=question-set');
 }

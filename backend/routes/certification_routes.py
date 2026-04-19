@@ -36,7 +36,10 @@ from ..services.certificate_awards import (
     prune_trainee_activity_certificates,
     sync_trainee_completion_certificates,
 )
-from ..services.mcq_samples import ensure_trainer_language_assessment_samples
+from ..services.mcq_samples import (
+    ensure_trainer_kpi_assessment_program,
+    ensure_trainer_language_assessment_samples,
+)
 from ..services.certificate_service import generate_certificate_pdf
 from ..services.coaching import (
     build_training_state,
@@ -47,6 +50,16 @@ from ..services.coaching import (
 )
 
 router = APIRouter(prefix="/api/certification", tags=["certification"])
+MCQ_MIN_PASSING_THRESHOLD = 90.0
+
+
+def _effective_mcq_passing_threshold(value: Optional[float]) -> float:
+    try:
+        normalized = float(value or 0.0)
+    except (TypeError, ValueError):
+        normalized = 0.0
+
+    return max(normalized, MCQ_MIN_PASSING_THRESHOLD)
 
 
 def _ensure_role(current_user: User, allowed: List[UserRole]) -> None:
@@ -69,17 +82,30 @@ def _serialize_mcq_categories(db: Session, categories: List[MCQCategory]) -> Lis
             for user in db.query(User).filter(User.id.in_(creator_ids)).all()
         }
 
-    question_counts = {}
+    active_question_ids: dict[str, list[str]] = {}
     if category_ids:
-        question_counts = {
+        question_rows = (
+            db.query(MCQQuestion.id, MCQQuestion.category_id)
+            .filter(
+                MCQQuestion.category_id.in_(category_ids),
+                MCQQuestion.is_active == True,
+            )
+            .all()
+        )
+        for question_id, category_id in question_rows:
+            active_question_ids.setdefault(category_id, []).append(question_id)
+
+    assignment_counts = {}
+    if category_ids:
+        assignment_counts = {
             category_id: count
             for category_id, count in (
-                db.query(MCQQuestion.category_id, func.count(MCQQuestion.id))
+                db.query(MCQAssessment.category_id, func.count(MCQAssessment.id))
                 .filter(
-                    MCQQuestion.category_id.in_(category_ids),
-                    MCQQuestion.is_active == True,
+                    MCQAssessment.category_id.in_(category_ids),
+                    MCQAssessment.is_active == True,
                 )
-                .group_by(MCQQuestion.category_id)
+                .group_by(MCQAssessment.category_id)
                 .all()
             )
         }
@@ -91,7 +117,7 @@ def _serialize_mcq_categories(db: Session, categories: List[MCQCategory]) -> Lis
             "description": category.description,
             "difficulty": category.difficulty,
             "lob": category.lob,
-            "passing_threshold": category.passing_threshold,
+            "passing_threshold": _effective_mcq_passing_threshold(category.passing_threshold),
             "is_global": category.is_global,
             "is_active": category.is_active,
             "created_by": category.created_by,
@@ -103,7 +129,20 @@ def _serialize_mcq_categories(db: Session, categories: List[MCQCategory]) -> Lis
             else None,
             "created_at": category.created_at,
             "updated_at": category.updated_at,
-            "question_count": question_counts.get(category.id, 0),
+            "question_count": len(active_question_ids.get(category.id, [])),
+            "selected_question_ids": [
+                question_id
+                for question_id in dict.fromkeys(category.selected_question_ids or [])
+                if question_id in set(active_question_ids.get(category.id, []))
+            ],
+            "selected_question_count": len(
+                [
+                    question_id
+                    for question_id in dict.fromkeys(category.selected_question_ids or [])
+                    if question_id in set(active_question_ids.get(category.id, []))
+                ]
+            ),
+            "assignment_count": assignment_counts.get(category.id, 0),
         }
         for category in categories
     ]
@@ -152,9 +191,61 @@ def _serialize_mcq_questions(db: Session, questions: List[MCQQuestion]) -> List[
             else None,
             "created_at": question.created_at,
             "updated_at": question.updated_at,
+            "is_selected_for_assessment": question.id
+            in set((category_lookup.get(question.category_id).selected_question_ids or []))
+            if category_lookup.get(question.category_id)
+            else False,
         }
         for question in questions
     ]
+
+
+def _serialize_mcq_question_snapshot(question: MCQQuestion) -> dict:
+    return {
+        "id": question.id,
+        "question_text": question.question_text,
+        "options": {
+            "A": question.option_a,
+            "B": question.option_b,
+            "C": question.option_c,
+            "D": question.option_d,
+        },
+        "correct_option": question.correct_option,
+        "explanation": question.explanation,
+        "media_url": question.media_url,
+        "kip_weight": question.kip_weight,
+    }
+
+
+def _build_mcq_question_snapshot(questions: List[MCQQuestion]) -> List[dict]:
+    return [_serialize_mcq_question_snapshot(question) for question in questions]
+
+
+def _resolve_mcq_assessment_snapshot(
+    db: Session,
+    assessment: MCQAssessment,
+) -> List[dict]:
+    if isinstance(assessment.question_snapshot, list) and assessment.question_snapshot:
+        return [row for row in assessment.question_snapshot if isinstance(row, dict)]
+
+    ordered_question_ids = [question_id for question_id in dict.fromkeys(assessment.question_ids or []) if question_id]
+    if not ordered_question_ids:
+        return []
+
+    question_lookup = {
+        question.id: question
+        for question in (
+            db.query(MCQQuestion)
+            .filter(MCQQuestion.id.in_(ordered_question_ids))
+            .all()
+        )
+    }
+    ordered_questions = [
+        question_lookup[question_id]
+        for question_id in ordered_question_ids
+        if question_id in question_lookup
+    ]
+    return _build_mcq_question_snapshot(ordered_questions)
 
 
 def _serialize_mcq_assignment_rows(
@@ -236,6 +327,11 @@ def _serialize_mcq_assignment_rows(
         batch = batch_lookup.get(assessment.assigned_batch_id) if assessment.assigned_batch_id else None
         assigned_user = user_lookup.get(assessment.assigned_user_id) if assessment.assigned_user_id else None
         assigned_by = user_lookup.get(assessment.assigned_by) if assessment.assigned_by else None
+        selected_category_question_ids = [
+            question_id
+            for question_id in dict.fromkeys((category.selected_question_ids or []) if category else [])
+            if question_id in active_question_lookup.get(assessment.category_id, set())
+        ]
 
         if batch:
             target_trainees = sorted(
@@ -253,6 +349,12 @@ def _serialize_mcq_assignment_rows(
 
         assessment_submissions = submissions_by_assessment.get(assessment.id, {})
         assessment_certificates = certificates_by_assessment.get(assessment.id, {})
+        assessment_snapshot = _resolve_mcq_assessment_snapshot(db, assessment)
+        snapshot_question_ids = [
+            str(row.get("id"))
+            for row in assessment_snapshot
+            if isinstance(row, dict) and row.get("id")
+        ]
 
         trainee_rows = []
         completed_trainees = 0
@@ -286,6 +388,7 @@ def _serialize_mcq_assignment_rows(
                     "status": "completed" if submission else "pending",
                     "score_percentage": submission.score_percentage if submission else None,
                     "is_passed": submission.is_passed if submission else None,
+                    "attempt_count": int(submission.attempt_count or 0) if submission else 0,
                     "submitted_at": submission.submitted_at if submission else None,
                     "certificate_id": certificate.id if certificate else None,
                     "certificate_no": certificate.certificate_no if certificate else None,
@@ -293,15 +396,9 @@ def _serialize_mcq_assignment_rows(
             )
 
         total_trainees = len(target_trainees)
-        question_ids = assessment.question_ids or []
+        question_ids = snapshot_question_ids or [question_id for question_id in dict.fromkeys(assessment.question_ids or []) if question_id]
         active_category_question_ids = active_question_lookup.get(assessment.category_id, set())
-        active_question_count = len(
-            [
-                question_id
-                for question_id in question_ids
-                if not active_category_question_ids or question_id in active_category_question_ids
-            ]
-        )
+        active_question_count = len(question_ids)
 
         serialized_assessments.append(
             {
@@ -312,8 +409,11 @@ def _serialize_mcq_assignment_rows(
                 "category_name": category.name if category else None,
                 "category_description": category.description if category else None,
                 "passing_threshold": (
-                    category.passing_threshold if category else 90.0
+                    _effective_mcq_passing_threshold(category.passing_threshold)
+                    if category
+                    else MCQ_MIN_PASSING_THRESHOLD
                 ),
+                "time_limit_minutes": assessment.time_limit_minutes or 30,
                 "assigned_batch_id": assessment.assigned_batch_id,
                 "assigned_batch_name": batch.name if batch else None,
                 "assigned_user_id": assessment.assigned_user_id,
@@ -322,7 +422,8 @@ def _serialize_mcq_assignment_rows(
                 "assigned_by_name": assigned_by.full_name if assigned_by else None,
                 "assigned_by_role": assigned_by.role.value if assigned_by else None,
                 "question_ids": question_ids,
-                "category_question_count": len(active_category_question_ids),
+                "category_question_count": len(selected_category_question_ids),
+                "question_bank_count": len(active_category_question_ids),
                 "question_count": active_question_count,
                 "total_trainees": total_trainees,
                 "completed_trainees": completed_trainees,
@@ -501,6 +602,22 @@ def _get_trainer_scope(
     }
 
 
+def _find_preferred_wave_one_batch(batches: List[Batch]) -> Optional[Batch]:
+    normalized_batches = [batch for batch in batches if batch.is_active]
+    for batch in normalized_batches:
+        batch_name = (batch.name or "").strip().lower()
+        if batch.wave_number == 1 and ("batch 1" in batch_name or "wave 1" in batch_name):
+            return batch
+    for batch in normalized_batches:
+        if batch.wave_number == 1:
+            return batch
+    for batch in normalized_batches:
+        batch_name = (batch.name or "").strip().lower()
+        if "batch 1" in batch_name or "wave 1" in batch_name:
+            return batch
+    return normalized_batches[0] if normalized_batches else None
+
+
 def _ensure_trainer_can_access_trainee(
     db: Session,
     *,
@@ -574,7 +691,7 @@ def _serialize_certificate_settings(settings: CertificationSettings) -> dict:
         "certificate_outro": settings.certificate_outro,
         "certificate_footer": settings.certificate_footer,
         "asr_passing_threshold": settings.asr_passing_threshold,
-        "mcq_passing_threshold": settings.mcq_passing_threshold,
+        "mcq_passing_threshold": _effective_mcq_passing_threshold(settings.mcq_passing_threshold),
         "unit_of_competency": settings.unit_of_competency,
     }
 
@@ -587,7 +704,8 @@ def _serialize_certificate_record(
     settings: CertificationSettings,
 ) -> dict:
     snapshot = build_template_snapshot(settings)
-    snapshot.update(cert.template_snapshot or {})
+    if isinstance(cert.template_snapshot, dict):
+        snapshot.update(cert.template_snapshot)
     verification_path = f"/api/certification/verify/{cert.qr_token}"
 
     return {
@@ -606,6 +724,34 @@ def _serialize_certificate_record(
         "qr_token": cert.qr_token,
         "settings": snapshot,
     }
+
+
+def _sync_certificates_for_assessment_targets(
+    db: Session,
+    assessments: List[MCQAssessment],
+) -> None:
+    trainee_ids = {
+        assessment.assigned_user_id
+        for assessment in assessments
+        if assessment.assigned_user_id
+    }
+    batch_ids = {
+        assessment.assigned_batch_id
+        for assessment in assessments
+        if assessment.assigned_batch_id
+    }
+
+    if batch_ids:
+        batches = db.query(Batch).filter(Batch.id.in_(list(batch_ids))).all()
+        for batch in batches:
+            trainee_ids.update(
+                user.id
+                for user in batch.users
+                if user.role == UserRole.TRAINEE and getattr(user, "is_active", True)
+            )
+
+    for trainee_id in sorted(filter(None, trainee_ids)):
+        sync_trainee_completion_certificates(db, trainee_id)
 
 
 # ------------------------- MCQ Category and Question Bank -------------------------
@@ -655,6 +801,10 @@ class MCQQuestionUpdate(BaseModel):
     kip_weight: Optional[float] = None
 
 
+class MCQCategorySelectionPayload(BaseModel):
+    question_ids: List[str] = []
+
+
 @router.post("/mcq/categories")
 async def create_mcq_category(
     payload: MCQCategoryCreate,
@@ -662,7 +812,6 @@ async def create_mcq_category(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINER])
-    settings = _ensure_settings(db)
     normalized_name = payload.name.strip()
     existing = (
         db.query(MCQCategory)
@@ -680,9 +829,7 @@ async def create_mcq_category(
         description=(payload.description or "").strip() or None,
         difficulty=payload.difficulty,
         lob=payload.lob,
-        passing_threshold=payload.passing_threshold
-        if payload.passing_threshold is not None
-        else settings.mcq_passing_threshold,
+        passing_threshold=_effective_mcq_passing_threshold(payload.passing_threshold),
         is_global=False,
         created_by=current_user.id,
     )
@@ -758,7 +905,7 @@ async def update_mcq_category(
     if "lob" in update_data:
         category.lob = (payload.lob or "").strip() or None
     if "passing_threshold" in update_data and payload.passing_threshold is not None:
-        category.passing_threshold = payload.passing_threshold
+        category.passing_threshold = _effective_mcq_passing_threshold(payload.passing_threshold)
     if "is_global" in update_data:
         category.is_global = False
 
@@ -898,6 +1045,52 @@ async def list_mcq_questions(
     }
 
 
+@router.put("/mcq/categories/{category_id}/selected-questions")
+async def save_selected_category_questions(
+    category_id: str,
+    payload: MCQCategorySelectionPayload,
+    current_user: Any = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_role(current_user, [UserRole.TRAINER])
+    category = (
+        db.query(MCQCategory)
+        .filter(MCQCategory.id == category_id, MCQCategory.is_active == True)
+        .first()
+    )
+    if not category:
+        raise HTTPException(status_code=404, detail="MCQ category not found")
+    if not _can_manage_mcq_resource(current_user, category.created_by):
+        raise HTTPException(status_code=403, detail="Not allowed to manage this category")
+
+    requested_question_ids = [question_id for question_id in dict.fromkeys(payload.question_ids or []) if question_id]
+    active_questions = (
+        db.query(MCQQuestion.id)
+        .filter(
+            MCQQuestion.category_id == category_id,
+            MCQQuestion.is_active == True,
+        )
+        .all()
+    )
+    active_question_ids = {question_id for question_id, in active_questions}
+    invalid_question_ids = [question_id for question_id in requested_question_ids if question_id not in active_question_ids]
+    if invalid_question_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="All selected question IDs must belong to the chosen category question bank.",
+        )
+
+    category.selected_question_ids = requested_question_ids
+    category.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(category)
+
+    return {
+        "status": "saved",
+        "category": _serialize_mcq_categories(db, [category])[0],
+    }
+
+
 @router.put("/mcq/questions/{question_id}")
 async def update_mcq_question(
     question_id: str,
@@ -917,6 +1110,7 @@ async def update_mcq_question(
         raise HTTPException(status_code=403, detail="Not allowed to edit this question")
 
     update_data = payload.model_dump(exclude_unset=True)
+    previous_category_id = question.category_id
     if "category_id" in update_data and payload.category_id:
         category = (
             db.query(MCQCategory)
@@ -953,6 +1147,20 @@ async def update_mcq_question(
     if "kip_weight" in update_data and payload.kip_weight is not None:
         question.kip_weight = payload.kip_weight
 
+    if previous_category_id != question.category_id:
+        previous_category = (
+            db.query(MCQCategory)
+            .filter(MCQCategory.id == previous_category_id)
+            .first()
+        )
+        if previous_category:
+            previous_category.selected_question_ids = [
+                existing_question_id
+                for existing_question_id in dict.fromkeys(previous_category.selected_question_ids or [])
+                if existing_question_id != question.id
+            ]
+            previous_category.updated_at = datetime.utcnow()
+
     question.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(question)
@@ -976,24 +1184,68 @@ async def delete_mcq_question(
     if not _can_manage_mcq_resource(current_user, question.created_by):
         raise HTTPException(status_code=403, detail="Not allowed to delete this question")
 
+    category = (
+        db.query(MCQCategory)
+        .filter(MCQCategory.id == question.category_id)
+        .first()
+    )
+    if category:
+        category.selected_question_ids = [
+            existing_question_id
+            for existing_question_id in dict.fromkeys(category.selected_question_ids or [])
+            if existing_question_id != question.id
+        ]
+        category.updated_at = datetime.utcnow()
+
     question.is_active = False
     question.updated_at = datetime.utcnow()
-
-    assessments = db.query(MCQAssessment).filter(MCQAssessment.is_active == True).all()
-    for assessment in assessments:
-        if question.id in (assessment.question_ids or []):
-            assessment.question_ids = [
-                existing_question_id
-                for existing_question_id in (assessment.question_ids or [])
-                if existing_question_id != question.id
-            ]
-            assessment.updated_at = datetime.utcnow()
 
     db.commit()
     return {"status": "deleted", "question_id": question_id}
 
 
 # ------------------------- Assessment Assignment and Submission -------------------------
+
+
+def _load_assignment_question_set(
+    db: Session,
+    *,
+    category: MCQCategory,
+    requested_question_ids: Optional[List[str]] = None,
+) -> tuple[List[str], List[MCQQuestion]]:
+    active_questions = (
+        db.query(MCQQuestion)
+        .filter(
+            MCQQuestion.category_id == category.id,
+            MCQQuestion.is_active == True,
+        )
+        .order_by(MCQQuestion.created_at.asc())
+        .all()
+    )
+    question_lookup = {question.id: question for question in active_questions}
+
+    if requested_question_ids:
+        ordered_question_ids = [question_id for question_id in dict.fromkeys(requested_question_ids) if question_id]
+    else:
+        ordered_question_ids = [
+            question_id
+            for question_id in dict.fromkeys(category.selected_question_ids or [])
+            if question_id
+        ]
+
+    if ordered_question_ids:
+        invalid_question_ids = [
+            question_id for question_id in ordered_question_ids if question_id not in question_lookup
+        ]
+        if invalid_question_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="All selected question IDs must belong to the active question bank of this category.",
+            )
+        ordered_questions = [question_lookup[question_id] for question_id in ordered_question_ids]
+        return ordered_question_ids, ordered_questions
+
+    return [], []
 
 
 class MCQAssignPayload(BaseModel):
@@ -1003,7 +1255,20 @@ class MCQAssignPayload(BaseModel):
     question_ids: List[str] = []
     assigned_user_id: Optional[str] = None
     assigned_batch_id: Optional[str] = None
+    assigned_batch_ids: List[str] = []
     due_date: Optional[datetime] = None
+    time_limit_minutes: int = 30
+
+
+class MCQAssignmentUpdatePayload(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category_id: Optional[str] = None
+    question_ids: Optional[List[str]] = None
+    assigned_user_id: Optional[str] = None
+    assigned_batch_id: Optional[str] = None
+    due_date: Optional[datetime] = None
+    time_limit_minutes: Optional[int] = None
 
 
 @router.post("/mcq/assign")
@@ -1013,12 +1278,23 @@ async def assign_mcq_assessment(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINER])
-    if not payload.assigned_user_id and not payload.assigned_batch_id:
-        raise HTTPException(status_code=400, detail="Provide assigned_user_id or assigned_batch_id")
-    if payload.assigned_user_id and payload.assigned_batch_id:
+    selected_batch_ids = [
+        batch_id
+        for batch_id in dict.fromkeys(
+            ([payload.assigned_batch_id] if payload.assigned_batch_id else [])
+            + list(payload.assigned_batch_ids or [])
+        )
+        if batch_id
+    ]
+    if not payload.assigned_user_id and not selected_batch_ids:
         raise HTTPException(
             status_code=400,
-            detail="Assign the assessment either to one trainee or to one batch.",
+            detail="Provide assigned_user_id or at least one assigned_batch_id.",
+        )
+    if payload.assigned_user_id and selected_batch_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Assign the assessment either to one trainee or to one or more batches.",
         )
     category = (
         db.query(MCQCategory)
@@ -1028,37 +1304,30 @@ async def assign_mcq_assessment(
     if not category:
         raise HTTPException(status_code=404, detail="MCQ category not found")
     if not _can_manage_mcq_resource(current_user, category.created_by):
-        raise HTTPException(status_code=403, detail="Not allowed to assign this category")
-    requested_question_ids = [question_id for question_id in dict.fromkeys(payload.question_ids or []) if question_id]
-    question_query = db.query(MCQQuestion).filter(
-        MCQQuestion.category_id == payload.category_id,
-        MCQQuestion.is_active == True,
-    )
-    if requested_question_ids:
-        question_query = question_query.filter(MCQQuestion.id.in_(requested_question_ids))
+        raise HTTPException(status_code=403, detail="Not allowed to use this category")
 
-    active_questions = question_query.order_by(MCQQuestion.created_at.asc()).all()
-    if requested_question_ids and len(active_questions) != len(requested_question_ids):
+    ordered_question_ids, ordered_questions = _load_assignment_question_set(
+        db,
+        category=category,
+        requested_question_ids=payload.question_ids,
+    )
+    if not ordered_questions:
         raise HTTPException(
             status_code=400,
-            detail="All selected question IDs must belong to the chosen category",
-        )
-    if not active_questions:
-        raise HTTPException(
-            status_code=400,
-            detail="The selected category has no active questions to assign.",
+            detail="Save at least one question to this assessment category before assigning it.",
         )
     trainer_scope = _get_trainer_scope(db, current_user=current_user)
-    batch = None
-    if payload.assigned_batch_id:
-        batch = trainer_scope["batch_lookup"].get(payload.assigned_batch_id)
+    target_batches: List[Batch] = []
+    for batch_id in selected_batch_ids:
+        batch = trainer_scope["batch_lookup"].get(batch_id)
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
         if not any(user.role == UserRole.TRAINEE and user.is_active for user in batch.users):
             raise HTTPException(
                 status_code=400,
-                detail="The selected batch has no active trainees yet.",
+                detail=f'The selected batch "{batch.name}" has no active trainees yet.',
             )
+        target_batches.append(batch)
     if payload.assigned_user_id and payload.assigned_user_id not in set(trainer_scope["trainee_ids"]):
         raise HTTPException(status_code=404, detail="Trainee not found")
 
@@ -1070,32 +1339,232 @@ async def assign_mcq_assessment(
         trainee = None
 
     normalized_title = (payload.title or "").strip()
-    if not normalized_title:
-        if batch:
-            normalized_title = f"{category.name} - {batch.name}"
-        elif trainee:
-            normalized_title = f"{category.name} - {trainee.full_name}"
-        else:
-            normalized_title = category.name
+    base_description = (payload.description or "").strip() or category.description
+    time_limit_minutes = max(int(payload.time_limit_minutes or 0), 1)
+    created_assessments: List[MCQAssessment] = []
+    question_snapshot = _build_mcq_question_snapshot(ordered_questions)
 
-    assessment = MCQAssessment(
-        title=normalized_title,
-        description=(payload.description or "").strip() or category.description,
-        category_id=payload.category_id,
-        question_ids=[question.id for question in active_questions],
-        assigned_by=current_user.id,
-        assigned_user_id=payload.assigned_user_id,
-        assigned_batch_id=payload.assigned_batch_id,
-        due_date=payload.due_date,
-    )
-    db.add(assessment)
+    if trainee:
+        if not normalized_title:
+            normalized_title = f"{category.name} - {trainee.full_name}"
+        assessment = (
+            db.query(MCQAssessment)
+            .filter(
+                MCQAssessment.category_id == payload.category_id,
+                MCQAssessment.assigned_user_id == payload.assigned_user_id,
+                MCQAssessment.is_active == True,
+                MCQAssessment.assigned_by == current_user.id,
+            )
+            .order_by(MCQAssessment.updated_at.desc(), MCQAssessment.created_at.desc())
+            .first()
+        )
+        if assessment:
+            assessment.title = normalized_title
+            assessment.description = base_description
+            assessment.question_ids = ordered_question_ids
+            assessment.question_snapshot = question_snapshot
+            assessment.due_date = payload.due_date
+            assessment.time_limit_minutes = time_limit_minutes
+            assessment.updated_at = datetime.utcnow()
+        else:
+            assessment = MCQAssessment(
+                title=normalized_title,
+                description=base_description,
+                category_id=payload.category_id,
+                question_ids=ordered_question_ids,
+                question_snapshot=question_snapshot,
+                assigned_by=current_user.id,
+                assigned_user_id=payload.assigned_user_id,
+                due_date=payload.due_date,
+                time_limit_minutes=time_limit_minutes,
+            )
+            db.add(assessment)
+        created_assessments.append(assessment)
+    else:
+        for batch in target_batches:
+            assessment_title = normalized_title or f"{category.name} - {batch.name}"
+            assessment = (
+                db.query(MCQAssessment)
+                .filter(
+                    MCQAssessment.category_id == payload.category_id,
+                    MCQAssessment.assigned_batch_id == batch.id,
+                    MCQAssessment.is_active == True,
+                    MCQAssessment.assigned_by == current_user.id,
+                )
+                .order_by(MCQAssessment.updated_at.desc(), MCQAssessment.created_at.desc())
+                .first()
+            )
+            if assessment:
+                assessment.title = assessment_title
+                assessment.description = base_description
+                assessment.question_ids = ordered_question_ids
+                assessment.question_snapshot = question_snapshot
+                assessment.due_date = payload.due_date
+                assessment.time_limit_minutes = time_limit_minutes
+                assessment.updated_at = datetime.utcnow()
+            else:
+                assessment = MCQAssessment(
+                    title=assessment_title,
+                    description=base_description,
+                    category_id=payload.category_id,
+                    question_ids=ordered_question_ids,
+                    question_snapshot=question_snapshot,
+                    assigned_by=current_user.id,
+                    assigned_batch_id=batch.id,
+                    due_date=payload.due_date,
+                    time_limit_minutes=time_limit_minutes,
+                )
+                db.add(assessment)
+            created_assessments.append(assessment)
+
     db.commit()
-    db.refresh(assessment)
+    for assessment in created_assessments:
+        db.refresh(assessment)
+    serialized_assessments = _serialize_mcq_assignment_rows(db, assessments=created_assessments)
     return {
         "status": "assigned",
-        "assessment_id": assessment.id,
+        "assessment_id": serialized_assessments[0]["id"] if serialized_assessments else None,
+        "assessment": serialized_assessments[0] if serialized_assessments else None,
+        "count": len(serialized_assessments),
+        "assessments": serialized_assessments,
+    }
+
+
+@router.put("/mcq/assignments/{assessment_id}")
+async def update_mcq_assignment(
+    assessment_id: str,
+    payload: MCQAssignmentUpdatePayload,
+    current_user: Any = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_role(current_user, [UserRole.TRAINER])
+    fields_set = set(payload.model_fields_set)
+    assessment = (
+        db.query(MCQAssessment)
+        .filter(MCQAssessment.id == assessment_id, MCQAssessment.is_active == True)
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assigned assessment not found")
+    if assessment.assigned_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to edit this assigned assessment")
+
+    next_category = (
+        db.query(MCQCategory)
+        .filter(
+            MCQCategory.id == (payload.category_id if "category_id" in fields_set and payload.category_id else assessment.category_id),
+            MCQCategory.is_active == True,
+        )
+        .first()
+    )
+    if not next_category:
+        raise HTTPException(status_code=404, detail="MCQ category not found")
+    if not _can_manage_mcq_resource(current_user, next_category.created_by):
+        raise HTTPException(status_code=403, detail="Not allowed to use this category")
+
+    trainer_scope = _get_trainer_scope(db, current_user=current_user)
+    next_batch_id = assessment.assigned_batch_id
+    next_user_id = assessment.assigned_user_id
+    if "assigned_batch_id" in fields_set:
+        if payload.assigned_batch_id and payload.assigned_batch_id not in trainer_scope["batch_lookup"]:
+            raise HTTPException(status_code=404, detail="Batch not found")
+        next_batch_id = payload.assigned_batch_id or None
+        next_user_id = None
+    if "assigned_user_id" in fields_set:
+        if payload.assigned_user_id and payload.assigned_user_id not in set(trainer_scope["trainee_ids"]):
+            raise HTTPException(status_code=404, detail="Trainee not found")
+        next_user_id = payload.assigned_user_id or None
+        next_batch_id = None
+
+    if not next_batch_id and not next_user_id:
+        raise HTTPException(status_code=400, detail="Assign the category to either one batch or one trainee.")
+
+    ordered_question_ids, ordered_questions = _load_assignment_question_set(
+        db,
+        category=next_category,
+        requested_question_ids=payload.question_ids
+        if "question_ids" in fields_set
+        else (assessment.question_ids if "category_id" not in fields_set else None),
+    )
+    if not ordered_questions:
+        raise HTTPException(
+            status_code=400,
+            detail="Save at least one question to this assessment category before assigning it.",
+        )
+
+    duplicate = (
+        db.query(MCQAssessment)
+        .filter(
+            MCQAssessment.id != assessment.id,
+            MCQAssessment.category_id == next_category.id,
+            MCQAssessment.assigned_batch_id == next_batch_id,
+            MCQAssessment.assigned_user_id == next_user_id,
+            MCQAssessment.assigned_by == current_user.id,
+            MCQAssessment.is_active == True,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=400,
+            detail="An active assessment category is already assigned to that target.",
+        )
+
+    assessment.category_id = next_category.id
+    assessment.question_ids = ordered_question_ids
+    assessment.question_snapshot = _build_mcq_question_snapshot(ordered_questions)
+    assessment.assigned_batch_id = next_batch_id
+    assessment.assigned_user_id = next_user_id
+    if "title" in fields_set:
+        normalized_title = payload.title.strip()
+        if not normalized_title:
+            target_label = (
+                trainer_scope["batch_lookup"][next_batch_id].name
+                if next_batch_id and next_batch_id in trainer_scope["batch_lookup"]
+                else db.query(User).filter(User.id == next_user_id).first().full_name
+                if next_user_id
+                else "Assignment"
+            )
+            normalized_title = f"{next_category.name} - {target_label}"
+        assessment.title = normalized_title
+    if "description" in fields_set:
+        assessment.description = payload.description.strip() or None
+    if "due_date" in fields_set:
+        assessment.due_date = payload.due_date
+    if "time_limit_minutes" in fields_set:
+        assessment.time_limit_minutes = max(int(payload.time_limit_minutes or 0), 1)
+    assessment.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(assessment)
+
+    return {
+        "status": "updated",
         "assessment": _serialize_mcq_assignment_rows(db, assessments=[assessment])[0],
     }
+
+
+@router.delete("/mcq/assignments/{assessment_id}")
+async def delete_mcq_assignment(
+    assessment_id: str,
+    current_user: Any = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_role(current_user, [UserRole.TRAINER])
+    assessment = (
+        db.query(MCQAssessment)
+        .filter(MCQAssessment.id == assessment_id, MCQAssessment.is_active == True)
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assigned assessment not found")
+    if assessment.assigned_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to delete this assigned assessment")
+
+    assessment.is_active = False
+    assessment.updated_at = datetime.utcnow()
+    db.commit()
+    return {"status": "deleted", "assessment_id": assessment_id}
 
 
 @router.get("/mcq/assignments")
@@ -1109,6 +1578,7 @@ async def list_trainer_mcq_assignments(
         query = query.filter(MCQAssessment.assigned_by == current_user.id)
 
     assessments = query.order_by(MCQAssessment.created_at.desc(), MCQAssessment.title.asc()).all()
+    _sync_certificates_for_assessment_targets(db, assessments)
     serialized = _serialize_mcq_assignment_rows(db, assessments=assessments)
     return {
         "count": len(serialized),
@@ -1133,12 +1603,33 @@ async def seed_language_assessment_mcq_samples(
     }
 
 
+@router.post("/mcq/samples/kpi-program")
+async def seed_kpi_assessment_program(
+    current_user: Any = Depends(auth_utils.get_current_user),
+    db: Session = Depends(get_db),
+):
+    _ensure_role(current_user, [UserRole.TRAINER])
+    trainer_scope = _get_trainer_scope(db, current_user=current_user)
+    target_batch = _find_preferred_wave_one_batch(trainer_scope["batches"])
+    summary = ensure_trainer_kpi_assessment_program(
+        db,
+        trainer_id=current_user.id,
+        target_batch=target_batch,
+    )
+    db.commit()
+    return {
+        "status": "seeded",
+        **summary,
+    }
+
+
 @router.get("/mcq/my-assessments")
 async def list_my_mcq_assessments(
     current_user: Any = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINEE])
+    sync_trainee_completion_certificates(db, current_user.id)
     batch_ids = [b.id for b in current_user.batches]
     assessments = (
         db.query(MCQAssessment)
@@ -1186,54 +1677,71 @@ async def list_my_mcq_assessments(
         else []
     )
     certificate_lookup = {certificate.source_id: certificate for certificate in certificates}
-    return {
-        "count": len(assessments),
-        "assessments": [
+    serialized_assessments = []
+    for assessment in assessments:
+        submission = submission_lookup.get(assessment.id)
+        certificate = certificate_lookup.get(assessment.id)
+        snapshot = _resolve_mcq_assessment_snapshot(db, assessment)
+        question_ids = [
+            str(row.get("id"))
+            for row in snapshot
+            if isinstance(row, dict) and row.get("id")
+        ] or [question_id for question_id in dict.fromkeys(assessment.question_ids or []) if question_id]
+        is_completed = bool(submission)
+        is_passed = submission.is_passed if submission else None
+        status = "passed" if submission and submission.is_passed else "failed" if submission else "pending"
+        serialized_assessments.append(
             {
-                "id": a.id,
-                "title": a.title,
-                "description": a.description,
-                "category_id": a.category_id,
-                "category_name": category_lookup.get(a.category_id).name
-                if category_lookup.get(a.category_id)
+                "id": assessment.id,
+                "title": assessment.title,
+                "description": assessment.description,
+                "category_id": assessment.category_id,
+                "category_name": category_lookup.get(assessment.category_id).name
+                if category_lookup.get(assessment.category_id)
                 else None,
-                "question_ids": a.question_ids,
-                "question_count": len(a.question_ids or []),
+                "question_ids": question_ids,
+                "question_count": len(question_ids),
                 "passing_threshold": (
-                    category_lookup.get(a.category_id).passing_threshold
-                    if category_lookup.get(a.category_id)
-                    else 90.0
+                    _effective_mcq_passing_threshold(
+                        category_lookup.get(assessment.category_id).passing_threshold
+                    )
+                    if category_lookup.get(assessment.category_id)
+                    else MCQ_MIN_PASSING_THRESHOLD
                 ),
-                "assigned_batch_id": a.assigned_batch_id,
-                "assigned_user_id": a.assigned_user_id,
-                "due_date": a.due_date,
-                "is_completed": bool(submission_lookup.get(a.id)),
-                "score_percentage": (
-                    submission_lookup[a.id].score_percentage
-                    if submission_lookup.get(a.id)
-                    else None
-                ),
-                "is_passed": (
-                    submission_lookup[a.id].is_passed
-                    if submission_lookup.get(a.id)
-                    else None
-                ),
-                "submitted_at": (
-                    submission_lookup[a.id].submitted_at
-                    if submission_lookup.get(a.id)
-                    else None
-                ),
-                "certificate_id": (
-                    certificate_lookup[a.id].id if certificate_lookup.get(a.id) else None
-                ),
-                "certificate_no": (
-                    certificate_lookup[a.id].certificate_no
-                    if certificate_lookup.get(a.id)
-                    else None
-                ),
+                "time_limit_minutes": assessment.time_limit_minutes or 30,
+                "assigned_batch_id": assessment.assigned_batch_id,
+                "assigned_user_id": assessment.assigned_user_id,
+                "due_date": assessment.due_date,
+                "is_completed": is_completed,
+                "is_passed": is_passed,
+                "status": status,
+                "score_percentage": submission.score_percentage if submission else None,
+                "can_retake": bool(submission and submission.is_passed is False),
+                "can_view": bool(submission),
+                "is_locked": bool(submission and submission.is_passed),
+                "attempt_count": int(submission.attempt_count or 0) if submission else 0,
+                "submitted_at": submission.submitted_at if submission else None,
+                "latest_review": submission.review if submission else [],
+                "certificate_id": certificate.id if certificate else None,
+                "certificate_no": certificate.certificate_no if certificate else None,
             }
-            for a in assessments
-        ],
+        )
+
+    serialized_assessments.sort(
+        key=lambda item: (
+            0
+            if item["status"] == "pending"
+            else 1
+            if item["status"] == "failed"
+            else 2,
+            item["due_date"] is None,
+            str(item["due_date"] or ""),
+            item["title"].lower(),
+        )
+    )
+    return {
+        "count": len(serialized_assessments),
+        "assessments": serialized_assessments,
     }
 
 
@@ -1252,24 +1760,65 @@ async def get_mcq_assessment(
         assessment=assessment,
         current_user=current_user,
     )
-    questions = (
-        db.query(MCQQuestion)
-        .filter(MCQQuestion.id.in_(assessment.question_ids), MCQQuestion.is_active == True)
-        .all()
-    )
+    question_snapshot = _resolve_mcq_assessment_snapshot(db, assessment)
+    if not question_snapshot:
+        raise HTTPException(status_code=400, detail="Assessment has no saved questions")
+
+    latest_submission = None
+    certificate = None
+    if current_user.role == UserRole.TRAINEE:
+        latest_submission = (
+            db.query(MCQSubmission)
+            .filter(
+                MCQSubmission.assessment_id == assessment.id,
+                MCQSubmission.trainee_id == current_user.id,
+            )
+            .first()
+        )
+        certificate = (
+            db.query(CertificateRecord)
+            .filter(
+                CertificateRecord.trainee_id == current_user.id,
+                CertificateRecord.source_type == "mcq_assessment",
+                CertificateRecord.source_id == assessment.id,
+            )
+            .first()
+        )
+
     return {
         "id": assessment.id,
         "title": assessment.title,
         "description": assessment.description,
         "category_id": assessment.category_id,
+        "time_limit_minutes": assessment.time_limit_minutes or 30,
+        "status": (
+            "passed"
+            if latest_submission and latest_submission.is_passed
+            else "failed"
+            if latest_submission
+            else "pending"
+        ),
+        "can_retake": bool(latest_submission and latest_submission.is_passed is False),
+        "is_locked": bool(latest_submission and latest_submission.is_passed),
+        "latest_submission": {
+            "score_percentage": latest_submission.score_percentage,
+            "is_passed": latest_submission.is_passed,
+            "attempt_count": latest_submission.attempt_count or 1,
+            "submitted_at": latest_submission.submitted_at,
+            "review": latest_submission.review or [],
+            "certificate_id": certificate.id if certificate else None,
+            "certificate_no": certificate.certificate_no if certificate else None,
+        }
+        if latest_submission
+        else None,
         "questions": [
             {
-                "id": q.id,
-                "question_text": q.question_text,
-                "options": {"A": q.option_a, "B": q.option_b, "C": q.option_c, "D": q.option_d},
-                "media_url": q.media_url,
+                "id": row.get("id"),
+                "question_text": row.get("question_text"),
+                "options": row.get("options") or {},
+                "media_url": row.get("media_url"),
             }
-            for q in questions
+            for row in question_snapshot
         ],
     }
 
@@ -1294,45 +1843,54 @@ async def submit_mcq_assessment(
         assessment=assessment,
         current_user=current_user,
     )
-    questions = (
-        db.query(MCQQuestion)
-        .filter(MCQQuestion.id.in_(assessment.question_ids), MCQQuestion.is_active == True)
-        .all()
-    )
-    if not questions:
-        raise HTTPException(status_code=400, detail="Assessment has no active questions")
+    question_snapshot = _resolve_mcq_assessment_snapshot(db, assessment)
+    if not question_snapshot:
+        raise HTTPException(status_code=400, detail="Assessment has no saved questions")
 
-    total_weight = sum(q.kip_weight for q in questions) or 1.0
+    total_weight = sum(float(question.get("kip_weight") or 1.0) for question in question_snapshot) or 1.0
     earned = 0.0
     review = []
-    for q in questions:
-        answer = (payload.answers.get(q.id) or "").upper()
-        correct = answer == q.correct_option
+    for question in question_snapshot:
+        question_id = str(question.get("id") or "")
+        answer = (payload.answers.get(question_id) or "").upper()
+        correct_option = str(question.get("correct_option") or "").upper()
+        correct = answer == correct_option
         if correct:
-            earned += q.kip_weight
+            earned += float(question.get("kip_weight") or 1.0)
         review.append(
             {
-                "question_id": q.id,
+                "question_id": question_id,
                 "selected": answer,
-                "correct": q.correct_option,
+                "correct": correct_option,
                 "is_correct": correct,
-                "explanation": q.explanation,
+                "explanation": question.get("explanation"),
             }
         )
     score = round((earned / total_weight) * 100, 2)
     category = db.query(MCQCategory).filter(MCQCategory.id == assessment.category_id).first()
-    passing = category.passing_threshold if category else 90.0
+    passing = (
+        _effective_mcq_passing_threshold(category.passing_threshold)
+        if category
+        else MCQ_MIN_PASSING_THRESHOLD
+    )
     is_passed = score >= passing
 
     existing = db.query(MCQSubmission).filter(
         MCQSubmission.assessment_id == assessment_id,
         MCQSubmission.trainee_id == current_user.id,
     ).first()
+    if existing and existing.is_passed:
+        raise HTTPException(
+            status_code=400,
+            detail="Passed assessments cannot be retaken.",
+        )
     submission_record: MCQSubmission
     if existing:
         existing.answers = payload.answers
+        existing.review = review
         existing.score_percentage = score
         existing.is_passed = is_passed
+        existing.attempt_count = int(existing.attempt_count or 0) + 1
         existing.submitted_at = datetime.utcnow()
         submission_record = existing
     else:
@@ -1340,34 +1898,60 @@ async def submit_mcq_assessment(
             assessment_id=assessment_id,
             trainee_id=current_user.id,
             answers=payload.answers,
+            review=review,
             score_percentage=score,
             is_passed=is_passed,
+            attempt_count=1,
         )
         db.add(submission_record)
     db.flush()
 
     achievement_title = category.name if category else assessment.title
-    certificate, certificate_created = award_certificate(
-        db,
-        trainee_id=current_user.id,
-        issuer_id=assessment.assigned_by,
-        source_type="mcq_assessment",
-        source_id=assessment.id,
-        achievement_title=achievement_title,
-        achievement_type="assessment",
-        remarks=f"Completed assessment: {assessment.title}",
-        score=score,
-        mcq_assessment_id=assessment.id,
-        issued_at=submission_record.submitted_at,
-    )
     db.commit()
+    created_certificates = sync_trainee_completion_certificates(db, current_user.id)
+
+    assessment_certificate = (
+        db.query(CertificateRecord)
+        .filter(
+            CertificateRecord.trainee_id == current_user.id,
+            CertificateRecord.source_type == "mcq_assessment",
+            CertificateRecord.source_id == assessment.id,
+        )
+        .first()
+        if is_passed
+        else None
+    )
+    completion_certificate = (
+        db.query(CertificateRecord)
+        .filter(
+            CertificateRecord.trainee_id == current_user.id,
+            CertificateRecord.source_type == "mcq_assessment_completion",
+            CertificateRecord.source_id == current_user.id,
+        )
+        .first()
+    )
     return {
         "score_percentage": score,
         "is_passed": is_passed,
         "review": review,
-        "certificate_id": certificate.id if certificate else None,
-        "certificate_no": certificate.certificate_no if certificate else None,
-        "certificate_created": certificate_created,
+        "certificate_id": assessment_certificate.id if assessment_certificate else None,
+        "certificate_no": assessment_certificate.certificate_no if assessment_certificate else None,
+        "certificate_created": any(
+            certificate.id == assessment_certificate.id
+            for certificate in created_certificates
+        )
+        if assessment_certificate
+        else False,
+        "completion_certificate_id": completion_certificate.id if completion_certificate else None,
+        "completion_certificate_no": completion_certificate.certificate_no if completion_certificate else None,
+        "completion_certificate_created": any(
+            certificate.id == completion_certificate.id
+            for certificate in created_certificates
+        )
+        if completion_certificate
+        else False,
+        "status": "passed" if is_passed else "failed",
+        "can_retake": not is_passed,
         "achievement_title": achievement_title,
     }
 
@@ -1708,6 +2292,7 @@ async def coaching_compliance(
 async def coaching_hub(
     trainee_id: Optional[str] = None,
     batch_id: Optional[str] = None,
+    trainer_id: Optional[str] = None,
     current_user: Any = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1733,6 +2318,24 @@ async def coaching_hub(
         for trainee in trainees:
             if trainee.batches:
                 trainee_batch[trainee.id] = trainee.batches[0]
+
+        if trainer_id:
+            trainer_batches = [batch for batch in batches if batch.created_by == trainer_id]
+            trainer_batch_lookup = {batch.id: batch for batch in trainer_batches}
+            trainer_trainee_ids = {
+                user.id
+                for batch in trainer_batches
+                for user in batch.users
+                if user.role == UserRole.TRAINEE
+            }
+            accessible_trainee_ids = trainer_trainee_ids
+            batch_lookup = trainer_batch_lookup
+            trainee_batch = {}
+            for batch in trainer_batches:
+                for user in batch.users:
+                    if user.role == UserRole.TRAINEE:
+                        trainee_batch[user.id] = batch
+            batches = trainer_batches
 
     if batch_id:
         batch = batch_lookup.get(batch_id)
@@ -1954,7 +2557,7 @@ async def create_competency_verdict(
 
     # Enforce thresholds for competent decision.
     threshold_ok = (asr_score >= settings.asr_passing_threshold) and (
-        mcq_score >= settings.mcq_passing_threshold
+        mcq_score >= _effective_mcq_passing_threshold(settings.mcq_passing_threshold)
     )
     is_competent = payload.is_competent and threshold_ok
 
@@ -2221,6 +2824,8 @@ async def update_certification_settings(
     _ensure_role(current_user, [UserRole.ADMIN])
     settings = _ensure_settings(db)
     for field, value in payload.model_dump(exclude_none=True).items():
+        if field == "mcq_passing_threshold":
+            value = _effective_mcq_passing_threshold(value)
         setattr(settings, field, value)
     settings.updated_at = datetime.utcnow()
     db.commit()

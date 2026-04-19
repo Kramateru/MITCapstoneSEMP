@@ -1,13 +1,13 @@
-'use client'
+'use client';
 
-import { TraineeAssessmentWorkspace } from '@/app/components/assessment/trainee/trainee-assessment-workspace'
-import { DashboardLayout } from '@/app/components/DashboardLayout'
-import { traineeSidebarItems } from '@/app/trainee/nav'
+import { DashboardLayout } from '@/app/components/DashboardLayout';
+import TraineeCertificatesWorkspace from '@/app/components/trainee/trainee-certificates-workspace';
+import { traineeSidebarItems } from '@/app/trainee/nav';
 
 export default function TraineeCertificatesPage() {
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
-      <TraineeAssessmentWorkspace initialTab="certificates" />
+      <TraineeCertificatesWorkspace />
     </DashboardLayout>
-  )
+  );
 }

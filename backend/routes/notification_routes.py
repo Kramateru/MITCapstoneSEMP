@@ -340,7 +340,7 @@ def _build_trainee_notifications(
                     if is_competent
                     else "Your trainer marked the latest mock call for retake."
                 ),
-                href="/trainee/reports?tab=certificates" if is_competent else "/trainee/sim-floor",
+                href="/trainee/certificates" if is_competent else "/trainee/sim-floor",
                 level="success" if is_competent else "warning",
                 action_label="View update" if is_competent else "Open Sim Floor",
                 created_at=latest_reviewed_session.trainer_evaluated_at,
@@ -369,7 +369,7 @@ def _build_trainee_notifications(
                 message=(
                     f"Certificate {latest_sim_floor_certificate.certificate_no} is now available in your certificates tab."
                 ),
-                href="/trainee/reports?tab=certificates",
+                href="/trainee/certificates",
                 level="success",
                 action_label="Open certificates",
                 created_at=latest_sim_floor_certificate.issued_at,
@@ -395,7 +395,7 @@ def _build_trainee_notifications(
                     f"You currently have {certificate_count} certificate"
                     f"{'' if certificate_count == 1 else 's'} saved in the database."
                 ),
-                href="/trainee/reports?tab=certificates",
+                href="/trainee/certificates",
                 level="success",
                 action_label="View certificates",
             )
