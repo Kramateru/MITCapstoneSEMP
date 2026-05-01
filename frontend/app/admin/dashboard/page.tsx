@@ -1,21 +1,23 @@
 'use client';
 
-import { Activity, FileText, Plus, Search, UserCheck, Users } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import {
+  Activity,
+  ArrowRight,
+  BarChart3,
+  FileText,
+  Loader2,
+  MessageSquare,
+  RefreshCw,
+  ShieldCheck,
+  UserCheck,
+  Users,
+} from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 
 import { adminSidebarItems } from '@/app/admin/nav';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Button } from '@/app/components/ui/button';
-import { useLobCatalog } from '@/app/hooks/useLobCatalog';
-
-type Scenario = {
-  id: string;
-  title: string;
-  difficulty: string;
-  purpose: string;
-  created_at: string;
-  is_published: boolean;
-};
 
 type DashboardStats = {
   total_users: number;
@@ -49,16 +51,32 @@ type DashboardStats = {
   }>;
 };
 
-const INITIAL_SCENARIO = {
-  title: '',
-  description: '',
-  difficulty: 'basic',
-  purpose: 'practice',
-  lob: '',
-  opening_prompt: '',
-  expected_keywords: 'verify, empathy, next steps',
-  estimated_duration: '300',
-};
+const ADMIN_QUICK_LINKS = [
+  {
+    href: '/admin/users',
+    label: 'Manage Users',
+    description: 'Create and maintain admin, trainer, and trainee accounts.',
+    icon: Users,
+  },
+  {
+    href: '/admin/analytics',
+    label: 'View Analytics',
+    description: 'Review trainer-wide performance, trends, and live database signals.',
+    icon: BarChart3,
+  },
+  {
+    href: '/admin/coaching',
+    label: 'Audit Coaching',
+    description: 'Inspect coaching activity, acknowledgement flow, and published logs.',
+    icon: MessageSquare,
+  },
+  {
+    href: '/admin/certification-settings',
+    label: 'Certification Setup',
+    description: 'Update certificate content, issuance rules, and compliance output.',
+    icon: ShieldCheck,
+  },
+] as const;
 
 function toDisplayLabel(value: string) {
   return value
@@ -84,112 +102,90 @@ function formatTimestamp(value?: string) {
       }).format(parsed);
 }
 
-async function extractErrorMessage(response: Response) {
+function getLoadErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return fallback;
+}
+
+async function fetchJsonWithTimeout<T>(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 12000,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const payload = await response.json();
-    return payload?.detail || payload?.message || 'Request failed.';
-  } catch {
-    return 'Request failed.';
+    const response = await fetch(input, {
+      ...init,
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(
+        (payload as { detail?: string; message?: string } | null)?.detail ||
+          (payload as { detail?: string; message?: string } | null)?.message ||
+          'Request failed.',
+      );
+    }
+
+    return payload as T;
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('The request took too long to load.');
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
 export default function AdminDashboardPage() {
-  const { lobs, isLoading: isLoadingLobs } = useLobCatalog();
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [scenarios, setScenarios] = useState<Scenario[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [status, setStatus] = useState('');
-  const [newScenario, setNewScenario] = useState(INITIAL_SCENARIO);
+  const [loadMessage, setLoadMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const authHeaders = () => {
     const token = localStorage.getItem('token');
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   };
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+    if (mode === 'initial') {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
     try {
-      const [statsResponse, scenariosResponse] = await Promise.all([
-        fetch('/api/admin/dashboard', { headers: authHeaders(), cache: 'no-store' }),
-        fetch('/api/admin/scenarios', { headers: authHeaders(), cache: 'no-store' }),
-      ]);
-
-      if (statsResponse.ok) {
-        setStats(await statsResponse.json());
-      } else {
-        setStats(null);
-      }
-
-      if (scenariosResponse.ok) {
-        const payload = await scenariosResponse.json();
-        setScenarios(payload.scenarios || []);
-      } else {
-        setScenarios([]);
-      }
+      const data = await fetchJsonWithTimeout<DashboardStats>('/api/admin/dashboard', { headers: authHeaders() }, 10000);
+      setStats(data);
+      setLoadMessage('');
     } catch (error) {
-      console.error(error);
-      setStats(null);
-      setScenarios([]);
+      if (mode === 'initial') {
+        setStats(null);
+        setLoadMessage(
+          `Dashboard overview is temporarily unavailable. ${getLoadErrorMessage(error, 'Please refresh in a moment.')}`,
+        );
+      } else {
+        setLoadMessage(
+          `Dashboard overview could not be refreshed. ${getLoadErrorMessage(error, 'Please try again.')}`,
+        );
+      }
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     void loadData();
   }, [loadData]);
-
-  const filteredScenarios = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
-    if (!query) {
-      return scenarios;
-    }
-    return scenarios.filter((scenario) => {
-      const haystack = `${scenario.title} ${scenario.difficulty} ${scenario.purpose}`.toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [scenarios, searchTerm]);
-
-  const handleCreateScenario = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setStatus('');
-    setIsSaving(true);
-
-    try {
-      const response = await fetch('/api/admin/scenarios', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authHeaders() || {}),
-        },
-        body: JSON.stringify({
-          title: newScenario.title.trim(),
-          description: newScenario.description.trim() || undefined,
-          difficulty: newScenario.difficulty,
-          purpose: newScenario.purpose,
-          lob: newScenario.lob || undefined,
-          opening_prompt: newScenario.opening_prompt.trim(),
-          expected_keywords: newScenario.expected_keywords
-            .split(',')
-            .map((keyword) => keyword.trim())
-            .filter(Boolean),
-          estimated_duration: Number(newScenario.estimated_duration) || undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(await extractErrorMessage(response));
-      }
-
-      setStatus('Scenario saved to the active database.');
-      setNewScenario(INITIAL_SCENARIO);
-      setShowForm(false);
-      await loadData();
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : 'Unable to save the scenario right now.');
-    } finally {
-      setIsSaving(false);
-    }
-  };
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
@@ -202,49 +198,115 @@ export default function AdminDashboardPage() {
             </p>
           </div>
 
-          <Button type="button" onClick={() => setShowForm((current) => !current)}>
-            <Plus className="size-4" />
-            {showForm ? 'Hide Scenario Form' : 'Create Scenario'}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={() => void loadData('refresh')} disabled={loading || refreshing}>
+              {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Refresh
+            </Button>
+          </div>
         </div>
 
-        {status && (
-          <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-            {status}
+        {loading ? (
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+            <div className="flex items-center gap-2">
+              <Loader2 className="size-4 animate-spin" />
+              Loading admin dashboard data...
+            </div>
+          </div>
+        ) : null}
+
+        {loadMessage && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            {loadMessage}
           </div>
         )}
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <StatCard
             label="Total Users"
-            value={stats?.total_users ?? 0}
+            value={loading && !stats ? '...' : stats?.total_users ?? 0}
             caption={`${stats?.total_trainees ?? 0} trainees | ${stats?.total_trainers ?? 0} trainers`}
             icon={<Users className="size-5 text-sky-600" />}
           />
           <StatCard
             label="Training Scenarios"
-            value={stats?.total_scenarios ?? 0}
+            value={loading && !stats ? '...' : stats?.total_scenarios ?? 0}
             caption={`${stats?.total_sessions ?? 0} saved sessions`}
             icon={<FileText className="size-5 text-amber-600" />}
           />
           <StatCard
             label="Active Batches"
-            value={stats?.active_batches ?? 0}
+            value={loading && !stats ? '...' : stats?.active_batches ?? 0}
             caption="Trainer-managed trainee groups"
             icon={<UserCheck className="size-5 text-emerald-600" />}
           />
           <StatCard
             label="Average Completion"
-            value={typeof stats?.average_completion === 'number' ? `${stats.average_completion.toFixed(1)}%` : '0.0%'}
+            value={loading && !stats ? '...' : typeof stats?.average_completion === 'number' ? `${stats.average_completion.toFixed(1)}%` : '0.0%'}
             caption="Across saved course assignments"
             icon={<Activity className="size-5 text-violet-600" />}
           />
           <StatCard
             label="Average Score"
-            value={typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
+            value={loading && !stats ? '...' : typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
             caption="Current practice-session average"
             icon={<Activity className="size-5 text-rose-600" />}
           />
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
+          <section className="rounded-3xl border bg-card p-6 shadow-sm">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-foreground">Admin Control Center</h3>
+              <p className="text-sm text-muted-foreground">
+                Jump straight into the core admin workflows for user management, analytics, coaching oversight, and certification setup.
+              </p>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              {ADMIN_QUICK_LINKS.map((item) => (
+                <QuickLinkCard
+                  key={item.href}
+                  href={item.href}
+                  label={item.label}
+                  description={item.description}
+                  icon={<item.icon className="size-5" />}
+                />
+              ))}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border bg-card p-6 shadow-sm">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-foreground">Platform Focus</h3>
+              <p className="text-sm text-muted-foreground">
+                Snapshot of the admin checks that usually need a fast decision before deeper review.
+              </p>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+              <FocusTile
+                label="Database"
+                value={toDisplayLabel(stats?.system_status?.database?.status || 'unknown')}
+                hint={stats?.system_status?.database?.detail || 'No database status available yet.'}
+              />
+              <FocusTile
+                label="Audio Coverage"
+                value={`${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}%`}
+                hint={`${stats?.system_status?.audio_storage?.utilization?.sessions_with_audio ?? 0} sessions currently have saved audio.`}
+              />
+              <FocusTile
+                label="Average Completion"
+                value={`${typeof stats?.average_completion === 'number' ? stats.average_completion.toFixed(1) : '0.0'}%`}
+                hint="Across trainer-managed course assignments."
+              />
+              <FocusTile
+                label="Average Score"
+                value={typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
+                hint="Current practice-session average across the active database."
+              />
+            </div>
+          </section>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
@@ -317,133 +379,6 @@ export default function AdminDashboardPage() {
             </div>
           </section>
         </div>
-
-        {showForm && (
-          <form onSubmit={handleCreateScenario} className="rounded-3xl border bg-card p-6 shadow-sm">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-foreground">Create Scenario</h3>
-              <p className="text-sm text-muted-foreground">
-                New scenarios are written directly to the active database.
-              </p>
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <input
-                className="rounded-lg border px-3 py-2"
-                placeholder="Scenario title"
-                value={newScenario.title}
-                onChange={(event) => setNewScenario((current) => ({ ...current, title: event.target.value }))}
-              />
-              <select
-                className="rounded-lg border px-3 py-2"
-                value={newScenario.purpose}
-                onChange={(event) => setNewScenario((current) => ({ ...current, purpose: event.target.value }))}
-              >
-                <option value="practice">Practice</option>
-                <option value="assessment">Assessment</option>
-                <option value="certification">Certification</option>
-              </select>
-              <textarea
-                className="min-h-24 rounded-lg border px-3 py-2 md:col-span-2"
-                placeholder="Scenario description"
-                value={newScenario.description}
-                onChange={(event) => setNewScenario((current) => ({ ...current, description: event.target.value }))}
-              />
-              <select
-                className="rounded-lg border px-3 py-2"
-                value={newScenario.difficulty}
-                onChange={(event) => setNewScenario((current) => ({ ...current, difficulty: event.target.value }))}
-              >
-                <option value="basic">Basic</option>
-                <option value="intermediate">Intermediate</option>
-                <option value="advanced">Advanced</option>
-              </select>
-              <select
-                className="rounded-lg border px-3 py-2"
-                value={newScenario.lob}
-                disabled={isLoadingLobs}
-                onChange={(event) => setNewScenario((current) => ({ ...current, lob: event.target.value }))}
-              >
-                <option value="">{isLoadingLobs ? 'Loading LOBs...' : 'Select LOB'}</option>
-                {lobs.map((lob) => (
-                  <option key={lob.id} value={lob.name}>
-                    {lob.name}
-                  </option>
-                ))}
-              </select>
-              <textarea
-                className="min-h-24 rounded-lg border px-3 py-2 md:col-span-2"
-                placeholder="Opening customer prompt"
-                value={newScenario.opening_prompt}
-                onChange={(event) => setNewScenario((current) => ({ ...current, opening_prompt: event.target.value }))}
-              />
-              <input
-                className="rounded-lg border px-3 py-2 md:col-span-2"
-                placeholder="Expected keywords (comma separated)"
-                value={newScenario.expected_keywords}
-                onChange={(event) => setNewScenario((current) => ({ ...current, expected_keywords: event.target.value }))}
-              />
-              <input
-                type="number"
-                className="rounded-lg border px-3 py-2"
-                placeholder="Estimated duration in seconds"
-                value={newScenario.estimated_duration}
-                onChange={(event) => setNewScenario((current) => ({ ...current, estimated_duration: event.target.value }))}
-              />
-            </div>
-
-            <div className="mt-4 flex justify-end">
-              <Button type="submit" disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save Scenario'}
-              </Button>
-            </div>
-          </form>
-        )}
-
-        <div className="rounded-3xl border bg-card p-6 shadow-sm">
-          <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-foreground">Saved Scenarios</h3>
-              <p className="text-sm text-muted-foreground">
-                Every item below is loaded from the database.
-              </p>
-            </div>
-
-            <div className="relative w-full max-w-sm">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                className="w-full rounded-lg border px-3 py-2 pl-9"
-                placeholder="Search scenarios..."
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-3">
-            {filteredScenarios.map((scenario) => (
-              <div key={scenario.id} className="rounded-2xl border p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                  <div>
-                    <div className="font-semibold text-foreground">{scenario.title}</div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {toDisplayLabel(scenario.difficulty)} | {toDisplayLabel(scenario.purpose)}
-                    </div>
-                  </div>
-                  <div className="text-sm text-muted-foreground">
-                    {scenario.is_published ? 'Published' : 'Draft'}
-                  </div>
-                </div>
-              </div>
-            ))}
-
-            {!filteredScenarios.length && (
-              <div className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
-                No database scenarios match the current search.
-              </div>
-            )}
-          </div>
-        </div>
       </div>
     </DashboardLayout>
   );
@@ -471,6 +406,52 @@ function StatCard({
         <div className="rounded-full bg-muted p-3">{icon}</div>
       </div>
     </div>
+  );
+}
+
+function FocusTile({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-2xl border p-4">
+      <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
+      <div className="mt-2 text-xs text-muted-foreground">{hint}</div>
+    </div>
+  );
+}
+
+function QuickLinkCard({
+  href,
+  label,
+  description,
+  icon,
+}: {
+  href: string;
+  label: string;
+  description: string;
+  icon: ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group rounded-2xl border p-4 transition hover:border-slate-300 hover:bg-slate-50"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="rounded-xl bg-muted p-3 text-slate-700 transition group-hover:bg-slate-900 group-hover:text-white">
+          {icon}
+        </div>
+        <ArrowRight className="size-4 text-muted-foreground transition group-hover:translate-x-0.5" />
+      </div>
+      <div className="mt-4 font-semibold text-foreground">{label}</div>
+      <div className="mt-1 text-sm text-muted-foreground">{description}</div>
+    </Link>
   );
 }
 

@@ -5,7 +5,7 @@ Canonical default credentials for local and seeded environments.
 ADMIN_EMAIL = "admin@stpetervelle.edu.ph"
 ADMIN_PASSWORD = "SPVAdmin2026"
 
-TRAINER_EMAIL = "trainer@st.peterville.edu.ph"
+TRAINER_EMAIL = "trainer@stpetervelle.edu.ph"
 TRAINER_PASSWORD = "SPVTrainer2026"
 
 TRAINEE_EMAIL = "mcureta@fatima.edu.ph"

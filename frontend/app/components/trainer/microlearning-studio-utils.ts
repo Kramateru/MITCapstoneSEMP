@@ -1,13 +1,7 @@
-export type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study';
+export type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio';
 export type Difficulty = 'basic' | 'intermediate' | 'advanced';
 export type FeedbackCategory = 'pronunciation' | 'fluency' | 'grammar' | 'empathy' | 'clarity';
 export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'certified';
-
-export interface AssessmentMethod {
-  id: string;
-  name: string;
-  summary: string | null;
-}
 
 export interface TopicCategory {
   id: string;
@@ -32,21 +26,26 @@ export interface MicrolearningModule {
   assignment_count: number;
   topic_category_id: string | null;
   topic_category_name: string | null;
-  assessment_method_id: string | null;
+  audio_url?: string | null;
+  audio_transcript?: string | null;
+  audio_tts_url?: string | null;
+  audio_duration_seconds?: number | null;
+  audio_language?: string | null;
 }
 
-export interface MicrolearningAssignment {
+export interface Batch {
   id: string;
-  title: string;
-  module_type: ModuleType;
-  topic_category_name: string | null;
-  trainee_name: string | null;
-  batch_label: string | null;
-  status: AssignmentStatus;
-  average_score: number;
-  is_passed: boolean;
-  certificate_id: string | null;
-  due_date: string | null;
+  name: string;
+  wave_number?: number | null;
+  start_date?: string | null;
+  end_date?: string | null;
+}
+
+export interface User {
+  id: string;
+  full_name: string;
+  email: string;
+  role: string;
 }
 
 export interface Batch {
@@ -122,45 +121,68 @@ export interface CategoryFormState {
 export interface ModuleFormState {
   title: string;
   description: string;
-  category: FeedbackCategory;
+  feedback_category: FeedbackCategory;
   module_type: ModuleType;
   duration_minutes: number;
   passing_score: number;
   skill_focus: string;
   content_url: string;
+  asset_record_id: string;
+  asset_storage_path: string;
+  asset_bucket_name: string;
+  asset_content_type: string;
+  asset_signed_url_required: boolean;
   difficulty: Difficulty;
-  assessment_method_id: string;
   topic_category_id: string;
-  practice_prompt: string;
-  quiz_question: string;
-  mastery_prompt: string;
-  reflection_prompt: string;
-  analysis_prompt: string;
-  root_cause_question: string;
-  sample_answer: string;
-  required_keywords: string;
-  question: string;
-  option_a: string;
-  option_b: string;
-  option_c: string;
-  correct_option: 'A' | 'B' | 'C' | '';
-  feedback_a: string;
-  feedback_b: string;
-  feedback_c: string;
-  card_front: string;
-  card_back: string;
-  power_phrases: string;
-  wall_phrases: string;
-  transcript: string;
-}
-
-export interface ModuleTemplatePreset {
-  key: string;
-  module_type: ModuleType;
-  feature_name: string;
-  seed_title: string;
-  description: string;
-  form: ModuleFormState;
+  // Video specific
+  video_questions: Array<{
+    timestamp?: number;
+    question: string;
+    type: 'open_ended' | 'multiple_choice';
+    stt_enabled: boolean;
+    options?: string[];
+    correct_option?: string;
+    sample_answer?: string;
+    required_keywords?: string;
+  }>;
+  // Quiz specific
+  quiz_questions: Array<{
+    question: string;
+    options: string[];
+    correct_option: string;
+  }>;
+  // Flashcard specific
+  flashcards: Array<{
+    front: string;
+    back: string;
+  }>;
+  // Infographic specific
+  infographic_questions: Array<{
+    question: string;
+    type: 'multiple_choice';
+    options: string[];
+    correct_option: string;
+  }>;
+  // Case Study specific
+  case_study_content: string;
+  case_study_questions: Array<{
+    question: string;
+    type: 'open_ended' | 'multiple_choice';
+    stt_enabled: boolean;
+    options?: string[];
+    correct_option?: string;
+    sample_answer?: string;
+    required_keywords?: string;
+  }>;
+  // Audio specific metadata
+  audio_content_id: string;
+  audio_storage_path: string;
+  audio_transcript_provider: string;
+  audio_tts_url: string;
+  audio_captions_url: string;
+  audio_duration_seconds: number;
+  audio_language: string;
+  audio_summary_text: string;
 }
 
 export const NONE_VALUE = '__none__';
@@ -184,176 +206,35 @@ export function emptyModuleForm(): ModuleFormState {
   return {
     title: '',
     description: '',
-    category: 'grammar',
-    module_type: 'quiz',
+    feedback_category: 'clarity',
+    module_type: 'video',
     duration_minutes: 5,
     passing_score: 80,
     skill_focus: '',
     content_url: '',
+    asset_record_id: '',
+    asset_storage_path: '',
+    asset_bucket_name: '',
+    asset_content_type: '',
+    asset_signed_url_required: false,
     difficulty: 'basic',
-    assessment_method_id: '',
     topic_category_id: '',
-    practice_prompt: '',
-    quiz_question: '',
-    mastery_prompt: '',
-    reflection_prompt: '',
-    analysis_prompt: '',
-    root_cause_question: '',
-    sample_answer: '',
-    required_keywords: '',
-    question: '',
-    option_a: '',
-    option_b: '',
-    option_c: '',
-    correct_option: '',
-    feedback_a: '',
-    feedback_b: '',
-    feedback_c: '',
-    card_front: '',
-    card_back: '',
-    power_phrases: '',
-    wall_phrases: '',
-    transcript: '',
+    video_questions: [],
+    quiz_questions: [],
+    flashcards: [],
+    infographic_questions: [],
+    case_study_content: '',
+    case_study_questions: [],
+    audio_content_id: '',
+    audio_storage_path: '',
+    audio_transcript_provider: '',
+    audio_tts_url: '',
+    audio_captions_url: '',
+    audio_duration_seconds: 0,
+    audio_language: 'en-US',
+    audio_summary_text: '',
   };
 }
-
-function templateForm(overrides: Partial<ModuleFormState>): ModuleFormState {
-  return {
-    ...emptyModuleForm(),
-    ...overrides,
-  };
-}
-
-export const MODULE_TEMPLATE_PRESETS: ModuleTemplatePreset[] = [
-  {
-    key: 'heard-technique',
-    module_type: 'video',
-    feature_name: 'De-escalation Toolkit',
-    seed_title: 'HEARD Technique',
-    description: 'Video uploader plus a practice prompt for calming upset customers using the HEARD framework.',
-    form: templateForm({
-      title: 'HEARD Technique',
-      description: 'A de-escalation video module that coaches agents to Hear, Empathize, Apologize, Resolve, and Diagnose.',
-      category: 'empathy',
-      module_type: 'video',
-      duration_minutes: 5,
-      passing_score: 80,
-      skill_focus: 'De-escalation language under pressure',
-      difficulty: 'basic',
-      practice_prompt:
-        "A customer says, 'I have called three times and no one fixed this.' Deliver a calm HEARD-based response.",
-      sample_answer:
-        'I understand how frustrating this has been, and I am sorry you had to repeat the concern. I will help you now and explain the next step clearly.',
-      required_keywords: 'understand\nsorry\nhelp\nnext step',
-    }),
-  },
-  {
-    key: 'spot-the-tone',
-    module_type: 'quiz',
-    feature_name: 'Spot the Tone',
-    seed_title: 'Robotic vs. Empathetic Tone',
-    description: 'A three-option quiz builder for comparing robotic and empathetic customer replies.',
-    form: templateForm({
-      title: 'Robotic vs. Empathetic Tone',
-      description: 'A tone-comparison quiz that helps trainees identify the safest BPO response.',
-      category: 'empathy',
-      module_type: 'quiz',
-      duration_minutes: 4,
-      passing_score: 80,
-      skill_focus: 'Tone selection for upset customers',
-      difficulty: 'basic',
-      quiz_question:
-        "The customer says, 'Your app locked me out before payroll.' Which response is best?",
-      option_a: 'That is our security process. Please wait for the reset email.',
-      option_b: 'I understand how urgent that is. Let me help you regain access as quickly as possible.',
-      option_c: 'Calm down. I just need you to follow the instructions.',
-      correct_option: 'B',
-      feedback_a: 'This sounds procedural and does not acknowledge urgency.',
-      feedback_b: 'Correct. It acknowledges the emotion and moves into action.',
-      feedback_c: 'This escalates the conversation and sounds dismissive.',
-    }),
-  },
-  {
-    key: 'product-flashcards',
-    module_type: 'flashcard',
-    feature_name: 'Product Flashcards',
-    seed_title: 'API/Technical Reset Steps',
-    description: 'A markdown-friendly front/back flashcard editor for technical product explanations.',
-    form: templateForm({
-      title: 'API/Technical Reset Steps',
-      description: 'Flashcards for explaining technical reset sequences in a clear customer-facing order.',
-      category: 'clarity',
-      module_type: 'flashcard',
-      duration_minutes: 6,
-      passing_score: 75,
-      skill_focus: 'Explaining reset steps in the right order',
-      difficulty: 'basic',
-      card_front: 'How do you reset an API key?',
-      card_back:
-        '1. Open **Security Settings**.\n2. Choose **API Keys**.\n3. Select **Reset**.\n4. Copy the new key.\n5. Save the change.',
-      mastery_prompt: 'Write the customer-facing explanation for resetting the API key.',
-      sample_answer:
-        'Please open Security Settings, choose API Keys, select Reset, copy the new key, and save the update.',
-      required_keywords: 'security settings\nreset\nnew key\nsave',
-    }),
-  },
-  {
-    key: 'empathy-challenge',
-    module_type: 'infographic',
-    feature_name: 'Empathy Challenge',
-    seed_title: 'Power Phrases vs. Wall Phrases',
-    description: 'An infographic/image uploader with editable power phrases and customer-safe wording.',
-    form: templateForm({
-      title: 'Power Phrases vs. Wall Phrases',
-      description: 'An empathy infographic that helps agents replace blocking language with supportive phrasing.',
-      category: 'empathy',
-      module_type: 'infographic',
-      duration_minutes: 3,
-      passing_score: 80,
-      skill_focus: 'Replacing policy walls with power phrases',
-      difficulty: 'basic',
-      power_phrases:
-        'I understand why that feels frustrating.\nThank you for your patience while I check this.\nLet us fix this together.',
-      wall_phrases:
-        'That is just our policy.\nThere is nothing I can do.\nYou should have read the terms.',
-      reflection_prompt: 'Rewrite a wall phrase into a power phrase for a delayed refund case.',
-      sample_answer:
-        'I understand the delay is frustrating, and I will help by checking the refund now and sharing the next step.',
-      required_keywords: 'understand\nhelp\nnext step',
-    }),
-  },
-  {
-    key: 'what-went-wrong',
-    module_type: 'case_study',
-    feature_name: 'What Went Wrong?',
-    seed_title: '1-Star Review Audio/Transcript Analysis',
-    description: 'An audio-supported case study with transcript, analysis field, and root-cause review.',
-    form: templateForm({
-      title: '1-Star Review Audio/Transcript Analysis',
-      description: 'A case study that helps trainees diagnose where trust was lost in a poor interaction.',
-      category: 'clarity',
-      module_type: 'case_study',
-      duration_minutes: 7,
-      passing_score: 80,
-      skill_focus: 'Root-cause analysis for call handling',
-      difficulty: 'intermediate',
-      transcript:
-        'Customer: I waited twenty minutes and got disconnected twice.\nAgent: You need to hold because the system is slow.\nCustomer: This is ridiculous.',
-      root_cause_question: 'What was the main reason the interaction collapsed?',
-      analysis_prompt: 'Write the corrective response the agent should have used after the first complaint.',
-      option_a: 'The customer refused to cooperate.',
-      option_b: 'The agent failed to acknowledge the frustration and used cold language.',
-      option_c: 'The system outage automatically caused a 1-star review.',
-      correct_option: 'B',
-      feedback_a: 'This shifts responsibility away from the coaching opportunity.',
-      feedback_b: 'Correct. The agent ignored the emotion and used language that reduced trust.',
-      feedback_c: 'System issues matter, but the agent still had a chance to recover the call.',
-      sample_answer:
-        'I understand the wait has been frustrating, and I am sorry for the repeated disconnection. I will assist you now and explain the next step before we continue.',
-      required_keywords: 'understand\nsorry\nassist\nnext step',
-    }),
-  },
-];
 
 export function splitToList(value: string) {
   return value
@@ -363,124 +244,226 @@ export function splitToList(value: string) {
 }
 
 export function buildContentData(form: ModuleFormState) {
-  const options = [form.option_a, form.option_b, form.option_c].map((item) => item.trim());
-  const correctOption =
-    form.correct_option === 'A' ? options[0] : form.correct_option === 'B' ? options[1] : form.correct_option === 'C' ? options[2] : '';
-
-  if (form.module_type === 'video') {
-    return {
-      asset_url: form.content_url || undefined,
-      practice_prompt: form.practice_prompt,
-      sample_answer: form.sample_answer,
-      required_keywords: splitToList(form.required_keywords),
-    };
+  switch (form.module_type) {
+    case 'video':
+      return {
+        asset_url: form.content_url || undefined,
+        asset_record_id: form.asset_record_id || undefined,
+        asset_storage_path: form.asset_storage_path || undefined,
+        asset_bucket: form.asset_bucket_name || undefined,
+        asset_content_type: form.asset_content_type || undefined,
+        storage_backend: form.asset_record_id ? 'supabase_postgres' : undefined,
+        signed_url_required: form.asset_signed_url_required || undefined,
+        video_questions: form.video_questions.map(q => ({
+          question: q.question,
+          type: q.type,
+          stt_enabled: q.stt_enabled,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: splitToList(q.required_keywords || ''),
+        })),
+      };
+    case 'quiz':
+      return {
+        questions: form.quiz_questions.map(q => ({
+          question: q.question,
+          options: q.options,
+          correct_option: q.correct_option,
+        })),
+      };
+    case 'flashcard':
+      return {
+        cards: form.flashcards.map(card => ({
+          front: card.front,
+          back: card.back,
+        })),
+      };
+    case 'infographic':
+      return {
+        asset_url: form.content_url || undefined,
+        asset_record_id: form.asset_record_id || undefined,
+        asset_storage_path: form.asset_storage_path || undefined,
+        asset_bucket: form.asset_bucket_name || undefined,
+        asset_content_type: form.asset_content_type || undefined,
+        storage_backend: form.asset_record_id ? 'supabase_postgres' : undefined,
+        signed_url_required: form.asset_signed_url_required || undefined,
+        questions: form.infographic_questions.map(q => ({
+          question: q.question,
+          type: q.type,
+          options: q.options,
+          correct_option: q.correct_option,
+        })),
+      };
+    case 'case_study':
+      return {
+        content: form.case_study_content,
+        questions: form.case_study_questions.map(q => ({
+          question: q.question,
+          type: q.type,
+          stt_enabled: q.stt_enabled,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: splitToList(q.required_keywords || ''),
+        })),
+      };
+    case 'audio':
+      return {
+        asset_url: form.content_url || undefined,
+        audio_url: form.content_url || undefined,
+        content: form.case_study_content,
+        transcript: form.case_study_content,
+        transcript_text: form.case_study_content,
+        captions_text: form.case_study_content,
+        summary: form.audio_summary_text || undefined,
+        summary_text: form.audio_summary_text || undefined,
+        audio_summary: form.audio_summary_text || undefined,
+        audio_content_id: form.audio_content_id || undefined,
+        audio_storage_path: form.audio_storage_path || undefined,
+        transcript_provider: form.audio_transcript_provider || undefined,
+        signed_url_required: true,
+        tts_url: form.audio_tts_url || undefined,
+        captions_url: form.audio_captions_url || undefined,
+        audio_duration_seconds: form.audio_duration_seconds || undefined,
+        audio_language: form.audio_language || 'en-US',
+        questions: form.case_study_questions.map(q => ({
+          question: q.question,
+          type: q.type,
+          stt_enabled: q.stt_enabled,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: splitToList(q.required_keywords || ''),
+        })),
+      };
+    default:
+      return {};
   }
-
-  if (form.module_type === 'quiz') {
-    return {
-      questions: [
-        {
-          title: form.title,
-          question: form.quiz_question,
-          options: options.filter(Boolean),
-          correct_option: correctOption,
-          option_feedback: {
-            ...(options[0] ? { [options[0]]: form.feedback_a } : {}),
-            ...(options[1] ? { [options[1]]: form.feedback_b } : {}),
-            ...(options[2] ? { [options[2]]: form.feedback_c } : {}),
-          },
-        },
-      ],
-    };
-  }
-
-  if (form.module_type === 'flashcard') {
-    return {
-      cards: [
-        {
-          front: form.card_front,
-          back: form.card_back,
-          mastery_prompt: form.mastery_prompt || `Explain the answer for: ${form.card_front}`,
-          mastery_answer: form.sample_answer || form.card_back,
-          required_keywords: splitToList(form.required_keywords),
-        },
-      ],
-    };
-  }
-
-  if (form.module_type === 'infographic') {
-    return {
-      asset_url: form.content_url || undefined,
-      power_phrases: splitToList(form.power_phrases),
-      wall_phrases: splitToList(form.wall_phrases),
-      reflection_prompt: form.reflection_prompt,
-      sample_answer: form.sample_answer,
-      required_keywords: splitToList(form.required_keywords),
-    };
-  }
-
-  return {
-    asset_url: form.content_url || undefined,
-    transcript: form.transcript,
-    analysis_prompt: form.analysis_prompt,
-    sample_answer: form.sample_answer,
-    required_keywords: splitToList(form.required_keywords),
-    root_cause_question: form.root_cause_question,
-    root_cause_options: options.filter(Boolean),
-    root_cause_answer: correctOption,
-    root_cause_feedback: {
-      ...(options[0] ? { [options[0]]: form.feedback_a } : {}),
-      ...(options[1] ? { [options[1]]: form.feedback_b } : {}),
-      ...(options[2] ? { [options[2]]: form.feedback_c } : {}),
-    },
-  };
 }
 
 export function moduleToForm(module: MicrolearningModule): ModuleFormState {
   const form = emptyModuleForm();
   const content = module.content_data || {};
-  const question = Array.isArray(content.questions) ? content.questions[0] || {} : {};
-  const card = Array.isArray(content.cards) ? content.cards[0] || {} : {};
-  const options = Array.isArray(question.options) ? question.options : Array.isArray(content.root_cause_options) ? content.root_cause_options : [];
-  const correct = question.correct_option || content.root_cause_answer;
-  const feedback = question.option_feedback || content.root_cause_feedback || {};
-  const correctOption = options[0] === correct ? 'A' : options[1] === correct ? 'B' : options[2] === correct ? 'C' : '';
 
-  return {
+  const baseForm = {
     ...form,
     title: module.title || '',
     description: module.description || '',
-    category: module.category || 'grammar',
-    module_type: module.module_type || 'quiz',
+    feedback_category: module.category || 'clarity',
+    module_type: module.module_type || 'video',
     duration_minutes: module.duration_minutes || 5,
     passing_score: module.passing_score || 80,
     skill_focus: module.skill_focus || '',
     content_url: module.content_url || content.asset_url || '',
+    asset_record_id: content.asset_record_id || '',
+    asset_storage_path: content.asset_storage_path || '',
+    asset_bucket_name: content.asset_bucket || '',
+    asset_content_type: content.asset_content_type || '',
+    asset_signed_url_required: Boolean(
+      content.asset_storage_path && content.signed_url_required !== false,
+    ),
     difficulty: module.difficulty || 'basic',
-    assessment_method_id: module.assessment_method_id || '',
     topic_category_id: module.topic_category_id || '',
-    practice_prompt: content.practice_prompt || '',
-    quiz_question: question.question || '',
-    mastery_prompt: card.mastery_prompt || '',
-    reflection_prompt: content.reflection_prompt || '',
-    analysis_prompt: content.analysis_prompt || '',
-    root_cause_question: content.root_cause_question || '',
-    sample_answer: content.sample_answer || card.mastery_answer || '',
-    required_keywords: (content.required_keywords || card.required_keywords || []).join('\n'),
-    question: question.question || content.reflection_prompt || content.analysis_prompt || '',
-    option_a: options[0] || '',
-    option_b: options[1] || '',
-    option_c: options[2] || '',
-    correct_option: correctOption,
-    feedback_a: feedback[options[0]] || '',
-    feedback_b: feedback[options[1]] || '',
-    feedback_c: feedback[options[2]] || '',
-    card_front: card.front || '',
-    card_back: card.back || '',
-    power_phrases: (content.power_phrases || []).join('\n'),
-    wall_phrases: (content.wall_phrases || []).join('\n'),
-    transcript: content.transcript || '',
+    audio_content_id: content.audio_content_id || '',
+    audio_storage_path: content.audio_storage_path || '',
+    audio_transcript_provider: content.transcript_provider || '',
+    audio_tts_url: module.audio_tts_url || content.tts_url || '',
+    audio_captions_url: content.captions_url || '',
+    audio_duration_seconds: module.audio_duration_seconds || content.audio_duration_seconds || 0,
+    audio_language: module.audio_language || content.audio_language || 'en-US',
+    audio_summary_text: content.summary_text || content.audio_summary || content.summary || '',
   };
+
+  switch (module.module_type) {
+    case 'video':
+      const savedVideoQuestions =
+        content.video_timestamp_questions ||
+        content.questions ||
+        content.video_questions ||
+        [];
+      return {
+        ...baseForm,
+        video_questions: savedVideoQuestions.map((q: any) => ({
+          timestamp: typeof q.timestamp === 'number' ? q.timestamp : undefined,
+          question: q.question || '',
+          type: q.type || 'open_ended',
+          stt_enabled: q.stt_enabled || false,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: Array.isArray(q.required_keywords) ? q.required_keywords.join(', ') : '',
+        })),
+      };
+    case 'quiz':
+      return {
+        ...baseForm,
+        quiz_questions: (content.questions || []).map((q: any) => ({
+          question: q.question || '',
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+        })),
+      };
+    case 'flashcard':
+      return {
+        ...baseForm,
+        flashcards: (content.cards || []).map((card: any) => ({
+          front: card.front || '',
+          back: card.back || '',
+        })),
+      };
+    case 'infographic':
+      return {
+        ...baseForm,
+        infographic_questions: (content.questions || []).map((q: any) => ({
+          question: q.question || '',
+          type: q.type || 'multiple_choice',
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+        })),
+      };
+    case 'case_study':
+      return {
+        ...baseForm,
+        case_study_content: content.content || '',
+        case_study_questions: (content.questions || []).map((q: any) => ({
+          question: q.question || '',
+          type: q.type || 'open_ended',
+          stt_enabled: q.stt_enabled || false,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: Array.isArray(q.required_keywords) ? q.required_keywords.join(', ') : '',
+        })),
+      };
+    case 'audio':
+      return {
+        ...baseForm,
+        case_study_content:
+          module.audio_transcript ||
+          content.transcript_text ||
+          content.transcript ||
+          content.captions_text ||
+          content.content ||
+          '',
+        case_study_questions: (
+          content.questions ||
+          content.audio_questions ||
+          content.case_study_questions ||
+          []
+        ).map((q: any) => ({
+          question: q.question || '',
+          type: q.type || 'open_ended',
+          stt_enabled: q.stt_enabled || false,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: Array.isArray(q.required_keywords) ? q.required_keywords.join(', ') : '',
+        })),
+      };
+    default:
+      return baseForm;
+  }
 }
 
 export function formatLabel(value?: string | null) {

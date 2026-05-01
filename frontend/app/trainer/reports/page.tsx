@@ -1,17 +1,18 @@
 'use client';
 
+import { BookOpen, ClipboardList, Download, Loader2, MessageSquare, Mic, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { BookOpen, ClipboardList, Loader2, MessageSquare, Mic, RefreshCw } from 'lucide-react';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
+import type { TrainerReportOverview } from '@/app/components/trainer/microlearning-studio-utils';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Progress } from '@/app/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import type { TrainerReportOverview } from '@/app/components/trainer/microlearning-studio-utils';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 import { apiFetch } from '@/app/utils/api';
+import { dedupeMessages } from '@/app/utils/runtime-errors';
 
 type ReportScope = 'batch' | 'trainee';
 
@@ -304,7 +305,7 @@ export default function ReportsPage() {
       nextMessages.push(results[3].reason instanceof Error ? results[3].reason.message : 'Unable to load assessment reports.');
     }
 
-    setMessages(nextMessages);
+    setMessages(dedupeMessages(nextMessages));
   }, []);
 
   const loadScopeData = useCallback(async () => {
@@ -324,8 +325,8 @@ export default function ReportsPage() {
 
     const simFloorRequest =
       scope === 'batch'
-        ? apiFetch<SimFloorBatchReport>(`/api/sim-floor/reports/batch/${selectedBatchId}`)
-        : apiFetch<SimFloorTraineeReport>(`/api/sim-floor/reports/trainee/${selectedTraineeId}`);
+        ? apiFetch<SimFloorBatchReport>(`/api/call-simulation/reports/batch/${selectedBatchId}`)
+        : apiFetch<SimFloorTraineeReport>(`/api/call-simulation/reports/trainee/${selectedTraineeId}`);
     const coachingRequest = apiFetch<CoachingHubResponse>(
       scope === 'batch'
         ? `/api/certification/coaching/hub?batch_id=${selectedBatchId}`
@@ -346,7 +347,7 @@ export default function ReportsPage() {
     } else {
       setSimFloorBatch(null);
       setSimFloorTrainee(null);
-      nextMessages.push(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load Sim Floor reports.');
+      nextMessages.push(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load Call Simulation reports.');
     }
 
     if (results[1].status === 'fulfilled') {
@@ -356,7 +357,12 @@ export default function ReportsPage() {
       nextMessages.push(results[1].reason instanceof Error ? results[1].reason.message : 'Unable to load coaching reports.');
     }
 
-    setMessages((current) => [...current.filter((message) => !message.includes('Sim Floor') && !message.includes('coaching')), ...nextMessages]);
+    setMessages((current) =>
+      dedupeMessages([
+        ...current.filter((message) => !message.includes('Call Simulation') && !message.includes('coaching')),
+        ...nextMessages,
+      ]),
+    );
   }, [scope, selectedBatchId, selectedTraineeId]);
 
   useEffect(() => {
@@ -376,6 +382,51 @@ export default function ReportsPage() {
     await loadBaseData();
     await loadScopeData();
     setRefreshing(false);
+  };
+
+  const handleDownloadPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      const params = new URLSearchParams();
+      params.append('scope', scope);
+      if (scope === 'batch' && selectedBatchId) {
+        params.append('batch_id', selectedBatchId);
+      } else if (scope === 'trainee' && selectedTraineeId) {
+        params.append('trainee_id', selectedTraineeId);
+      }
+
+      const response = await fetch(`/api/export/trainer-report-pdf?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to download PDF');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const filename = scope === 'batch'
+        ? `Progress_Report_Batch_${selectedBatch?.name || selectedBatchId}_${new Date().toISOString().split('T')[0]}.pdf`
+        : `Progress_Report_Trainee_${selectedTrainee?.full_name || selectedTraineeId}_${new Date().toISOString().split('T')[0]}.pdf`;
+      link.download = filename.replace(/\s+/g, '_');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download PDF error:', error);
+      alert(error instanceof Error ? error.message : 'Failed to download PDF report');
+    }
   };
 
   const microlearningAssignments = useMemo(() => {
@@ -466,13 +517,19 @@ export default function ReportsPage() {
           <div>
             <h1 className="text-3xl font-bold">Reports</h1>
             <p className="text-muted-foreground">
-              Database-backed reports for microlearning, Sim Floor, assessments, and coaching only.
+              Database-backed reports for microlearning, Call Simulation, assessments, and coaching only.
             </p>
           </div>
-          <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
-            {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => void handleDownloadPDF()} disabled={loading || refreshing}>
+              <Download className="mr-2 size-4" />
+              Download PDF
+            </Button>
+            <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
+              {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {messages.length ? (
@@ -554,7 +611,7 @@ export default function ReportsPage() {
           <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <SummaryCard icon={<BookOpen className="size-5" />} label="Microlearning" value={`${microlearningSummary.completed}/${microlearningSummary.assignmentCount}`} helper={`${microlearningSummary.certified} certified | Avg ${formatPercent(microlearningSummary.averageScore)}`} />
-              <SummaryCard icon={<Mic className="size-5" />} label="Sim Floor" value={String(simFloorSummary?.total_sessions || 0)} helper={`Avg ${formatPercent(simFloorSummary?.average_score)} | Pass ${formatPercent(simFloorSummary?.pass_rate)}`} />
+              <SummaryCard icon={<Mic className="size-5" />} label="Call Simulation" value={String(simFloorSummary?.total_sessions || 0)} helper={`Avg ${formatPercent(simFloorSummary?.average_score)} | Pass ${formatPercent(simFloorSummary?.pass_rate)}`} />
               <SummaryCard icon={<ClipboardList className="size-5" />} label="Assessments" value={`${assessmentSummary.completed}/${assessmentSummary.totalAssigned}`} helper={`${assessmentSummary.passed} passed | ${assessmentSummary.certificates} certificates`} />
               <SummaryCard icon={<MessageSquare className="size-5" />} label="Coaching" value={String(coachingSummary?.completed_categories || 0)} helper={`${coachingSummary?.pending_acknowledgement || 0} pending ack | ${coachingSummary?.acknowledged || 0} acknowledged`} />
             </div>
@@ -596,7 +653,7 @@ export default function ReportsPage() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Sim Floor Completion and Analytics</CardTitle>
+                  <CardTitle>Call Simulation Completion and Analytics</CardTitle>
                   <CardDescription>Attempts, scores, pass rates, and retakes for the selected scope.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">

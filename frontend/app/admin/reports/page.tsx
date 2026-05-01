@@ -1,7 +1,7 @@
 'use client';
 
+import { BookOpen, ClipboardList, Download, Loader2, MessageSquare, Mic, RefreshCw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { BookOpen, ClipboardList, Loader2, MessageSquare, Mic, RefreshCw } from 'lucide-react';
 
 import { adminSidebarItems } from '@/app/admin/nav';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
@@ -11,6 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app
 import { Progress } from '@/app/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
 import { apiFetch } from '@/app/utils/api';
+import { dedupeMessages } from '@/app/utils/runtime-errors';
 
 type ReportScope = 'trainer' | 'batch';
 
@@ -273,7 +274,7 @@ export default function AdminReportsPage() {
       nextMessages.push(results[3].reason instanceof Error ? results[3].reason.message : 'Unable to load assessment reports.');
     }
 
-    setMessages(nextMessages);
+    setMessages(dedupeMessages(nextMessages));
   }, []);
 
   const loadScopeData = useCallback(async () => {
@@ -297,8 +298,8 @@ export default function AdminReportsPage() {
 
     const simFloorRequests =
       scope === 'trainer'
-        ? trainerBatchIds.map((batchId) => apiFetch<SimFloorBatchReport>(`/api/sim-floor/reports/batch/${batchId}`))
-        : [apiFetch<SimFloorBatchReport>(`/api/sim-floor/reports/batch/${selectedBatchId}`)];
+        ? trainerBatchIds.map((batchId) => apiFetch<SimFloorBatchReport>(`/api/call-simulation/reports/batch/${batchId}`))
+        : [apiFetch<SimFloorBatchReport>(`/api/call-simulation/reports/batch/${selectedBatchId}`)];
 
     const [coachingResult, simFloorResults] = await Promise.all([
       coachingPromise.then((value) => ({ status: 'fulfilled' as const, value })).catch((reason) => ({ status: 'rejected' as const, reason })),
@@ -320,10 +321,15 @@ export default function AdminReportsPage() {
     setSimFloorReports(fulfilledReports);
 
     if (simFloorResults.some((result) => result.status === 'rejected')) {
-      nextMessages.push('Some Sim Floor reports could not be loaded for the selected scope.');
+      nextMessages.push('Some Call Simulation reports could not be loaded for the selected scope.');
     }
 
-    setMessages((current) => [...current.filter((message) => !message.includes('Sim Floor') && !message.includes('coaching')), ...nextMessages]);
+    setMessages((current) =>
+      dedupeMessages([
+        ...current.filter((message) => !message.includes('Call Simulation') && !message.includes('coaching')),
+        ...nextMessages,
+      ]),
+    );
   }, [scope, selectedBatchId, selectedTrainerId, trainerBatchIds]);
 
   useEffect(() => {
@@ -343,6 +349,54 @@ export default function AdminReportsPage() {
     await loadBaseData();
     await loadScopeData();
     setRefreshing(false);
+  };
+
+  const handleDownloadPDF = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      const params = new URLSearchParams();
+      // Admin uses 'trainer' or 'batch' scope, which now maps directly to backend
+      params.append('scope', scope);
+      
+      if (scope === 'trainer' && selectedTrainerId) {
+        // For trainer scope, pass the trainer_id to the backend
+        params.append('trainer_id', selectedTrainerId);
+      } else if (scope === 'batch' && selectedBatchId) {
+        params.append('batch_id', selectedBatchId);
+      }
+
+      const response = await fetch(`/api/export/trainer-report-pdf?${params.toString()}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Failed to download PDF');
+      }
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const filename = scope === 'trainer'
+        ? `Progress_Report_Trainer_${selectedTrainer?.full_name || selectedTrainerId}_${new Date().toISOString().split('T')[0]}.pdf`
+        : `Progress_Report_Batch_${selectedBatch?.name || selectedBatchId}_${new Date().toISOString().split('T')[0]}.pdf`;
+      link.download = filename.replace(/\s+/g, '_');
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download PDF error:', error);
+      alert(error instanceof Error ? error.message : 'Failed to download PDF report');
+    }
   };
 
   const filteredMicrolearningAssignments = useMemo(() => {
@@ -424,13 +478,19 @@ export default function AdminReportsPage() {
           <div>
             <h1 className="text-3xl font-bold">Reports</h1>
             <p className="text-muted-foreground">
-              Admin reports now stay focused on microlearning, Sim Floor, assessments, and coaching.
+              Admin reports now stay focused on microlearning, Call Simulation, assessments, and coaching.
             </p>
           </div>
-          <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
-            {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => void handleDownloadPDF()} disabled={loading || refreshing}>
+              <Download className="mr-2 size-4" />
+              Download PDF
+            </Button>
+            <Button type="button" variant="outline" onClick={() => void handleRefresh()} disabled={loading || refreshing}>
+              {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {messages.length ? (
@@ -514,7 +574,7 @@ export default function AdminReportsPage() {
           <>
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <SummaryCard icon={<BookOpen className="size-5" />} label="Microlearning" value={`${microlearningSummary.completed}/${microlearningSummary.assignmentCount}`} helper={`${microlearningSummary.certified} certified | Avg ${formatPercent(microlearningSummary.averageScore)}`} />
-              <SummaryCard icon={<Mic className="size-5" />} label="Sim Floor" value={String(simFloorSummary.totalSessions)} helper={`Avg ${formatPercent(simFloorSummary.averageScore)} | Pass ${formatPercent(simFloorSummary.passRate)}`} />
+              <SummaryCard icon={<Mic className="size-5" />} label="Call Simulation" value={String(simFloorSummary.totalSessions)} helper={`Avg ${formatPercent(simFloorSummary.averageScore)} | Pass ${formatPercent(simFloorSummary.passRate)}`} />
               <SummaryCard icon={<ClipboardList className="size-5" />} label="Assessments" value={`${assessmentSummary.completed}/${assessmentSummary.totalAssigned}`} helper={`${assessmentSummary.passed} passed | ${assessmentSummary.certificates} certificates`} />
               <SummaryCard icon={<MessageSquare className="size-5" />} label="Coaching" value={String(coachingSummary?.completed_categories || 0)} helper={`${coachingSummary?.pending_acknowledgement || 0} pending ack | ${coachingSummary?.acknowledged || 0} acknowledged`} />
             </div>
@@ -558,8 +618,8 @@ export default function AdminReportsPage() {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Sim Floor Completion and Analytics</CardTitle>
-                  <CardDescription>Batch-level Sim Floor reporting from the selected admin scope.</CardDescription>
+                  <CardTitle>Call Simulation Completion and Analytics</CardTitle>
+                  <CardDescription>Batch-level Call Simulation reporting from the selected admin scope.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <div className="grid gap-3 sm:grid-cols-4">

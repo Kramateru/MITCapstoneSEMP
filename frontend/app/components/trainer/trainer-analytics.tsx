@@ -7,11 +7,9 @@ import {
     AlertTriangle,
     CheckCircle2,
     Clock3,
-    Gauge,
     Loader2,
     Mic,
     RefreshCw,
-    Target,
     TrendingUp,
     Users,
 } from 'lucide-react';
@@ -20,6 +18,7 @@ import {
     Bar,
     BarChart,
     CartesianGrid,
+    Cell,
     Legend,
     Line,
     LineChart,
@@ -79,6 +78,24 @@ type TraineeInsight = {
   session_count: number;
   pass_rate: number;
   trend: 'improving' | 'stable' | 'declining';
+};
+
+type CoachingFlowPoint = {
+  stage: string;
+  count: number;
+  fill: string;
+};
+
+type QualitySignalPoint = {
+  signal: string;
+  current: number;
+  target: number;
+};
+
+type KpiFailurePoint = {
+  metric: string;
+  count: number;
+  fill: string;
 };
 
 type TrainerPerformanceHubResponse = {
@@ -235,6 +252,16 @@ function averageSessionsPerUnit(totalSessions: number, totalUnits: number) {
   return totalSessions / totalUnits;
 }
 
+function formatMetricLabel(metric: string) {
+  if (metric.toLowerCase() === 'aht') {
+    return 'AHT';
+  }
+
+  return metric
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 export default function TrainerAnalytics() {
   const { token, isLoading: isAuthLoading, isAuthenticated, refreshToken, logout } = useAuth();
   const [data, setData] = useState<TrainerPerformanceHubResponse | null>(null);
@@ -311,7 +338,7 @@ export default function TrainerAnalytics() {
           fetchWithAuthRetry('/api/analytics/trainer/performance-hub'),
           fetchWithAuthRetry('/api/certification/coaching/hub'),
           fetchWithAuthRetry('/api/certification/coaching/compliance'),
-          fetchWithAuthRetry('/api/sim-floor/analytics/live'),
+          fetchWithAuthRetry('/api/call-simulation/analytics/live'),
         ]);
 
         const [performancePayload, coachingHubPayload, coachingCompliancePayload, simFloorPayload] = await Promise.all([
@@ -321,7 +348,7 @@ export default function TrainerAnalytics() {
           ),
           parseJsonResponse<CoachingHubResponse>(
             coachingHubResponse,
-            'Unable to load coaching workflow analytics.',
+            'Unable to load coaching analytics.',
           ),
           parseJsonResponse<CoachingComplianceResponse>(
             coachingComplianceResponse,
@@ -329,7 +356,7 @@ export default function TrainerAnalytics() {
           ),
           parseJsonResponse<SimFloorLiveAnalytics>(
             simFloorResponse,
-            'Unable to load Sim Floor live analytics.',
+            'Unable to load Call Simulation live analytics.',
           ),
         ]);
 
@@ -481,6 +508,95 @@ export default function TrainerAnalytics() {
   const sessionsPerTrainee = averageSessionsPerUnit(summary?.total_sessions || 0, summary?.total_trainees || 0);
   const sessionsPerBatch = averageSessionsPerUnit(summary?.total_sessions || 0, summary?.active_batches || 0);
   const highPriorityBatchCount = batchRows.filter((batch) => batchPriority(batch).label === 'High Priority').length;
+  const coachingFlowRows = useMemo<CoachingFlowPoint[]>(
+    () => [
+      {
+        stage: 'Ready',
+        count: coachingSummary.ready_for_coaching,
+        fill: '#f59e0b',
+      },
+      {
+        stage: 'Draft',
+        count: coachingCompliance?.draft_logs ?? 0,
+        fill: '#64748b',
+      },
+      {
+        stage: 'Pending Ack',
+        count: coachingCompliance?.pending_logs ?? coachingSummary.pending_acknowledgement,
+        fill: '#f43f5e',
+      },
+      {
+        stage: 'Acknowledged',
+        count: coachingCompliance?.acknowledged_logs ?? coachingSummary.acknowledged,
+        fill: '#0ea5e9',
+      },
+      {
+        stage: 'Competent',
+        count: coachingCompliance?.competent_logs ?? coachingSummary.competent,
+        fill: '#10b981',
+      },
+      {
+        stage: 'Retake',
+        count: coachingCompliance?.not_competent_logs ?? coachingSummary.not_competent,
+        fill: '#ef4444',
+      },
+    ],
+    [coachingCompliance, coachingSummary],
+  );
+  const qualitySignalRows = useMemo<QualitySignalPoint[]>(
+    () => [
+      { signal: 'Pass Rate', current: summary?.pass_rate ?? 0, target: 80 },
+      { signal: 'Verified', current: summary?.verified_rate ?? 0, target: 85 },
+      { signal: 'ASR Confidence', current: summary?.asr_confidence ?? 0, target: 92 },
+      { signal: 'Ack Rate', current: coachingCompliance?.acknowledgment_rate ?? 0, target: 90 },
+    ],
+    [coachingCompliance?.acknowledgment_rate, summary?.asr_confidence, summary?.pass_rate, summary?.verified_rate],
+  );
+  const liveKpiRiskRows = useMemo<KpiFailurePoint[]>(
+    () =>
+      Object.entries(simFloorData?.top_failed_kpis || {})
+        .map(([metric, count], index) => ({
+          metric: formatMetricLabel(metric),
+          count: Number(count || 0),
+          fill: ['#ef4444', '#f97316', '#f59e0b', '#8b5cf6', '#0ea5e9', '#14b8a6'][index % 6],
+        }))
+        .sort((left, right) => right.count - left.count)
+        .slice(0, 6),
+    [simFloorData?.top_failed_kpis],
+  );
+  const hasCoachingFlow = coachingFlowRows.some((row) => row.count > 0);
+  const hasKpiFailureData = liveKpiRiskRows.some((row) => row.count > 0);
+  const batchPassRateRows = useMemo(
+    () =>
+      [...batchRows]
+        .sort((left, right) => right.pass_rate - left.pass_rate || right.sessions - left.sessions)
+        .slice(0, 6),
+    [batchRows],
+  );
+  const scenarioPassRateRows = useMemo(
+    () =>
+      [...scenarioRows]
+        .sort((left, right) => right.sessions - left.sessions || right.pass_rate - left.pass_rate)
+        .slice(0, 6),
+    [scenarioRows],
+  );
+  const traineeSpotlightRows = useMemo(
+    () => [
+      ...(data?.top_performers || []).slice(0, 3).map((trainee) => ({
+        name: trainee.trainee_name,
+        avg_score: trainee.avg_score,
+        pass_rate: trainee.pass_rate,
+        fill: '#10b981',
+      })),
+      ...(data?.needs_attention || []).slice(0, 3).map((trainee) => ({
+        name: trainee.trainee_name,
+        avg_score: trainee.avg_score,
+        pass_rate: trainee.pass_rate,
+        fill: '#f59e0b',
+      })),
+    ],
+    [data?.needs_attention, data?.top_performers],
+  );
 
   return (
     <div className="space-y-6">
@@ -519,13 +635,13 @@ export default function TrainerAnalytics() {
         <SummaryCard
           label="Active Batches"
           value={summary?.active_batches ?? 0}
-          hint="Managed by you"
+          hint="Trainer-owned batches linked to active Supabase trainees"
           icon={<Users className="size-5 text-sky-600" />}
         />
         <SummaryCard
           label="Trainees"
           value={summary?.total_trainees ?? 0}
-          hint="Inside your class roster"
+          hint="Active Supabase trainees in your assigned batches"
           icon={<Users className="size-5 text-emerald-600" />}
         />
         <SummaryCard
@@ -566,10 +682,75 @@ export default function TrainerAnalytics() {
         />
       </div>
 
+      <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Coaching Pipeline</CardTitle>
+            <CardDescription>
+              Live coaching movement from ready-for-review activity through acknowledgement and competency results.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <InsightTile label="Ready for Review" value={String(coachingSummary.ready_for_coaching)} />
+              <InsightTile label="Pending Ack" value={String(coachingCompliance?.pending_logs ?? coachingSummary.pending_acknowledgement)} />
+              <InsightTile label="Published Logs" value={String(coachingCompliance?.total_logs ?? 0)} />
+            </div>
+
+            {hasCoachingFlow ? (
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart data={coachingFlowRows} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" allowDecimals={false} />
+                  <YAxis dataKey="stage" type="category" width={92} />
+                  <Tooltip />
+                  <Bar dataKey="count" radius={[0, 10, 10, 0]} name="Records">
+                    {coachingFlowRows.map((entry) => (
+                      <Cell key={entry.stage} fill={entry.fill} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[280px] items-center justify-center rounded-2xl border border-dashed text-sm text-muted-foreground">
+                Coaching flow graphics will appear after trainee sessions and published logs are recorded.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Quality Signal Tracker</CardTitle>
+            <CardDescription>
+              Compare core trainer quality signals against healthy operating targets from the live Supabase-backed activity stream.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={qualitySignalRows} margin={{ top: 4, right: 12, left: 0, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="signal" interval={0} angle={-10} textAnchor="end" height={60} />
+                <YAxis domain={[0, 100]} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="current" fill="#2563eb" name="Current" radius={[8, 8, 0, 0]} />
+                <Bar dataKey="target" fill="#cbd5e1" name="Target" radius={[8, 8, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <InsightTile label="Highest Volume Batch" value={highestVolumeBatch ? `${highestVolumeBatch.batch} | ${highestVolumeBatch.sessions} sessions` : 'No volume yet'} />
+              <InsightTile label="Priority Watch" value={priorityBatch ? `${priorityBatch.batch} | ${batchPriority(priorityBatch).label}` : 'No priority batch yet'} />
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {simFloorData && (
         <Card>
           <CardHeader>
-            <CardTitle>Sim Floor Live Ops</CardTitle>
+            <CardTitle>Call Simulation Live Ops</CardTitle>
             <CardDescription>
               Active Speech Enabler simulations, completed attempts, and the KPI areas causing the most retakes.
             </CardDescription>
@@ -603,52 +784,33 @@ export default function TrainerAnalytics() {
             </div>
 
             <div className="rounded-2xl border p-4">
-              <div className="text-sm font-medium text-foreground">Top Failed KPIs</div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                {Object.entries(simFloorData.top_failed_kpis || {}).slice(0, 8).map(([metric, count]) => (
-                  <div key={metric} className="flex items-center justify-between rounded-xl bg-muted/50 px-3 py-2 text-sm">
-                    <span className="capitalize">{metric.replace(/_/g, ' ')}</span>
-                    <Badge variant="outline">{count}</Badge>
-                  </div>
-                ))}
+              <div className="text-sm font-medium text-foreground">KPI Failure Pressure</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                Most common scoring misses from the live call-simulation attempts saved for your cohorts.
               </div>
+              {hasKpiFailureData ? (
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={liveKpiRiskRows} layout="vertical" margin={{ top: 16, right: 12, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis dataKey="metric" type="category" width={98} />
+                    <Tooltip />
+                    <Bar dataKey="count" radius={[0, 10, 10, 0]} name="Failures">
+                      {liveKpiRiskRows.map((row) => (
+                        <Cell key={row.metric} fill={row.fill} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex h-[220px] items-center justify-center text-sm text-muted-foreground">
+                  KPI failure graphics will appear once scored attempts are available.
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
       )}
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <SummaryCard
-          label="Ready for Coaching"
-          value={coachingSummary.ready_for_coaching}
-          hint="Completed activity waiting for trainer action"
-          icon={<Target className="size-5 text-amber-600" />}
-        />
-        <SummaryCard
-          label="Pending Ack"
-          value={coachingCompliance?.pending_logs ?? coachingSummary.pending_acknowledgement}
-          hint="Sent logs still waiting for trainee acknowledgement"
-          icon={<AlertTriangle className="size-5 text-rose-600" />}
-        />
-        <SummaryCard
-          label="Draft Logs"
-          value={coachingCompliance?.draft_logs ?? 0}
-          hint="Coaching records not sent yet"
-          icon={<Clock3 className="size-5 text-slate-600" />}
-        />
-        <SummaryCard
-          label="Ack Rate"
-          value={formatScore(coachingCompliance?.acknowledgment_rate ?? 0)}
-          hint="Published log acknowledgement rate"
-          icon={<CheckCircle2 className="size-5 text-sky-600" />}
-        />
-        <SummaryCard
-          label="Verified Sessions"
-          value={formatScore(summary?.verified_rate ?? 0)}
-          hint="Trainer-verified practice records"
-          icon={<Gauge className="size-5 text-fuchsia-600" />}
-        />
-      </div>
 
       {!loading && !hasActivity && (
         <Card className="border-dashed">
@@ -758,6 +920,92 @@ export default function TrainerAnalytics() {
                 <Bar yAxisId="right" dataKey="sessions" fill="#0ea5e9" name="Sessions" radius={[8, 8, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Batch Pass Rate Ladder</CardTitle>
+            <CardDescription>Which trainer-owned batches are converting sessions into passes most reliably.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {batchPassRateRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={batchPassRateRows} layout="vertical" margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis type="number" domain={[0, 100]} />
+                  <YAxis dataKey="batch" type="category" width={104} />
+                  <Tooltip />
+                  <Bar dataKey="pass_rate" radius={[0, 10, 10, 0]} name="Pass Rate">
+                    {batchPassRateRows.map((row) => (
+                      <Cell key={row.batch} fill={batchPriority(row).label === 'High Priority' ? '#ef4444' : batchPriority(row).label === 'Watch List' ? '#f59e0b' : '#10b981'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Batch pass-rate charts will appear after your cohorts save scored sessions.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Scenario Pass Rate Monitor</CardTitle>
+            <CardDescription>Compare the most-used scenarios by pass rate instead of session count alone.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {scenarioPassRateRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={scenarioPassRateRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="scenario" interval={0} angle={-18} textAnchor="end" height={88} />
+                  <YAxis domain={[0, 100]} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="pass_rate" fill="#0ea5e9" name="Pass Rate" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="avg_score" fill="#7c3aed" name="Average Score" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Scenario pass-rate charts will appear once trainee attempts are stored.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Trainee Score Snapshot</CardTitle>
+            <CardDescription>See strong performers and current coaching risks side by side from the live database feed.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {traineeSpotlightRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={traineeSpotlightRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" interval={0} angle={-18} textAnchor="end" height={88} />
+                  <YAxis domain={[0, 100]} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="avg_score" name="Average Score" radius={[8, 8, 0, 0]}>
+                    {traineeSpotlightRows.map((row) => (
+                      <Cell key={`${row.name}-avg`} fill={row.fill} />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="pass_rate" fill="#2563eb" name="Pass Rate" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Trainee spotlight charts will appear once top-performer and coaching-risk data is available.
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

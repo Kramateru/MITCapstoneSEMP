@@ -12,11 +12,6 @@ This file documents all required API endpoints for the comprehensive UI design.
 
 # ==================== ADMIN API ====================
 # GET /api/admin/dashboard         - Get system-wide stats
-# GET /api/admin/scenarios         - List all scenarios
-# POST /api/admin/scenarios        - Create new scenario
-# PUT /api/admin/scenarios/{id}    - Update scenario
-# DELETE /api/admin/scenarios/{id} - Delete scenario
-# POST /api/admin/scenarios/{id}/publish - Publish scenario
 
 # GET /api/admin/assessment-categories - List assessment categories
 # POST /api/admin/assessment-categories - Create category
@@ -43,6 +38,13 @@ This file documents all required API endpoints for the comprehensive UI design.
 # GET /api/trainer/batches        - List trainee batches
 # POST /api/trainer/batches       - Create new batch
 # PUT /api/trainer/batches/{id}   - Update batch
+# POST /api/trainer/batches/{id}/assign-assessment - Assign category to batch with time limit
+# GET /api/trainer/batches/{id}/assessments        - List assessments assigned to batch
+
+# GET /api/trainer/question-bank            - List all MCQ questions
+# POST /api/trainer/question-bank           - Create new MCQ question (a-d)
+# PUT /api/trainer/question-bank/{id}       - Update question
+# DELETE /api/trainer/question-bank/{id}    - Delete question
 
 # GET /api/trainer/interaction-history - List recent sessions
 # GET /api/trainer/interaction-history/{session_id} - View session details
@@ -55,6 +57,9 @@ This file documents all required API endpoints for the comprehensive UI design.
 # ==================== TRAINEE API ====================
 # GET /api/trainee/stats          - Personal stats
 # GET /api/trainee/scenarios      - List available scenarios
+# GET /api/trainee/assessments      - List assigned assessment categories
+# GET /api/trainee/assessments/{id} - Get questions for a specific assessment
+# POST /api/trainee/assessments/{id}/submit - Submit assessment answers and get score
 # GET /api/trainee/sessions       - Session history
 # POST /api/trainee/sessions      - Create new session
 

@@ -3,7 +3,6 @@ User Management Routes
 Handles user CRUD operations, authentication, and profile management
 """
 
-from pathlib import Path
 import uuid
 from typing import List, Optional
 
@@ -15,6 +14,14 @@ from .. import auth_utils
 from ..database import get_db
 from ..default_credentials import DEFAULT_TRAINEE_PASSWORD
 from ..models import User, UserRole
+from ..services.supabase_auth_service import (
+    SupabaseAuthenticationError,
+    SupabaseAuthConfigurationError,
+    SupabaseAuthServiceError,
+    SupabaseUserSyncError,
+    authenticate_supabase_credentials,
+    sync_user_to_supabase_auth,
+)
 from ..supabase_client import get_supabase_client
 from ..schemas import (
     ChangePasswordRequest,
@@ -27,8 +34,6 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
-PROFILE_IMAGE_DIR = Path(__file__).resolve().parents[2] / "media" / "profile-images"
-PROFILE_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 ALLOWED_PROFILE_IMAGE_TYPES = {
     "image/jpeg": "jpg",
     "image/jpg": "jpg",
@@ -118,20 +123,25 @@ def _delete_profile_image(profile_image_url: Optional[str]) -> None:
     if not profile_image_url:
         return
 
-    if profile_image_url.startswith("/media/profile-images/"):
-        local_path = PROFILE_IMAGE_DIR / profile_image_url.rsplit("/", 1)[-1]
-        if local_path.exists():
-            local_path.unlink(missing_ok=True)
-        return
-
     get_supabase_client().delete_by_public_url(profile_image_url)
+
+
+def _sync_user_to_supabase_or_raise(db: Session, user: User) -> None:
+    try:
+        sync_user_to_supabase_auth(db, user)
+    except SupabaseUserSyncError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     """Register a new user"""
     # Check if email already exists
-    existing_user = db.query(User).filter(User.email == user_data.email).first()
+    normalized_email = user_data.email.strip().lower()
+    existing_user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -150,8 +160,8 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
     # Create new user
     new_user = User(
-        email=user_data.email,
-        full_name=user_data.full_name,
+        email=normalized_email,
+        full_name=user_data.full_name.strip(),
         password_hash=auth_utils.hash_password(effective_password),
         role=user_data.role,
         department=user_data.department,
@@ -163,6 +173,12 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     )
     
     db.add(new_user)
+    db.flush()
+    try:
+        _sync_user_to_supabase_or_raise(db, new_user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(new_user)
     
@@ -171,16 +187,35 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/login", response_model=LoginResponse)
 async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
-    """User login with email and password"""
+    """User login with Supabase-authenticated email and password"""
     normalized_email = credentials.email.strip().lower()
-    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
-    
-    if not user or not auth_utils.verify_password(credentials.password, user.password_hash):
+
+    try:
+        authenticate_supabase_credentials(db, normalized_email, credentials.password)
+    except SupabaseAuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password"
+            detail=str(exc),
+        ) from exc
+    except SupabaseAuthConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except SupabaseAuthServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your Supabase account does not have a platform profile.",
         )
-    
+
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -198,7 +233,11 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        user=UserResponse.from_orm(user)
+        user=UserResponse.from_orm(user),
+        must_change_password=(
+            user.role == UserRole.TRAINEE
+            and auth_utils.verify_password(DEFAULT_TRAINEE_PASSWORD, user.password_hash)
+        ),
     )
 
 
@@ -222,6 +261,11 @@ async def update_current_user(
     current_user = await auth_utils.get_current_user(authorization, db)
 
     _apply_self_profile_updates(current_user, user_update, db)
+    try:
+        _sync_user_to_supabase_or_raise(db, current_user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(current_user)
 
@@ -268,9 +312,10 @@ async def upload_current_user_profile_image(
         )
 
     if not new_profile_image_url:
-        local_path = PROFILE_IMAGE_DIR / new_filename
-        local_path.write_bytes(file_bytes)
-        new_profile_image_url = f"/media/profile-images/{new_filename}"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Supabase storage is required for profile image uploads.",
+        )
 
     previous_profile_image_url = current_user.profile_image_url
     current_user.profile_image_url = new_profile_image_url
@@ -338,6 +383,12 @@ async def change_password(
     
     # Update password
     current_user.password_hash = auth_utils.hash_password(password_change.new_password)
+    db.flush()
+    try:
+        _sync_user_to_supabase_or_raise(db, current_user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     
     return SuccessResponse(message="Password changed successfully")
@@ -418,6 +469,11 @@ async def update_user(
         )
 
     _apply_admin_user_updates(user, user_update, db)
+    try:
+        _sync_user_to_supabase_or_raise(db, user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(user)
 

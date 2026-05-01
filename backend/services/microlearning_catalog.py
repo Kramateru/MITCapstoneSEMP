@@ -4,10 +4,13 @@ import re
 import uuid
 from typing import Any, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..models import (
+    CertificateRecord,
     FeedbackType,
+    MicrolearningAssignment,
     MicrolearningModule,
     MicrolearningTopicCategory,
     ScenarioDifficulty,
@@ -19,7 +22,12 @@ SUPPORTED_MICROLEARNING_TYPES = {
     "flashcard",
     "infographic",
     "case_study",
+    "audio",
 }
+
+DEFAULT_FLASHCARD_PREVIEW_SECONDS = 10
+DEFAULT_FLASHCARD_BLANK_SECONDS = 2
+DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS = 20
 
 DEFAULT_TOPIC_CATEGORIES: list[dict[str, str]] = [
     {
@@ -319,6 +327,66 @@ def serialize_topic_category(category: MicrolearningTopicCategory) -> dict[str, 
     }
 
 
+def _normalize_question_type(value: Optional[str]) -> str:
+    normalized = slugify(value or "open_ended").replace("-", "_")
+    return "multiple_choice" if normalized == "multiple_choice" else "open_ended"
+
+
+def _clean_string_list(values: Any) -> list[str]:
+    if isinstance(values, str):
+        raw_values = re.split(r"[\n,]", values)
+    else:
+        raw_values = list(values or [])
+
+    cleaned: list[str] = []
+    for value in raw_values:
+        text = str(value or "").strip()
+        if text:
+            cleaned.append(text)
+    return cleaned
+
+
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _build_authored_question_exercise(
+    question: dict[str, Any],
+    *,
+    index: int,
+    fallback_title: str,
+    fallback_prompt: str,
+    default_tips: list[str],
+    include_timestamp: bool = False,
+) -> dict[str, Any]:
+    question_type = _normalize_question_type(question.get("type"))
+    options = _clean_string_list(question.get("options"))
+    correct_option = question.get("correct_option") or question.get("correct")
+    exercise_type = "multiple_choice" if question_type == "multiple_choice" else "keyword_response"
+
+    exercise = {
+        "id": str(uuid.uuid4()),
+        "title": question.get("title") or f"{fallback_title} {index}",
+        "type": exercise_type,
+        "prompt": question.get("question") or fallback_prompt,
+        "options": options if exercise_type == "multiple_choice" else [],
+        "correct_option": correct_option if exercise_type == "multiple_choice" else None,
+        "required_keywords": _clean_string_list(question.get("required_keywords")),
+        "tips": _clean_string_list(question.get("tips")) or default_tips,
+        "sample_answer": (question.get("sample_answer") or "").strip() or None,
+        "enable_stt": bool(question.get("stt_enabled") or question.get("enable_stt")),
+    }
+
+    if include_timestamp:
+        exercise["timestamp"] = question.get("timestamp", 0)
+
+    return exercise
+
+
 def build_type_specific_exercises(
     module_type: Optional[str],
     content_data: Optional[dict[str, Any]],
@@ -332,6 +400,25 @@ def build_type_specific_exercises(
     exercises: list[dict[str, Any]] = []
 
     if normalized_type == "video":
+        video_questions = (
+            content.get("video_timestamp_questions")
+            or content.get("questions")
+            or content.get("video_questions")
+            or []
+        )
+        for i, question in enumerate(video_questions, start=1):
+            exercises.append(
+                _build_authored_question_exercise(
+                    dict(question or {}),
+                    index=i,
+                    fallback_title="Video Question",
+                    fallback_prompt=f"Respond to the scenario shown in {title or 'the lesson'}.",
+                    default_tips=["Review the assigned video lesson first.", "Tie your answer to the key idea from the lesson."],
+                )
+            )
+        if exercises:
+            return exercises
+
         prompt = content.get("practice_prompt") or f"Respond to the scenario shown in {title or 'the lesson'}."
         exercises.append(
             {
@@ -342,12 +429,14 @@ def build_type_specific_exercises(
                 "required_keywords": list(content.get("required_keywords") or []),
                 "tips": ["Acknowledge the concern first.", "State the next step clearly."],
                 "sample_answer": content.get("sample_answer"),
+                "enable_stt": content.get("enable_stt_video", False),
             }
         )
         return exercises
 
     if normalized_type == "quiz":
-        for index, question in enumerate(content.get("questions") or [], start=1):
+        questions = content.get("questions") or content.get("quiz_questions") or []
+        for index, question in enumerate(questions, start=1):
             option_feedback = dict(question.get("option_feedback") or {})
             correct_option = question.get("correct_option") or question.get("correct")
             exercises.append(
@@ -366,21 +455,73 @@ def build_type_specific_exercises(
         return exercises
 
     if normalized_type == "flashcard":
+        default_preview_seconds = _coerce_positive_int(
+            content.get("preview_seconds") or content.get("review_seconds"),
+            DEFAULT_FLASHCARD_PREVIEW_SECONDS,
+        )
+        default_blank_seconds = _coerce_positive_int(
+            content.get("blank_seconds"),
+            DEFAULT_FLASHCARD_BLANK_SECONDS,
+        )
+        default_answer_time_limit_seconds = _coerce_positive_int(
+            content.get("answer_time_limit_seconds") or content.get("recall_time_limit_seconds"),
+            DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS,
+        )
+
         for index, card in enumerate(content.get("cards") or [], start=1):
+            preview_seconds = _coerce_positive_int(
+                card.get("preview_seconds"),
+                default_preview_seconds,
+            )
+            blank_seconds = _coerce_positive_int(
+                card.get("blank_seconds"),
+                default_blank_seconds,
+            )
+            answer_time_limit_seconds = _coerce_positive_int(
+                card.get("answer_time_limit_seconds") or card.get("recall_time_limit_seconds"),
+                default_answer_time_limit_seconds,
+            )
             exercises.append(
                 {
                     "id": str(uuid.uuid4()),
-                    "title": card.get("title") or f"Flashcard Check {index}",
-                    "type": "keyword_response",
-                    "prompt": card.get("mastery_prompt") or f"Explain the correct answer for: {card.get('front') or focus}",
-                    "required_keywords": list(card.get("required_keywords") or []),
-                    "tips": ["Use a complete sentence.", "Keep the sequence in the right order."],
-                    "sample_answer": card.get("mastery_answer") or card.get("back"),
+                    "title": card.get("title") or f"Flashcard Recall {index}",
+                    "type": "flashcard_recall",
+                    "prompt": card.get("mastery_prompt")
+                    or "Memorize both sides of the card, then type the hidden side exactly.",
+                    "front": (card.get("front") or "").strip(),
+                    "back": (card.get("back") or "").strip(),
+                    "preview_seconds": preview_seconds,
+                    "blank_seconds": blank_seconds,
+                    "answer_time_limit_seconds": answer_time_limit_seconds,
+                    "required_keywords": _clean_string_list(card.get("required_keywords")),
+                    "tips": [
+                        f"Study both sides during the {preview_seconds}-second preview.",
+                        f"When one side stays visible, type the hidden side within {answer_time_limit_seconds} seconds.",
+                    ],
+                    "sample_answer": (card.get("mastery_answer") or card.get("back") or "").strip() or None,
                 }
             )
         return exercises
 
     if normalized_type == "infographic":
+        infographic_questions = (
+            content.get("questions")
+            or content.get("infographic_questions")
+            or []
+        )
+        for index, question in enumerate(infographic_questions, start=1):
+            exercises.append(
+                _build_authored_question_exercise(
+                    dict(question or {}),
+                    index=index,
+                    fallback_title="Knowledge Check",
+                    fallback_prompt=f"Summarize the strongest takeaway from {title or 'this infographic'}.",
+                    default_tips=["Study the assigned visual first.", "Use the best evidence from the infographic."],
+                )
+            )
+        if exercises:
+            return exercises
+
         exercises.append(
             {
                 "id": str(uuid.uuid4()),
@@ -395,6 +536,24 @@ def build_type_specific_exercises(
         return exercises
 
     if normalized_type == "case_study":
+        case_study_questions = (
+            content.get("questions")
+            or content.get("case_study_questions")
+            or []
+        )
+        for index, question in enumerate(case_study_questions, start=1):
+            exercises.append(
+                _build_authored_question_exercise(
+                    dict(question or {}),
+                    index=index,
+                    fallback_title="Case Study Question",
+                    fallback_prompt=f"Write the corrective response for the {focus} case.",
+                    default_tips=["Reference the assigned scenario details.", "Keep the response tied to the case facts."],
+                )
+            )
+        if exercises:
+            return exercises
+
         if content.get("root_cause_question"):
             option_feedback = dict(content.get("root_cause_feedback") or {})
             exercises.append(
@@ -420,6 +579,57 @@ def build_type_specific_exercises(
                 "required_keywords": list(content.get("required_keywords") or []),
                 "tips": ["Acknowledge the issue.", "Take ownership before the next step."],
                 "sample_answer": content.get("sample_answer"),
+                "enable_stt": content.get("enable_stt_case_study", False),
+            }
+        )
+        return exercises
+
+    if normalized_type == "audio":
+        audio_questions = (
+            content.get("questions")
+            or content.get("audio_questions")
+            or content.get("case_study_questions")
+            or []
+        )
+        for index, question in enumerate(audio_questions, start=1):
+            exercises.append(
+                _build_authored_question_exercise(
+                    dict(question or {}),
+                    index=index,
+                    fallback_title="Audio Question",
+                    fallback_prompt=f"Listen to the assigned audio and answer the question for {focus}.",
+                    default_tips=[
+                        "Replay the uploaded audio before answering.",
+                        "Use the transcript or captions to support the strongest answer.",
+                    ],
+                )
+            )
+        if exercises:
+            return exercises
+
+        transcript = (
+            content.get("transcript")
+            or content.get("captions_text")
+            or content.get("content")
+            or ""
+        )
+        fallback_prompt = (
+            content.get("analysis_prompt")
+            or f"Listen to the assigned audio and summarize the strongest response for {focus}."
+        )
+        exercises.append(
+            {
+                "id": str(uuid.uuid4()),
+                "title": "Listening Response",
+                "type": "keyword_response",
+                "prompt": fallback_prompt,
+                "required_keywords": list(content.get("required_keywords") or []),
+                "tips": [
+                    "Replay the audio if you need to confirm the caller concern.",
+                    "Use the transcript to support the clearest answer.",
+                ],
+                "sample_answer": content.get("sample_answer") or transcript or None,
+                "enable_stt": content.get("enable_stt_audio", True),
             }
         )
         return exercises
@@ -498,7 +708,7 @@ def seed_bpo_microlearning_library(
 
         if module:
             module.description = definition.get("description")
-            module.category = definition["feedback_category"]
+            module.category = definition["feedback_category"].name
             module.type = definition["module_type"]
             module.duration_minutes = int(definition.get("duration_minutes") or 3)
             module.content_data = dict(definition.get("content_data") or {})
@@ -515,7 +725,7 @@ def seed_bpo_microlearning_library(
         module = MicrolearningModule(
             title=definition["title"],
             description=definition.get("description"),
-            category=definition["feedback_category"],
+            category=definition["feedback_category"].name,
             type=definition["module_type"],
             duration_minutes=int(definition.get("duration_minutes") or 3),
             content_data=dict(definition.get("content_data") or {}),
@@ -536,4 +746,117 @@ def seed_bpo_microlearning_library(
         "categories_seeded": len(categories),
         "modules_created": created_modules,
         "modules_updated": updated_modules,
+    }
+
+
+def cleanup_seeded_microlearning_library(
+    db: Session,
+    *,
+    trainer_id: Optional[str] = None,
+) -> dict[str, int]:
+    """Permanently remove the legacy seeded microlearning pack from the database."""
+    seeded_category_names = {
+        (definition.get("name") or "").strip().lower()
+        for definition in DEFAULT_TOPIC_CATEGORIES
+        if (definition.get("name") or "").strip()
+    }
+    seeded_module_titles = {
+        (definition.get("title") or "").strip().lower()
+        for definition in BPO_MICROLEARNING_LIBRARY
+        if (definition.get("title") or "").strip()
+    }
+
+    category_query = db.query(MicrolearningTopicCategory)
+    module_query = db.query(MicrolearningModule)
+    if trainer_id:
+        category_query = category_query.filter(
+            MicrolearningTopicCategory.created_by == trainer_id
+        )
+        module_query = module_query.filter(MicrolearningModule.created_by == trainer_id)
+
+    categories = (
+        category_query.filter(
+            func.lower(MicrolearningTopicCategory.name).in_(seeded_category_names)
+        ).all()
+        if seeded_category_names
+        else []
+    )
+    category_ids = {category.id for category in categories}
+
+    seeded_modules = (
+        module_query.filter(
+            func.lower(MicrolearningModule.title).in_(seeded_module_titles)
+        ).all()
+        if seeded_module_titles
+        else []
+    )
+    seeded_module_ids = {module.id for module in seeded_modules}
+
+    modules_uncategorized = 0
+    if category_ids:
+        linked_modules = (
+            module_query.filter(MicrolearningModule.topic_category_id.in_(category_ids)).all()
+        )
+        for module in linked_modules:
+            if module.id in seeded_module_ids:
+                continue
+            module.topic_category_id = None
+            module.topic_category = None
+            modules_uncategorized += 1
+
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .filter(MicrolearningAssignment.module_id.in_(seeded_module_ids))
+        .all()
+        if seeded_module_ids
+        else []
+    )
+    assignment_ids = {assignment.id for assignment in assignments}
+    certificate_ids = {
+        assignment.certificate_id
+        for assignment in assignments
+        if assignment.certificate_id
+    }
+
+    certificates: list[CertificateRecord] = []
+    if assignment_ids:
+        certificates.extend(
+            db.query(CertificateRecord)
+            .filter(
+                CertificateRecord.source_type == "microlearning",
+                CertificateRecord.source_id.in_(assignment_ids),
+            )
+            .all()
+        )
+    if certificate_ids:
+        existing_certificate_ids = {certificate.id for certificate in certificates}
+        certificates.extend(
+            certificate
+            for certificate in (
+                db.query(CertificateRecord)
+                .filter(CertificateRecord.id.in_(certificate_ids))
+                .all()
+            )
+            if certificate.id not in existing_certificate_ids
+        )
+
+    for assignment in assignments:
+        db.delete(assignment)
+
+    for certificate in certificates:
+        db.delete(certificate)
+
+    for module in seeded_modules:
+        db.delete(module)
+
+    for category in categories:
+        db.delete(category)
+
+    db.flush()
+    return {
+        "categories_deleted": len(categories),
+        "seeded_modules_deleted": len(seeded_modules),
+        "seeded_assignments_deleted": len(assignments),
+        "seeded_certificates_deleted": len(certificates),
+        "modules_uncategorized": modules_uncategorized,
     }

@@ -113,7 +113,7 @@ export function TrainerAssessmentStudio() {
             <Link href="/trainer/mcq">Open MCQ Workspace</Link>
           </Button>
           <Button asChild variant="outline">
-            <Link href="/trainer/assign">Open Assignment Queue</Link>
+            <Link href="/trainer/microlearning">Open Microlearning</Link>
           </Button>
           <Button asChild variant="outline">
             <Link href="/trainer/grading">Open Grading Review</Link>
@@ -129,7 +129,8 @@ export function TrainerAssessmentStudio() {
         <div>
           <h1 className="text-3xl font-bold text-slate-950">Assessment Studio</h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Create categories, build mixed assessments, assign them to batches, and coach trainees from a Supabase-backed workflow.
+            Create categories, build mixed assessments, assign them to batches, and review trainee results from the
+            Supabase-backed assessment records.
           </p>
         </div>
         <Button type="button" variant="outline" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>

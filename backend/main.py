@@ -54,9 +54,9 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
 
 try:
-    from .env_loader import load_backend_environment, use_local_sqlite
+    from .env_loader import load_backend_environment
 except ImportError:
-    from env_loader import load_backend_environment, use_local_sqlite
+    from env_loader import load_backend_environment
 
 try:
     from .config_validation import is_usable_azure_speech_key, normalize_env_value
@@ -78,12 +78,10 @@ def validate_environment():
     required = {
         'SECRET_KEY': 'JWT signing key (must be >= 32 characters, not default)',
         'BACKEND_URL': 'Backend public URL for CORS',
+        'DATABASE_URL': 'PostgreSQL/Supabase database URL',
+        'SUPABASE_URL': 'Supabase project URL',
+        'SUPABASE_SERVICE_KEY': 'Supabase service account key',
     }
-
-    if not use_local_sqlite():
-        required['DATABASE_URL'] = 'PostgreSQL/Supabase database URL'
-        required['SUPABASE_URL'] = 'Supabase project URL'
-        required['SUPABASE_SERVICE_KEY'] = 'Supabase service account key'
 
     missing = []
     for var, description in required.items():
@@ -111,14 +109,13 @@ def validate_environment():
     except Exception as e:
         raise RuntimeError(f"Invalid BACKEND_URL format: {e}")
 
-    if not use_local_sqlite():
-        supabase_url = os.getenv('SUPABASE_URL')
-        try:
-            urlparse(supabase_url)
-        except Exception as e:
-            raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
+    supabase_url = os.getenv('SUPABASE_URL')
+    try:
+        urlparse(supabase_url)
+    except Exception as e:
+        raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
 
-    logger.info("✓ Environment validation passed")
+    logger.info("Environment validation passed")
 
 
 # Validate environment before starting
@@ -127,11 +124,11 @@ validate_environment()
 # Configure Gemini-related availability messaging.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
-    logger.info("Gemini API key detected for REST-based support features")
+    logger.info("Gemini API key detected for Gemini-enabled features")
 elif GEMINI_AVAILABLE:
-    logger.warning("Gemini API key not found; Gemini features disabled")
+    logger.warning("Gemini API key not found; Gemini-enabled features disabled")
 else:
-    logger.warning("Google GenAI SDK not installed; WebSocket Gemini features disabled")
+    logger.warning("Google GenAI SDK not installed; Gemini-enabled features disabled")
 
 # Support running from `backend/` as `uvicorn main:app`.
 if __package__ in (None, ""):
@@ -152,17 +149,13 @@ from backend.routes import (
     settings_routes,
     workspace_routes,
     export_routes,
-    support_routes,
     certification_routes,
     notification_routes,
-    sim_floor_routes,
-    sim_floor_recordings,
+    call_simulation_routes,
+    call_simulation_recordings,
 )
 from backend.database import Base, engine, SessionLocal
-from backend.services.lob_catalog import (
-    migrate_legacy_lob_references,
-    sync_default_lob_catalog,
-)
+from backend.services.sample_data_cleanup import cleanup_legacy_sample_dataset
 from backend.services.speech_pipeline import (
     SpeechPipelineController,
     SpeechPipelineError,
@@ -245,7 +238,7 @@ def ensure_supabase_realtime_publication() -> None:
         "sim_session",
         "certificate_record",
         "coaching_log",
-        "sim_floor_assignment",
+        "call_simulation_assignment",
     }
 
     try:
@@ -337,6 +330,41 @@ def ensure_microlearning_assessment_schema() -> None:
                 "ADD COLUMN passing_score INTEGER DEFAULT 75"
             )
         )
+    if "audio_url" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_module "
+                "ADD COLUMN audio_url VARCHAR(500)"
+            )
+        )
+    if "audio_transcript" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_module "
+                "ADD COLUMN audio_transcript TEXT"
+            )
+        )
+    if "audio_tts_url" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_module "
+                "ADD COLUMN audio_tts_url VARCHAR(500)"
+            )
+        )
+    if "audio_duration_seconds" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_module "
+                "ADD COLUMN audio_duration_seconds INTEGER"
+            )
+        )
+    if "audio_language" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_module "
+                "ADD COLUMN audio_language VARCHAR(10) DEFAULT 'en-US'"
+            )
+        )
     if "assessment_method_id" not in current_columns:
         statements.append(
             text(
@@ -357,7 +385,8 @@ def ensure_microlearning_assessment_schema() -> None:
                     "UPDATE microlearning_module SET "
                     "type = COALESCE(type, 'video'), "
                     f"content_data = COALESCE(content_data, {empty_json_literal}), "
-                    "passing_score = COALESCE(passing_score, 75)"
+                    "passing_score = COALESCE(passing_score, 75), "
+                    "audio_language = COALESCE(audio_language, 'en-US')"
                 )
             )
         logger.info("Applied microlearning module schema backfill")
@@ -366,7 +395,7 @@ def ensure_microlearning_assessment_schema() -> None:
 
 
 def ensure_microlearning_assignment_schema() -> None:
-    """Backfill certificate_id column for microlearning assignments."""
+    """Backfill lifecycle columns for microlearning assignments."""
     try:
         inspector = inspect(engine)
         existing_tables = set(inspector.get_table_names())
@@ -385,20 +414,32 @@ def ensure_microlearning_assignment_schema() -> None:
         logger.exception("Unable to inspect microlearning_assignment columns for schema backfill")
         return
 
-    if "certificate_id" in current_columns:
+    statements = []
+    if "certificate_id" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_assignment "
+                "ADD COLUMN certificate_id VARCHAR(36)"
+            )
+        )
+    if "started_at" not in current_columns:
+        statements.append(
+            text(
+                "ALTER TABLE microlearning_assignment "
+                "ADD COLUMN started_at TIMESTAMP"
+            )
+        )
+
+    if not statements:
         return
 
     try:
         with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE microlearning_assignment "
-                    "ADD COLUMN certificate_id VARCHAR(36)"
-                )
-            )
-        logger.info("Applied microlearning assignment certificate_id schema backfill")
+            for statement in statements:
+                connection.execute(statement)
+        logger.info("Applied microlearning assignment lifecycle schema backfill")
     except Exception:
-        logger.exception("Failed to backfill microlearning assignment certificate_id column")
+        logger.exception("Failed to backfill microlearning assignment lifecycle columns")
 
 
 def ensure_microlearning_topic_category_schema() -> None:
@@ -518,13 +559,13 @@ def ensure_batch_schema() -> None:
 ensure_batch_schema()
 
 
-def ensure_sim_floor_session_schema() -> None:
-    """Backfill Sim Floor session columns for existing databases."""
+def ensure_call_simulation_session_schema() -> None:
+    """Backfill Call Simulation session columns for existing databases."""
     try:
         inspector = inspect(engine)
         existing_tables = set(inspector.get_table_names())
     except Exception:
-        logger.exception("Unable to inspect Sim Floor tables for schema backfill")
+        logger.exception("Unable to inspect Call Simulation tables for schema backfill")
         return
 
     if "sim_session" not in existing_tables:
@@ -598,21 +639,21 @@ def ensure_sim_floor_session_schema() -> None:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(statement)
-        logger.info("Applied Sim Floor session schema backfill")
+        logger.info("Applied Call Simulation session schema backfill")
     except Exception:
-        logger.exception("Failed to backfill Sim Floor session schema")
+        logger.exception("Failed to backfill Call Simulation session schema")
 
 
-ensure_sim_floor_session_schema()
+ensure_call_simulation_session_schema()
 
 
-def ensure_sim_floor_scenario_schema() -> None:
-    """Backfill Scenario and ScenarioFlow fields for multi-turn Sim Floor sessions."""
+def ensure_call_simulation_scenario_schema() -> None:
+    """Backfill Scenario and ScenarioFlow fields for multi-turn Call Simulation sessions."""
     try:
         inspector = inspect(engine)
         existing_tables = set(inspector.get_table_names())
     except Exception:
-        logger.exception("Unable to inspect Sim Floor scenario tables for schema backfill")
+        logger.exception("Unable to inspect Call Simulation scenario tables for schema backfill")
         return
 
     json_object_definition = (
@@ -636,9 +677,9 @@ def ensure_sim_floor_scenario_schema() -> None:
                     scenario_statements.append(
                         text(f"ALTER TABLE scenario ADD COLUMN cxone_metadata {json_object_definition}")
                     )
-                if "sim_floor_config" not in scenario_columns:
+                if "call_simulation_config" not in scenario_columns:
                     scenario_statements.append(
-                        text(f"ALTER TABLE scenario ADD COLUMN sim_floor_config {json_object_definition}")
+                        text(f"ALTER TABLE scenario ADD COLUMN call_simulation_config {json_object_definition}")
                     )
                 if "ringer_audio_url" not in scenario_columns:
                     scenario_statements.append(
@@ -670,12 +711,12 @@ def ensure_sim_floor_scenario_schema() -> None:
                     )
                 for statement in flow_statements:
                     connection.execute(statement)
-        logger.info("Applied Sim Floor scenario schema backfill")
+        logger.info("Applied Call Simulation scenario schema backfill")
     except Exception:
-        logger.exception("Failed to backfill Sim Floor scenario schema")
+        logger.exception("Failed to backfill Call Simulation scenario schema")
 
 
-ensure_sim_floor_scenario_schema()
+ensure_call_simulation_scenario_schema()
 
 
 def ensure_certification_schema() -> None:
@@ -960,32 +1001,19 @@ def ensure_mcq_assessment_schema() -> None:
 ensure_mcq_assessment_schema()
 
 
-def ensure_default_lob_catalog() -> None:
-    """Keep the active LOB catalog aligned with the supported production list."""
-    for attempt in range(1, 3):
-        db = SessionLocal()
-        try:
-            catalog_summary = sync_default_lob_catalog(db, deactivate_missing=True)
-            migration_summary = migrate_legacy_lob_references(db)
-            db.commit()
-            logger.info(
-                "LOB catalog synced: created=%s updated=%s deactivated=%s migrated=%s",
-                catalog_summary["created"],
-                catalog_summary["updated"],
-                catalog_summary["deactivated"],
-                migration_summary,
-            )
-            return
-        except Exception:
-            db.rollback()
-            if attempt == 2:
-                logger.exception("Failed to sync default LOB catalog")
-            else:
-                logger.info(
-                    "LOB catalog sync attempt %s failed; retrying once.", attempt
-                )
-        finally:
-            db.close()
+def cleanup_legacy_seed_data() -> None:
+    """Keep retired sample/demo content out of the live product views."""
+    db = SessionLocal()
+    try:
+        cleanup_summary = cleanup_legacy_sample_dataset(db)
+        db.commit()
+        if cleanup_summary.get("changed"):
+            logger.info("Legacy sample cleanup applied: %s", cleanup_summary)
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to clean up legacy sample data")
+    finally:
+        db.close()
 
 
 # Add CORS middleware to allow requests from React frontend
@@ -998,7 +1026,7 @@ app.add_middleware(
 )
 app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
-ensure_default_lob_catalog()
+cleanup_legacy_seed_data()
 
 # Ensure admin user exists
 def ensure_admin_user():
@@ -1006,7 +1034,7 @@ def ensure_admin_user():
     from backend.models import User, UserRole
     from backend import auth_utils
     from backend.default_credentials import ADMIN_EMAIL, ADMIN_PASSWORD
-    
+
     db = SessionLocal()
     try:
         existing = db.query(User).filter(User.email == ADMIN_EMAIL).first()
@@ -1030,14 +1058,65 @@ def ensure_admin_user():
     finally:
         db.close()
 
-ensure_admin_user()
+
+def sync_runtime_users_to_supabase_auth(*, fail_fast: bool) -> None:
+    """Keep Supabase auth.users aligned with the platform users on every start."""
+    from backend.database import SessionLocal
+    from backend.models import User
+    from backend.services.supabase_auth_service import sync_user_to_supabase_auth
+
+    db = SessionLocal()
+    created = 0
+    updated = 0
+    skipped = 0
+    mismatched_ids = 0
+
+    try:
+        users = db.query(User).order_by(User.created_at.asc(), User.email.asc()).all()
+        for user in users:
+            result = sync_user_to_supabase_auth(db, user)
+            status = result.get("status")
+            if status == "created":
+                created += 1
+            elif status == "skipped":
+                skipped += 1
+            else:
+                updated += 1
+
+            if not result.get("matched_local_id", True):
+                mismatched_ids += 1
+
+        db.commit()
+        logger.info(
+            "Synchronized %s users to Supabase Auth (created=%s, updated=%s, skipped=%s, mismatched_ids=%s)",
+            len(users),
+            created,
+            updated,
+            skipped,
+            mismatched_ids,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.exception("Failed to synchronize users to Supabase Auth: %s", exc)
+        if fail_fast:
+            raise RuntimeError(
+                "Supabase Auth synchronization failed during backend startup."
+            ) from exc
+    finally:
+        db.close()
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    """Run the production Supabase preflight before serving traffic."""
+    ensure_admin_user()
+    sync_runtime_users_to_supabase_auth(fail_fast=True)
 
 # Add shutdown event to clean up database connections
 @app.on_event("shutdown")
 def shutdown_event():
     """Clean up database connection pool on shutdown"""
-    from backend.database import SessionLocal
-    SessionLocal.remove()
+    engine.dispose()
     logger.info("Database connection pool cleaned up")
 
 # Include route blueprints
@@ -1054,11 +1133,10 @@ app.include_router(trainee_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(workspace_routes.router)
 app.include_router(export_routes.router)
-app.include_router(support_routes.router)
 app.include_router(certification_routes.router)
 app.include_router(notification_routes.router)
-app.include_router(sim_floor_routes.router)
-app.include_router(sim_floor_recordings.router)
+app.include_router(call_simulation_routes.router)
+app.include_router(call_simulation_recordings.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))

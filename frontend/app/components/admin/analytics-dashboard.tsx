@@ -1,27 +1,27 @@
 'use client';
 
 import {
-  Activity,
-  Award,
-  Gauge,
-  GraduationCap,
-  Loader2,
-  RefreshCw,
-  Target,
-  Users,
+    Activity,
+    Award,
+    Gauge,
+    GraduationCap,
+    Loader2,
+    RefreshCw,
+    Target,
+    Users,
 } from 'lucide-react';
 import { type ReactNode, useEffect, useState } from 'react';
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+    Bar,
+    BarChart,
+    CartesianGrid,
+    ComposedChart,
+    Legend,
+    Line,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
 } from 'recharts';
 
 import { apiFetch } from '@/app/utils/api';
@@ -35,7 +35,6 @@ type AdminSummary = {
   average_performance: number;
   certifications_issued: number;
   total_sessions: number;
-  total_scenarios: number;
   avg_session_duration: number;
   asr_confidence: number;
   completion_rate: number;
@@ -76,12 +75,45 @@ type TrainerAnalytics = {
   last_activity: string | null;
 };
 
+type TrainerMicrolearningAnalytics = {
+  trainer_id: string;
+  trainer_name: string;
+  assignment_count: number;
+  completed_count: number;
+  certified_count: number;
+  average_score: number;
+  completion_rate: number;
+  certification_rate: number;
+};
+
+type TrainerCoachingAnalytics = {
+  trainer_id: string;
+  trainer_name: string;
+  total_logs: number;
+  sent_count: number;
+  acknowledged_count: number;
+  draft_count: number;
+  competent_count: number;
+  not_competent_count: number;
+  acknowledgment_rate: number;
+};
+
+type LobBreakdownRow = {
+  name: string;
+  agents: number;
+  avgScore: number;
+  sessions: number;
+};
+
 type AdminPerformanceHubResponse = {
   summary: AdminSummary;
   performance_trend: PerformanceTrendPoint[];
   category_scores: CategoryScorePoint[];
+  lob_breakdown: LobBreakdownRow[];
   leaderboard: LeaderboardRow[];
   trainer_analytics: TrainerAnalytics[];
+  trainer_microlearning: TrainerMicrolearningAnalytics[];
+  trainer_coaching: TrainerCoachingAnalytics[];
 };
 
 type SimFloorLiveAnalytics = {
@@ -152,7 +184,7 @@ export default function AnalyticsDashboard() {
     try {
       const [payload, simFloorPayload] = await Promise.all([
         apiFetch<AdminPerformanceHubResponse>('/api/analytics/admin/performance-hub'),
-        apiFetch<SimFloorLiveAnalytics>('/api/sim-floor/analytics/live'),
+        apiFetch<SimFloorLiveAnalytics>('/api/call-simulation/analytics/live'),
       ]);
       setData(payload);
       setSimFloorData(simFloorPayload);
@@ -171,6 +203,10 @@ export default function AnalyticsDashboard() {
   const summary = data?.summary;
   const targetScore = summary?.target_score ?? 75;
   const hasActivity = (summary?.total_sessions || 0) > 0;
+  const trainerAnalyticsRows = (data?.trainer_analytics || []).slice(0, 8);
+  const trainerMicrolearningRows = (data?.trainer_microlearning || []).slice(0, 8);
+  const trainerCoachingRows = (data?.trainer_coaching || []).slice(0, 8);
+  const lobBreakdownRows = (data?.lob_breakdown || []).slice(0, 8);
 
   return (
     <div className="space-y-6">
@@ -178,8 +214,8 @@ export default function AnalyticsDashboard() {
         <div>
           <h2 className="text-3xl font-bold text-foreground">Performance Hub</h2>
           <p className="text-sm text-muted-foreground">
-            Platform analytics below come only from trainees, trainers, sessions, and certificates saved in the
-            database.
+            Platform analytics below come only from active Supabase-backed users and their saved sessions,
+            coaching, and certificate records.
           </p>
         </div>
 
@@ -205,13 +241,13 @@ export default function AnalyticsDashboard() {
         <SummaryCard
           label="Trainees"
           value={summary?.total_trainees ?? 0}
-          hint="Active learner accounts"
+          hint="Active Supabase trainees in the platform"
           icon={<Users className="size-5 text-sky-600" />}
         />
         <SummaryCard
           label="Trainers"
           value={summary?.total_trainers ?? 0}
-          hint="Coaching accounts"
+          hint="Active Supabase trainers in the platform"
           icon={<Users className="size-5 text-emerald-600" />}
         />
         <SummaryCard
@@ -243,7 +279,7 @@ export default function AnalyticsDashboard() {
       {simFloorData && (
         <Card>
           <CardHeader>
-            <CardTitle>Sim Floor Live Snapshot</CardTitle>
+            <CardTitle>Call Simulation Live Snapshot</CardTitle>
             <CardDescription>
               Active Speech Enabler simulations and the KPI areas missing the passing target most often.
             </CardDescription>
@@ -263,9 +299,9 @@ export default function AnalyticsDashboard() {
                 icon={<Gauge className="size-5 text-emerald-600" />}
               />
               <SummaryCard
-                label="Sim Floor Pass"
+                label="Call Simulation Pass"
                 value={formatScore(simFloorData.pass_rate)}
-                hint="Across completed Sim Floor sessions"
+                hint="Across completed Call Simulation sessions"
                 icon={<Target className="size-5 text-amber-600" />}
               />
               <SummaryCard
@@ -344,6 +380,127 @@ export default function AnalyticsDashboard() {
         </Card>
       </div>
 
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>Trainer Scoreboard</CardTitle>
+            <CardDescription>Average score, pass rate, and session volume by trainer.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {trainerAnalyticsRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <ComposedChart data={trainerAnalyticsRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={76} />
+                  <YAxis yAxisId="left" domain={[0, 100]} />
+                  <YAxis yAxisId="right" orientation="right" allowDecimals={false} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="right" dataKey="total_sessions" fill="#f59e0b" name="Sessions" radius={[8, 8, 0, 0]} />
+                  <Line yAxisId="left" type="monotone" dataKey="avg_batch_performance" stroke="#2563eb" strokeWidth={3} name="Avg Score" />
+                  <Line yAxisId="left" type="monotone" dataKey="pass_rate" stroke="#0f766e" strokeWidth={2} name="Pass Rate" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Trainer performance charts will appear once trainer activity is recorded.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Trainer Workload Mix</CardTitle>
+            <CardDescription>How trainer ownership is split across batches, trainees, and certifications.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {trainerAnalyticsRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={trainerAnalyticsRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={76} />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="total_trainees" fill="#2563eb" name="Trainees" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="batches_managed" fill="#0f766e" name="Batches" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="certifications_issued" fill="#f97316" name="Certificates" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Trainer workload charts will appear after batches and results are saved.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* LOB Activity Overview graph removed as requested */}
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Trainer Microlearning Delivery</CardTitle>
+            <CardDescription>
+              Admin view of how each trainer is assigning topics, driving completions, and issuing certificates.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {trainerMicrolearningRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <BarChart data={trainerMicrolearningRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={76} />
+                  <YAxis allowDecimals={false} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="assignment_count" fill="#2563eb" name="Assigned" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="completed_count" fill="#0f766e" name="Completed" radius={[8, 8, 0, 0]} />
+                  <Bar dataKey="certified_count" fill="#f59e0b" name="Certified" radius={[8, 8, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Microlearning delivery graphs will appear once trainers assign topics to their batches.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Trainer Coaching Follow-through</CardTitle>
+            <CardDescription>
+              Admin view of coaching volume, trainee acknowledgements, and not-competent outcomes by trainer.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {trainerCoachingRows.length ? (
+              <ResponsiveContainer width="100%" height={320}>
+                <ComposedChart data={trainerCoachingRows}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={76} />
+                  <YAxis yAxisId="left" allowDecimals={false} />
+                  <YAxis yAxisId="right" orientation="right" domain={[0, 100]} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar yAxisId="left" dataKey="sent_count" fill="#2563eb" name="Pending / Sent" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="acknowledged_count" fill="#0f766e" name="Acknowledged" radius={[8, 8, 0, 0]} />
+                  <Bar yAxisId="left" dataKey="not_competent_count" fill="#ef4444" name="Not Competent" radius={[8, 8, 0, 0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="acknowledgment_rate" stroke="#7c3aed" strokeWidth={3} name="Ack Rate" />
+                </ComposedChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+                Coaching follow-through graphs will appear once trainers start sending coaching logs.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="grid gap-6 xl:grid-cols-[1.35fr,0.95fr]">
         <Card>
           <CardHeader>
@@ -383,15 +540,9 @@ export default function AnalyticsDashboard() {
         <Card>
           <CardHeader>
             <CardTitle>System Statistics</CardTitle>
-            <CardDescription>Platform-wide operational metrics taken from the active database.</CardDescription>
+            <CardDescription>Operational metrics calculated from active users and their saved records.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
-            <MetricCard
-              label="Total Scenarios"
-              value={summary?.total_scenarios ?? 0}
-              hint="Published and draft records"
-              icon={<GraduationCap className="size-5 text-sky-600" />}
-            />
             <MetricCard
               label="Average Session Duration"
               value={formatDuration(summary?.avg_session_duration ?? 0)}
@@ -429,7 +580,7 @@ export default function AnalyticsDashboard() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {(data?.trainer_analytics || []).map((trainer, index) => (
+          {trainerAnalyticsRows.map((trainer, index) => (
             <div key={trainer.trainer_id} className="rounded-2xl border p-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="flex-1">
@@ -461,7 +612,7 @@ export default function AnalyticsDashboard() {
             </div>
           ))}
 
-          {!loading && !(data?.trainer_analytics || []).length && (
+          {!loading && !trainerAnalyticsRows.length && (
             <div className="text-sm text-muted-foreground text-center py-8">
               Trainer analytics will appear once trainer activity is recorded in the system.
             </div>

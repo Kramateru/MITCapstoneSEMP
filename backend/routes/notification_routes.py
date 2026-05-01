@@ -131,44 +131,105 @@ def _active_notifications_for_user(
     return [notification for notification in notifications if notification["id"] not in cleared_ids]
 
 
-def _persist_notification_read(
+def _persist_notification_reads(
     *,
     db: Session,
     current_user: User,
-    notification_id: str,
-) -> NotificationRead:
-    record = (
-        db.query(NotificationRead)
-        .filter(
-            NotificationRead.user_id == current_user.id,
-            NotificationRead.notification_id == notification_id,
+    notification_ids: list[str],
+) -> list[NotificationRead]:
+    unique_notification_ids = []
+    seen_notification_ids: set[str] = set()
+    for notification_id in notification_ids:
+        normalized_id = str(notification_id or "").strip()
+        if not normalized_id or normalized_id in seen_notification_ids:
+            continue
+        seen_notification_ids.add(normalized_id)
+        unique_notification_ids.append(normalized_id)
+
+    if not unique_notification_ids:
+        return []
+
+    existing_records = {
+        record.notification_id: record
+        for record in (
+            db.query(NotificationRead)
+            .filter(
+                NotificationRead.user_id == current_user.id,
+                NotificationRead.notification_id.in_(unique_notification_ids),
+            )
+            .all()
         )
-        .first()
-    )
+    }
+
     now = datetime.utcnow()
+    updated_records: list[NotificationRead] = []
 
-    if not record:
-        record = NotificationRead(
-            user_id=current_user.id,
-            notification_id=notification_id,
-            role=current_user.role,
-        )
-        db.add(record)
+    for notification_id in unique_notification_ids:
+        record = existing_records.get(notification_id)
+        if not record:
+            record = NotificationRead(
+                user_id=current_user.id,
+                notification_id=notification_id,
+                role=current_user.role,
+            )
+            db.add(record)
+        record.role = current_user.role
+        record.status = "read"
+        record.is_cleared = True
+        record.read_at = now
+        updated_records.append(record)
 
-    record.role = current_user.role
-    record.status = "read"
-    record.is_cleared = True
-    record.read_at = now
-
-    # Keep the legacy user-level dismissal list in sync so existing records remain hidden.
     dismissed_ids = list(current_user.dismissed_notifications or [])
-    if notification_id not in dismissed_ids:
-        dismissed_ids.append(notification_id)
+    did_update_dismissed_ids = False
+    for notification_id in unique_notification_ids:
+        if notification_id not in dismissed_ids:
+            dismissed_ids.append(notification_id)
+            did_update_dismissed_ids = True
+    if did_update_dismissed_ids:
         current_user.dismissed_notifications = dismissed_ids
 
     db.commit()
-    db.refresh(record)
-    return record
+    for record in updated_records:
+        db.refresh(record)
+    return updated_records
+
+
+def _active_notification_ids_for_href(
+    *,
+    db: Session,
+    current_user: User,
+    href: str,
+) -> list[str]:
+    normalized_href = str(href or "").strip()
+    if not normalized_href:
+        return []
+
+    return [
+        str(notification.get("id") or "").strip()
+        for notification in _active_notifications_for_user(db=db, current_user=current_user)
+        if str(notification.get("href") or "").strip() == normalized_href
+    ]
+
+
+def _resolve_notification_ids_to_clear(
+    *,
+    db: Session,
+    current_user: User,
+    notification_id: Optional[str],
+    href: Optional[str],
+) -> list[str]:
+    target_ids = []
+    if href:
+        target_ids.extend(
+            _active_notification_ids_for_href(
+                db=db,
+                current_user=current_user,
+                href=href,
+            )
+        )
+    if notification_id:
+        target_ids.append(notification_id)
+    return [str(target_id or "").strip() for target_id in target_ids if str(target_id or "").strip()]
 
 
 def _trainer_cohort_ids(db: Session, trainer_id: str) -> tuple[list[str], list[str]]:
@@ -328,21 +389,21 @@ def _build_trainee_notifications(
         notifications.append(
             _serialize_notification(
                 notification_id=_notification_key(
-                    "trainee-sim-floor-verdict",
+                    "trainee-call-simulation-verdict",
                     current_user.id,
                     latest_reviewed_session.id,
                     verdict_status,
                     latest_reviewed_session.trainer_evaluated_at,
                 ),
-                title="Sim Floor verdict received",
+                title="Call Simulation verdict received",
                 message=(
                     "Your trainer marked the latest mock call as competent."
                     if is_competent
                     else "Your trainer marked the latest mock call for retake."
                 ),
-                href="/trainee/certificates" if is_competent else "/trainee/sim-floor",
+                href="/trainee/certificates" if is_competent else "/trainee/call-simulation",
                 level="success" if is_competent else "warning",
-                action_label="View update" if is_competent else "Open Sim Floor",
+                action_label="View update" if is_competent else "Open Call Simulation",
                 created_at=latest_reviewed_session.trainer_evaluated_at,
             )
         )
@@ -360,12 +421,12 @@ def _build_trainee_notifications(
         notifications.append(
             _serialize_notification(
                 notification_id=_notification_key(
-                    "trainee-sim-floor-certificate",
+                    "trainee-call-simulation-certificate",
                     current_user.id,
                     latest_sim_floor_certificate.id,
                     latest_sim_floor_certificate.issued_at,
                 ),
-                title="Sim Floor certificate unlocked",
+                title="Call Simulation certificate unlocked",
                 message=(
                     f"Certificate {latest_sim_floor_certificate.certificate_no} is now available in your certificates tab."
                 ),
@@ -686,22 +747,30 @@ async def mark_notification_read(
     db: Session = Depends(get_db),
 ):
     notification_id = (payload.get("notification_id") or "").strip()
-    if not notification_id:
-        raise HTTPException(status_code=400, detail="notification_id is required")
-
-    read_record = _persist_notification_read(
+    href = (payload.get("href") or "").strip()
+    notification_ids = _resolve_notification_ids_to_clear(
         db=db,
         current_user=current_user,
         notification_id=notification_id,
+        href=href or None,
+    )
+    if not notification_ids:
+        raise HTTPException(status_code=400, detail="notification_id or href is required")
+
+    read_records = _persist_notification_reads(
+        db=db,
+        current_user=current_user,
+        notification_ids=notification_ids,
     )
     unread_notifications = _active_notifications_for_user(db=db, current_user=current_user)
 
     return {
-        "message": "Notification marked as read",
-        "notification_id": notification_id,
-        "status": read_record.status,
-        "is_cleared": read_record.is_cleared,
-        "read_at": read_record.read_at.isoformat() if read_record.read_at else None,
+        "message": "Notifications marked as read",
+        "notification_id": notification_ids[0],
+        "notification_ids": notification_ids,
+        "status": read_records[0].status if read_records else "read",
+        "is_cleared": all(record.is_cleared for record in read_records) if read_records else True,
+        "read_at": read_records[0].read_at.isoformat() if read_records and read_records[0].read_at else None,
         "count": len(unread_notifications),
     }
 

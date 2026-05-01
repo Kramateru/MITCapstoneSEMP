@@ -298,20 +298,164 @@ async def export_progress_report(
 
 @router.get("/trainer-report-pdf")
 async def export_trainer_report_pdf(
-    scope: str = Query("batch", pattern="^(batch|trainee)$"),
+    scope: str = Query("batch", pattern="^(batch|trainee|trainer)$"),
     batch_id: Optional[str] = None,
     trainee_id: Optional[str] = None,
+    trainer_id: Optional[str] = None,
     metric_type: str = Query("overall", pattern="^(overall|pronunciation|grammar|pacing|clarity|soft_skills)$"),
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=2020),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Generate a PDF version of the trainer reporting workspace."""
+    """Generate a PDF version of the trainer reporting workspace.
+    
+    Supports three scopes:
+    - batch: Report for a specific batch
+    - trainee: Report for a specific trainee
+    - trainer: Report for all batches under a specific trainer (admin only)
+    """
     current_user = await auth_utils.get_current_user(authorization, db)
     generated_at = datetime.utcnow()
     start_date, end_date, period_label = _resolve_export_period(month=month, year=year)
     focus_metric = _metric_label(metric_type)
+
+    if scope == "trainer":
+        # Admin-only scope: generate report for all batches under a trainer
+        if current_user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="Admin access required for trainer scope")
+        if not trainer_id:
+            raise HTTPException(status_code=400, detail="trainer_id is required for trainer scope export")
+        
+        # Get all batches for this trainer
+        trainer_batches = db.query(Batch).filter(Batch.trainer_id == trainer_id).all()
+        if not trainer_batches:
+            raise HTTPException(status_code=404, detail="No batches found for the selected trainer")
+        
+        # Use the first batch for the report (or we could aggregate all)
+        batch = trainer_batches[0]
+        batch_name_suffix = f" (Trainer: {trainer_batches[0].name})" if len(trainer_batches) == 1 else f" (All batches for trainer)"
+        
+        # Collect all trainees from all trainer's batches
+        trainee_ids = set()
+        for tb in trainer_batches:
+            trainees_in_batch = db.query(User).join(User.batches).filter(Batch.id == tb.id, User.role == UserRole.TRAINEE).all()
+            for t in trainees_in_batch:
+                trainee_ids.add(t.id)
+        trainees = list(db.query(User).filter(User.id.in_(trainee_ids)).all())
+        
+        trainee_ids_list = [user.id for user in trainees]
+        session_query = db.query(PracticeSession).filter(PracticeSession.user_id.in_(trainee_ids_list))
+        if start_date and end_date:
+            session_query = session_query.filter(
+                PracticeSession.created_at >= start_date,
+                PracticeSession.created_at <= end_date,
+            )
+        sessions = session_query.order_by(PracticeSession.created_at.asc()).all()
+        if not sessions:
+            raise HTTPException(status_code=404, detail="No sessions found for the selected trainer report period")
+
+        overall_scores = [float(session.overall_score or 0.0) for session in sessions if session.overall_score is not None]
+        pronunciation_scores = [float(session.accuracy_score or 0.0) for session in sessions if session.accuracy_score is not None]
+        pass_count = sum((session.overall_score or 0.0) >= 70 for session in sessions)
+
+        improvement_rows = []
+        improvement_specs = [
+            ("Pronunciation", "accuracy_score", "Pronunciation"),
+            ("Pacing", "fluency_score", "Pacing"),
+            ("Clarity", "clarity_score", "Clarity"),
+            ("Grammar", "keyword_adherence_score", "Grammar"),
+            ("Soft Skills", "soft_skills_score", "Soft Skills"),
+        ]
+        for label, attribute, recommendation_key in improvement_specs:
+            scores = [
+                float(getattr(session, attribute))
+                for session in sessions
+                if getattr(session, attribute) is not None
+            ]
+            average = sum(scores) / len(scores) if scores else 0.0
+            below_threshold = sum(score < 70 for score in scores)
+            improvement_rows.append(
+                {
+                    "category": label,
+                    "average": average,
+                    "below_threshold_count": below_threshold,
+                    "recommendation": TRAINER_RECOMMENDATIONS[recommendation_key],
+                }
+            )
+
+        error_counts: dict[str, dict[str, Any]] = {}
+        for session in sessions:
+            for feedback in session.word_feedback or []:
+                if not isinstance(feedback, dict):
+                    continue
+                error_type = str(feedback.get("error_type") or "").strip()
+                if not error_type or error_type.lower() == "none":
+                    continue
+                bucket = error_counts.setdefault(error_type, {"count": 0, "examples": []})
+                bucket["count"] += 1
+                word = str(feedback.get("word") or "").strip()
+                if word and word not in bucket["examples"] and len(bucket["examples"]) < 4:
+                    bucket["examples"].append(word)
+
+        pronunciation_rows = [
+            {
+                "error_type": error_type,
+                "frequency": payload["count"],
+                "examples": payload["examples"],
+            }
+            for error_type, payload in sorted(
+                error_counts.items(),
+                key=lambda item: item[1]["count"],
+                reverse=True,
+            )[:6]
+        ]
+
+        ranking_rows = []
+        for trainee in trainees:
+            trainee_sessions = [session for session in sessions if session.user_id == trainee.id]
+            trainee_scores = [
+                float(session.overall_score or 0.0)
+                for session in trainee_sessions
+                if session.overall_score is not None
+            ]
+            ranking_rows.append(
+                {
+                    "trainee_name": trainee.full_name,
+                    "sessions_count": len(trainee_sessions),
+                    "average_score": (sum(trainee_scores) / len(trainee_scores)) if trainee_scores else 0.0,
+                    "highest_score": max(trainee_scores) if trainee_scores else 0.0,
+                    "pass_sessions": sum((session.overall_score or 0.0) >= 70 for session in trainee_sessions),
+                }
+            )
+        ranking_rows.sort(key=lambda row: row["average_score"], reverse=True)
+
+        generator = PerformanceReportGenerator(title="Performance Report")
+        pdf_buffer = generator.generate_trainer_batch_report(
+            batch_name=f"Trainer Report - {batch.name}{batch_name_suffix}",
+            wave_number=batch.wave_number,
+            report_period=period_label,
+            generated_at=generated_at,
+            focus_metric=focus_metric,
+            total_trainees=len(trainees),
+            total_sessions=len(sessions),
+            average_score=(sum(overall_scores) / len(overall_scores)) if overall_scores else 0.0,
+            pass_rate=(pass_count / len(sessions) * 100) if sessions else 0.0,
+            average_pronunciation=(sum(pronunciation_scores) / len(pronunciation_scores)) if pronunciation_scores else 0.0,
+            improvement_rows=improvement_rows,
+            pronunciation_rows=pronunciation_rows,
+            ranking_rows=ranking_rows,
+        )
+
+        return Response(
+            content=pdf_buffer.read(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="Progress_Report_Trainer_{_safe_filename_fragment(batch.name, "Trainer")}_{datetime.now().strftime("%Y%m%d")}.pdf"'
+                )
+            },
+        )
 
     if scope == "batch":
         if not batch_id:
@@ -694,11 +838,10 @@ async def upload_report_to_cloud(
         supabase = get_supabase_client()
         
         if not supabase.is_available:
-            return {
-                "status": "warning",
-                "message": "Cloud storage not configured. PDF saved locally only.",
-                "is_cloud_available": False
-            }
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase storage is required for exporting reports.",
+            )
         
         # Extract PDF bytes from report data
         pdf_bytes = report_data.get("pdf_bytes")
@@ -721,12 +864,10 @@ async def upload_report_to_cloud(
             document_type="pdf",
             filename=filename
         )):
-            return {
-                "status": "success",
-                "message": "Report generated but cloud upload failed. Saved locally.",
-                "is_cloud_available": True,
-                "is_uploaded": False,
-            }
+            raise HTTPException(
+                status_code=503,
+                detail="Supabase storage could not save the exported report.",
+            )
         
         return {
             "status": "success",

@@ -6,9 +6,7 @@ import { getConfigValue } from './env'
 
 type SupabaseApiKeyKind =
   | 'sb_secret'
-  | 'sb_publishable'
   | 'service_role_jwt'
-  | 'anon_jwt'
 
 function normalizeEnvValue(value: string) {
   const trimmed = value.trim()
@@ -75,10 +73,6 @@ function getSupabaseApiKeyKind(token: string): SupabaseApiKeyKind | null {
     return 'sb_secret'
   }
 
-  if (normalized.startsWith('sb_publishable_')) {
-    return 'sb_publishable'
-  }
-
   const segments = normalized.split('.')
   if (segments.length !== 3 || segments.some((segment) => segment.length === 0)) {
     return null
@@ -87,10 +81,6 @@ function getSupabaseApiKeyKind(token: string): SupabaseApiKeyKind | null {
   const payload = decodeJwtPayload(normalized)
   if (payload?.role === 'service_role') {
     return 'service_role_jwt'
-  }
-
-  if (payload?.role === 'anon') {
-    return 'anon_jwt'
   }
 
   return null
@@ -102,24 +92,10 @@ function resolveSupabaseApiKey() {
     'SUPABASE_SERVICE_KEY',
     'SUPABASE_SERVICE_ROLE',
   ], ''))
-  const anonKey = normalizeEnvValue(getConfigValue([
-    'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-    'SUPABASE_KEY',
-    'NEXT_PUBLIC_SUPABASE_KEY',
-    'REACT_APP_ANON_KEY',
-  ], ''))
 
   const serviceRoleKind = getSupabaseApiKeyKind(serviceRoleKey)
   if (serviceRoleKind === 'sb_secret' || serviceRoleKind === 'service_role_jwt') {
     return serviceRoleKey
-  }
-
-  const anonKeyKind = getSupabaseApiKeyKind(anonKey)
-  if (anonKeyKind === 'sb_publishable' || anonKeyKind === 'anon_jwt') {
-    console.warn(
-      'Assessment workspace is falling back to the Supabase publishable key because the configured service-role key is missing or malformed.',
-    )
-    return anonKey
   }
 
   return ''
@@ -139,7 +115,7 @@ export function createSupabaseAdminClient() {
 
   if (!serviceRoleKey) {
     throw new Error(
-      'A valid Supabase service-role or publishable key is not configured for the assessment workspace.',
+      'A valid Supabase service-role key is not configured for the assessment workspace.',
     )
   }
 

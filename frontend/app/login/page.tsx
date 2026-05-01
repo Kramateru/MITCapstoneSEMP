@@ -1,65 +1,143 @@
 'use client'
 
-import { Eye, EyeOff, LogIn } from 'lucide-react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
+import {
+  AlertTriangle,
+  Eye,
+  EyeOff,
+  LoaderCircle,
+  LockKeyhole,
+  LogIn,
+  Mail,
+  MapPin,
+  Phone,
+  ShieldCheck,
+} from 'lucide-react'
 
 import { useAuth } from '@/app/context/AuthContext'
 
+type AuthProviderStatus = {
+  provider: 'supabase' | 'local'
+  uses_supabase: boolean
+  available: boolean
+  credential_source: string
+  message: string
+}
+
+const fieldBaseClassName =
+  'h-14 w-full rounded-[20px] border border-slate-200 bg-slate-50/92 px-14 py-3.5 text-[0.98rem] text-slate-900 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.16)] transition placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-300/40 disabled:cursor-not-allowed disabled:opacity-70 sm:h-15 sm:text-[1.02rem]'
+
 export default function LoginPage() {
   const router = useRouter()
-  const { login, user, isAuthenticated } = useAuth()
+  const { login, user, isAuthenticated, isLoading: isAuthLoading } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [hasHydrated, setHasHydrated] = useState(false)
+  const [providerStatus, setProviderStatus] = useState<AuthProviderStatus | null>(null)
 
-  // Redirect if already authenticated
   useEffect(() => {
-    if (isAuthenticated && user) {
+    setHasHydrated(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isAuthLoading && isAuthenticated && user) {
       if (user.must_change_password) {
-        router.push('/trainee/settings')
-      } else {
-        const dashboardMap: Record<string, string> = {
-          'admin': '/admin/dashboard',
-          'trainer': '/trainer/dashboard',
-          'trainee': '/trainee/dashboard',
+        router.replace('/trainee/settings')
+        return
+      }
+
+      const dashboardMap: Record<string, string> = {
+        admin: '/admin/dashboard',
+        trainer: '/trainer/dashboard',
+        trainee: '/trainee/dashboard',
+      }
+      const path = dashboardMap[user.user_role || 'trainee'] || '/dashboard'
+      router.replace(path)
+    }
+  }, [isAuthLoading, isAuthenticated, router, user])
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    async function loadProviderStatus() {
+      try {
+        const response = await fetch('/api/auth/provider-status', {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+
+        if (!response.ok) {
+          throw new Error('Unable to verify the credential source right now.')
         }
-        const path = dashboardMap[user.user_role || 'trainee'] || '/dashboard'
-        router.push(path)
+
+        const data = (await response.json()) as AuthProviderStatus
+        setProviderStatus(data)
+      } catch (fetchError) {
+        if (controller.signal.aborted) {
+          return
+        }
+
+        setProviderStatus({
+          provider: 'local',
+          uses_supabase: false,
+          available: false,
+          credential_source: 'unknown',
+          message:
+            fetchError instanceof Error
+              ? fetchError.message
+              : 'Unable to verify the credential source right now.',
+        })
       }
     }
-  }, [isAuthenticated, user, router])
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+    void loadProviderStatus()
+
+    return () => controller.abort()
+  }, [])
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
     setError('')
-    
-    if (!email.trim()) {
+
+    const normalizedEmail = email.trim().toLowerCase()
+
+    if (!normalizedEmail) {
       setError('Email is required')
       return
     }
-    
+
     if (!password) {
       setError('Password is required')
       return
     }
 
-    setIsLoading(true)
+    setIsSubmitting(true)
 
     try {
-      await login(email, password)
+      await login(normalizedEmail, password)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed'
       setError(message)
-      setIsLoading(false)
+      setIsSubmitting(false)
     }
   }
 
+  const isSessionChecking = hasHydrated && isAuthLoading
+  const showProviderWarning =
+    providerStatus !== null &&
+    (providerStatus.provider !== 'supabase' || !providerStatus.available)
+  const providerIsReady =
+    providerStatus !== null &&
+    providerStatus.provider === 'supabase' &&
+    providerStatus.available
+
   return (
-    <div className="relative min-h-screen w-screen overflow-x-hidden">
-      {/* Background Video */}
+    <main className="relative min-h-screen overflow-x-hidden bg-slate-950 text-white">
       <video
         className="absolute inset-0 h-full w-full object-cover"
         autoPlay
@@ -71,144 +149,217 @@ export default function LoginPage() {
         <source src="/loginbg.mp4" type="video/mp4" />
       </video>
 
-      {/* Overlay Gradients */}
-      <div className="absolute inset-0 bg-slate-950/50" />
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-950/40 via-slate-950/40 to-black/60" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.2),transparent_50%)]" />
+      <div className="absolute inset-0 bg-slate-950/62" />
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(30,41,59,0.4),rgba(15,23,42,0.72))]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(96,165,250,0.18),transparent_38%)]" />
 
-      {/* Centered Login Container */}
-      <div className="relative z-10 flex min-h-screen w-full flex-col items-center justify-center px-2 py-4 sm:px-6 sm:py-8">
-        {/* Main Card */}
-        <div className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-900/60 p-6 shadow-2xl backdrop-blur-xl sm:max-w-lg sm:p-8 md:max-w-lg">
-          {/* Header Section */}
-          <div className="mb-6 flex flex-col items-center space-y-3 text-center sm:mb-8 sm:space-y-4">
-            {/* Logo */}
-            <div className="flex items-center justify-center">
-              <div className="relative h-16 w-16 flex-shrink-0 sm:h-20 sm:w-20">
-                <div className="absolute inset-0 rounded-full bg-gradient-to-br from-yellow-300 to-yellow-400 opacity-20 blur-lg" />
-                <div className="relative h-full w-full rounded-full border-2 border-white bg-white/95 p-2 shadow-lg">
-                  <img
+      <div className="relative z-10 flex min-h-screen items-start justify-center px-4 py-4 sm:px-6 sm:py-6 lg:items-center lg:px-8 lg:py-5">
+        <div className="mx-auto grid w-full max-w-[74rem] overflow-hidden rounded-[30px] border border-white/16 bg-white/8 shadow-[0_42px_120px_-50px_rgba(0,0,0,0.96)] backdrop-blur-lg lg:h-[min(42rem,calc(100dvh-2.5rem))] lg:grid-cols-[1fr_0.94fr]">
+          <section className="relative overflow-hidden bg-[linear-gradient(180deg,rgba(16,50,68,0.78),rgba(13,36,53,0.84))] px-6 py-6 sm:px-8 sm:py-7 lg:px-8 lg:py-7">
+            <div aria-hidden="true" className="absolute inset-0">
+              <div className="absolute left-[9%] top-[7%] h-16 w-16 rounded-[22px] bg-amber-100/18 blur-[1px]" />
+              <div className="absolute right-[18%] top-[8%] h-36 w-5 rounded-full bg-white/4" />
+              <div className="absolute left-[15%] top-[46%] h-64 w-64 rounded-full border border-white/4" />
+              <div className="absolute right-[12%] top-[22%] h-34 w-4 rotate-45 rounded-full bg-white/4" />
+              <div className="absolute left-[39%] bottom-[7%] h-32 w-5 rounded-full bg-white/4" />
+            </div>
+
+            <div className="relative flex h-full flex-col justify-between">
+              <div className="flex w-full justify-center">
+                <div className="relative h-28 w-28 overflow-hidden rounded-[28px] bg-white p-2.5 shadow-[0_18px_40px_-20px_rgba(0,0,0,0.55)] sm:h-32 sm:w-32 lg:h-36 lg:w-36">
+                  <Image
                     src="/st-peter-seal.png"
                     alt="St. Peter Velle Technical Training Center"
-                    className="h-full w-full object-contain"
+                    fill
+                    sizes="(min-width: 1024px) 144px, (min-width: 640px) 128px, 112px"
+                    className="object-contain p-2.5"
+                    priority
                   />
                 </div>
               </div>
+
+              <div className="relative mx-auto mt-4 w-full max-w-[31rem] text-center lg:mt-4">
+                <h1 className="mx-auto max-w-[28rem] text-balance text-[clamp(2rem,3.18vw,3.15rem)] leading-[0.94] font-bold tracking-[-0.05em] text-white">
+                  <span className="block">Speech-Enabled</span>
+                  <span className="mt-1.5 block text-[0.64em] tracking-[0.07em]">Microlearning Platform</span>
+                </h1>
+                <div className="mt-4 flex flex-col items-center gap-2.5">
+                  <span className="h-1 w-18 rounded-full bg-amber-400" />
+                  <p className="max-w-full whitespace-nowrap text-[clamp(0.84rem,0.94vw,1.02rem)] leading-[1.2] font-semibold text-slate-100">
+                    St. Peter Velle Technical Training Center, Inc
+                  </p>
+                </div>
+              </div>
+
+              <div className="relative mt-4 rounded-[26px] border border-white/12 bg-white/12 p-5 backdrop-blur-md sm:p-6 lg:mt-6">
+                <div className="grid gap-3 text-slate-100">
+                  <div className="flex items-start gap-4">
+                    <MapPin className="mt-1 h-5 w-5 shrink-0 text-amber-300" />
+                    <p className="text-[1rem] font-medium leading-6 text-slate-100/96">
+                      #92 Mc Arthur Highway, Marulas, Valenzuela, Philippines 1440
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <Phone className="h-5 w-5 shrink-0 text-amber-300" />
+                    <p className="text-[1rem] font-medium text-slate-100/94">0960 545 6293</p>
+                  </div>
+                  <div className="flex items-center gap-4">
+                    <Mail className="h-5 w-5 shrink-0 text-amber-300" />
+                    <p className="break-words text-[1rem] font-medium text-slate-100/94">
+                      stpetervelle2003@yahoo.com.ph
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
+          </section>
 
-            {/* Institution Name and Title */}
-            <div className="space-y-1 sm:space-y-2">
-              <h1 className="text-2xl font-bold text-white sm:text-2xl md:text-3xl">
-                Language Assessment
-              </h1>
-              <p className="text-xs font-semibold uppercase tracking-widest text-blue-200">
-                Microlearning Platform
-              </p>
-              <p className="text-xs font-medium text-white/90 sm:text-sm md:text-sm">
-                St. Peter Velle Technical Training Center, Inc.
-              </p>
-            </div>
-
-            {/* Contact Info */}
-            <div className="w-full space-y-1 border-t border-white/10 pt-3 sm:pt-4">
-              <p className="text-xs text-slate-200 leading-relaxed sm:text-xs">
-                #92 Mc Arthur Highway, Marulas, Valenzuela, Philippines 1440
-              </p>
-              <p className="text-xs text-slate-300 leading-relaxed sm:text-xs">
-                Phone: 0960 545 6293 | Email: stpetervelle2003@yahoo.com.ph
-              </p>
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="mb-4 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent sm:mb-6" />
-
-          {/* Form Section */}
-          <div className="mb-4 space-y-1 text-center sm:mb-6">
-            <h2 className="text-xl font-bold text-white sm:text-xl md:text-2xl">Welcome Back</h2>
-            <p className="text-sm text-slate-300 sm:text-sm">
-              Sign in to your training account
-            </p>
-          </div>
-
-          {/* Error Message */}
-          {error && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-red-400/30 bg-red-500/10 p-3 backdrop-blur-sm">
-              <div className="h-5 w-5 flex-shrink-0 rounded-full bg-red-500" />
-              <p className="text-sm text-red-200">{error}</p>
-            </div>
-          )}
-
-          {/* Login Form */}
-          <form onSubmit={handleSubmit} className="space-y-3 sm:space-y-4">
-            {/* Email Field */}
-            <div className="space-y-1.5 sm:space-y-2">
-              <label htmlFor="email" className="block text-sm font-semibold text-slate-100 sm:text-sm">
-                Email Address
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                disabled={isLoading}
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your.email@company.com"
-                className="w-full rounded-lg border border-white/20 bg-white/8 px-3 py-2.5 text-sm text-white placeholder:text-slate-400 transition sm:py-3 sm:px-4 focus:border-blue-400 focus:bg-white/12 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:opacity-50"
-              />
-            </div>
-
-            {/* Password Field */}
-            <div className="space-y-1.5 sm:space-y-2">
-              <label htmlFor="password" className="block text-sm font-semibold text-slate-100 sm:text-sm">
-                Password
-              </label>
-              <div className="relative">
-                <input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  disabled={isLoading}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="********"
-                  className="w-full rounded-lg border border-white/20 bg-white/8 px-3 py-2.5 pr-10 text-sm text-white placeholder:text-slate-400 transition sm:py-3 sm:px-4 sm:pr-12 focus:border-blue-400 focus:bg-white/12 focus:outline-none focus:ring-2 focus:ring-blue-400/50 disabled:opacity-50"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  disabled={isLoading}
-                  aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-300 transition hover:bg-white/10 hover:text-white disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-400/50 sm:right-3"
+          <section className="bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,251,255,0.82))] px-6 py-6 text-slate-900 backdrop-blur-xl sm:px-8 sm:py-7 lg:px-8 lg:py-7">
+            <div className="mx-auto flex h-full w-full max-w-[31rem] flex-col justify-center">
+              <div>
+                <div
+                  className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] ${
+                    providerIsReady
+                      ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
+                      : 'bg-amber-50 text-amber-700 ring-1 ring-amber-100'
+                  }`}
                 >
-                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {providerIsReady ? (
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                  )}
+                  <span>{providerIsReady ? 'Supabase Connected' : 'Credential Source Check'}</span>
+                </div>
+
+                <h2 className="mt-4 text-[clamp(2.15rem,3.35vw,3rem)] font-bold tracking-[-0.04em] text-slate-900">
+                  Welcome back
+                </h2>
+              </div>
+
+              {showProviderWarning ? (
+                <div className="mt-5 rounded-[22px] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <p className="leading-6">
+                      {providerStatus?.message || 'Unable to verify the credential source right now.'}
+                    </p>
+                  </div>
+                </div>
+              ) : null}
+
+              {error ? (
+                <div
+                  role="alert"
+                  aria-live="polite"
+                  className="mt-5 rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+                >
+                  {error}
+                </div>
+              ) : null}
+
+              {isSessionChecking ? (
+                <div className="mt-5 rounded-[22px] border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+                  <div className="flex items-center gap-3">
+                    <LoaderCircle className="h-4 w-4 animate-spin" />
+                    <span>Checking your saved session...</span>
+                  </div>
+                </div>
+              ) : null}
+
+              <form onSubmit={handleSubmit} className="mt-5 space-y-4" noValidate>
+                <div className="space-y-2">
+                  <label
+                    htmlFor="email"
+                    className="block text-sm font-bold uppercase tracking-[0.16em] text-slate-800"
+                  >
+                    Email Address
+                  </label>
+                  <div className="relative">
+                    <Mail className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+                    <input
+                      id="email"
+                      type="email"
+                      autoComplete="email"
+                      inputMode="email"
+                      required
+                      disabled={isSubmitting}
+                      value={email}
+                      onChange={(event) => {
+                        if (error) {
+                          setError('')
+                        }
+                        setEmail(event.target.value)
+                      }}
+                      placeholder="admin@stpetervelle.edu.ph"
+                      className={fieldBaseClassName}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label
+                    htmlFor="password"
+                    className="block text-sm font-bold uppercase tracking-[0.16em] text-slate-800"
+                  >
+                    Password
+                  </label>
+                  <div className="relative">
+                    <LockKeyhole className="pointer-events-none absolute left-5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+                    <input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      autoComplete="current-password"
+                      required
+                      disabled={isSubmitting}
+                      value={password}
+                      onChange={(event) => {
+                        if (error) {
+                          setError('')
+                        }
+                        setPassword(event.target.value)
+                      }}
+                      placeholder="Enter your password"
+                      className={`${fieldBaseClassName} pr-14`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((current) => !current)}
+                      disabled={isSubmitting}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-300/35"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="inline-flex h-14 w-full items-center justify-center gap-2 rounded-[20px] bg-gradient-to-r from-amber-400 via-orange-400 to-orange-500 px-4 text-[1.06rem] font-semibold text-white shadow-[0_24px_55px_-28px_rgba(249,115,22,0.72)] transition hover:-translate-y-0.5 hover:from-amber-300 hover:via-orange-400 hover:to-orange-400 disabled:cursor-not-allowed disabled:from-slate-400 disabled:via-slate-400 disabled:to-slate-500"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <LoaderCircle className="h-4 w-4 animate-spin" />
+                      <span>Signing in...</span>
+                    </>
+                  ) : (
+                    <>
+                      <LogIn size={18} />
+                      <span>Sign In</span>
+                    </>
+                  )}
                 </button>
+              </form>
+
+              <div className="mt-5 border-t border-slate-200 pt-4 text-center text-[0.8rem] leading-6 text-slate-500">
+                <p>Copyright 2026 Speech-Enabled Microlearning Platform. All rights reserved.</p>
               </div>
             </div>
-
-            {/* Submit Button */}
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="group relative w-full overflow-hidden rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-2.5 font-semibold text-white shadow-lg transition hover:from-blue-700 hover:to-blue-800 hover:shadow-blue-500/20 disabled:from-slate-700 disabled:to-slate-700 disabled:opacity-60 sm:py-3"
-            >
-              <div className="flex items-center justify-center gap-2">
-                <LogIn size={18} />
-                <span className="text-sm sm:text-base">{isLoading ? 'Signing In...' : 'Sign In'}</span>
-              </div>
-              {isLoading && (
-                <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse" />
-              )}
-            </button>
-          </form>
-
-          {/* Footer */}
-          <div className="mt-4 border-t border-white/10 pt-3 text-center text-xs text-slate-400 sm:mt-6 sm:pt-4">
-            <p>Copyright 2026 Speech-Enabled Microlearning Platform</p>
-            <p>All rights reserved</p>
-          </div>
+          </section>
         </div>
       </div>
-    </div>
+    </main>
   )
 }

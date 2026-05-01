@@ -7,13 +7,13 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends as FastAPIDepends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends as FastAPIDepends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
-from sqlalchemy import and_, func
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import and_, case, func, or_
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from .. import auth_utils
-from ..database import get_db
+from ..database import SessionLocal, get_db
 from ..models import (
     Batch,
     CertificateRecord,
@@ -22,6 +22,7 @@ from ..models import (
     Feedback,
     MicrolearningAssignment,
     MicrolearningModule,
+    MicrolearningTopicCategory,
     PerformanceMetrics,
     PracticeSession,
     Scenario,
@@ -38,6 +39,7 @@ from ..services.certificate_awards import (
 from ..services.microlearning import (
     ensure_module_exercises,
     evaluate_exercise_submission,
+    reset_assignment_for_retake,
     refresh_assignment_progress,
     serialize_assignment_detail,
     serialize_assignment_summary,
@@ -96,6 +98,7 @@ class MicrolearningExerciseSubmission(BaseModel):
     response_text: Optional[str] = None
     selected_option: Optional[str] = None
     input_mode: Optional[str] = None
+    revealed_side: Optional[str] = None
 
 
 # ==================== Helper Functions ====================
@@ -110,6 +113,30 @@ def verify_trainee(
     return current_user
 
 
+def _get_active_batch_ids_for_user(user: User) -> list[str]:
+    return [batch.id for batch in user.batches if getattr(batch, "is_active", True)]
+
+
+def _active_trainee_microlearning_assignments_query(
+    db: Session,
+    *,
+    trainee_id: str,
+):
+    return (
+        db.query(MicrolearningAssignment)
+        .join(MicrolearningAssignment.module)
+        .outerjoin(MicrolearningModule.topic_category)
+        .filter(
+            MicrolearningAssignment.trainee_id == trainee_id,
+            MicrolearningModule.is_active == True,
+            or_(
+                MicrolearningModule.topic_category_id.is_(None),
+                MicrolearningTopicCategory.is_active == True,
+            ),
+        )
+    )
+
+
 def _get_trainee_microlearning_assignment(
     db: Session,
     *,
@@ -117,18 +144,20 @@ def _get_trainee_microlearning_assignment(
     assignment_id: str,
 ) -> MicrolearningAssignment:
     assignment = (
-        db.query(MicrolearningAssignment)
+        _active_trainee_microlearning_assignments_query(
+            db,
+            trainee_id=trainee_id,
+        )
         .options(
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
-            selectinload(MicrolearningAssignment.trainee),
-            selectinload(MicrolearningAssignment.trainer),
-            selectinload(MicrolearningAssignment.batch),
-            selectinload(MicrolearningAssignment.certificate),
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
+            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainer),
+            joinedload(MicrolearningAssignment.batch),
+            joinedload(MicrolearningAssignment.certificate),
         )
         .filter(
             MicrolearningAssignment.id == assignment_id,
-            MicrolearningAssignment.trainee_id == trainee_id,
         )
         .first()
     )
@@ -218,16 +247,18 @@ def _build_trainee_microlearning_report(
     trainee_id: str,
 ) -> dict[str, Any]:
     assignments = (
-        db.query(MicrolearningAssignment)
-        .options(
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
-            selectinload(MicrolearningAssignment.trainee),
-            selectinload(MicrolearningAssignment.trainer),
-            selectinload(MicrolearningAssignment.batch),
-            selectinload(MicrolearningAssignment.certificate),
+        _active_trainee_microlearning_assignments_query(
+            db,
+            trainee_id=trainee_id,
         )
-        .filter(MicrolearningAssignment.trainee_id == trainee_id)
+        .options(
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
+            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainer),
+            joinedload(MicrolearningAssignment.batch),
+            joinedload(MicrolearningAssignment.certificate),
+        )
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
@@ -425,15 +456,16 @@ async def get_assigned_scenarios(
 ):
     """Get scenarios assigned to trainee via courses"""
     # Get batches for this trainee
-    batches = current_user.batches
-    batch_ids = [b.id for b in batches]
+    batch_ids = _get_active_batch_ids_for_user(current_user)
 
     # Get course assignments for trainee's batches or personal assignments
     assignments = (
         db.query(CourseAssignment)
+        .join(Course)
         .filter(
             and_(
                 CourseAssignment.is_mandatory == True,
+                Course.is_published == True,
                 (CourseAssignment.batch_id.in_(batch_ids))
                 | (CourseAssignment.user_id == current_user.id),
             )
@@ -446,9 +478,15 @@ async def get_assigned_scenarios(
     for assignment in assignments:
         if assignment.course and assignment.course.scenario_ids:
             scenario_ids.extend(assignment.course.scenario_ids)
+    scenario_ids = [scenario_id for scenario_id in dict.fromkeys(scenario_ids) if scenario_id]
 
     scenarios = (
-        db.query(Scenario).filter(Scenario.id.in_(scenario_ids)).all()
+        db.query(Scenario)
+        .filter(
+            Scenario.id.in_(scenario_ids),
+            Scenario.is_published == True,
+        )
+        .all()
         if scenario_ids
         else []
     )
@@ -1161,13 +1199,15 @@ async def get_assigned_courses(
     current_user: Any = Depends(verify_trainee), db: Session = Depends()
 ):
     """Get courses assigned to trainee"""
-    batches = current_user.batches
+    batch_ids = _get_active_batch_ids_for_user(current_user)
 
     # Get assignments from batches or personal
     assignments = (
         db.query(CourseAssignment)
+        .join(Course)
         .filter(
-            (CourseAssignment.batch_id.in_([b.id for b in batches]))
+            Course.is_published == True,
+            (CourseAssignment.batch_id.in_(batch_ids))
             | (CourseAssignment.user_id == current_user.id)
         )
         .all()
@@ -1197,15 +1237,28 @@ async def get_microlearning_modules(
     category: Optional[str] = None,
 ):
     """Get available microlearning modules"""
-    query = db.query(MicrolearningModule).filter(MicrolearningModule.is_active == True)
-
-    if category:
-        query = query.filter(MicrolearningModule.category == category)
-
-    modules = query.options(
-        selectinload(MicrolearningModule.assessment_method),
-        selectinload(MicrolearningModule.topic_category),
-    ).all()
+    assignments = (
+        _active_trainee_microlearning_assignments_query(
+            db,
+            trainee_id=current_user.id,
+        )
+        .options(
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
+        )
+        .order_by(MicrolearningAssignment.assigned_at.desc())
+        .all()
+    )
+    modules: list[MicrolearningModule] = []
+    seen_module_ids: set[str] = set()
+    for assignment in assignments:
+        module = assignment.module
+        if not module or module.id in seen_module_ids:
+            continue
+        if category and module.category != category:
+            continue
+        seen_module_ids.add(module.id)
+        modules.append(module)
 
     return {
         "count": len(modules),
@@ -1220,16 +1273,18 @@ async def list_microlearning_assignments(
 ):
     """List the trainee's assigned microlearning modules."""
     assignments = (
-        db.query(MicrolearningAssignment)
-        .options(
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
-            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
-            selectinload(MicrolearningAssignment.trainee),
-            selectinload(MicrolearningAssignment.trainer),
-            selectinload(MicrolearningAssignment.batch),
-            selectinload(MicrolearningAssignment.certificate),
+        _active_trainee_microlearning_assignments_query(
+            db,
+            trainee_id=current_user.id,
         )
-        .filter(MicrolearningAssignment.trainee_id == current_user.id)
+        .options(
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
+            joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
+            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainer),
+            joinedload(MicrolearningAssignment.batch),
+            joinedload(MicrolearningAssignment.certificate),
+        )
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
@@ -1297,6 +1352,33 @@ async def get_microlearning_assignment_detail(
     return serialize_assignment_detail(assignment)
 
 
+@router.post("/microlearning-assignments/{assignment_id}/start")
+async def start_microlearning_assignment(
+    assignment_id: str,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Mark an assigned microlearning module as started before the trainee begins the lesson."""
+    assignment = _get_trainee_microlearning_assignment(
+        db,
+        trainee_id=current_user.id,
+        assignment_id=assignment_id,
+    )
+
+    ensure_module_exercises(assignment.module)
+    if assignment.started_at is None:
+        assignment.started_at = datetime.utcnow()
+
+    refresh_assignment_progress(assignment)
+    db.commit()
+    db.refresh(assignment)
+
+    return {
+        "status": "started",
+        "assignment": serialize_assignment_summary(assignment),
+    }
+
+
 @router.post("/microlearning-assignments/{assignment_id}/exercises/{exercise_id}")
 async def submit_microlearning_exercise(
     assignment_id: str,
@@ -1323,6 +1405,7 @@ async def submit_microlearning_exercise(
         response_text=payload.response_text,
         selected_option=payload.selected_option,
         input_mode=payload.input_mode,
+        revealed_side=payload.revealed_side,
     )
 
     responses = dict(assignment.responses or {})
@@ -1347,12 +1430,46 @@ async def submit_microlearning_exercise(
     }
 
 
+@router.post("/microlearning-assignments/{assignment_id}/retake")
+async def retake_microlearning_assignment(
+    assignment_id: str,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Reset a completed-but-not-passed microlearning module so the trainee can try again."""
+    assignment = _get_trainee_microlearning_assignment(
+        db,
+        trainee_id=current_user.id,
+        assignment_id=assignment_id,
+    )
+
+    ensure_module_exercises(assignment.module)
+    refresh_assignment_progress(assignment)
+    summary = serialize_assignment_summary(assignment)
+
+    if summary.get("is_passed"):
+        raise HTTPException(status_code=400, detail="This module is already passed.")
+    if assignment.completed_exercises < len((assignment.module.exercises or []) if assignment.module else []):
+        raise HTTPException(status_code=400, detail="Finish the current attempt before requesting a retake.")
+
+    reset_assignment_for_retake(assignment)
+    refresh_assignment_progress(assignment)
+    db.commit()
+    db.refresh(assignment)
+
+    return {
+        "status": "retake_started",
+        "assignment": serialize_assignment_summary(assignment),
+    }
+
+
 @router.get("/microlearning-report")
 async def get_microlearning_report(
     current_user: Any = Depends(verify_trainee),
     db: Session = Depends(),
 ):
     """Return the trainee's microlearning accomplishment report."""
+    sync_trainee_completion_certificates(db, current_user.id)
     return _build_trainee_microlearning_report(db, trainee_id=current_user.id)
 
 
@@ -1365,45 +1482,39 @@ async def trainee_stats(
 ):
     """Stats payload used by trainee dashboard UI."""
     sync_trainee_completion_certificates(db, current_user.id)
-    prune_trainee_activity_certificates(db, current_user.id)
-    db.commit()
-
     now = datetime.utcnow()
     start_of_day = datetime(now.year, now.month, now.day)
     end_of_day = start_of_day + timedelta(days=1)
 
-    total_sessions = (
-        db.query(func.count(PracticeSession.id))
-        .filter(PracticeSession.user_id == current_user.id)
-        .scalar()
-        or 0
-    )
-
-    avg_score, max_score, total_practice_time = (
+    (
+        total_sessions,
+        avg_score,
+        max_score,
+        total_practice_time,
+        completed_today,
+        completed_scenarios,
+    ) = (
         db.query(
+            func.count(PracticeSession.id),
             func.avg(PracticeSession.overall_score),
             func.max(PracticeSession.overall_score),
             func.sum(PracticeSession.response_duration),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            PracticeSession.created_at >= start_of_day,
+                            PracticeSession.created_at < end_of_day,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.count(func.distinct(PracticeSession.scenario_id)),
         )
         .filter(PracticeSession.user_id == current_user.id)
         .one()
-    )
-
-    completed_today = (
-        db.query(func.count(PracticeSession.id))
-        .filter(
-            PracticeSession.user_id == current_user.id,
-            PracticeSession.created_at >= start_of_day,
-            PracticeSession.created_at < end_of_day,
-        )
-        .scalar()
-        or 0
-    )
-    completed_scenarios = (
-        db.query(func.count(func.distinct(PracticeSession.scenario_id)))
-        .filter(PracticeSession.user_id == current_user.id)
-        .scalar()
-        or 0
     )
     certifications = (
         db.query(func.count(CertificateRecord.id))
@@ -1414,20 +1525,22 @@ async def trainee_stats(
         .scalar()
         or 0
     )
-    microlearning_assignments = (
-        db.query(func.count(MicrolearningAssignment.id))
-        .filter(MicrolearningAssignment.trainee_id == current_user.id)
-        .scalar()
-        or 0
-    )
-    certified_microlearning_assignments = (
-        db.query(func.count(MicrolearningAssignment.id))
-        .filter(
-            MicrolearningAssignment.trainee_id == current_user.id,
-            MicrolearningAssignment.certificate_id.isnot(None),
+
+    microlearning_assignments, certified_microlearning_assignments = (
+        _active_trainee_microlearning_assignments_query(
+            db,
+            trainee_id=current_user.id,
         )
-        .scalar()
-        or 0
+        .with_entities(
+            func.count(MicrolearningAssignment.id),
+            func.sum(
+                case(
+                    (MicrolearningAssignment.certificate_id.isnot(None), 1),
+                    else_=0,
+                )
+            ),
+        )
+        .one()
     )
 
     return {
@@ -1438,8 +1551,8 @@ async def trainee_stats(
         "completed_today": int(completed_today),
         "completed_scenarios": int(completed_scenarios),
         "certifications": int(certifications),
-        "microlearning_assignments": int(microlearning_assignments),
-        "microlearning_certifications": int(certified_microlearning_assignments),
+        "microlearning_assignments": int(microlearning_assignments or 0),
+        "microlearning_certifications": int(certified_microlearning_assignments or 0),
     }
 
 
@@ -1471,11 +1584,13 @@ async def trainee_dashboard(
     )
 
     # Get assigned courses
-    batches = current_user.batches
+    batch_ids = _get_active_batch_ids_for_user(current_user)
     assigned_courses = (
         db.query(CourseAssignment)
+        .join(Course)
         .filter(
-            (CourseAssignment.batch_id.in_([b.id for b in batches]))
+            Course.is_published == True,
+            (CourseAssignment.batch_id.in_(batch_ids))
             | (CourseAssignment.user_id == current_user.id)
         )
         .all()
@@ -1672,3 +1787,53 @@ async def update_account_status(
             "is_active": trainee.is_active,
         }
     }
+
+
+@router.websocket("/live-updates")
+async def trainee_live_updates(websocket: WebSocket, token: str):
+    """Push trainee-specific workspace updates such as microlearning assignment removals."""
+    db = SessionLocal()
+    channel = ""
+    try:
+        token_data = auth_utils.decode_token(token)
+        user = db.query(User).filter(User.id == token_data.user_id).first()
+
+        if not user or user.role != UserRole.TRAINEE:
+            await websocket.close(code=4403)
+            return
+
+        channel = f"trainee:{user.id}"
+        await live_update_manager.connect(channel, websocket)
+        await websocket.send_json(
+            {
+                "type": "connected",
+                "role": user.role.value,
+                "message": "Live trainee workspace updates enabled",
+            }
+        )
+
+        while True:
+            message = await websocket.receive_text()
+            if message == "ping":
+                await websocket.send_json({"type": "pong"})
+    except HTTPException:
+        try:
+            await websocket.accept()
+        except Exception:
+            pass
+        try:
+            await websocket.close(code=4401)
+        except Exception:
+            pass
+    except WebSocketDisconnect:
+        if channel:
+            await live_update_manager.disconnect(channel, websocket)
+    except Exception:
+        try:
+            await websocket.close(code=1011)
+        except Exception:
+            pass
+        if channel:
+            await live_update_manager.disconnect(channel, websocket)
+    finally:
+        db.close()

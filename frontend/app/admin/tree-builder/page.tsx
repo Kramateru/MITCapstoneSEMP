@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
 
 export default function AdminTreeBuilderPage() {
-  redirect('/admin/scenarios');
+  redirect('/admin/dashboard');
 }

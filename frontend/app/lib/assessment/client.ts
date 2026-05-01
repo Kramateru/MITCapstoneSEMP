@@ -1,5 +1,7 @@
 'use client'
 
+import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
+
 import type {
   CoachAttemptPayload,
   CreateAssessmentPayload,
@@ -20,20 +22,26 @@ function getToken() {
 }
 
 function getJsonErrorMessage(payload: unknown) {
-  return (payload as { error?: string } | null)?.error || 'Assessment request failed.'
+  const candidate = payload as { error?: string; detail?: string; message?: string } | null
+  return candidate?.error || candidate?.detail || candidate?.message || 'Assessment request failed.'
 }
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const token = getToken()
-  const response = await fetch(input, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers || {}),
-    },
-    cache: 'no-store',
-  })
+  let response: Response
+  try {
+    response = await fetch(input, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(init?.headers || {}),
+      },
+      cache: 'no-store',
+    })
+  } catch (error) {
+    throw normalizeConnectivityError(error)
+  }
 
   const payload = await response.json().catch(() => null)
   if (!response.ok) {

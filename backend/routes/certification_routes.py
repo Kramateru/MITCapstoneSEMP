@@ -14,6 +14,7 @@ from .. import auth_utils
 from ..database import get_db
 from ..models import (
     Batch,
+    CallSimulationAssignment,
     CertificateRecord,
     CertificationSettings,
     CoachingLog,
@@ -24,6 +25,7 @@ from ..models import (
     MCQQuestion,
     MCQSubmission,
     PracticeSession,
+    Scenario,
     SimSession,
     User,
     UserRole,
@@ -36,10 +38,6 @@ from ..services.certificate_awards import (
     prune_trainee_activity_certificates,
     sync_trainee_completion_certificates,
 )
-from ..services.mcq_samples import (
-    ensure_trainer_kpi_assessment_program,
-    ensure_trainer_language_assessment_samples,
-)
 from ..services.certificate_service import generate_certificate_pdf
 from ..services.coaching import (
     build_training_state,
@@ -48,6 +46,7 @@ from ..services.coaching import (
     normalize_competency_status,
     serialize_coaching_log,
 )
+from ..services.supabase_auth_service import filter_to_supabase_active_users
 
 router = APIRouter(prefix="/api/certification", tags=["certification"])
 MCQ_MIN_PASSING_THRESHOLD = 90.0
@@ -459,6 +458,61 @@ def _generate_coaching_id(db: Session) -> str:
     return generate_coaching_id(db)
 
 
+def _get_mcq_assessment_target_trainee_ids(
+    db: Session,
+    assessment: MCQAssessment,
+) -> set[str]:
+    trainee_ids: set[str] = set()
+    if assessment.assigned_user_id:
+        trainee_ids.add(assessment.assigned_user_id)
+
+    if assessment.assigned_batch_id:
+        batch = db.query(Batch).filter(Batch.id == assessment.assigned_batch_id).first()
+        if batch:
+            trainee_ids.update(
+                user.id
+                for user in batch.users
+                if user.role == UserRole.TRAINEE and getattr(user, "is_active", True)
+            )
+
+    return trainee_ids
+
+
+def _practice_session_has_active_trainer_source(
+    session: Optional[PracticeSession],
+) -> bool:
+    if not session:
+        return False
+
+    scenario = getattr(session, "scenario", None)
+    return bool(scenario and getattr(scenario, "is_published", False))
+
+
+def _sim_session_has_active_trainer_source(
+    db: Session,
+    session: Optional[SimSession],
+) -> bool:
+    if not session:
+        return False
+
+    scenario = getattr(session, "scenario", None)
+    if not scenario:
+        scenario = db.query(Scenario).filter(Scenario.id == session.scenario_id).first()
+    if not scenario or not bool(getattr(scenario, "is_published", False)):
+        return False
+
+    active_assignment = (
+        db.query(CallSimulationAssignment.id)
+        .filter(
+            CallSimulationAssignment.trainee_id == session.trainee_id,
+            CallSimulationAssignment.scenario_id == session.scenario_id,
+            CallSimulationAssignment.is_active == True,
+        )
+        .first()
+    )
+    return bool(active_assignment)
+
+
 def _resolve_coaching_log_source(
     db: Session,
     *,
@@ -468,7 +522,7 @@ def _resolve_coaching_log_source(
     if payload.practice_session_id and payload.sim_session_id:
         raise HTTPException(
             status_code=400,
-            detail="Provide either a practice session or a Sim Floor session, not both.",
+            detail="Provide either a practice session or a Call Simulation session, not both.",
         )
 
     if payload.practice_session_id:
@@ -493,11 +547,11 @@ def _resolve_coaching_log_source(
             .first()
         )
         if not sim_session:
-            raise HTTPException(status_code=404, detail="Sim Floor session not found")
+            raise HTTPException(status_code=404, detail="Call Simulation session not found")
         if sim_session.trainee_id != trainee_id:
             raise HTTPException(
                 status_code=400,
-                detail="Sim Floor session does not belong to the selected trainee",
+                detail="Call Simulation session does not belong to the selected trainee",
             )
         return None, sim_session, "sim_floor_session"
 
@@ -516,18 +570,18 @@ def _purge_orphaned_coaching_logs(
     logs = query.all()
     practice_ids = {log.practice_session_id for log in logs if log.practice_session_id}
     sim_session_ids = {log.sim_session_id for log in logs if log.sim_session_id}
-    valid_practice_ids = {
-        session_id
-        for session_id, in (
-            db.query(PracticeSession.id)
+    practice_lookup = {
+        session.id: session
+        for session in (
+            db.query(PracticeSession)
             .filter(PracticeSession.id.in_(list(practice_ids or ["__none__"])))
             .all()
         )
     }
-    valid_sim_session_ids = {
-        session_id
-        for session_id, in (
-            db.query(SimSession.id)
+    sim_session_lookup = {
+        session.id: session
+        for session in (
+            db.query(SimSession)
             .filter(SimSession.id.in_(list(sim_session_ids or ["__none__"])))
             .all()
         )
@@ -535,11 +589,16 @@ def _purge_orphaned_coaching_logs(
 
     deleted_count = 0
     for log in logs:
-        if log.practice_session_id and log.practice_session_id not in valid_practice_ids:
+        if log.practice_session_id and not _practice_session_has_active_trainer_source(
+            practice_lookup.get(log.practice_session_id)
+        ):
             db.delete(log)
             deleted_count += 1
             continue
-        if log.sim_session_id and log.sim_session_id not in valid_sim_session_ids:
+        if log.sim_session_id and not _sim_session_has_active_trainer_source(
+            db,
+            sim_session_lookup.get(log.sim_session_id),
+        ):
             db.delete(log)
             deleted_count += 1
             continue
@@ -579,7 +638,7 @@ def _get_trainer_scope(
 
     batches = (
         db.query(Batch)
-        .filter(Batch.created_by == current_user.id)
+        .filter(Batch.created_by == current_user.id, Batch.is_active == True)
         .order_by(Batch.wave_number.is_(None), Batch.wave_number.asc(), Batch.name.asc())
         .all()
     )
@@ -589,7 +648,7 @@ def _get_trainer_scope(
 
     for batch in batches:
         for user in batch.users:
-            if user.role != UserRole.TRAINEE:
+            if user.role != UserRole.TRAINEE or not user.is_active:
                 continue
             trainee_ids.add(user.id)
             trainee_batch.setdefault(user.id, batch)
@@ -647,7 +706,9 @@ def _ensure_mcq_assessment_access(
         return
 
     if current_user.role == UserRole.TRAINEE:
-        batch_ids = {batch.id for batch in current_user.batches}
+        batch_ids = {
+            batch.id for batch in current_user.batches if getattr(batch, "is_active", True)
+        }
         if assessment.assigned_user_id == current_user.id:
             return
         if assessment.assigned_batch_id and assessment.assigned_batch_id in batch_ids:
@@ -730,27 +791,11 @@ def _sync_certificates_for_assessment_targets(
     db: Session,
     assessments: List[MCQAssessment],
 ) -> None:
-    trainee_ids = {
-        assessment.assigned_user_id
-        for assessment in assessments
-        if assessment.assigned_user_id
-    }
-    batch_ids = {
-        assessment.assigned_batch_id
-        for assessment in assessments
-        if assessment.assigned_batch_id
-    }
+    trainee_ids: set[str] = set()
+    for assessment in assessments:
+        trainee_ids.update(_get_mcq_assessment_target_trainee_ids(db, assessment))
 
-    if batch_ids:
-        batches = db.query(Batch).filter(Batch.id.in_(list(batch_ids))).all()
-        for batch in batches:
-            trainee_ids.update(
-                user.id
-                for user in batch.users
-                if user.role == UserRole.TRAINEE and getattr(user, "is_active", True)
-            )
-
-    for trainee_id in sorted(filter(None, trainee_ids)):
+    for trainee_id in sorted(trainee_ids):
         sync_trainee_completion_certificates(db, trainee_id)
 
 
@@ -1561,9 +1606,12 @@ async def delete_mcq_assignment(
     if assessment.assigned_by != current_user.id:
         raise HTTPException(status_code=403, detail="Not allowed to delete this assigned assessment")
 
+    impacted_trainee_ids = sorted(_get_mcq_assessment_target_trainee_ids(db, assessment))
     assessment.is_active = False
     assessment.updated_at = datetime.utcnow()
     db.commit()
+    for trainee_id in impacted_trainee_ids:
+        sync_trainee_completion_certificates(db, trainee_id)
     return {"status": "deleted", "assessment_id": assessment_id}
 
 
@@ -1592,15 +1640,10 @@ async def seed_language_assessment_mcq_samples(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINER])
-    summary = ensure_trainer_language_assessment_samples(
-        db,
-        trainer_id=current_user.id,
+    raise HTTPException(
+        status_code=410,
+        detail="Sample MCQ programs are disabled. Create question banks and assessments from live database records instead.",
     )
-    db.commit()
-    return {
-        "status": "seeded",
-        **summary,
-    }
 
 
 @router.post("/mcq/samples/kpi-program")
@@ -1609,18 +1652,10 @@ async def seed_kpi_assessment_program(
     db: Session = Depends(get_db),
 ):
     _ensure_role(current_user, [UserRole.TRAINER])
-    trainer_scope = _get_trainer_scope(db, current_user=current_user)
-    target_batch = _find_preferred_wave_one_batch(trainer_scope["batches"])
-    summary = ensure_trainer_kpi_assessment_program(
-        db,
-        trainer_id=current_user.id,
-        target_batch=target_batch,
+    raise HTTPException(
+        status_code=410,
+        detail="Sample MCQ programs are disabled. Create question banks and assessments from live database records instead.",
     )
-    db.commit()
-    return {
-        "status": "seeded",
-        **summary,
-    }
 
 
 @router.get("/mcq/my-assessments")
@@ -1630,7 +1665,7 @@ async def list_my_mcq_assessments(
 ):
     _ensure_role(current_user, [UserRole.TRAINEE])
     sync_trainee_completion_certificates(db, current_user.id)
-    batch_ids = [b.id for b in current_user.batches]
+    batch_ids = [b.id for b in current_user.batches if getattr(b, "is_active", True)]
     assessments = (
         db.query(MCQAssessment)
         .filter(
@@ -2255,21 +2290,44 @@ async def coaching_compliance(
 ):
     _ensure_role(current_user, [UserRole.ADMIN, UserRole.TRAINER])
     _purge_orphaned_coaching_logs(db)
-    query = db.query(CoachingLog)
+
     if current_user.role == UserRole.TRAINER:
         scope = _get_trainer_scope(db, current_user=current_user)
-        trainee_ids = list(scope["trainee_ids"])
-        if not trainee_ids:
-            return {
-                "total_logs": 0,
-                "acknowledged_logs": 0,
-                "pending_logs": 0,
-                "draft_logs": 0,
-                "competent_logs": 0,
-                "not_competent_logs": 0,
-                "acknowledgment_rate": 0,
-            }
-        query = query.filter(CoachingLog.trainee_id.in_(trainee_ids))
+        candidate_trainee_ids = list(scope["trainee_ids"])
+    else:
+        candidate_trainee_ids = [
+            trainee_id
+            for (trainee_id,) in db.query(User.id)
+            .filter(User.role == UserRole.TRAINEE, User.is_active == True)
+            .all()
+        ]
+
+    candidate_trainees = (
+        db.query(User)
+        .filter(
+            User.id.in_(candidate_trainee_ids or ["__none__"]),
+            User.role == UserRole.TRAINEE,
+            User.is_active == True,
+        )
+        .all()
+    )
+    active_trainee_ids = [
+        trainee.id for trainee in filter_to_supabase_active_users(db, candidate_trainees)
+    ]
+    if not active_trainee_ids:
+        return {
+            "total_logs": 0,
+            "acknowledged_logs": 0,
+            "pending_logs": 0,
+            "draft_logs": 0,
+            "competent_logs": 0,
+            "not_competent_logs": 0,
+            "acknowledgment_rate": 0,
+        }
+
+    query = db.query(CoachingLog).filter(CoachingLog.trainee_id.in_(active_trainee_ids))
+    if current_user.role == UserRole.TRAINER:
+        query = query.filter(CoachingLog.trainee_id.in_(active_trainee_ids))
 
     total = query.count()
     acknowledged = query.filter(CoachingLog.status == "acknowledged").count()
@@ -2311,13 +2369,23 @@ async def coaching_hub(
         accessible_trainee_ids = set(scope["trainee_ids"])
         trainee_batch = scope["trainee_batch"]
     else:
-        batches = db.query(Batch).order_by(Batch.wave_number.is_(None), Batch.wave_number.asc(), Batch.name.asc()).all()
+        batches = (
+            db.query(Batch)
+            .filter(Batch.is_active == True)
+            .order_by(Batch.wave_number.is_(None), Batch.wave_number.asc(), Batch.name.asc())
+            .all()
+        )
         batch_lookup = {batch.id: batch for batch in batches}
-        trainees = db.query(User).filter(User.role == UserRole.TRAINEE).all()
+        trainees = (
+            db.query(User)
+            .filter(User.role == UserRole.TRAINEE, User.is_active == True)
+            .all()
+        )
         accessible_trainee_ids = {trainee.id for trainee in trainees}
         for trainee in trainees:
-            if trainee.batches:
-                trainee_batch[trainee.id] = trainee.batches[0]
+            active_batch = next((batch for batch in trainee.batches if batch.id in batch_lookup), None)
+            if active_batch:
+                trainee_batch[trainee.id] = active_batch
 
         if trainer_id:
             trainer_batches = [batch for batch in batches if batch.created_by == trainer_id]
@@ -2326,14 +2394,14 @@ async def coaching_hub(
                 user.id
                 for batch in trainer_batches
                 for user in batch.users
-                if user.role == UserRole.TRAINEE
+                if user.role == UserRole.TRAINEE and user.is_active
             }
             accessible_trainee_ids = trainer_trainee_ids
             batch_lookup = trainer_batch_lookup
             trainee_batch = {}
             for batch in trainer_batches:
                 for user in batch.users:
-                    if user.role == UserRole.TRAINEE:
+                    if user.role == UserRole.TRAINEE and user.is_active:
                         trainee_batch[user.id] = batch
             batches = trainer_batches
 
@@ -2342,7 +2410,7 @@ async def coaching_hub(
         if not batch:
             raise HTTPException(status_code=404, detail="Batch not found")
         accessible_trainee_ids = {
-            user.id for user in batch.users if user.role == UserRole.TRAINEE
+            user.id for user in batch.users if user.role == UserRole.TRAINEE and user.is_active
         }
         trainee_batch = {trainee_id_value: batch for trainee_id_value in accessible_trainee_ids}
 
@@ -2350,6 +2418,36 @@ async def coaching_hub(
         if current_user.role == UserRole.TRAINER and trainee_id not in accessible_trainee_ids:
             raise HTTPException(status_code=403, detail="This trainee is not assigned to one of your batches.")
         accessible_trainee_ids = {trainee_id}
+
+    candidate_trainee_records = (
+        db.query(User)
+        .filter(
+            User.id.in_(list(accessible_trainee_ids) or ["__none__"]),
+            User.role == UserRole.TRAINEE,
+            User.is_active == True,
+        )
+        .all()
+    )
+    trainee_records = sorted(
+        filter_to_supabase_active_users(db, candidate_trainee_records),
+        key=lambda trainee: ((trainee.full_name or "").lower(), (trainee.email or "").lower()),
+    )
+    accessible_trainee_ids = {trainee.id for trainee in trainee_records}
+    trainee_batch = {
+        trainee_id_value: batch
+        for trainee_id_value, batch in trainee_batch.items()
+        if trainee_id_value in accessible_trainee_ids
+    }
+    batches = [
+        batch
+        for batch in batches
+        if any(
+            user.id in accessible_trainee_ids
+            for user in batch.users
+            if user.role == UserRole.TRAINEE and user.is_active
+        )
+    ]
+    batch_lookup = {batch.id: batch for batch in batches}
 
     if not accessible_trainee_ids:
         return {
@@ -2366,13 +2464,6 @@ async def coaching_hub(
             "completed_categories": [],
             "recent_logs": [],
         }
-
-    trainee_records = (
-        db.query(User)
-        .filter(User.id.in_(list(accessible_trainee_ids)))
-        .order_by(User.full_name.asc(), User.email.asc())
-        .all()
-    )
 
     completed_sim_sessions = (
         db.query(SimSession)
@@ -2666,11 +2757,8 @@ async def list_certificates(
     target_trainee_id = trainee_id
     if current_user.role == UserRole.TRAINEE:
         target_trainee_id = current_user.id
-
     if target_trainee_id:
         sync_trainee_completion_certificates(db, target_trainee_id)
-        prune_trainee_activity_certificates(db, target_trainee_id)
-        db.commit()
 
     query = db.query(CertificateRecord)
     if current_user.role == UserRole.TRAINEE:

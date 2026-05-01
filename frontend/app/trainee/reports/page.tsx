@@ -19,7 +19,7 @@ export default function TraineeReportsPage() {
             <CardHeader>
               <CardTitle>Trainee Reports</CardTitle>
               <CardDescription>
-                Reports now show only the tracked database-backed categories: microlearning, Sim Floor, assessments,
+                Reports now show only the tracked database-backed categories: microlearning, Call Simulation, assessments,
                 and coaching. Certificates stay in the separate Certificates navigation.
               </CardDescription>
             </CardHeader>
@@ -33,7 +33,7 @@ export default function TraineeReportsPage() {
               user_role: user.user_role,
             }}
             title="Reports Overview"
-            description="Review your microlearning, Sim Floor, assessment, and coaching analytics from the connected database."
+            description="Review your microlearning, Call Simulation, assessment, and coaching analytics from the connected database."
             summaryTitle="Reports Snapshot"
             summaryDescription="Only the tracked report categories are shown here so the reports page matches your actual training records."
           />

@@ -1,5 +1,5 @@
 """
-Seed the active database with the default BPO microlearning pack only.
+Legacy entry point for the retired default BPO microlearning seed pack.
 
 Run with the desired DATABASE_URL already loaded. In this repo, that means:
 - local SQLite for local verification
@@ -123,32 +123,10 @@ def _resolve_target_trainer(db):
 
 
 def seed():
-    Base.metadata.create_all(bind=engine)
-    _ensure_certification_schema()
-    _ensure_microlearning_schema()
-
-    db = SessionLocal()
-    try:
-        trainer, trainer_created = _resolve_target_trainer(db)
-        summary = seed_bpo_microlearning_library(db, trainer_id=trainer.id)
-        db.commit()
-
-        result = {
-            "trainer_id": trainer.id,
-            "trainer_email": trainer.email,
-            "trainer_created": trainer_created,
-            **summary,
-        }
-
-        print("Microlearning seed completed.")
-        for key, value in result.items():
-            print(f"{key}: {value}")
-        return result
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    raise RuntimeError(
+        "The default microlearning seed pack has been retired. "
+        "Create categories and modules from the trainer microlearning studio instead."
+    )
 
 
 if __name__ == "__main__":

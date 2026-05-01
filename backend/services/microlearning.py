@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -23,6 +25,11 @@ def _enum_value(value: Any) -> Any:
     return value.value if hasattr(value, "value") else value
 
 
+def _feedback_category_value(value: Any) -> str:
+    normalized = str(_enum_value(value) or "").strip().lower()
+    return normalized or FeedbackType.PRONUNCIATION.value
+
+
 def _slug(value: str) -> str:
     return "-".join((value or "").strip().lower().split())
 
@@ -41,6 +48,43 @@ def _format_batch_label(batch: Any) -> Optional[str]:
     if wave_number is not None:
         return f"Wave {wave_number}"
     return None
+
+
+_SPECIAL_RESPONSE_KEYS = {"__meta__"}
+_KEYWORD_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "i",
+    "if",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "this",
+    "to",
+    "we",
+    "will",
+    "with",
+    "you",
+    "your",
+}
 
 
 ASSESSMENT_METHOD_DEFINITIONS: list[dict[str, Any]] = [
@@ -268,7 +312,7 @@ def _generate_category_exercises(
     title: Optional[str] = None,
     skill_focus: Optional[str] = None,
 ) -> list[dict[str, Any]]:
-    category_value = _enum_value(category) or FeedbackType.PRONUNCIATION.value
+    category_value = _feedback_category_value(category)
     focus = skill_focus or title or "customer communication"
 
     templates: dict[str, list[dict[str, Any]]] = {
@@ -707,7 +751,7 @@ def ensure_assessment_method_examples(
 
             if module:
                 module.description = example["description"]
-                module.category = example["category"]
+                module.category = example["category"].name
                 module.duration_minutes = example["duration_minutes"]
                 module.skill_focus = example.get("skill_focus")
                 module.content_url = example.get("content_url")
@@ -720,7 +764,7 @@ def ensure_assessment_method_examples(
                 module = MicrolearningModule(
                     title=example["title"],
                     description=example["description"],
-                    category=example["category"],
+                    category=example["category"].name,
                     duration_minutes=example["duration_minutes"],
                     skill_focus=example.get("skill_focus"),
                     content_url=example.get("content_url"),
@@ -766,12 +810,117 @@ def serialize_assessment_method(
     }
 
 
-def _assignment_average_score(assignment: MicrolearningAssignment) -> float:
+def _response_entries(assignment: MicrolearningAssignment) -> list[tuple[str, dict[str, Any]]]:
     responses = dict(assignment.responses or {})
+    entries: list[tuple[str, dict[str, Any]]] = []
+    for exercise_id, attempt in responses.items():
+        if exercise_id in _SPECIAL_RESPONSE_KEYS:
+            continue
+        if isinstance(attempt, dict):
+            entries.append((exercise_id, attempt))
+    return entries
+
+
+def _assignment_meta(assignment: MicrolearningAssignment) -> dict[str, Any]:
+    responses = dict(assignment.responses or {})
+    meta = responses.get("__meta__")
+    return dict(meta) if isinstance(meta, dict) else {}
+
+
+def _set_assignment_meta(assignment: MicrolearningAssignment, **updates: Any) -> None:
+    responses = dict(assignment.responses or {})
+    meta = _assignment_meta(assignment)
+    meta.update(updates)
+    responses["__meta__"] = meta
+    assignment.responses = responses
+
+
+def _get_retake_count(assignment: MicrolearningAssignment) -> int:
+    try:
+        return int(_assignment_meta(assignment).get("retake_count") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _current_attempt_number(assignment: MicrolearningAssignment) -> int:
+    return _get_retake_count(assignment) + 1
+
+
+def _normalize_exact_text(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _tokenize_text(value: Optional[str]) -> list[str]:
+    tokens = re.findall(r"[A-Za-z0-9']+", str(value or "").lower())
+    return [
+        token
+        for token in tokens
+        if len(token) > 2 and token not in _KEYWORD_STOP_WORDS
+    ]
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _derive_required_keywords(exercise: dict[str, Any]) -> list[str]:
+    explicit_keywords = [
+        str(keyword or "").strip().lower()
+        for keyword in (exercise.get("required_keywords") or [])
+        if str(keyword or "").strip()
+    ]
+    if explicit_keywords:
+        return _dedupe_preserving_order(explicit_keywords)
+
+    sample_answer = (exercise.get("sample_answer") or "").strip()
+    if not sample_answer:
+        return []
+
+    return _dedupe_preserving_order(_tokenize_text(sample_answer))[:6]
+
+
+def _exercise_options_for_current_attempt(
+    assignment: MicrolearningAssignment,
+    exercise: dict[str, Any],
+) -> list[str]:
+    options = [str(option or "") for option in (exercise.get("options") or []) if str(option or "").strip()]
+    if len(options) < 2:
+        return options
+
+    shuffler = random.Random(
+        f"{assignment.id}:{_current_attempt_number(assignment)}:{exercise.get('id') or exercise.get('title')}"
+    )
+    shuffled = list(options)
+    shuffler.shuffle(shuffled)
+    return shuffled
+
+
+def reset_assignment_for_retake(assignment: MicrolearningAssignment) -> None:
+    next_retake_count = _get_retake_count(assignment) + 1
+    assignment.responses = {
+        "__meta__": {
+            "retake_count": next_retake_count,
+            "reset_at": datetime.utcnow().isoformat(),
+        }
+    }
+    assignment.status = "assigned"
+    assignment.completion_percentage = 0.0
+    assignment.completed_exercises = 0
+    assignment.started_at = None
+    assignment.completed_at = None
+
+
+def _assignment_average_score(assignment: MicrolearningAssignment) -> float:
     completed_scores = [
         float(attempt.get("score") or 0.0)
-        for attempt in responses.values()
-        if isinstance(attempt, dict) and attempt.get("is_completed")
+        for _, attempt in _response_entries(assignment)
+        if attempt.get("is_completed")
     ]
     if not completed_scores:
         return 0.0
@@ -799,13 +948,18 @@ def serialize_microlearning_module(
         "id": module.id,
         "title": module.title,
         "description": module.description,
-        "category": _enum_value(module.category),
+        "category": _feedback_category_value(module.category),
         "module_type": normalize_module_type(getattr(module, "type", None)),
         "duration_minutes": module.duration_minutes,
         "passing_score": int(getattr(module, "passing_score", 0) or 0),
         "skill_focus": module.skill_focus,
-        "content_url": module.content_url,
+        "content_url": module.content_url or module.audio_url,
         "content_data": module.content_data or {},
+        "audio_url": module.audio_url,
+        "audio_transcript": module.audio_transcript,
+        "audio_tts_url": module.audio_tts_url,
+        "audio_duration_seconds": module.audio_duration_seconds,
+        "audio_language": module.audio_language,
         "difficulty": _enum_value(module.difficulty),
         "topic_category_id": getattr(topic_category, "id", None) or module.topic_category_id,
         "topic_category_name": getattr(topic_category, "name", None),
@@ -824,41 +978,38 @@ def serialize_microlearning_module(
 
 
 def ensure_module_exercises(module: Optional[MicrolearningModule]) -> bool:
-    if not module or module.exercises:
+    if not module:
         return False
 
-    assessment_method_slug = getattr(getattr(module, "assessment_method", None), "slug", None)
-    generated_exercises = build_type_specific_exercises(
-        getattr(module, "type", None),
-        getattr(module, "content_data", None),
+    if module.exercises:
+        return False
+
+    module.exercises = build_type_specific_exercises(
+        normalize_module_type(getattr(module, "type", None)),
+        module.content_data or {},
         title=module.title,
         skill_focus=module.skill_focus,
     )
-    module.exercises = generated_exercises or generate_default_exercises(
-        module.category,
-        title=module.title,
-        skill_focus=module.skill_focus,
-        assessment_method_slug=assessment_method_slug,
-    )
-    return True
+    return bool(module.exercises)
 
 
 def refresh_assignment_progress(assignment: MicrolearningAssignment) -> None:
     exercises = (assignment.module.exercises or []) if assignment.module else []
-    responses = dict(assignment.responses or {})
     total_exercises = len(exercises)
     completed_exercises = sum(
-        1 for attempt in responses.values() if isinstance(attempt, dict) and attempt.get("is_completed")
+        1 for _, attempt in _response_entries(assignment) if attempt.get("is_completed")
     )
+
+    if completed_exercises > 0 and assignment.started_at is None:
+        assignment.started_at = datetime.utcnow()
 
     assignment.completed_exercises = completed_exercises
     assignment.completion_percentage = (
         round((completed_exercises / total_exercises) * 100, 2) if total_exercises else 0.0
     )
-    is_passed = _assignment_is_passed(assignment)
 
     if completed_exercises == 0:
-        assignment.status = "assigned"
+        assignment.status = "in_progress" if assignment.started_at else "assigned"
         assignment.completed_at = None
         return
 
@@ -882,25 +1033,35 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
     certificate = getattr(assignment, "certificate", None)
     average_score = _assignment_average_score(assignment)
     is_passed = _assignment_is_passed(assignment)
+    retake_count = _get_retake_count(assignment)
+    can_retake = (
+        assignment.status in {"completed", "certified"}
+        and not is_passed
+        and not assignment.certificate_id
+    )
     return {
         "id": assignment.id,
         "module_id": assignment.module_id,
         "title": module.title if module else None,
         "description": module.description if module else None,
-        "category": _enum_value(module.category) if module else None,
+        "category": _feedback_category_value(module.category) if module else None,
         "module_type": normalize_module_type(getattr(module, "type", None)) if module else None,
         "skill_focus": module.skill_focus if module else None,
         "duration_minutes": module.duration_minutes if module else None,
         "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
         "difficulty": _enum_value(module.difficulty) if module else None,
-        "content_url": module.content_url if module else None,
+        "content_url": (module.content_url or module.audio_url) if module else None,
         "status": assignment.status,
         "completion_percentage": float(assignment.completion_percentage or 0.0),
         "average_score": average_score,
         "is_passed": is_passed,
+        "can_retake": can_retake,
+        "retake_count": retake_count,
+        "attempt_number": _current_attempt_number(assignment),
         "exercise_count": len(module.exercises or []) if module else 0,
         "completed_exercises": int(assignment.completed_exercises or 0),
         "assigned_at": assignment.assigned_at,
+        "started_at": assignment.started_at,
         "due_date": assignment.due_date,
         "completed_at": assignment.completed_at,
         "notes": assignment.notes,
@@ -911,7 +1072,7 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
         "user_id": assignment.trainee_id,
         "trainee_name": getattr(trainee, "full_name", None),
         "module_title": module.title if module else None,
-        "module_category": _enum_value(module.category) if module else None,
+        "module_category": _feedback_category_value(module.category) if module else None,
         "topic_category_id": getattr(topic_category, "id", None) or getattr(module, "topic_category_id", None),
         "topic_category_name": getattr(topic_category, "name", None),
         "topic_category_slug": getattr(topic_category, "slug", None),
@@ -935,18 +1096,28 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
 
     for exercise in ((module.exercises or []) if module else []):
         attempt = responses.get(exercise.get("id"))
+        exercise_type = exercise.get("type")
         exercises.append(
             {
                 "id": exercise.get("id"),
                 "title": exercise.get("title"),
-                "type": exercise.get("type"),
+                "type": exercise_type,
                 "prompt": exercise.get("prompt"),
-                "options": exercise.get("options") or [],
+                "options": _exercise_options_for_current_attempt(assignment, exercise)
+                if exercise_type == "multiple_choice"
+                else (exercise.get("options") or []),
                 "required_keywords": exercise.get("required_keywords") or [],
                 "tips": exercise.get("tips") or [],
                 "explanation": exercise.get("explanation"),
                 "option_feedback": exercise.get("option_feedback") or {},
                 "sample_answer": exercise.get("sample_answer"),
+                "front": exercise.get("front"),
+                "back": exercise.get("back"),
+                "preview_seconds": exercise.get("preview_seconds"),
+                "blank_seconds": exercise.get("blank_seconds"),
+                "answer_time_limit_seconds": exercise.get("answer_time_limit_seconds"),
+                "enable_stt": bool(exercise.get("enable_stt")),
+                "timestamp": exercise.get("timestamp"),
                 "attempt": attempt,
             }
         )
@@ -956,9 +1127,18 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
         "module": {
             "id": module.id if module else None,
             "module_type": normalize_module_type(getattr(module, "type", None)) if module else None,
+            "category": _feedback_category_value(module.category) if module else None,
             "content_data": module.content_data or {} if module else {},
             "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
-            "content_url": module.content_url if module else None,
+            "content_url": (module.content_url or module.audio_url) if module else None,
+            "audio_url": module.audio_url if module else None,
+            "audio_transcript": module.audio_transcript if module else None,
+            "audio_tts_url": module.audio_tts_url if module else None,
+            "audio_duration_seconds": module.audio_duration_seconds if module else None,
+            "audio_language": module.audio_language if module else None,
+            "captions_url": (
+                ((module.content_data or {}).get("captions_url")) if module else None
+            ),
         },
         "exercises": exercises,
     }
@@ -970,6 +1150,7 @@ def evaluate_exercise_submission(
     response_text: Optional[str],
     selected_option: Optional[str],
     input_mode: Optional[str] = None,
+    revealed_side: Optional[str] = None,
 ) -> dict[str, Any]:
     exercise_type = (exercise.get("type") or "").strip().lower()
     normalized_text = (response_text or "").strip()
@@ -995,31 +1176,73 @@ def evaluate_exercise_submission(
             "submitted_at": datetime.utcnow().isoformat(),
         }
 
-    required_keywords = [
-        keyword.strip().lower()
-        for keyword in (exercise.get("required_keywords") or [])
-        if keyword and keyword.strip()
-    ]
+    if exercise_type == "flashcard_recall":
+        revealed = (revealed_side or "").strip().lower()
+        front = (exercise.get("front") or "").strip()
+        back = (exercise.get("back") or "").strip()
+        expected_answer = front if revealed == "front" else back if revealed == "back" else ""
+        is_correct = bool(expected_answer) and _normalize_exact_text(normalized_text) == _normalize_exact_text(expected_answer)
+        feedback = (
+            "Correct. You recalled the selected side exactly."
+            if is_correct
+            else "Not yet. Review both sides again, then type the selected side exactly to continue."
+        )
+        return {
+            "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
+            "response_text": response_text,
+            "selected_option": selected_option,
+            "input_mode": input_mode or "typed",
+            "revealed_side": revealed or None,
+            "score": 100.0 if is_correct else 0.0,
+            "feedback": feedback,
+            "expected_answer_length": len(expected_answer),
+            "is_completed": is_correct,
+            "submitted_at": datetime.utcnow().isoformat(),
+        }
+
+    required_keywords = _derive_required_keywords(exercise)
     response_lower = normalized_text.lower()
     matched_keywords = [keyword for keyword in required_keywords if keyword in response_lower]
-    score = (
+    missing_keywords = [keyword for keyword in required_keywords if keyword not in matched_keywords]
+    keyword_score = (
         round((len(matched_keywords) / len(required_keywords)) * 100, 2)
         if required_keywords
-        else (100.0 if normalized_text else 0.0)
+        else 0.0
     )
-    missing_keywords = [keyword for keyword in required_keywords if keyword not in matched_keywords]
 
-    if required_keywords:
+    sample_answer = (exercise.get("sample_answer") or "").strip()
+    response_tokens = set(_tokenize_text(normalized_text))
+    sample_tokens = set(_tokenize_text(sample_answer))
+    similarity_score = (
+        round((len(response_tokens & sample_tokens) / len(sample_tokens)) * 100, 2)
+        if sample_tokens
+        else 0.0
+    )
+
+    if required_keywords and sample_tokens:
+        score = round(keyword_score * 0.7 + similarity_score * 0.3, 2)
+    elif required_keywords:
+        score = keyword_score
+    elif sample_tokens:
+        score = similarity_score
+    else:
+        score = 100.0 if normalized_text else 0.0
+
+    if required_keywords or sample_tokens:
         if missing_keywords:
             feedback = (
-                "Matched keywords: "
+                "Matched trainer expectations: "
                 + ", ".join(matched_keywords or ["none"])
-                + ". Missing: "
+                + ". Missing focus terms: "
                 + ", ".join(missing_keywords)
                 + "."
             )
+        elif score >= 85:
+            feedback = "Strong response. Your answer closely matches the trainer's expected answer."
+        elif score >= 60:
+            feedback = "Partially correct. Review the trainer sample answer and include the missing key ideas next time."
         else:
-            feedback = "Great job. You used all of the target keywords."
+            feedback = "Your answer needs more of the trainer's key points. Review the sample answer and try again if needed."
     else:
         feedback = "Response saved successfully."
 
@@ -1032,6 +1255,7 @@ def evaluate_exercise_submission(
         "missing_keywords": missing_keywords,
         "score": score,
         "feedback": feedback,
+        "sample_similarity": similarity_score,
         "is_completed": bool(normalized_text),
         "submitted_at": datetime.utcnow().isoformat(),
     }

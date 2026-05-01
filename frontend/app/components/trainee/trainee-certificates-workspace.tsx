@@ -1,18 +1,18 @@
 'use client';
 
+import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
+import { Award, ExternalLink, FileDown, GraduationCap, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Award, ExternalLink, FileDown, GraduationCap, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 
 import CertificatePreview, {
-  type CertificatePreviewData,
-  type CertificateSettingsView,
+    type CertificatePreviewData,
+    type CertificateSettingsView,
 } from '@/app/components/shared/certificate-preview';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { useAuth } from '@/app/context/AuthContext';
-import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-client';
 
 type TraineeCertificateRecord = CertificatePreviewData & {
   source_type?: string | null;
@@ -201,7 +201,7 @@ export default function TraineeCertificatesWorkspace() {
 
     let stream: EventSource | null = null;
     try {
-      stream = openSimFloorRealtimeStream();
+      stream = openCallSimulationRealtimeStream();
       stream.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as { type?: string };
@@ -263,7 +263,7 @@ export default function TraineeCertificatesWorkspace() {
         <div>
           <h2 className="text-3xl font-bold text-foreground">My Certificates</h2>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Every certificate earned from completed microlearning, MCQ assessments, and Sim Floor competency is shown
+            Every certificate earned from completed microlearning, MCQ assessments, and Call Simulation competency is shown
             here from the backend certificate ledger.
           </p>
         </div>
@@ -291,7 +291,7 @@ export default function TraineeCertificatesWorkspace() {
           <CardHeader>
             <CardTitle>No certificates yet</CardTitle>
             <CardDescription>
-              Finish assigned learning activities, pass assessments, or earn a competent Sim Floor verdict to unlock
+              Finish assigned learning activities, pass assessments, or earn a competent Call Simulation verdict to unlock
               certificates automatically.
             </CardDescription>
           </CardHeader>
@@ -300,7 +300,7 @@ export default function TraineeCertificatesWorkspace() {
               <Link href="/trainee/microlearning">Open Microlearning</Link>
             </Button>
             <Button asChild variant="outline">
-              <Link href="/trainee/sim-floor">Open Sim Floor</Link>
+              <Link href="/trainee/call-simulation">Open Call Simulation</Link>
             </Button>
             <Button asChild variant="ghost">
               <Link href="/trainee/reports">View Reports</Link>
@@ -344,7 +344,7 @@ export default function TraineeCertificatesWorkspace() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Sim Floor</CardTitle>
+                <CardTitle className="text-sm font-medium text-muted-foreground">Call Simulation</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="flex items-center gap-2 text-3xl font-bold">

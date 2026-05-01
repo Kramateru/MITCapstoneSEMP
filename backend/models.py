@@ -10,7 +10,7 @@ from enum import Enum
 
 from sqlalchemy import JSON, Boolean, Column, Date, DateTime
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy import Float, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import Float, ForeignKey, Integer, LargeBinary, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -239,7 +239,7 @@ class Scenario(Base):
     estimated_duration = Column(Integer)  # seconds
     member_profile = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     cxone_metadata = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
-    sim_floor_config = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    call_simulation_config = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     ringer_audio_url = Column(String(500))
     hold_audio_url = Column(String(500))
 
@@ -563,15 +563,23 @@ class MicrolearningModule(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     title = Column(String(255), nullable=False)
     description = Column(Text)
-    category = Column(SQLEnum(FeedbackType))
+    category = Column(String(50), nullable=False, default="video")  # Video, Quiz, Flashcard, Infographic, Case Study, Audio
 
     # Content
-    type = Column(String(50), nullable=False, default="video")  # video, quiz, flashcard, infographic, case_study
+    type = Column(String(50), nullable=False, default="video")  # video, quiz, flashcard, infographic, case_study, audio
     duration_minutes = Column(Integer, default=3)
     content_data = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)  # JSON payload for type-specific content
     passing_score = Column(Integer, default=75)
     skill_focus = Column(String(100))  # e.g., "Breathing & Pacing", "Empathy"
     content_url = Column(String(500), nullable=True)  # Link to video/audio/image
+    
+    # Audio-specific fields for speech-enabled content
+    audio_url = Column(String(500), nullable=True)  # Original uploaded audio file URL (MP3)
+    audio_transcript = Column(Text, nullable=True)  # Speech-to-text transcription of the audio
+    audio_tts_url = Column(String(500), nullable=True)  # Text-to-speech generated audio (for accessibility)
+    audio_duration_seconds = Column(Integer, nullable=True)  # Duration of the audio in seconds
+    audio_language = Column(String(10), default="en-US")  # Language code for speech processing
+    
     exercises = Column(JSONB().with_variant(JSON, "sqlite"), default=list)  # List of practice exercises
 
     # Difficulty
@@ -597,7 +605,27 @@ class MicrolearningModule(Base):
     topic_category = relationship(
         "MicrolearningTopicCategory", back_populates="modules"
     )
-    assignments = relationship("MicrolearningAssignment", back_populates="module")
+    assignments = relationship(
+        "MicrolearningAssignment",
+        back_populates="module",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class MicrolearningUploadedAsset(Base):
+    """Trainer-uploaded binary asset stored in Supabase Postgres for playback."""
+
+    __tablename__ = "microlearning_uploaded_asset"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trainer_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    content_type = Column(String(120), nullable=False, default="application/octet-stream")
+    byte_size = Column(Integer, nullable=False, default=0)
+    file_bytes = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MicrolearningAssignment(Base):
@@ -607,7 +635,7 @@ class MicrolearningAssignment(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     module_id = Column(
-        String(36), ForeignKey("microlearning_module.id"), nullable=False
+        String(36), ForeignKey("microlearning_module.id", ondelete="CASCADE"), nullable=False
     )
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
@@ -618,6 +646,7 @@ class MicrolearningAssignment(Base):
     status = Column(String(20), default="assigned")  # assigned, in_progress, completed
     completion_percentage = Column(Float, default=0.0)
     completed_exercises = Column(Integer, default=0)
+    started_at = Column(DateTime, nullable=True)
     completed_at = Column(DateTime, nullable=True)
     responses = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     assigned_at = Column(DateTime, default=datetime.utcnow)
@@ -919,7 +948,7 @@ class CertificateRecord(Base):
     issued_at = Column(DateTime, default=datetime.utcnow)
 
 
-# ==================== Sim Floor Models ====================
+# ==================== Call Simulation Models ====================
 
 
 class ScenarioVariation(Base):
@@ -931,7 +960,7 @@ class ScenarioVariation(Base):
     scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
     actor_name = Column(String(100), nullable=False)
     script = Column(Text, nullable=False)
-    score = Column(Float, default=0.0)  # 0-5 scale
+    score = Column(Float, default=0.0)  # Trainer-defined scenario points
     branching_logic = Column(Text)  # JSON string for conditional branching
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -941,7 +970,7 @@ class ScenarioVariation(Base):
 
 
 class BatchScenarioMapping(Base):
-    """Maps scenarios to batches for Sim Floor access control."""
+    """Maps scenarios to batches for Call Simulation access control."""
 
     __tablename__ = "batch_scenario_mapping"
 
@@ -960,10 +989,10 @@ class BatchScenarioMapping(Base):
     )
 
 
-class SimFloorAssignment(Base):
-    """Trainer-issued Sim Floor assignment row for a trainee."""
+class CallSimulationAssignment(Base):
+    """Trainer-issued Call Simulation assignment row for a trainee."""
 
-    __tablename__ = "sim_floor_assignment"
+    __tablename__ = "call_simulation_assignment"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
@@ -975,18 +1004,18 @@ class SimFloorAssignment(Base):
     assigned_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    scenario = relationship("Scenario", backref="sim_floor_assignments")
+    scenario = relationship("Scenario", backref="call_simulation_assignments")
     trainee = relationship("User", foreign_keys=[trainee_id])
     trainer = relationship("User", foreign_keys=[assigned_by])
     batch = relationship("Batch")
 
     __table_args__ = (
-        UniqueConstraint("scenario_id", "trainee_id", name="uq_sim_floor_assignment"),
+        UniqueConstraint("scenario_id", "trainee_id", name="uq_call_simulation_assignment"),
     )
 
 
 class BatchKPIConfig(Base):
-    """Per-batch KPI weighting configuration for Sim Floor."""
+    """Per-batch KPI weighting configuration for Call Simulation."""
 
     __tablename__ = "batch_kpi_config"
 
@@ -1033,7 +1062,7 @@ class BatchKPIConfig(Base):
 
 
 class SimSession(Base):
-    """Sim Floor simulation session - tracks trainee progress through a scenario."""
+    """Call Simulation simulation session - tracks trainee progress through a scenario."""
 
     __tablename__ = "sim_session"
 
@@ -1117,6 +1146,48 @@ class SimSession(Base):
 
     def __repr__(self):
         return f"<SimSession {self.id} - Trainee: {self.trainee_id} Scenario: {self.scenario_id}>"
+
+
+class SessionResponseRecord(Base):
+    """Per-turn Call Simulation response captured for Supabase-backed review and scoring."""
+
+    __tablename__ = "session_responses"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(String(36), ForeignKey("sim_session.id"), nullable=False)
+    script_id = Column(String(36), ForeignKey("scenario_flow.id"), nullable=True)
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
+    step_number = Column(Integer, nullable=False)
+    turn_attempt_number = Column(Integer, nullable=False, default=1)
+    actor_type = Column(String(20), nullable=False, default="CSR")
+    scenario_group = Column(String(255), nullable=True)
+    expected_script = Column(Text, nullable=True)
+    trainee_spoken_text = Column(Text, nullable=True)
+    matched_score = Column(Float, default=0.0)
+    grammar_score = Column(Float, default=0.0)
+    pronunciation_score = Column(Float, default=0.0)
+    pacing_score = Column(Float, default=0.0)
+    speech_to_text_accuracy = Column(Float, default=0.0)
+    transcript_confidence = Column(Float, default=0.0)
+    audio_url = Column(String(500), nullable=True)
+    ai_feedback = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    session = relationship("SimSession", backref="session_response_records")
+    script = relationship("ScenarioFlow")
+    scenario = relationship("Scenario")
+    trainee = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "step_number",
+            "turn_attempt_number",
+            name="uq_session_response_turn_attempt",
+        ),
+    )
 
 
 # ==================== Assessment Management Models ====================

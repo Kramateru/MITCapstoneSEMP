@@ -11,6 +11,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models import (
+    CallSimulationAssignment,
     CertificateRecord,
     CertificationSettings,
     CompetencyVerdict,
@@ -18,6 +19,7 @@ from ..models import (
     MCQCategory,
     MCQSubmission,
     MicrolearningAssignment,
+    Scenario,
     SimSession,
     User,
     UserRole,
@@ -25,6 +27,7 @@ from ..models import (
 
 SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES = {
     "sim_floor_session",
+    "call_simulation_session",
     "mcq_assessment",
     "mcq_assessment_completion",
     "microlearning_assignment",
@@ -225,11 +228,26 @@ def _microlearning_assignment_average_score(
     return round(sum(scores) / len(scores), 2)
 
 
+def _microlearning_assignment_has_active_source(
+    assignment: MicrolearningAssignment,
+) -> bool:
+    module = getattr(assignment, "module", None)
+    if not module or not bool(getattr(module, "is_active", False)):
+        return False
+
+    topic_category_id = getattr(module, "topic_category_id", None)
+    if not topic_category_id:
+        return True
+
+    topic_category = getattr(module, "topic_category", None)
+    return bool(topic_category and getattr(topic_category, "is_active", False))
+
+
 def _microlearning_assignment_is_passed(
     assignment: MicrolearningAssignment,
 ) -> bool:
     module = getattr(assignment, "module", None)
-    if not module:
+    if not module or not _microlearning_assignment_has_active_source(assignment):
         return False
 
     exercises = list(module.exercises or [])
@@ -257,6 +275,31 @@ def _normalize_certificate_source_type(source_type: Optional[str]) -> Optional[s
     return source_type
 
 
+def _sim_session_has_active_source(
+    db: Session,
+    session: Optional[SimSession],
+) -> bool:
+    if not session:
+        return False
+
+    scenario = getattr(session, "scenario", None)
+    if not scenario:
+        scenario = db.query(Scenario).filter(Scenario.id == session.scenario_id).first()
+    if not scenario or not bool(getattr(scenario, "is_published", False)):
+        return False
+
+    active_assignment = (
+        db.query(CallSimulationAssignment.id)
+        .filter(
+            CallSimulationAssignment.trainee_id == session.trainee_id,
+            CallSimulationAssignment.scenario_id == session.scenario_id,
+            CallSimulationAssignment.is_active == True,
+        )
+        .first()
+    )
+    return bool(active_assignment)
+
+
 def _is_supported_certificate_record(
     db: Session,
     certificate: CertificateRecord,
@@ -265,15 +308,29 @@ def _is_supported_certificate_record(
     if not normalized_source_type or not certificate.source_id:
         return False
 
-    if normalized_source_type == "sim_floor_session":
+    if normalized_source_type in {"sim_floor_session", "call_simulation_session"}:
         session = db.query(SimSession).filter(SimSession.id == certificate.source_id).first()
+        verdict_status = (session.trainer_verdict_status or "").lower() if session else ""
         return bool(
             session
             and session.trainee_id == certificate.trainee_id
-            and (session.trainer_verdict_status or "").lower() == "competent"
+            and _sim_session_has_active_source(db, session)
+            and verdict_status != "retake"
+            and (verdict_status == "competent" or bool(session.pass_fail))
         )
 
     if normalized_source_type == "mcq_assessment":
+        trainee = db.query(User).filter(User.id == certificate.trainee_id).first()
+        if not trainee:
+            return False
+
+        active_assessment_ids = {
+            assessment.id
+            for assessment in _get_active_mcq_assessments_for_trainee(db, trainee)
+        }
+        if certificate.source_id not in active_assessment_ids:
+            return False
+
         submission = (
             db.query(MCQSubmission)
             .filter(
@@ -301,7 +358,11 @@ def _is_supported_certificate_record(
             )
             .first()
         )
-        return bool(assignment and _microlearning_assignment_is_passed(assignment))
+        return bool(
+            assignment
+            and _microlearning_assignment_has_active_source(assignment)
+            and _microlearning_assignment_is_passed(assignment)
+        )
 
     return False
 
@@ -427,7 +488,7 @@ def prune_trainee_activity_certificates(db: Session, trainee_id: str) -> int:
 
         linked_sim_session = None
         linked_assignment = None
-        if normalized_source_type == "sim_floor_session" and certificate.source_id:
+        if normalized_source_type in {"sim_floor_session", "call_simulation_session"} and certificate.source_id:
             linked_sim_session = (
                 db.query(SimSession)
                 .filter(SimSession.id == certificate.source_id)
@@ -473,6 +534,10 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
         .filter(MCQSubmission.trainee_id == trainee_id)
         .all()
     )
+    active_assessment_ids = {
+        assessment.id
+        for assessment in _get_active_mcq_assessments_for_trainee(db, trainee)
+    }
     category_ids = {
         assessment.category_id for _, assessment in submissions if assessment.category_id
     }
@@ -486,6 +551,8 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
     }
     for submission, assessment in submissions:
         if not submission.is_passed:
+            continue
+        if assessment.id not in active_assessment_ids:
             continue
         category = category_lookup.get(assessment.category_id)
         certificate, created = award_certificate(
@@ -516,6 +583,8 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
     )
     did_update_microlearning_assignments = False
     for assignment in microlearning_assignments:
+        if not _microlearning_assignment_has_active_source(assignment):
+            continue
         if not _microlearning_assignment_is_passed(assignment):
             continue
 

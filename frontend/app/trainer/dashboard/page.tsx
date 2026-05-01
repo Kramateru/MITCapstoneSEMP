@@ -3,9 +3,6 @@
 import {
     AlertCircle,
     ArrowRight,
-    BookOpen,
-    ClipboardList,
-    ClipboardCheck,
     FileText,
     Layers3,
     TrendingUp,
@@ -63,6 +60,8 @@ interface BatchSnapshot extends BatchItem {
   average_score: number;
 }
 
+const COACHING_QUEUE_CUTOFF_DATE = '2026-04-20';
+
 function formatDateTime(value?: string | null) {
   if (!value) {
     return 'No activity yet';
@@ -74,6 +73,24 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString();
+}
+
+function isOnOrAfterCoachingQueueCutoff(value?: string | null) {
+  if (!value) {
+    return false;
+  }
+
+  const normalizedDate = value.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
+    return normalizedDate >= COACHING_QUEUE_CUTOFF_DATE;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return false;
+  }
+
+  return parsed >= new Date(`${COACHING_QUEUE_CUTOFF_DATE}T00:00:00`);
 }
 
 function formatBatchLabel(batch: Pick<BatchItem, 'name' | 'wave_number'>) {
@@ -178,16 +195,18 @@ export default function TrainerDashboardPage() {
 
       if (sessionsRes.ok) {
         const sessionsData = await sessionsRes.json();
-        const nextSessions: TrainingSession[] = (sessionsData.sessions || []).map((session: any) => ({
-          id: session.id,
-          user_name: session.user_name || 'Trainee',
-          scenario_title: session.scenario_title || 'Scenario',
-          overall_score: Number(session.overall_score || 0),
-          accuracy: Number(session.accuracy || 0),
-          fluency: Number(session.fluency || 0),
-          is_verified: Boolean(session.is_verified),
-          created_at: session.created_at,
-        }));
+        const nextSessions: TrainingSession[] = (sessionsData.sessions || [])
+          .filter((session: any) => isOnOrAfterCoachingQueueCutoff(session.created_at))
+          .map((session: any) => ({
+            id: session.id,
+            user_name: session.user_name || 'Trainee',
+            scenario_title: session.scenario_title || 'Scenario',
+            overall_score: Number(session.overall_score || 0),
+            accuracy: Number(session.accuracy || 0),
+            fluency: Number(session.fluency || 0),
+            is_verified: Boolean(session.is_verified),
+            created_at: session.created_at,
+          }));
         setSessions(nextSessions);
       }
 
@@ -336,45 +355,12 @@ export default function TrainerDashboardPage() {
     <DashboardLayout sidebarItems={sidebarItems} userRole="trainer">
       <div className="space-y-6">
         <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <h2 className="text-3xl font-bold text-foreground">Trainer Dashboard</h2>
-              <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-                Focus on the batches that need attention, the trainees waiting for coaching, and the outcomes that
-                matter most right now.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Link
-                href="/trainer/coaching"
-                className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition hover:bg-muted"
-              >
-                <ClipboardCheck className="size-4" />
-                Open Coaching
-              </Link>
-              <Link
-                href="/trainer/batches"
-                className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition hover:bg-muted"
-              >
-                <Users className="size-4" />
-                Manage Batches
-              </Link>
-              <Link
-                href="/trainer/courses"
-                className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition hover:bg-muted"
-              >
-                <BookOpen className="size-4" />
-                Microlearning
-              </Link>
-              <Link
-                href="/trainer/assessments"
-                className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm text-foreground transition hover:bg-muted"
-              >
-                <ClipboardList className="size-4" />
-                Assessments
-              </Link>
-            </div>
+          <div>
+            <h2 className="text-3xl font-bold text-foreground">Trainer Dashboard</h2>
+            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+              Focus on the batches that need attention, the trainees waiting for coaching, and the outcomes that
+              matter most right now.
+            </p>
           </div>
         </section>
 

@@ -1,41 +1,41 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
-import { trainerSidebarItems } from '@/app/trainer/nav';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
-import { Button } from '@/app/components/ui/button';
 import { Badge } from '@/app/components/ui/badge';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
+import { Button } from '@/app/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from '@/app/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs';
+import { trainerSidebarItems } from '@/app/trainer/nav';
 import {
-  Activity,
-  Users,
-  TrendingUp,
-  AlertTriangle,
-  BarChart3,
-  Download,
-  RefreshCw,
+    Activity,
+    AlertTriangle,
+    BarChart3,
+    Download,
+    RefreshCw,
+    TrendingUp,
+    Users,
 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
 import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  LineChart,
-  Line,
-  PieChart as RechartsPieChart,
-  Pie,
-  Cell,
+    Bar,
+    BarChart,
+    CartesianGrid,
+    Cell,
+    Line,
+    LineChart,
+    Pie,
+    PieChart as RechartsPieChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
 } from 'recharts';
 
 interface Batch {
@@ -145,7 +145,7 @@ export default function TrainerAnalyticsPage() {
   const fetchLiveAnalytics = useCallback(async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch('/api/sim-floor/analytics/live', {
+      const res = await fetch('/api/call-simulation/analytics/live', {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -160,7 +160,7 @@ export default function TrainerAnalyticsPage() {
   const fetchBatchAnalytics = useCallback(async (batchId: string) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(`/api/sim-floor/analytics/batch/${batchId}`, {
+      const res = await fetch(`/api/call-simulation/analytics/batch/${batchId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {

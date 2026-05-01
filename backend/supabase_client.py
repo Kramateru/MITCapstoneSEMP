@@ -44,8 +44,12 @@ class SupabaseClient:
             or os.getenv("SUPABASE_SERVICE_ROLE")
         )
         self.bucket_name = os.getenv("STORAGE_BUCKET_NAME", "audio-records")
-        self.sim_floor_bucket_name = os.getenv(
-            "SIM_FLOOR_STORAGE_BUCKET_NAME", "sim-floor-audio"
+        self.call_simulation_bucket_name = os.getenv(
+            "CALL_SIMULATION_STORAGE_BUCKET_NAME", "call-simulation-audio"
+        )
+        # New bucket for microlearning audio content
+        self.microlearning_bucket_name = os.getenv(
+            "MICROLEARNING_STORAGE_BUCKET_NAME", "audio-modules"
         )
         self.is_available = False
         self.config_status = "not_configured"
@@ -61,7 +65,7 @@ class SupabaseClient:
                 self.is_available = True
                 self.config_status = "configured"
                 self.status_detail = "Supabase storage client initialized successfully."
-                logger.info("✓ Supabase client initialized successfully")
+                logger.info("Supabase client initialized successfully")
             except Exception as e:
                 self.config_status = "invalid"
                 self.status_detail = f"Supabase client initialization failed: {e}"
@@ -130,11 +134,40 @@ class SupabaseClient:
             # Generate public URL
             public_url = self.client.storage.from_(self.bucket_name).get_public_url(path)
 
-            logger.info(f"✓ Audio file uploaded: {path}")
+            logger.info(f"Audio file uploaded: {path}")
             return public_url
 
         except Exception as e:
             logger.error(f"Failed to upload audio file: {e}")
+            return None
+
+    def upload_call_simulation_audio(
+        self,
+        *,
+        file_data: bytes,
+        trainee_id: str,
+        scenario_id: str,
+        session_id: str,
+        filename: str,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """Upload a Call Simulation recording using the recordings/{trainee}/{scenario}/... layout."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Call Simulation audio file not uploaded to cloud.")
+            return None
+
+        try:
+            path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+            self.client.storage.from_(self.call_simulation_bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={"content-type": content_type or "audio/webm"},
+            )
+            public_url = self.client.storage.from_(self.call_simulation_bucket_name).get_public_url(path)
+            logger.info(f"Call Simulation audio uploaded: {path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload Call Simulation audio file: {e}")
             return None
 
     def upload_sim_floor_audio(
@@ -147,26 +180,17 @@ class SupabaseClient:
         filename: str,
         content_type: Optional[str] = None,
     ) -> Optional[str]:
-        """Upload a Sim Floor recording using the recordings/{trainee}/{scenario}/... layout."""
-        if not self.is_available:
-            logger.warning("Supabase not available. Sim Floor audio file not uploaded to cloud.")
-            return None
+        """Backward-compatible alias for retired Call Simulation upload call sites."""
+        return self.upload_call_simulation_audio(
+            file_data=file_data,
+            trainee_id=trainee_id,
+            scenario_id=scenario_id,
+            session_id=session_id,
+            filename=filename,
+            content_type=content_type,
+        )
 
-        try:
-            path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
-            self.client.storage.from_(self.sim_floor_bucket_name).upload(
-                path=path,
-                file=file_data,
-                file_options={"content-type": content_type or "audio/webm"},
-            )
-            public_url = self.client.storage.from_(self.sim_floor_bucket_name).get_public_url(path)
-            logger.info(f"Sim Floor audio uploaded: {path}")
-            return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload Sim Floor audio file: {e}")
-            return None
-
-    def upload_sim_floor_asset(
+    def upload_call_simulation_asset(
         self,
         *,
         file_data: bytes,
@@ -176,24 +200,24 @@ class SupabaseClient:
         scenario_id: Optional[str] = None,
         content_type: Optional[str] = None,
     ) -> Optional[str]:
-        """Upload trainer-managed Sim Floor audio assets such as member turns and call tones."""
+        """Upload trainer-managed Call Simulation audio assets such as member turns and call tones."""
         if not self.is_available:
-            logger.warning("Supabase not available. Sim Floor asset upload skipped.")
+            logger.warning("Supabase not available. Call Simulation asset upload skipped.")
             return None
 
         try:
             scenario_segment = scenario_id or "draft"
             path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
-            self.client.storage.from_(self.sim_floor_bucket_name).upload(
+            self.client.storage.from_(self.call_simulation_bucket_name).upload(
                 path=path,
                 file=file_data,
                 file_options={"content-type": content_type or "audio/mpeg"},
             )
-            public_url = self.client.storage.from_(self.sim_floor_bucket_name).get_public_url(path)
-            logger.info(f"Sim Floor asset uploaded: {path}")
+            public_url = self.client.storage.from_(self.call_simulation_bucket_name).get_public_url(path)
+            logger.info(f"Call Simulation asset uploaded: {path}")
             return public_url
         except Exception as e:
-            logger.error(f"Failed to upload Sim Floor asset: {e}")
+            logger.error(f"Failed to upload Call Simulation asset: {e}")
             return None
 
     def upload_document(
@@ -239,7 +263,7 @@ class SupabaseClient:
 
             public_url = self.client.storage.from_(self.bucket_name).get_public_url(path)
 
-            logger.info(f"✓ Document uploaded: {path}")
+            logger.info(f"Document uploaded: {path}")
             return public_url
 
         except Exception as e:
@@ -269,10 +293,131 @@ class SupabaseClient:
                 },
             )
             public_url = self.client.storage.from_(self.bucket_name).get_public_url(path)
-            logger.info(f"✓ Profile image uploaded: {path}")
+            logger.info(f"Profile image uploaded: {path}")
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload profile image: {e}")
+            return None
+
+    def upload_microlearning_audio(
+        self,
+        file_data: bytes,
+        module_id: str,
+        trainer_id: str,
+        filename: Optional[str] = None,
+        content_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Upload microlearning audio file (MP3/WAV) to Supabase storage.
+        
+        Args:
+            file_data: Audio file bytes
+            module_id: Microlearning module ID for organization
+            trainer_id: Trainer ID for ownership tracking
+            filename: Optional custom filename. If not provided, generates one with timestamp
+            content_type: MIME type (defaults to audio/mpeg for MP3)
+        
+        Returns:
+            Public URL of uploaded file, or None if upload fails
+        """
+        if not self.is_available:
+            logger.warning("Supabase not available. Microlearning audio not uploaded to cloud.")
+            return None
+
+        try:
+            if not filename:
+                timestamp = datetime.utcnow().isoformat().replace(":", "-")
+                ext = "mp3" if (content_type or "").startswith("audio/mpeg") else "wav"
+                filename = f"{module_id}/{timestamp}.{ext}"
+
+            # Upload to microlearning-audio bucket
+            path = f"audio/{trainer_id}/{filename}"
+            self.client.storage.from_(self.microlearning_bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={"content-type": content_type or "audio/mpeg"},
+            )
+
+            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
+            logger.info(f"Microlearning audio uploaded: {path}")
+            return public_url
+
+        except Exception as e:
+            logger.error(f"Failed to upload microlearning audio: {e}")
+            return None
+
+    def upload_microlearning_tts(
+        self,
+        audio_data: bytes,
+        module_id: str,
+        filename: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Upload text-to-speech generated audio for accessibility.
+        
+        Args:
+            audio_data: TTS audio bytes (WAV format)
+            module_id: Microlearning module ID
+            filename: Optional custom filename
+        
+        Returns:
+            Public URL of uploaded TTS audio, or None if upload fails
+        """
+        if not self.is_available:
+            logger.warning("Supabase not available. TTS audio not uploaded to cloud.")
+            return None
+
+        try:
+            if not filename:
+                timestamp = datetime.utcnow().isoformat().replace(":", "-")
+                filename = f"{module_id}/tts_{timestamp}.wav"
+
+            path = f"tts/{filename}"
+            self.client.storage.from_(self.microlearning_bucket_name).upload(
+                path=path,
+                file=audio_data,
+                file_options={"content-type": "audio/wav"},
+            )
+
+            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
+            logger.info(f"TTS audio uploaded: {path}")
+            return public_url
+
+        except Exception as e:
+            logger.error(f"Failed to upload TTS audio: {e}")
+            return None
+
+    def upload_microlearning_binary(
+        self,
+        *,
+        module_id: str,
+        trainer_id: str,
+        filename: str,
+        file_data: bytes,
+        content_type: Optional[str] = None,
+        folder: str = "assets",
+    ) -> Optional[str]:
+        """Upload an arbitrary microlearning companion file such as captions."""
+        if not self.is_available:
+            logger.warning("Supabase not available. Microlearning companion file not uploaded to cloud.")
+            return None
+
+        try:
+            sanitized_folder = (folder or "assets").strip("/ ") or "assets"
+            path = f"{sanitized_folder}/{trainer_id}/{module_id}/{filename}"
+            self.client.storage.from_(self.microlearning_bucket_name).upload(
+                path=path,
+                file=file_data,
+                file_options={
+                    "content-type": content_type or "application/octet-stream",
+                    "upsert": "true",
+                },
+            )
+            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
+            logger.info(f"Microlearning companion file uploaded: {path}")
+            return public_url
+        except Exception as e:
+            logger.error(f"Failed to upload microlearning companion file: {e}")
             return None
 
     def upload_binary(
@@ -326,7 +471,7 @@ class SupabaseClient:
 
         try:
             self.client.storage.from_(self.bucket_name).remove([file_path])
-            logger.info(f"✓ File deleted: {file_path}")
+            logger.info(f"File deleted: {file_path}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete file: {e}")

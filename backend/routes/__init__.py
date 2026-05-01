@@ -10,6 +10,7 @@ from .settings_routes import router as settings_router
 from .workspace_routes import router as workspace_router
 from .export_routes import router as export_router
 from .certification_routes import router as certification_router
+from .call_simulation_trainee_routes import router as call_simulation_trainee_router
 
 __all__ = [
     "auth_router",
@@ -20,4 +21,5 @@ __all__ = [
     "workspace_router",
     "export_router",
     "certification_router",
+    "call_simulation_trainee_router",
 ]

@@ -1,6 +1,6 @@
 """
 Admin Portal Routes
-Handles scenario creation, assessment categories, KPI configuration, and user management
+Handles assessment categories, KPI configuration, and user management
 """
 
 import csv
@@ -63,6 +63,7 @@ from ..services.lob_catalog import (
     serialize_lobs,
     sync_default_lob_catalog,
 )
+from ..services.supabase_auth_service import SupabaseUserSyncError, sync_user_to_supabase_auth
 from ..services.pdf_generator import PerformanceReportGenerator
 from ..supabase_client import get_supabase_client
 
@@ -73,42 +74,6 @@ ALL_LOB_ACCESS_LABEL = "All LOBs"
 
 
 # ==================== Pydantic Models ====================
-
-
-class ScenarioFlowCreate(BaseModel):
-    step_number: int
-    step_type: str  # "agent_response", "customer_prompt", "logic_branch"
-    prompt_text: Optional[str] = None
-    expected_response: Optional[str] = None
-    expected_keywords_for_step: Optional[List[str]] = None
-    condition_type: Optional[str] = None
-    condition_value: Optional[str] = None
-    jump_to_step: Optional[int] = None
-    alternative_step: Optional[int] = None
-    is_closing: bool = False
-    response_time_limit: Optional[int] = None
-
-
-class ScenarioCreate(BaseModel):
-    title: str
-    description: Optional[str] = None
-    purpose: ScenarioPurpose = ScenarioPurpose.PRACTICE
-    difficulty: ScenarioDifficulty = ScenarioDifficulty.BASIC
-    lob: Optional[str] = None
-    opening_prompt: str
-    opening_prompt_audio: Optional[str] = None
-    expected_keywords: Optional[List[str]] = None
-    estimated_duration: Optional[int] = None
-    flow_steps: Optional[List[ScenarioFlowCreate]] = None
-
-
-class ScenarioUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    purpose: Optional[ScenarioPurpose] = None
-    difficulty: Optional[ScenarioDifficulty] = None
-    expected_keywords: Optional[List[str]] = None
-    is_published: Optional[bool] = None
 
 
 class AssessmentCategoryCreate(BaseModel):
@@ -804,162 +769,6 @@ def _ensure_mcq_submission(
     db.flush()
     return submission, created
 
-
-# ==================== Scenario Management ====================
-
-
-@router.post("/scenarios", response_model=dict)
-async def create_scenario(
-    scenario: ScenarioCreate,
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Create a new scenario with branching flow"""
-    try:
-        new_scenario = Scenario(
-            title=scenario.title,
-            description=scenario.description,
-            purpose=scenario.purpose,
-            difficulty=scenario.difficulty,
-            lob=scenario.lob,
-            opening_prompt=scenario.opening_prompt,
-            opening_prompt_audio=scenario.opening_prompt_audio,
-            expected_keywords=scenario.expected_keywords or [],
-            estimated_duration=scenario.estimated_duration,
-            created_by=current_user.id,
-            is_draft=True,
-        )
-
-        db.add(new_scenario)
-        db.flush()  # Get the ID without committing
-
-        # Add flow steps if provided
-        if scenario.flow_steps:
-            for step_data in scenario.flow_steps:
-                flow_step = ScenarioFlow(
-                    scenario_id=new_scenario.id, **step_data.dict()
-                )
-                db.add(flow_step)
-
-        db.commit()
-
-        log_admin_action(
-            db,
-            current_user.id,
-            "created_scenario",
-            "Scenario",
-            new_scenario.id,
-            {"title": scenario.title},
-        )
-
-        return {
-            "id": new_scenario.id,
-            "title": new_scenario.title,
-            "status": "created",
-            "is_draft": True,
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/scenarios")
-async def list_scenarios(
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-    skip: int = 0,
-    limit: int = 50,
-    difficulty: Optional[ScenarioDifficulty] = None,
-):
-    """List all scenarios with filtering"""
-    query = db.query(Scenario)
-
-    if difficulty:
-        query = query.filter(Scenario.difficulty == difficulty)
-
-    scenarios = query.offset(skip).limit(limit).all()
-
-    return {
-        "count": len(scenarios),
-        "scenarios": [
-            {
-                "id": s.id,
-                "title": s.title,
-                "difficulty": s.difficulty,
-                "purpose": s.purpose,
-                "is_draft": s.is_draft,
-                "is_published": s.is_published,
-                "created_at": s.created_at,
-                "flow_steps_count": len(s.flow_steps),
-            }
-            for s in scenarios
-        ],
-    }
-
-
-@router.put("/scenarios/{scenario_id}")
-async def update_scenario(
-    scenario_id: str,
-    scenario_update: ScenarioUpdate,
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Update scenario details"""
-    scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
-    if not scenario:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-
-    changes = {}
-
-    if scenario_update.title:
-        changes["title"] = {"old": scenario.title, "new": scenario_update.title}
-        scenario.title = scenario_update.title
-
-    if scenario_update.difficulty:
-        changes["difficulty"] = {
-            "old": scenario.difficulty,
-            "new": scenario_update.difficulty,
-        }
-        scenario.difficulty = scenario_update.difficulty
-
-    if scenario_update.is_published is not None:
-        changes["is_published"] = {
-            "old": scenario.is_published,
-            "new": scenario_update.is_published,
-        }
-        scenario.is_published = scenario_update.is_published
-        scenario.is_draft = not scenario_update.is_published
-
-    scenario.updated_at = datetime.utcnow()
-    db.commit()
-
-    log_admin_action(
-        db, current_user.id, "updated_scenario", "Scenario", scenario_id, changes
-    )
-
-    return {"status": "updated", "scenario_id": scenario_id}
-
-
-@router.post("/scenarios/{scenario_id}/publish")
-async def publish_scenario(
-    scenario_id: str,
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Publish a scenario (make it available for trainees)"""
-    scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
-    if not scenario:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-
-    scenario.is_published = True
-    scenario.is_draft = False
-    db.commit()
-
-    log_admin_action(db, current_user.id, "published_scenario", "Scenario", scenario_id)
-
-    return {"status": "published", "scenario_id": scenario_id}
-
-
 # ==================== Assessment Category Management ====================
 
 
@@ -1099,41 +908,6 @@ async def delete_assessment_category(
     )
 
     return {"status": "deleted", "category_id": category.id}
-
-
-@router.post("/scenarios/{scenario_id}/assessment-categories/{category_id}")
-async def link_assessment_to_scenario(
-    scenario_id: str,
-    category_id: str,
-    current_user: Any = Depends(verify_admin),
-    db: Session = Depends(get_db),
-):
-    """Link an assessment category to a scenario"""
-    scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
-    category = (
-        db.query(AssessmentCategory)
-        .filter(AssessmentCategory.id == category_id)
-        .first()
-    )
-
-    if not scenario or not category:
-        raise HTTPException(status_code=404, detail="Scenario or category not found")
-
-    if category not in scenario.assessment_categories:
-        scenario.assessment_categories.append(category)
-        db.commit()
-
-        log_admin_action(
-            db,
-            current_user.id,
-            "linked_assessment_to_scenario",
-            "Scenario",
-            scenario_id,
-            {"category_id": category_id},
-        )
-
-    return {"status": "linked", "scenario_id": scenario_id, "category_id": category_id}
-
 
 # ==================== KPI Configuration ====================
 
@@ -1299,6 +1073,17 @@ async def create_user(
     )
 
     db.add(new_user)
+    db.flush()
+
+    try:
+        sync_user_to_supabase_auth(db, new_user)
+    except SupabaseUserSyncError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc),
+        ) from exc
+
     db.commit()
 
     log_admin_action(
@@ -1353,21 +1138,27 @@ async def bulk_upload_users(
                     row.get("password")
                     or (DEFAULT_TRAINEE_PASSWORD if role == UserRole.TRAINEE else "ChangeMe@123")
                 )
-                new_user = User(
-                    email=row["email"],
-                    full_name=row["full_name"],
-                    password_hash=auth_utils.hash_password(temporary_password),
-                    role=role,
-                    lob=row.get("lob"),
-                    department=row.get("department"),
-                    language_dialect=row.get("language_dialect", "en-US"),
-                )
+                with db.begin_nested():
+                    new_user = User(
+                        email=row["email"].strip().lower(),
+                        full_name=row["full_name"],
+                        password_hash=auth_utils.hash_password(temporary_password),
+                        role=role,
+                        lob=row.get("lob"),
+                        department=row.get("department"),
+                        language_dialect=row.get("language_dialect", "en-US"),
+                    )
 
-                db.add(new_user)
+                    db.add(new_user)
+                    db.flush()
+                    sync_user_to_supabase_auth(db, new_user)
+
                 created_count += 1
 
             except KeyError as e:
                 errors.append(f"Row {idx}: Invalid role value")
+            except SupabaseUserSyncError as e:
+                errors.append(f"Row {idx}: {str(e)}")
             except Exception as e:
                 errors.append(f"Row {idx}: {str(e)}")
 
@@ -1661,6 +1452,7 @@ def _seed_sample_dataset(
         },
     ]:
         user, created = _ensure_user(db, **user_seed)
+        sync_user_to_supabase_auth(db, user)
         users[user_seed["email"]] = user
         summary["users_created"] += int(created)
 

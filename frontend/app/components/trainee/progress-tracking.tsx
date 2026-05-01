@@ -1,10 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Award, BookOpen, ClipboardList, Loader2, MessageSquare, Mic, RefreshCw, RotateCcw, TrendingUp } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 
-import { apiFetch } from '@/app/utils/api';
 import type { AppUser } from '@/app/types/user';
+import { apiFetch } from '@/app/utils/api';
+import { dedupeMessages } from '@/app/utils/runtime-errors';
 
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -154,7 +155,7 @@ function getAssessmentStatus(assessment: AssessmentRecord) {
 export default function ProgressTracking({
   user,
   title = 'My Progress',
-  description = 'Your progress view is organized into the four tracked categories: microlearning, Sim Floor, assessments, and coaching.',
+  description = 'Your progress view is organized into the four tracked categories: microlearning, Call Simulation, assessments, and coaching.',
   summaryTitle = 'Progress Summary',
   summaryDescription = 'This page now only shows analytics and completion data that come from the tracked trainee categories.',
 }: ProgressTrackingProps) {
@@ -183,7 +184,7 @@ export default function ProgressTracking({
     }
 
     const results = await Promise.allSettled([
-      apiFetch<SimFloorReport>(`/api/sim-floor/reports/trainee/${traineeId}`),
+      apiFetch<SimFloorReport>(`/api/call-simulation/reports/trainee/${traineeId}`),
       apiFetch<MicrolearningReport>('/api/trainee/microlearning-report'),
       apiFetch<AssessmentResponse>('/api/certification/mcq/my-assessments'),
       apiFetch<CoachingResponse>('/api/certification/coaching/logs'),
@@ -195,7 +196,7 @@ export default function ProgressTracking({
       setSimFloorReport(results[0].value);
     } else {
       setSimFloorReport(null);
-      nextMessages.push(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load Sim Floor progress.');
+      nextMessages.push(results[0].reason instanceof Error ? results[0].reason.message : 'Unable to load Call Simulation progress.');
     }
 
     if (results[1].status === 'fulfilled') {
@@ -219,7 +220,7 @@ export default function ProgressTracking({
       nextMessages.push(results[3].reason instanceof Error ? results[3].reason.message : 'Unable to load coaching progress.');
     }
 
-    setMessages(nextMessages);
+    setMessages(dedupeMessages(nextMessages));
     setLoading(false);
     setRefreshing(false);
   }, [traineeId]);
@@ -293,7 +294,7 @@ export default function ProgressTracking({
           secondary={`${microlearningReport?.summary.certified_count || 0} certified | Avg ${formatScore(microlearningReport?.summary.average_score)}`}
         />
         <SummaryCard
-          title="Sim Floor"
+          title="Call Simulation"
           icon={<Mic className="size-4 text-violet-700" />}
           primary={String(simFloorReport?.summary.total_sessions || 0)}
           secondary={`Avg ${formatScore(simFloorReport?.summary.average_score)} | ${simFloorReport?.summary.retakes || 0} retakes`}
@@ -355,7 +356,7 @@ export default function ProgressTracking({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Mic className="size-5 text-violet-700" />
-              Sim Floor Completion and Analytics
+              Call Simulation Completion and Analytics
             </CardTitle>
             <CardDescription>Attempt history, average scores, pass rate, and retakes.</CardDescription>
           </CardHeader>
@@ -384,7 +385,7 @@ export default function ProgressTracking({
 
             {!simFloorReport?.recent_sessions.length ? (
               <div className="rounded-2xl border border-dashed p-4 text-sm text-muted-foreground">
-                No Sim Floor attempts are recorded yet.
+                No Call Simulation attempts are recorded yet.
               </div>
             ) : null}
           </CardContent>
@@ -500,7 +501,7 @@ export default function ProgressTracking({
         </CardHeader>
         <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <InsightTile label="Microlearning Certificates" value={String(microlearningReport?.summary.certified_count || 0)} icon={<Award className="size-4 text-amber-600" />} />
-          <InsightTile label="Sim Floor Retakes" value={String(simFloorReport?.summary.retakes || 0)} icon={<RotateCcw className="size-4 text-violet-600" />} />
+          <InsightTile label="Call Simulation Retakes" value={String(simFloorReport?.summary.retakes || 0)} icon={<RotateCcw className="size-4 text-violet-600" />} />
           <InsightTile label="Assessment Passes" value={String(assessmentSummary.passed)} icon={<ClipboardList className="size-4 text-emerald-600" />} />
           <InsightTile label="Coaching Pending Ack" value={String(coachingSummary.pending)} icon={<MessageSquare className="size-4 text-sky-600" />} />
         </CardContent>

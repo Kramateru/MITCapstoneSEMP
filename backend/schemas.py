@@ -196,7 +196,7 @@ class ScenarioBase(BaseModel):
     estimated_duration: Optional[int] = None
     member_profile: Optional[Dict[str, Any]] = {}
     cxone_metadata: Optional[Dict[str, Any]] = {}
-    sim_floor_config: Optional[Dict[str, Any]] = {}
+    call_simulation_config: Optional[Dict[str, Any]] = {}
     ringer_audio_url: Optional[str] = None
     hold_audio_url: Optional[str] = None
 
@@ -630,7 +630,7 @@ class PaginatedResponse(BaseModel):
     items: List[dict]
 
 
-# ==================== Sim Floor Schemas ====================
+# ==================== Call Simulation Schemas ====================
 
 
 class ScenarioVariationCreate(BaseModel):
@@ -670,17 +670,27 @@ class ScenarioVariationResponse(BaseModel):
         from_attributes = True
 
 
-class SimFloorScenarioVariationInput(BaseModel):
-    """Variation payload used by Sim Floor trainer CRUD."""
+class CallSimulationScenarioVariationInput(BaseModel):
+    """Variation payload used by Call Simulation trainer CRUD."""
 
     actor_name: str
     script: str
-    score: float = Field(default=0.0, ge=0.0, le=5.0)
+    score: float = Field(default=0.0, ge=0.0)
     branching_logic: Optional[str] = None
 
 
-class SimFloorScenarioStepInput(BaseModel):
-    """Turn-based Sim Floor step definition used by the trainer scenario builder."""
+class CallSimulationScenarioRowInput(BaseModel):
+    """Canonical Call Simulation trainer row built from Actor/Script/Score/Scenario columns."""
+
+    actor_name: str
+    script: str
+    score: float = Field(default=0.0, ge=0.0)
+    scenario: str
+    audio_url: Optional[str] = None
+
+
+class CallSimulationScenarioStepInput(BaseModel):
+    """Turn-based Call Simulation step definition used by the trainer scenario builder."""
 
     step_number: int
     actor: str
@@ -693,8 +703,8 @@ class SimFloorScenarioStepInput(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class SimFloorScenarioStepResponse(BaseModel):
-    """Serialized Sim Floor step for trainee playback."""
+class CallSimulationScenarioStepResponse(BaseModel):
+    """Serialized Call Simulation step for trainee playback."""
 
     id: Optional[str] = None
     step_number: int
@@ -708,28 +718,29 @@ class SimFloorScenarioStepResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
-class SimFloorScenarioCreate(BaseModel):
-    """Create a Sim Floor scenario owned by a trainer/admin."""
+class CallSimulationScenarioCreate(BaseModel):
+    """Create a Call Simulation scenario owned by a trainer/admin."""
 
     title: str
     batch_id: str
     description: Optional[str] = None
-    opening_prompt: str = "Sim Floor scenario"
+    opening_prompt: str = "Call Simulation scenario"
     difficulty: ScenarioDifficulty = ScenarioDifficulty.BASIC
     purpose: ScenarioPurpose = ScenarioPurpose.PRACTICE
     expected_keywords: List[str] = Field(default_factory=list)
     estimated_duration: Optional[int] = None
-    variations: List[SimFloorScenarioVariationInput] = Field(default_factory=list)
-    steps: List[SimFloorScenarioStepInput] = Field(default_factory=list)
+    script_rows: List[CallSimulationScenarioRowInput] = Field(default_factory=list)
+    variations: List[CallSimulationScenarioVariationInput] = Field(default_factory=list)
+    steps: List[CallSimulationScenarioStepInput] = Field(default_factory=list)
     member_profile: Dict[str, Any] = Field(default_factory=dict)
     cxone_metadata: Dict[str, Any] = Field(default_factory=dict)
-    sim_floor_config: Dict[str, Any] = Field(default_factory=dict)
+    call_simulation_config: Dict[str, Any] = Field(default_factory=dict)
     ringer_audio_url: Optional[str] = None
     hold_audio_url: Optional[str] = None
 
 
-class SimFloorScenarioUpdate(BaseModel):
-    """Update a Sim Floor scenario."""
+class CallSimulationScenarioUpdate(BaseModel):
+    """Update a Call Simulation scenario."""
 
     title: Optional[str] = None
     batch_id: Optional[str] = None
@@ -740,17 +751,18 @@ class SimFloorScenarioUpdate(BaseModel):
     expected_keywords: Optional[List[str]] = None
     estimated_duration: Optional[int] = None
     is_published: Optional[bool] = None
-    variations: Optional[List[SimFloorScenarioVariationInput]] = None
-    steps: Optional[List[SimFloorScenarioStepInput]] = None
+    script_rows: Optional[List[CallSimulationScenarioRowInput]] = None
+    variations: Optional[List[CallSimulationScenarioVariationInput]] = None
+    steps: Optional[List[CallSimulationScenarioStepInput]] = None
     member_profile: Optional[Dict[str, Any]] = None
     cxone_metadata: Optional[Dict[str, Any]] = None
-    sim_floor_config: Optional[Dict[str, Any]] = None
+    call_simulation_config: Optional[Dict[str, Any]] = None
     ringer_audio_url: Optional[str] = None
     hold_audio_url: Optional[str] = None
 
 
-class SimFloorScenarioAssignmentSummary(BaseModel):
-    """Assigned batch summary for a Sim Floor scenario."""
+class CallSimulationScenarioAssignmentSummary(BaseModel):
+    """Assigned batch summary for a Call Simulation scenario."""
 
     batch_id: str
     batch_name: str
@@ -764,8 +776,8 @@ class SimFloorScenarioAssignmentSummary(BaseModel):
     latest_completed_at: Optional[datetime] = None
 
 
-class SimFloorScenarioResponse(BaseModel):
-    """Sim Floor scenario response with mapping and variation metadata."""
+class CallSimulationScenarioResponse(BaseModel):
+    """Call Simulation scenario response with mapping and variation metadata."""
 
     id: str
     title: str
@@ -777,7 +789,7 @@ class SimFloorScenarioResponse(BaseModel):
     estimated_duration: Optional[int] = None
     member_profile: Dict[str, Any] = Field(default_factory=dict)
     cxone_metadata: Dict[str, Any] = Field(default_factory=dict)
-    sim_floor_config: Dict[str, Any] = Field(default_factory=dict)
+    call_simulation_config: Dict[str, Any] = Field(default_factory=dict)
     ringer_audio_url: Optional[str] = None
     hold_audio_url: Optional[str] = None
     batch_id: Optional[str] = None
@@ -788,8 +800,8 @@ class SimFloorScenarioResponse(BaseModel):
     variations_count: int = 0
     variations: List[ScenarioVariationResponse] = Field(default_factory=list)
     steps_count: int = 0
-    steps: List[SimFloorScenarioStepResponse] = Field(default_factory=list)
-    assigned_batches: List[SimFloorScenarioAssignmentSummary] = Field(default_factory=list)
+    steps: List[CallSimulationScenarioStepResponse] = Field(default_factory=list)
+    assigned_batches: List[CallSimulationScenarioAssignmentSummary] = Field(default_factory=list)
     member_count: int = 0
     completed_sessions: int = 0
     passed_sessions: int = 0
@@ -819,6 +831,40 @@ class BatchScenarioMappingResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CallSimulationAssignmentCreate(BaseModel):
+    """Explicit trainer-to-trainee Call Simulation assignment payload."""
+
+    scenario_id: str
+    batch_id: str
+    trainee_ids: List[str] = Field(default_factory=list)
+
+
+class CallSimulationAssignmentTargetResponse(BaseModel):
+    """Trainee row available for direct Call Simulation assignment."""
+
+    trainee_id: str
+    trainee_name: str
+    trainee_email: str
+    language_dialect: Optional[str] = None
+    batch_id: str
+    batch_name: str
+    wave_number: Optional[int] = None
+    is_assigned: bool = False
+    assignment_id: Optional[str] = None
+    assigned_at: Optional[datetime] = None
+
+
+class CallSimulationAssignmentResponse(BaseModel):
+    """Summary returned after explicit trainee assignment updates."""
+
+    scenario_id: str
+    batch_id: str
+    assigned_trainee_ids: List[str] = Field(default_factory=list)
+    assignments_created: int = 0
+    assignments_updated: int = 0
+    assignments_deactivated: int = 0
 
 
 class BatchKPIConfigCreate(BaseModel):
@@ -954,7 +1000,7 @@ class SimSessionUpdate(BaseModel):
 
 
 class SimSessionCompleteRequest(BaseModel):
-    """Complete a Sim Floor session using already uploaded audio/transcript data."""
+    """Complete a Call Simulation session using already uploaded audio/transcript data."""
 
     audio_url: Optional[str] = None
     transcript: str
@@ -1034,6 +1080,9 @@ class SimSessionResponse(BaseModel):
     trainer_verdict_notes: Optional[str] = None
     trainer_evaluated_at: Optional[datetime] = None
     certificate_id: Optional[str] = None
+    coaching_id: Optional[str] = None
+    coaching_status: Optional[str] = None
+    coaching_acknowledged_at: Optional[datetime] = None
 
     created_at: datetime
     updated_at: datetime
@@ -1055,10 +1104,10 @@ class SimSessionStartResponse(BaseModel):
     passing_score: float
     member_profile: Dict[str, Any] = Field(default_factory=dict)
     cxone_metadata: Dict[str, Any] = Field(default_factory=dict)
-    sim_floor_config: Dict[str, Any] = Field(default_factory=dict)
+    call_simulation_config: Dict[str, Any] = Field(default_factory=dict)
     ringer_audio_url: Optional[str] = None
     hold_audio_url: Optional[str] = None
-    steps: List[SimFloorScenarioStepResponse] = Field(default_factory=list)
+    steps: List[CallSimulationScenarioStepResponse] = Field(default_factory=list)
 
 
 class SimSessionTurnResponse(BaseModel):
@@ -1094,8 +1143,8 @@ class BulkUploadRequest(BaseModel):
     """Bulk upload scenarios"""
 
     batch_id: str
-    scenario_title: str
-    variations: List[dict]  # Actor, Script, Score, Branching Logic
+    scenario_title: Optional[str] = None
+    variations: List[dict]  # Actor, Script, Score, Scenario
 
 
 class BulkUploadResponse(BaseModel):
@@ -1128,13 +1177,13 @@ class CoachingNoteResponse(BaseModel):
 
 
 class SimSessionCoachingNoteUpdate(BaseModel):
-    """Update the coaching notes for a Sim Floor session."""
+    """Update the coaching notes for a Call Simulation session."""
 
     notes: str
 
 
 class SimSessionTrainerVerdictUpdate(BaseModel):
-    """Trainer competency decision for a Sim Floor attempt."""
+    """Trainer competency decision for a Call Simulation attempt."""
 
     verdict_status: str
     notes: Optional[str] = None

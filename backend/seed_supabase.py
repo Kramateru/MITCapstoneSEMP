@@ -13,7 +13,6 @@ from .default_credentials import ADMIN_EMAIL, ADMIN_PASSWORD
 from .models import Batch, CoachingLog, Course, MCQAssessment, MCQCategory, User, UserRole, Workspace
 from .routes.admin_routes import _ensure_user, _seed_sample_dataset
 from .services.mcq_samples import ensure_trainer_language_assessment_samples
-from .services.microlearning_catalog import seed_bpo_microlearning_library
 from .services.workspace_seed import seed_workspace_library
 
 
@@ -285,11 +284,6 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
             "seeded_forbidden_words": 0,
             "seeded_required_keywords": 0,
         }
-        microlearning_summary = {
-            "categories_seeded": 0,
-            "modules_created": 0,
-            "modules_updated": 0,
-        }
         sample_trainers = (
             db.query(User)
             .filter(User.role == UserRole.TRAINER, User.is_active == True)
@@ -343,15 +337,6 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
                     seeded_counts["seeded_required_keywords"]
                 )
 
-            trainer_microlearning_summary = seed_bpo_microlearning_library(
-                db,
-                trainer_id=trainer.id,
-            )
-            for key in microlearning_summary:
-                microlearning_summary[key] += int(
-                    trainer_microlearning_summary.get(key, 0)
-                )
-
         db.commit()
         result["summary"].update(
             {
@@ -365,9 +350,6 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
                 "workspace_probing_questions_seeded": workspace_summary["seeded_probing_questions"],
                 "workspace_forbidden_words_seeded": workspace_summary["seeded_forbidden_words"],
                 "workspace_required_keywords_seeded": workspace_summary["seeded_required_keywords"],
-                "trainer_microlearning_categories_seeded": microlearning_summary["categories_seeded"],
-                "trainer_microlearning_modules_created": microlearning_summary["modules_created"],
-                "trainer_microlearning_modules_updated": microlearning_summary["modules_updated"],
             }
         )
 
@@ -382,8 +364,8 @@ def seed(reset_sample_scenarios: bool = False) -> dict:
 
         print("Ownership:")
         trainer_emails = [
-            "trainer@st.peterville.edu.ph",
-            "trainer2@st.peterville.edu.ph",
+            "trainer@stpetervelle.edu.ph",
+            "trainer2@stpetervelle.edu.ph",
         ]
         for trainer_email in trainer_emails:
             trainer = db.query(User).filter(User.email == trainer_email).first()

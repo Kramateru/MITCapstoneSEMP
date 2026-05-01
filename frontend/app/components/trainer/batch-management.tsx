@@ -519,7 +519,7 @@ export default function BatchManagement() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Batch</DialogTitle>
-            <DialogDescription>Update the saved batch label or batch number used across trainer workflows.</DialogDescription>
+            <DialogDescription>Update the saved batch label or batch number used across your trainer navigation and reports.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">

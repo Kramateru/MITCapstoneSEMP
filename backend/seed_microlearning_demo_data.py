@@ -1,10 +1,7 @@
 """
-Seed trainer-facing microlearning demo data for a selected batch.
+Legacy entry point for retired trainer-facing microlearning demo data.
 
-This script is idempotent:
-- seeds the default 10-module trainer library
-- assigns a configurable subset of modules to one trainer batch
-- creates sample trainee attempts so trainer and trainee reports show scores
+This script is retained only to make the deprecation explicit.
 
 Optional environment variables:
 - MICROLEARNING_TRAINER_ID
@@ -207,98 +204,10 @@ def _seed_assignment_attempts(
 
 
 def seed() -> dict[str, Any]:
-    Base.metadata.create_all(bind=engine)
-    _ensure_certification_schema()
-    _ensure_microlearning_schema()
-
-    db = SessionLocal()
-    try:
-        trainer, trainer_created = _resolve_target_trainer(db)
-        library_summary = seed_bpo_microlearning_library(db, trainer_id=trainer.id)
-
-        batch = _resolve_target_batch(db, trainer_id=trainer.id)
-        batch_trainees = _resolve_batch_trainees(batch)
-        primary_trainee = _resolve_primary_trainee(batch_trainees)
-
-        assignment_limit = int(os.getenv("MICROLEARNING_ASSIGNMENT_COUNT") or "3")
-        modules = _load_trainer_modules(
-            db,
-            trainer_id=trainer.id,
-            titles=_selected_module_titles(assignment_limit),
-        )
-
-        assignments_created = 0
-        for trainee in batch_trainees:
-            for module in modules:
-                assignment, created = _ensure_assignment(
-                    db,
-                    module=module,
-                    trainee=trainee,
-                    trainer_id=trainer.id,
-                    batch_id=batch.id,
-                )
-                assignments_created += 1 if created else 0
-
-        db.flush()
-
-        sample_attempts_seeded = 0
-        primary_assignments = (
-            db.query(MicrolearningAssignment)
-            .filter(
-                MicrolearningAssignment.assigned_by == trainer.id,
-                MicrolearningAssignment.trainee_id == primary_trainee.id,
-                MicrolearningAssignment.batch_id == batch.id,
-            )
-            .all()
-        )
-        assignment_by_module_id = {
-            assignment.module_id: assignment for assignment in primary_assignments
-        }
-
-        if modules:
-            completed_assignment = assignment_by_module_id.get(modules[0].id)
-            if completed_assignment and _seed_assignment_attempts(
-                completed_assignment,
-                complete_all=True,
-            ):
-                sample_attempts_seeded += 1
-
-        partial_module = next(
-            (module for module in modules if len(module.exercises or []) > 1),
-            None,
-        )
-        if partial_module:
-            partial_assignment = assignment_by_module_id.get(partial_module.id)
-            if partial_assignment and _seed_assignment_attempts(
-                partial_assignment,
-                complete_all=False,
-            ):
-                sample_attempts_seeded += 1
-
-        db.commit()
-
-        result = {
-            "trainer_email": trainer.email,
-            "trainer_created": trainer_created,
-            "batch_name": batch.name,
-            "batch_id": batch.id,
-            "batch_trainee_count": len(batch_trainees),
-            "primary_trainee_email": primary_trainee.email,
-            "assigned_module_count": len(modules),
-            "assignments_created": assignments_created,
-            "sample_attempt_sets_seeded": sample_attempts_seeded,
-            **library_summary,
-        }
-
-        print("Microlearning demo seed completed.")
-        for key, value in result.items():
-            print(f"{key}: {value}")
-        return result
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
+    raise RuntimeError(
+        "Microlearning demo seeding has been retired. "
+        "Create trainer-owned categories, modules, and assignments from the application instead."
+    )
 
 
 if __name__ == "__main__":

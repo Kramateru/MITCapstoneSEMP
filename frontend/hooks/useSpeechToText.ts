@@ -170,7 +170,7 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
             formData.append('file', blob, `step-${stepNumber}.webm`);
 
             const token = localStorage.getItem('token');
-            const response = await fetch(`/api/sim-floor/session/${sessionId}/turn`, {
+            const response = await fetch(`/api/call-simulation/session/${sessionId}/turn`, {
               method: 'POST',
               headers: token ? { Authorization: `Bearer ${token}` } : undefined,
               body: formData,

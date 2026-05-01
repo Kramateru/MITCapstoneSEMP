@@ -21,8 +21,11 @@ from ..models import (
     Scenario,
     Feedback,
     CertificateRecord,
+    CoachingLog,
     KPIConfiguration,
+    MicrolearningAssignment,
 )
+from ..services.supabase_auth_service import filter_to_supabase_active_users
 from ..schemas import (
     BatchAnalyticsResponse,
     PerformanceMetricsResponse,
@@ -137,6 +140,18 @@ def _progress_state(sessions: List[PracticeSession]) -> str:
     if delta < -2:
         return "declining"
     return "stable"
+
+
+def _microlearning_assignment_score(responses: object) -> float:
+    if not isinstance(responses, dict):
+        return 0.0
+
+    completed_scores = [
+        float(attempt.get("score") or 0.0)
+        for attempt in responses.values()
+        if isinstance(attempt, dict) and attempt.get("is_completed")
+    ]
+    return round(sum(completed_scores) / len(completed_scores), 2) if completed_scores else 0.0
 
 
 def _resolve_period_range(
@@ -488,11 +503,13 @@ async def get_admin_performance_hub(
             detail="Admin access required",
         )
 
-    trainees = (
+    all_trainees = (
         db.query(User)
         .filter(User.role == UserRole.TRAINEE, User.is_active == True)
         .all()
     )
+    trainees = filter_to_supabase_active_users(db, all_trainees)
+    active_trainee_count = len(trainees)
     trainee_lookup = {trainee.id: trainee for trainee in trainees}
     trainee_ids = list(trainee_lookup.keys())
 
@@ -507,10 +524,11 @@ async def get_admin_performance_hub(
 
     scored_sessions = [float(session.overall_score) for session in sessions if session.overall_score is not None]
     sessions_passed = sum((session.overall_score or 0) >= 70 for session in sessions)
-    trainees_with_activity = len({session.user_id for session in sessions})
+    trainee_ids_with_activity = {session.user_id for session in sessions}
     kpi_config = db.query(KPIConfiguration).first()
     target_score = float(kpi_config.passing_score) if kpi_config else 75.0
 
+    sessions_by_user: dict[str, List[PracticeSession]] = {}
     lob_buckets: dict[str, dict] = {}
     for trainee in trainees:
         lob_name = trainee.lob or "Unassigned"
@@ -520,15 +538,17 @@ async def get_admin_performance_hub(
         )
         lob_bucket["user_ids"].add(trainee.id)
 
-    sessions_by_user: dict[str, List[PracticeSession]] = {}
     for session in sessions:
         sessions_by_user.setdefault(session.user_id, []).append(session)
         trainee = trainee_lookup.get(session.user_id)
+        if not trainee:
+            continue
         lob_name = trainee.lob if trainee and trainee.lob else "Unassigned"
         lob_bucket = lob_buckets.setdefault(
             lob_name,
             {"name": lob_name, "user_ids": set(), "scores": [], "sessions": 0},
         )
+        lob_bucket["user_ids"].add(trainee.id)
         lob_bucket["sessions"] += 1
         if session.overall_score is not None:
             lob_bucket["scores"].append(float(session.overall_score))
@@ -554,14 +574,240 @@ async def get_admin_performance_hub(
         reverse=True,
     )
 
+    all_trainers = (
+        db.query(User)
+        .filter(User.role == UserRole.TRAINER, User.is_active.is_(True))
+        .all()
+    )
+    trainers = filter_to_supabase_active_users(db, all_trainers)
+    trainer_lookup = {trainer.id: trainer for trainer in trainers}
+    batches_by_trainer: dict[str, list[Batch]] = {trainer.id: [] for trainer in trainers}
+    batch_ids_with_activity_by_trainer: dict[str, set[str]] = {trainer.id: set() for trainer in trainers}
+    trainee_ids_by_trainer: dict[str, set[str]] = {trainer.id: set() for trainer in trainers}
+
+    for batch in db.query(Batch).filter(Batch.created_by.isnot(None), Batch.is_active.is_(True)).all():
+        if batch.created_by not in trainer_lookup:
+            continue
+        batch_trainee_ids = {
+            trainee.id
+            for trainee in batch.users
+            if trainee.role == UserRole.TRAINEE and trainee.is_active and trainee.id in trainee_lookup
+        }
+        if not batch_trainee_ids:
+            continue
+        batches_by_trainer.setdefault(batch.created_by, []).append(batch)
+        trainer_trainee_ids = trainee_ids_by_trainer.setdefault(batch.created_by, set())
+        trainer_trainee_ids.update(batch_trainee_ids)
+        if batch_trainee_ids & trainee_ids_with_activity:
+            batch_ids_with_activity_by_trainer.setdefault(batch.created_by, set()).add(batch.id)
+
+    certification_counts = {
+        trainer_id: count
+        for trainer_id, count in (
+            db.query(CertificateRecord.trainer_id, func.count(CertificateRecord.id))
+            .join(User, User.id == CertificateRecord.trainee_id)
+            .filter(
+                CertificateRecord.trainer_id.isnot(None),
+                CertificateRecord.trainer_id.in_(list(trainer_lookup.keys()) or ["__none__"]),
+                User.role == UserRole.TRAINEE,
+                User.is_active.is_(True),
+                User.id.in_(trainee_ids or ["__none__"]),
+            )
+            .group_by(CertificateRecord.trainer_id)
+            .all()
+        )
+    }
+
+    trainer_analytics = []
+    for trainer in trainers:
+        managed_trainee_ids = trainee_ids_by_trainer.get(trainer.id, set())
+        trainer_sessions = [
+            session for session in sessions if session.user_id in managed_trainee_ids
+        ]
+        certification_count = certification_counts.get(trainer.id, 0)
+        trainer_session_scores = [
+            float(session.overall_score)
+            for session in trainer_sessions
+            if session.overall_score is not None
+        ]
+        trainer_sessions_passed = sum(
+            (session.overall_score or 0) >= 70 for session in trainer_sessions
+        )
+
+        trainer_analytics.append(
+            {
+                "trainer_id": trainer.id,
+                "trainer_name": trainer.full_name,
+                "batches_managed": len(batches_by_trainer.get(trainer.id, [])),
+                "total_trainees": len(managed_trainee_ids),
+                "avg_batch_performance": _average(trainer_session_scores),
+                "pass_rate": round(
+                    (
+                        trainer_sessions_passed / len(trainer_sessions) * 100
+                    )
+                    if trainer_sessions
+                    else 0.0,
+                    2,
+                ),
+                "total_sessions": len(trainer_sessions),
+                "certifications_issued": certification_count,
+                "last_activity": trainer_sessions[-1].created_at if trainer_sessions else None,
+            }
+        )
+
+    trainer_analytics.sort(
+        key=lambda item: (
+            item["avg_batch_performance"],
+            item["pass_rate"],
+            item["total_sessions"],
+            item["trainer_name"],
+        ),
+        reverse=True,
+    )
+
+    trainer_microlearning_buckets = {
+        trainer.id: {
+            "trainer_id": trainer.id,
+            "trainer_name": trainer.full_name,
+            "assignment_count": 0,
+            "completed_count": 0,
+            "certified_count": 0,
+            "scores": [],
+        }
+        for trainer in trainers
+    }
+    trainer_coaching_buckets = {
+        trainer.id: {
+            "trainer_id": trainer.id,
+            "trainer_name": trainer.full_name,
+            "total_logs": 0,
+            "sent_count": 0,
+            "acknowledged_count": 0,
+            "draft_count": 0,
+            "competent_count": 0,
+            "not_competent_count": 0,
+        }
+        for trainer in trainers
+    }
+
+    if trainer_lookup and trainee_ids:
+        trainer_ids = list(trainer_lookup.keys())
+        microlearning_assignments = (
+            db.query(MicrolearningAssignment)
+            .filter(
+                MicrolearningAssignment.assigned_by.in_(trainer_ids),
+                MicrolearningAssignment.trainee_id.in_(trainee_ids),
+            )
+            .all()
+        )
+        for assignment in microlearning_assignments:
+            bucket = trainer_microlearning_buckets.get(assignment.assigned_by)
+            if not bucket:
+                continue
+            bucket["assignment_count"] += 1
+            if assignment.status in {"completed", "certified"}:
+                bucket["completed_count"] += 1
+            if assignment.certificate_id:
+                bucket["certified_count"] += 1
+
+            score = _microlearning_assignment_score(assignment.responses)
+            if score > 0:
+                bucket["scores"].append(score)
+
+        coaching_logs = (
+            db.query(CoachingLog)
+            .filter(
+                CoachingLog.trainer_id.in_(trainer_ids),
+                CoachingLog.trainee_id.in_(trainee_ids),
+            )
+            .all()
+        )
+        for log in coaching_logs:
+            bucket = trainer_coaching_buckets.get(log.trainer_id)
+            if not bucket:
+                continue
+            bucket["total_logs"] += 1
+            if log.status == "acknowledged":
+                bucket["acknowledged_count"] += 1
+            elif log.status == "sent":
+                bucket["sent_count"] += 1
+            elif log.status == "draft":
+                bucket["draft_count"] += 1
+
+            if log.competency_status == "competent":
+                bucket["competent_count"] += 1
+            elif log.competency_status == "not_competent":
+                bucket["not_competent_count"] += 1
+
+    trainer_microlearning = [
+        {
+            "trainer_id": bucket["trainer_id"],
+            "trainer_name": bucket["trainer_name"],
+            "assignment_count": bucket["assignment_count"],
+            "completed_count": bucket["completed_count"],
+            "certified_count": bucket["certified_count"],
+            "average_score": _average(bucket["scores"]),
+            "completion_rate": round(
+                (bucket["completed_count"] / bucket["assignment_count"] * 100)
+                if bucket["assignment_count"]
+                else 0.0,
+                2,
+            ),
+            "certification_rate": round(
+                (bucket["certified_count"] / bucket["assignment_count"] * 100)
+                if bucket["assignment_count"]
+                else 0.0,
+                2,
+            ),
+        }
+        for bucket in trainer_microlearning_buckets.values()
+    ]
+    trainer_microlearning.sort(
+        key=lambda item: (
+            item["assignment_count"],
+            item["certified_count"],
+            item["completion_rate"],
+            item["trainer_name"],
+        ),
+        reverse=True,
+    )
+
+    trainer_coaching = [
+        {
+            "trainer_id": bucket["trainer_id"],
+            "trainer_name": bucket["trainer_name"],
+            "total_logs": bucket["total_logs"],
+            "sent_count": bucket["sent_count"],
+            "acknowledged_count": bucket["acknowledged_count"],
+            "draft_count": bucket["draft_count"],
+            "competent_count": bucket["competent_count"],
+            "not_competent_count": bucket["not_competent_count"],
+            "acknowledgment_rate": round(
+                (bucket["acknowledged_count"] / bucket["total_logs"] * 100)
+                if bucket["total_logs"]
+                else 0.0,
+                2,
+            ),
+        }
+        for bucket in trainer_coaching_buckets.values()
+    ]
+    trainer_coaching.sort(
+        key=lambda item: (
+            item["total_logs"],
+            item["acknowledged_count"],
+            item["acknowledgment_rate"],
+            item["trainer_name"],
+        ),
+        reverse=True,
+    )
+
     return {
         "summary": {
-            "total_trainees": len(trainees),
-            "total_trainers": db.query(User).filter(User.role == UserRole.TRAINER, User.is_active == True).count(),
+            "total_trainees": active_trainee_count,
+            "total_trainers": len(trainers),
             "average_performance": _average(scored_sessions),
-            "certifications_issued": db.query(CertificateRecord).count(),
+            "certifications_issued": sum(certification_counts.values()),
             "total_sessions": len(sessions),
-            "total_scenarios": db.query(Scenario).count(),
             "avg_session_duration": _average(
                 [float(session.response_duration) for session in sessions if session.response_duration is not None]
             ),
@@ -573,7 +819,7 @@ async def get_admin_performance_hub(
                 ]
             ),
             "completion_rate": round(
-                (trainees_with_activity / len(trainees) * 100) if trainees else 0.0,
+                (len(trainee_ids_with_activity) / active_trainee_count * 100) if active_trainee_count else 0.0,
                 2,
             ),
             "pass_rate": round(
@@ -599,11 +845,14 @@ async def get_admin_performance_hub(
             }
             for bucket in sorted(
                 lob_buckets.values(),
-                key=lambda item: (len(item["user_ids"]), item["name"]),
+                key=lambda item: (item["sessions"], len(item["user_ids"]), item["name"]),
                 reverse=True,
             )
         ],
         "leaderboard": leaderboard[:6],
+        "trainer_analytics": trainer_analytics,
+        "trainer_microlearning": trainer_microlearning,
+        "trainer_coaching": trainer_coaching,
     }
 
 
@@ -621,16 +870,29 @@ async def get_trainer_performance_hub(
             detail="Trainer access required",
         )
 
-    batches = db.query(Batch).filter(Batch.created_by == current_user.id).all()
+    batches = (
+        db.query(Batch)
+        .filter(Batch.created_by == current_user.id, Batch.is_active.is_(True))
+        .all()
+    )
 
-    trainee_lookup: dict[str, User] = {}
-    batch_names_by_trainee: dict[str, List[str]] = {}
+    candidate_trainee_lookup: dict[str, User] = {}
     for batch in batches:
         for user in batch.users:
-            if user.role != UserRole.TRAINEE:
+            if user.role != UserRole.TRAINEE or not user.is_active:
                 continue
-            trainee_lookup[user.id] = user
-            batch_names_by_trainee.setdefault(user.id, [])
+            candidate_trainee_lookup[user.id] = user
+
+    active_trainees = filter_to_supabase_active_users(
+        db,
+        list(candidate_trainee_lookup.values()),
+    )
+    trainee_lookup = {trainee.id: trainee for trainee in active_trainees}
+    batch_names_by_trainee: dict[str, List[str]] = {trainee_id: [] for trainee_id in trainee_lookup}
+    for batch in batches:
+        for user in batch.users:
+            if user.id not in trainee_lookup:
+                continue
             if batch.name not in batch_names_by_trainee[user.id]:
                 batch_names_by_trainee[user.id].append(batch.name)
 
@@ -664,8 +926,14 @@ async def get_trainer_performance_hub(
 
     batch_comparison = []
     for batch in batches:
-        batch_trainees = [user for user in batch.users if user.role == UserRole.TRAINEE]
+        batch_trainees = [
+            user
+            for user in batch.users
+            if user.id in trainee_lookup
+        ]
         batch_trainee_ids = {trainee.id for trainee in batch_trainees}
+        if not batch_trainee_ids:
+            continue
         batch_sessions = [session for session in sessions if session.user_id in batch_trainee_ids]
         batch_comparison.append(
             {
@@ -738,7 +1006,7 @@ async def get_trainer_performance_hub(
 
     return {
         "summary": {
-            "active_batches": len(batches),
+            "active_batches": len(batch_comparison),
             "total_trainees": len(trainee_lookup),
             "total_sessions": total_sessions,
             "average_score": _average(

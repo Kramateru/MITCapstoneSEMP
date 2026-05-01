@@ -1,4 +1,5 @@
 // Helper functions for API calls with authentication token
+import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
 export interface ApiResponse<T> {
   status?: string
@@ -59,10 +60,15 @@ export async function apiFetch<T>(
     headers['Authorization'] = `Bearer ${token}`
   }
 
-  const response = await fetch(input, {
-    ...init,
-    headers,
-  })
+  let response: Response
+  try {
+    response = await fetch(input, {
+      ...init,
+      headers,
+    })
+  } catch (error) {
+    throw normalizeConnectivityError(error)
+  }
 
   const payload = await readResponsePayload(response)
 

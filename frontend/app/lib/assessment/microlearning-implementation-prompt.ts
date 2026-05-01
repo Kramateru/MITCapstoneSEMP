@@ -7,12 +7,12 @@ Current stack and boundaries:
 - Existing trainer and trainee modules already exist. Extend them. Do not rebuild the platform from scratch.
 
 Primary goal:
-Build a production-ready microlearning experience for BPO training where trainer users can manage categories, author or seed modules, upload supporting assets to Supabase, assign selected topics to batches or specific trainees, and track completion, passing score, certificates, reports, and analytics end to end.
+Build a production-ready microlearning experience for BPO training where trainer users can manage categories, author modules, upload supporting assets to Supabase, assign selected topics to batches or specific trainees, and track completion, passing score, certificates, reports, and analytics end to end.
 
 Non-negotiable business rules:
 - Supabase is the source of truth for microlearning categories, modules, assignments, progress, certificates, accomplishment history, reports, analytics, and uploaded assets.
-- Seed at least 10 BPO-focused microlearning modules with answers into Supabase/Postgres.
-- Focus the seeded pack on language, grammar, empathy, tone, pronunciation, escalation, billing, troubleshooting, active listening, and product knowledge.
+- Topic categories must be created and managed by trainer users instead of being pre-seeded.
+- Modules must be created and managed by trainer users instead of relying on a default seed pack.
 - Trainers must be able to add, modify, and delete microlearning topic categories.
 - Trainers must be able to select one or more microlearning topics and assign them to a selected batch that already has assigned trainees.
 - Trainees must be able to open assigned microlearning modules, complete the activity, receive a passing score, and unlock the related certificate automatically.
@@ -170,16 +170,16 @@ Reporting and analytics requirements:
   - accomplishment history
 
 Required deliverables:
-- Backend trainer APIs for category CRUD, module CRUD, asset upload, default 10-module seed pack, assignment creation, and trainer microlearning reporting.
+- Backend trainer APIs for category CRUD, module CRUD, asset upload, assignment creation, and trainer microlearning reporting.
 - Backend trainee APIs for assignment listing, module detail, exercise submission, progress refresh, microlearning report generation, and automatic certificate award.
 - Frontend trainer microlearning studio for categories, modules, assignments, certificates, and per-batch or per-trainee progress.
 - Frontend trainee microlearning hub for opening modules, answering exercises, tracking progress, and seeing certificate unlock state.
-- Supabase-compatible SQL or seed artifacts for the default category and 10-module BPO pack.
-- Documentation that explains how to seed the microlearning library into the active Supabase database.
+- Supabase-compatible SQL or maintenance artifacts for cleaning up legacy sample categories and modules.
+- Documentation that explains that trainer-created categories and modules are saved into the active Supabase database.
 
 Acceptance criteria:
 - Trainer can add, edit, and delete microlearning topic categories.
-- Trainer can seed at least 10 BPO microlearning modules with answers into Supabase-backed persistence.
+- Trainer can create and save microlearning modules into Supabase-backed persistence.
 - Trainer can assign selected modules to a batch with trainees or to a specific trainee.
 - Trainee can access assigned modules, complete the exercises, and receive a passing score.
 - Passing microlearning modules automatically appear in trainee certificates.

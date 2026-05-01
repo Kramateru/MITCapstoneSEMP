@@ -2,6 +2,8 @@ import 'server-only'
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
+import { fetchBackendPath } from '@/app/lib/backend-proxy'
+
 import { getConfigValue } from './env'
 import { createSupabaseAdminClient } from './supabase-admin'
 import type { BackendSessionUser, PlatformRole } from './types'
@@ -240,11 +242,9 @@ export async function requireBackendSessionUser(
   }
   const accessToken = extractAccessToken(authorization)
 
-  const backendUrl = getConfigValue(['BACKEND_URL'], 'http://127.0.0.1:8000')
-
   let backendError: AssessmentHttpError | null = null
   try {
-    const response = await fetch(`${backendUrl}/api/auth/verify-token`, {
+    const response = await fetchBackendPath('/api/auth/verify-token', {
       method: 'GET',
       headers: {
         Authorization: authorization,

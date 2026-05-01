@@ -152,11 +152,11 @@ export default function TraineeDashboard() {
       try {
         const token = localStorage.getItem('token');
         const [reportResponse, availableResponse] = await Promise.all([
-          fetch(`/api/sim-floor/reports/trainee/${user.user_id}`, {
+          fetch(`/api/call-simulation/reports/trainee/${user.user_id}`, {
             headers: { Authorization: `Bearer ${token}` },
             cache: 'no-store',
           }),
-          fetch('/api/sim-floor/available', {
+          fetch('/api/call-simulation/available', {
             headers: { Authorization: `Bearer ${token}` },
             cache: 'no-store',
           }),
@@ -172,7 +172,7 @@ export default function TraineeDashboard() {
           setAssignedSimFloorScenarios(payload.scenarios || []);
         }
       } catch (error) {
-        console.error('Error loading Sim Floor report:', error);
+        console.error('Error loading Call Simulation report:', error);
       }
     };
 
@@ -210,11 +210,11 @@ export default function TraineeDashboard() {
   }, [assignedSimFloorScenarios]);
 
   const simFloorHref = prioritizedSimFloorScenario
-    ? `/trainee/sim-floor?scenarioId=${encodeURIComponent(prioritizedSimFloorScenario.id)}`
-    : '/trainee/sim-floor';
+    ? `/trainee/call-simulation?scenarioId=${encodeURIComponent(prioritizedSimFloorScenario.id)}`
+    : '/trainee/call-simulation';
   const simFloorDescription = prioritizedSimFloorScenario
     ? prioritizedSimFloorScenario.retake_required
-      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest Sim Floor verdict.`
+      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest Call Simulation verdict.`
       : `Open "${prioritizedSimFloorScenario.title}" and launch your assigned mock call right away.`
     : simFloorReport?.summary.retakes
       ? `${simFloorReport.summary.retakes} retake${simFloorReport.summary.retakes === 1 ? '' : 's'} still need completion.`
@@ -352,13 +352,13 @@ export default function TraineeDashboard() {
                   <div className="font-semibold">Strength: {strengthLabel()}</div>
                   <div className="flex flex-wrap gap-2 text-yellow-800">
                     <span className={strengthChecks.length ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.length ? '✓' : '•'} 8+ chars
+                      {strengthChecks.length ? 'OK' : '-'} 8+ chars
                     </span>
                     <span className={strengthChecks.number ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.number ? '✓' : '•'} number
+                      {strengthChecks.number ? 'OK' : '-'} number
                     </span>
                     <span className={strengthChecks.symbol ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.symbol ? '✓' : '•'} symbol
+                      {strengthChecks.symbol ? 'OK' : '-'} symbol
                     </span>
                   </div>
                 </div>
@@ -485,7 +485,7 @@ export default function TraineeDashboard() {
 
               <div className="grid gap-4 md:grid-cols-2">
                 <QuickLinkCard
-                  title="Sim Floor"
+                  title="Call Simulation"
                   description={simFloorDescription}
                   href={simFloorHref}
                   icon={<Mic size={20} />}
@@ -530,7 +530,7 @@ export default function TraineeDashboard() {
           {/* Sidebar - Coaching and Recent Sessions */}
           <div className="space-y-6">
             <div className="bg-card rounded-lg shadow-md p-6 border border-border">
-              <h3 className="text-lg font-bold text-foreground mb-4">Sim Floor Snapshot</h3>
+              <h3 className="text-lg font-bold text-foreground mb-4">Call Simulation Snapshot</h3>
               {simFloorReport ? (
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-3">
@@ -585,12 +585,12 @@ export default function TraineeDashboard() {
                   ))}
 
                   {!simFloorReport.recent_sessions.length ? (
-                    <div className="text-sm text-muted-foreground">No Sim Floor attempts yet.</div>
+                    <div className="text-sm text-muted-foreground">No Call Simulation attempts yet.</div>
                   ) : null}
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">
-                  Start a Sim Floor scenario and your mock-call performance summary will appear here.
+                  Start a Call Simulation scenario and your mock-call performance summary will appear here.
                 </div>
               )}
             </div>

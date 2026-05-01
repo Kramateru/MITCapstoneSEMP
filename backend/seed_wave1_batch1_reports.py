@@ -16,7 +16,7 @@ from .models import Batch, PracticeSession, Scenario, User, UserRole
 from .routes.admin_routes import _ensure_practice_session
 
 TARGET_BATCH_NAME = "WAVE1 - BATCH 1"
-TARGET_TRAINER_EMAIL = "trainer@st.peterville.edu.ph"
+TARGET_TRAINER_EMAIL = "trainer@stpetervelle.edu.ph"
 
 
 def _word_feedback(*items: tuple[str, int, str, str]) -> list[dict[str, object]]:

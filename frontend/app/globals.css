@@ -1,28 +1,31 @@
 @import "tailwindcss";
+@source "./**/*.{js,ts,jsx,tsx,mdx}";
+@source "../hooks/**/*.{js,ts,jsx,tsx,mdx}";
+@source "../styles/**/*.{css}";
 
 :root {
   color-scheme: light;
-  --font-geist-sans: "Aptos", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  --font-geist-sans: "Inter", "Roboto", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   --font-geist-mono: "Cascadia Mono", "Consolas", "Courier New", monospace;
   --font-size: 16px;
-  --background: #ffffff;
+  --background: #f8f9fa;
   --foreground: #0f172a;
   --card: #ffffff;
   --card-foreground: #0f172a;
   --popover: #ffffff;
   --popover-foreground: #0f172a;
-  --primary: #1e3a8a;
+  --primary: #2563eb;
   --primary-foreground: #ffffff;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #1e3a8a;
-  --muted: #f8fafc;
-  --muted-foreground: #475569;
-  --accent: #d97706;
+  --secondary: #eef2f7;
+  --secondary-foreground: #1d4ed8;
+  --muted: #eef3f8;
+  --muted-foreground: #6c757d;
+  --accent: #16a34a;
   --accent-foreground: #ffffff;
   --destructive: #ef4444;
   --destructive-foreground: #ffffff;
-  --border: #e2e8f0;
-  --input: #cbd5e1;
+  --border: #d7dee7;
+  --input: #c8d2de;
   --input-background: #ffffff;
   --switch-background: #cbd5e1;
   --font-weight-medium: 500;
@@ -42,6 +45,12 @@
   --sidebar-accent-foreground: #1e3a8a;
   --sidebar-border: #e2e8f0;
   --sidebar-ring: #3b82f6;
+  --dashboard-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --dashboard-shell-shadow: 0 28px 64px -38px rgba(15, 23, 42, 0.28);
+  --dashboard-card-radius: 1.5rem;
+  --dashboard-gap: clamp(1rem, 0.85rem + 0.6vw, 1.5rem);
+  --dashboard-padding: clamp(1rem, 0.85rem + 0.8vw, 1.5rem);
+  --dashboard-reading-width: 72ch;
 }
 
 .dark {
@@ -134,61 +143,85 @@
 
   html {
     font-size: var(--font-size);
+    -webkit-text-size-adjust: 100%;
   }
 
   body {
-    min-height: 100vh;
+    min-height: 100dvh;
+    width: 100%;
+    overflow-x: hidden;
     background:
-      radial-gradient(circle at top, color-mix(in srgb, var(--primary) 12%, transparent), transparent 45%),
-      linear-gradient(180deg, color-mix(in srgb, var(--background) 92%, white 8%), var(--background));
+      linear-gradient(180deg, #fcfdfe 0%, var(--background) 42%, #eef2f6 100%);
     color: var(--foreground);
     font-family: var(--font-sans), "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-    line-height: 1.55;
+    line-height: 1.6;
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     font-feature-settings: "ss01" 1, "ss02" 1, "cv01" 1;
   }
 
+  h1,
+  h2,
+  h3,
+  h4 {
+    text-wrap: balance;
+  }
+
   h1 {
-    font-size: var(--text-2xl, 1.5rem);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    font-size: clamp(1.85rem, 1.45rem + 1.2vw, 2.75rem);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.03em;
   }
 
   h2 {
-    font-size: var(--text-xl, 1.25rem);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    font-size: clamp(1.5rem, 1.2rem + 0.8vw, 2.2rem);
+    font-weight: 700;
+    line-height: 1.18;
+    letter-spacing: -0.025em;
   }
 
   h3 {
-    font-size: var(--text-lg, 1.125rem);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    font-size: clamp(1.15rem, 1rem + 0.45vw, 1.55rem);
+    font-weight: 700;
+    line-height: 1.25;
   }
 
   h4 {
     font-size: var(--text-base, 1rem);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+    font-weight: 700;
+    line-height: 1.45;
   }
 
   label {
-    font-size: var(--text-base, 1rem);
-    font-weight: var(--font-weight-medium);
+    font-size: 0.96rem;
+    font-weight: 600;
     line-height: 1.5;
   }
 
   button {
-    font-size: var(--text-base, 1rem);
-    font-weight: var(--font-weight-medium);
+    font-size: 0.96rem;
+    font-weight: 600;
     line-height: 1.5;
   }
 
   input {
-    font-size: var(--text-base, 1rem);
+    font-size: 1rem;
     font-weight: var(--font-weight-normal);
     line-height: 1.5;
+  }
+
+  p,
+  li,
+  td,
+  th,
+  small {
+    overflow-wrap: anywhere;
+  }
+
+  p,
+  li {
+    text-wrap: pretty;
   }
 
   a {
@@ -243,6 +276,20 @@
 
   textarea {
     line-height: 1.55;
+  }
+
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+
+  main,
+  section,
+  article,
+  aside {
+    min-width: 0;
   }
 
   table {
@@ -312,5 +359,104 @@
 
   .dark :is(.text-gray-700, .text-gray-800, .text-gray-900, .text-slate-700, .text-slate-800, .text-slate-900) {
     color: var(--foreground) !important;
+  }
+}
+
+@layer utilities {
+  .shadow-sm {
+    box-shadow: var(--dashboard-shadow);
+  }
+
+  .dashboard-page {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-grid {
+    display: grid;
+    gap: var(--dashboard-gap);
+  }
+
+  .dashboard-card {
+    background: var(--card);
+    box-shadow: var(--dashboard-shadow);
+    border: 1px solid color-mix(in srgb, var(--border) 88%, white 12%);
+    border-radius: var(--dashboard-card-radius);
+  }
+
+  .dashboard-section {
+    border-radius: var(--dashboard-card-radius);
+    background: var(--card);
+    padding: var(--dashboard-padding);
+    box-shadow: var(--dashboard-shadow);
+    border: 1px solid color-mix(in srgb, var(--border) 88%, white 12%);
+  }
+
+  .reading-width {
+    max-width: var(--dashboard-reading-width);
+  }
+
+  .speech-panel {
+    border-radius: calc(var(--dashboard-card-radius) - 0.25rem);
+    background: #ffffff;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
+    box-shadow: var(--dashboard-shadow);
+    color: var(--foreground);
+    line-height: 1.65;
+  }
+
+  .cta-button {
+    box-shadow: 0 14px 28px -18px rgba(37, 99, 235, 0.55);
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border-radius: 9999px;
+    padding: 0.4rem 0.8rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1;
+  }
+
+  .status-pill::before {
+    content: "";
+    height: 0.5rem;
+    width: 0.5rem;
+    border-radius: 9999px;
+    background: currentColor;
+    opacity: 0.9;
+  }
+
+  .status-pill-positive {
+    background: #e8f7ee;
+    color: #15803d;
+  }
+
+  .status-pill-warning {
+    background: #fff5e6;
+    color: #b45309;
+  }
+
+  .status-pill-danger {
+    background: #fdecec;
+    color: #b91c1c;
+  }
+
+  .status-pill-neutral {
+    background: #edf2f7;
+    color: #475569;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --font-size: 15px;
+    --dashboard-card-radius: 1.2rem;
+  }
+
+  body {
+    line-height: 1.65;
   }
 }

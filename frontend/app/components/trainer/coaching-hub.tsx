@@ -712,7 +712,7 @@ export default function TrainerCoachingHub({
               <CardHeader>
                 <CardTitle>Finished Mock Calls</CardTitle>
                 <CardDescription>
-                  The latest Sim Floor trainee attempts saved in the database.
+                  The latest Call Simulation trainee attempts saved in the database.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">

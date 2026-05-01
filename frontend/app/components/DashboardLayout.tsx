@@ -2,10 +2,10 @@
 
 import NotificationBell from '@/app/components/shared/notification-bell';
 import ProfileManagementDialog from '@/app/components/shared/profile-management-dialog';
-import { StPeterBuddyChat } from '@/app/components/shared/st-peter-buddy-chat';
+import { Badge } from '@/app/components/ui/badge';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
-import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-client';
+import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
 import {
     applyUserSettingsToDocument,
     buildDefaultUserSettings,
@@ -14,10 +14,10 @@ import {
     USER_SETTINGS_EVENT,
     type UserDashboardSettings,
 } from '@/app/utils/user-settings';
-import { Bot, LogOut, Menu, MessageCircle, X } from 'lucide-react';
+import { LogOut, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 interface SidebarItem {
   label: string;
@@ -42,7 +42,6 @@ export function DashboardLayout({
   userRole?: string;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [buddyOpen, setBuddyOpen] = useState(false);
   const [dashboardSettings, setDashboardSettings] = useState<UserDashboardSettings>(
     () => readCachedUserSettings() ?? buildDefaultUserSettings(),
   );
@@ -57,7 +56,11 @@ export function DashboardLayout({
   const isMinifiedSidebar = dashboardSettings.minifyNavigation && !isTopNavigation;
   const isHiddenSidebar = dashboardSettings.hideNavigation && !isTopNavigation;
   const desktopMenuEnabled = isHiddenSidebar;
-  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-5xl' : 'max-w-7xl';
+  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-7xl xl:max-w-[1500px]' : 'max-w-none';
+  const contentOuterSpacingClass = dashboardSettings.boxedLayout
+    ? 'px-3 py-3 sm:px-5 sm:py-5 lg:px-7 lg:py-7 xl:px-8 xl:py-8'
+    : 'px-3 py-3 sm:px-4 sm:py-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6';
+  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-4 sm:p-6 lg:p-8 xl:p-9' : 'p-4 sm:p-5 lg:p-7 xl:p-8';
 
   let desktopSidebarStateClass = 'lg:translate-x-0 lg:relative';
   if (isTopNavigation) {
@@ -174,10 +177,10 @@ export function DashboardLayout({
           const href = item.href || '';
           return href.startsWith('/trainee/certificates') || href.startsWith('/trainee/reports?tab=certificates');
         }).length;
-        const simFloorBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/sim-floor')).length;
+        const callSimulationBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/call-simulation')).length;
         setSidebarBadgeMap({
           '/trainee/certificates': certificateBadge,
-          '/trainee/sim-floor': simFloorBadge,
+          '/trainee/call-simulation': callSimulationBadge,
         });
       } catch {
         // Keep the rest of the workspace responsive when notifications are temporarily unavailable.
@@ -191,7 +194,7 @@ export function DashboardLayout({
 
     let stream: EventSource | null = null;
     try {
-      stream = openSimFloorRealtimeStream();
+      stream = openCallSimulationRealtimeStream();
       stream.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as { type?: string };
@@ -217,6 +220,17 @@ export function DashboardLayout({
     ...item,
     badge: sidebarBadgeMap[item.href] ?? item.badge,
   }));
+  const isActivePath = useMemo(
+    () => (href: string) => pathname === href || pathname.startsWith(`${href}/`),
+    [pathname],
+  );
+  const currentPageLabel = useMemo(() => {
+    const bestMatch = [...resolvedSidebarItems]
+      .sort((left, right) => right.href.length - left.href.length)
+      .find((item) => isActivePath(item.href));
+
+    return bestMatch?.label || 'Workspace';
+  }, [isActivePath, resolvedSidebarItems]);
 
   const handleLogout = () => {
     logout();
@@ -231,7 +245,7 @@ export function DashboardLayout({
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-background text-foreground">
         <div className="text-sm text-muted-foreground">Loading dashboard...</div>
       </div>
     );
@@ -239,16 +253,15 @@ export function DashboardLayout({
 
   if (!user || user.user_role !== resolvedUserRole) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background text-foreground">
+      <div className="flex min-h-[100dvh] items-center justify-center bg-background text-foreground">
         <div className="text-sm text-muted-foreground">Redirecting to your workspace...</div>
       </div>
     );
   }
 
   return (
-    <div className="relative flex h-screen overflow-hidden bg-background text-foreground">
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,color-mix(in_srgb,var(--background)_92%,white_8%),var(--background))]" />
-      <div className="absolute inset-0 opacity-70 bg-[radial-gradient(circle_at_top,rgba(59,130,246,0.14),transparent_58%)]" />
+    <div className="relative flex min-h-[100dvh] overflow-hidden bg-background text-foreground">
+      <div className="absolute inset-0 bg-[linear-gradient(180deg,#fcfdff_0%,var(--background)_34%,#eef2f6_100%)]" />
       <Toaster position="top-right" richColors />
       {sidebarOpen && (
         <button
@@ -261,15 +274,15 @@ export function DashboardLayout({
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] border-r border-sidebar-border bg-sidebar/95 text-sidebar-foreground shadow-2xl backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-64'} lg:max-w-none ${desktopSidebarStateClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] border-r border-sidebar-border bg-white/94 text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[17rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
         <div className="h-full flex flex-col">
           {/* Logo Section */}
-          <div className="px-6 py-6 border-b border-sidebar-border">
+          <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6">
             <div className={`flex items-center gap-3 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="w-10 h-10 rounded-lg bg-card ring-1 ring-border flex items-center justify-center overflow-hidden shadow-sm">
+              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-card ring-1 ring-border shadow-sm">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
@@ -277,22 +290,22 @@ export function DashboardLayout({
                 />
               </div>
               <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
-                <h1 className="text-sm font-bold text-sidebar-foreground">Speech-Enabled BPO Platform</h1>
-                <p className="text-xs text-muted-foreground capitalize">St. Peter Velle - {resolvedUserRole}</p>
+                <h1 className="text-base font-bold text-sidebar-foreground">Speech-Enabled BPO Platform</h1>
+                <p className="text-xs leading-5 text-muted-foreground capitalize">St. Peter Velle - {resolvedUserRole}</p>
               </div>
             </div>
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+          <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
             {resolvedSidebarItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
                 prefetch={true}
                 onClick={handleSidebarLinkClick}
-                className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-colors ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
-                  pathname === item.href
+                className={`flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-[background-color,color,transform,box-shadow] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
+                  isActivePath(item.href)
                     ? 'bg-sidebar-primary text-sidebar-primary-foreground font-medium shadow-sm'
                     : 'text-sidebar-foreground/85 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                 }`}
@@ -300,9 +313,9 @@ export function DashboardLayout({
                 {item.icon}
                 <span className={`flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
                   {item.badge && !isMinifiedSidebar ? (
-                    <span className="px-2 py-1 bg-red-100 text-red-800 rounded-full text-xs font-semibold">
+                    <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
                       {item.badge}
-                    </span>
+                    </Badge>
                   ) : null}
               </Link>
             ))}
@@ -312,7 +325,7 @@ export function DashboardLayout({
           <div className="p-4 border-t border-sidebar-border">
             <button
               onClick={handleLogout}
-              className="w-full flex items-center gap-3 px-4 py-3 text-sidebar-foreground/85 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground rounded-lg transition-colors"
+              className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sidebar-foreground/85 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <LogOut size={20} />
               <span>Logout</span>
@@ -324,7 +337,7 @@ export function DashboardLayout({
       {/* Main Content */}
       <div className="relative z-10 flex-1 flex flex-col min-w-0">
         {/* Top Navigation Bar */}
-        <header className={`bg-background/88 backdrop-blur border-b border-border px-6 py-4 flex items-center justify-between shadow-sm ${
+        <header className={`flex items-center justify-between gap-3 border-b border-border bg-white/92 px-3 py-3 shadow-sm backdrop-blur sm:px-5 sm:py-4 lg:px-6 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
           <button
@@ -339,12 +352,12 @@ export function DashboardLayout({
             {sidebarOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
 
-          <h1 className="text-xl font-bold text-foreground hidden lg:block">
-            Dashboard
+          <h1 className="hidden text-lg font-bold text-foreground lg:block xl:text-xl">
+            {currentPageLabel}
           </h1>
 
           {/* Right Section */}
-          <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 sm:gap-4 lg:gap-6">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>
@@ -352,7 +365,7 @@ export function DashboardLayout({
 
         {isTopNavigation ? (
           <div className="hidden border-b border-border bg-background/88 backdrop-blur lg:block">
-            <div className={`mx-auto w-full px-6 ${contentWidthClass}`}>
+            <div className={`mx-auto w-full px-4 sm:px-5 lg:px-6 ${contentWidthClass}`}>
               <nav className="overflow-x-auto py-3">
                 <div className="flex min-w-max items-center gap-2">
                   {resolvedSidebarItems.map((item) => (
@@ -360,7 +373,7 @@ export function DashboardLayout({
                       key={`top-${item.href}`}
                       href={item.href}
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
-                        pathname === item.href
+                        isActivePath(item.href)
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                       }`}
@@ -382,35 +395,15 @@ export function DashboardLayout({
 
         {/* Page Content */}
         <main className="flex-1 overflow-auto">
-          <div className={`mx-auto w-full p-6 ${contentWidthClass}`}>
-            <div className="rounded-2xl border border-border bg-card/98 shadow-xl p-6 text-card-foreground">
+          <div className={`dashboard-page mx-auto w-full ${contentOuterSpacingClass} ${contentWidthClass}`}>
+            <div
+              className={`rounded-[1.35rem] sm:rounded-[1.55rem] lg:rounded-[1.75rem] border border-border/80 bg-card/98 text-card-foreground ${contentInnerSpacingClass}`}
+              style={{ boxShadow: 'var(--dashboard-shell-shadow)' }}
+            >
               {children}
             </div>
           </div>
         </main>
-      </div>
-
-      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
-        {buddyOpen && (
-          <StPeterBuddyChat
-            variant="widget"
-            onClose={() => setBuddyOpen(false)}
-          />
-        )}
-
-        <button
-          type="button"
-          onClick={() => setBuddyOpen((prev) => !prev)}
-          className="group inline-flex items-center gap-3 rounded-full border border-blue-200 bg-white/95 px-4 py-3 text-sm font-semibold text-slate-900 shadow-2xl backdrop-blur transition hover:border-blue-300 hover:bg-white"
-          aria-label="Toggle St Peter Buddy"
-          title="Open St Peter Buddy"
-        >
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-700 text-white shadow-lg transition group-hover:bg-blue-800">
-            {buddyOpen ? <X size={18} /> : <MessageCircle size={18} />}
-          </span>
-          <span className="hidden sm:inline">St Peter Buddy</span>
-          <Bot size={16} className="hidden text-blue-700 sm:inline" />
-        </button>
       </div>
     </div>
   );

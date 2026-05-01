@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server'
 
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
-import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
+import {
+  handleAssessmentRouteError,
+  isAssessmentServiceUnavailableError,
+} from '@/app/lib/assessment/route-utils'
 import { getTrainerAssessmentBootstrap } from '@/app/lib/assessment/service'
 import type { TrainerBootstrapResponse } from '@/app/lib/assessment/types'
 
@@ -27,13 +30,7 @@ export async function GET(request: Request) {
     const payload = await getTrainerAssessmentBootstrap(sessionUser)
     return NextResponse.json(payload)
   } catch (error) {
-    if (
-      error instanceof Error
-      && (
-        /invalid api key/i.test(error.message)
-        || /supabase assessment service/i.test(error.message)
-      )
-    ) {
+    if (isAssessmentServiceUnavailableError(error)) {
       return NextResponse.json(buildEmptyTrainerBootstrap())
     }
 

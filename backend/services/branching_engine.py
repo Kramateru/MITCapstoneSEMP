@@ -54,9 +54,6 @@ class ScenarioStep:
     estimated_duration: int = 30  # Seconds
     difficulty: str = "medium"  # easy, medium, hard
     
-    # Optional hint system
-    buddy_bot_hint: Optional[str] = None
-
 
 @dataclass
 class ScenarioFlowResult:

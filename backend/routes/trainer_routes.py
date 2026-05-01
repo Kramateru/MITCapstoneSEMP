@@ -7,7 +7,6 @@ import csv
 import io
 import re
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import (
@@ -32,13 +31,14 @@ from ..default_credentials import DEFAULT_TRAINEE_PASSWORD
 from ..models import (
     batch_user_association,
     Batch,
+    CertificateRecord,
     Course,
     CourseAssignment,
     Feedback,
     FeedbackType,
-    MicrolearningAssessmentMethod,
     MicrolearningAssignment,
     MicrolearningModule,
+    MicrolearningUploadedAsset,
     MicrolearningTopicCategory,
     PerformanceMetrics,
     PracticeSession,
@@ -47,31 +47,28 @@ from ..models import (
     User,
     UserRole,
 )
+from ..services.certificate_awards import sync_trainee_completion_certificates
 from ..services.live_updates import live_update_manager
 from ..services.microlearning import (
-    ensure_assessment_method_catalog,
-    ensure_assessment_method_examples,
     ensure_module_exercises,
-    generate_default_exercises,
     refresh_assignment_progress,
-    serialize_assessment_method,
     serialize_microlearning_module,
     serialize_assignment_summary,
 )
+from ..services.microlearning_delete import (
+    MicrolearningDeleteError,
+    delete_microlearning_module_and_dependencies,
+)
 from ..services.microlearning_catalog import (
-    BPO_MICROLEARNING_LIBRARY,
     build_type_specific_exercises,
     normalize_module_type,
-    seed_bpo_microlearning_library,
     serialize_topic_category,
 )
+from ..services.supabase_auth_service import SupabaseUserSyncError, sync_user_to_supabase_auth
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
-MICROLEARNING_ASSET_ROOT = (
-    Path(__file__).resolve().parent.parent / "media" / "microlearning-assets"
-)
 
 
 def Depends(dependency=None):
@@ -89,6 +86,13 @@ def _normalize_header(header: str) -> str:
 
 def _normalize_text_value(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _sync_trainee_to_supabase_or_raise(db: Session, trainee: User) -> None:
+    try:
+        sync_user_to_supabase_auth(db, trainee)
+    except SupabaseUserSyncError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 def _derive_batch_name(name: Optional[str], wave_number: Optional[int]) -> str:
@@ -356,61 +360,48 @@ def _sanitize_asset_name(filename: str) -> str:
 
 def _upload_microlearning_asset(
     *,
+    db: Session,
     trainer_id: str,
     file_bytes: bytes,
     filename: str,
     content_type: Optional[str],
-) -> str:
+) -> Dict[str, Any]:
     sanitized = _sanitize_asset_name(filename)
-    timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
-    prefixed_name = f"{timestamp}_{sanitized}"
-    supabase = get_supabase_client()
-
-    if supabase.is_available:
-        path = f"microlearning-assets/{trainer_id}/{prefixed_name}"
-        public_url = supabase.upload_binary(
-            path=path,
-            file_data=file_bytes,
-            content_type=content_type or "application/octet-stream",
-            upsert=False,
-        )
-        if public_url:
-            return public_url
-
-    target_dir = MICROLEARNING_ASSET_ROOT / trainer_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target_path = target_dir / prefixed_name
-    target_path.write_bytes(file_bytes)
-    return f"/media/microlearning-assets/{trainer_id}/{prefixed_name}"
-
-
-def _ensure_trainer_default_microlearning_library(
-    db: Session,
-    *,
-    trainer_id: str,
-) -> bool:
-    expected_titles = {
-        (definition.get("title") or "").strip().lower()
-        for definition in BPO_MICROLEARNING_LIBRARY
-        if (definition.get("title") or "").strip()
-    }
-    existing_titles = {
-        (title or "").strip().lower()
-        for (title,) in (
-            db.query(MicrolearningModule.title)
-            .filter(
-                MicrolearningModule.created_by == trainer_id,
-                MicrolearningModule.is_active == True,
-            )
-            .all()
-        )
-    }
-    if expected_titles.issubset(existing_titles):
-        return False
-
-    seed_bpo_microlearning_library(db, trainer_id=trainer_id)
+    asset = MicrolearningUploadedAsset(
+        trainer_id=trainer_id,
+        filename=sanitized,
+        content_type=content_type or "application/octet-stream",
+        byte_size=len(file_bytes),
+        file_bytes=file_bytes,
+    )
+    db.add(asset)
     db.commit()
-    return True
+    db.refresh(asset)
+
+    asset_url = f"/api/microlearning/assets/{asset.id}/stream"
+
+    return {
+        "asset_url": asset_url,
+        "asset_record_id": asset.id,
+        "storage_backend": "supabase_postgres",
+        "signed_url_required": False,
+        "content_type": content_type or "application/octet-stream",
+        "byte_size": asset.byte_size,
+    }
+
+
+def _feedback_category_db_label(category: FeedbackType | str | None) -> str:
+    if isinstance(category, FeedbackType):
+        return category.name
+    normalized = str(category or "").strip()
+    return normalized.upper() if normalized else FeedbackType.PRONUNCIATION.name
+
+
+def _feedback_category_api_value(category: FeedbackType | str | None) -> str:
+    if isinstance(category, FeedbackType):
+        return category.value
+    normalized = str(category or "").strip().lower()
+    return normalized or FeedbackType.PRONUNCIATION.value
 
 
 def _build_microlearning_report_overview(
@@ -659,6 +650,7 @@ def _create_trainee_account(
 
     db.add(new_user)
     db.flush()
+    _sync_trainee_to_supabase_or_raise(db, new_user)
 
     if new_user not in batch.users:
         batch.users.append(new_user)
@@ -782,7 +774,6 @@ class MicrolearningModuleCreate(BaseModel):
     content_url: Optional[str] = None
     content_data: Optional[Dict[str, Any]] = None
     difficulty: ScenarioDifficulty = ScenarioDifficulty.BASIC
-    assessment_method_id: Optional[str] = None
     topic_category_id: Optional[str] = None
 
 
@@ -1177,6 +1168,9 @@ async def create_trainee(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except HTTPException:
+        db.rollback()
+        raise
 
     db.commit()
     db.refresh(new_user)
@@ -1376,6 +1370,11 @@ async def update_trainee(
     if trainee not in batch.users:
         batch.users.append(trainee)
 
+    try:
+        _sync_trainee_to_supabase_or_raise(db, trainee)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(trainee)
 
@@ -1541,6 +1540,8 @@ async def bulk_upload_trainees(
                 )
         except ValueError as exc:
             errors.append(f"Row {index}: {exc}")
+        except HTTPException as exc:
+            errors.append(f"Row {index}: {exc.detail}")
 
     db.commit()
 
@@ -1673,35 +1674,43 @@ async def delete_microlearning_topic_category(
         category_id=category_id,
     )
     linked_modules = (
-        db.query(MicrolearningModule.id)
+        db.query(MicrolearningModule)
         .filter(
+            MicrolearningModule.created_by == current_user.id,
             MicrolearningModule.topic_category_id == category.id,
-            MicrolearningModule.is_active == True,
         )
-        .first()
+        .all()
     )
-    if linked_modules:
-        raise HTTPException(
-            status_code=400,
-            detail="Reassign or archive the linked modules before deleting this category.",
-        )
+
+    reassigned_module_count = 0
+    for module in linked_modules:
+        if module.is_active:
+            reassigned_module_count += 1
+        module.topic_category_id = None
+        module.topic_category = None
 
     category.is_active = False
     db.commit()
-    return {"status": "deleted", "category_id": category.id}
+    return {
+        "status": "deleted",
+        "category_id": category.id,
+        "reassigned_module_count": reassigned_module_count,
+    }
 
 
 @router.post("/microlearning-assets/upload")
 async def upload_microlearning_asset(
     file: UploadFile = File(...),
     current_user: Any = Depends(verify_trainer),
+    db: Session = Depends(),
 ):
     """Upload a trainer asset for video, image, audio, or infographic content."""
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    asset_url = _upload_microlearning_asset(
+    upload_result = _upload_microlearning_asset(
+        db=db,
         trainer_id=current_user.id,
         file_bytes=file_bytes,
         filename=file.filename or "microlearning-asset.bin",
@@ -1709,9 +1718,8 @@ async def upload_microlearning_asset(
     )
     return {
         "status": "uploaded",
-        "asset_url": asset_url,
+        **upload_result,
         "filename": file.filename,
-        "content_type": file.content_type,
     }
 
 
@@ -1720,10 +1728,11 @@ async def seed_bpo_microlearning_pack(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Seed the default BPO-focused microlearning pack into the active database."""
-    summary = seed_bpo_microlearning_library(db, trainer_id=current_user.id)
-    db.commit()
-    return {"status": "seeded", **summary}
+    """Legacy seed endpoint retained only to block reintroducing sample content."""
+    raise HTTPException(
+        status_code=410,
+        detail="Default microlearning seed packs are disabled. Categories and modules must be created by the trainer.",
+    )
 
 
 @router.get("/microlearning-reports/overview")
@@ -1740,41 +1749,8 @@ async def list_microlearning_assessment_methods(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """List assessment methods used for assessment-based microlearning lessons."""
-    methods = ensure_assessment_method_catalog(db)
-    method_ids = [method.id for method in methods]
-
-    lesson_counts = {}
-    if method_ids:
-        lesson_counts = {
-            method_id: count
-            for method_id, count in (
-                db.query(
-                    MicrolearningModule.assessment_method_id,
-                    func.count(MicrolearningModule.id),
-                )
-                .filter(
-                    MicrolearningModule.created_by == current_user.id,
-                    MicrolearningModule.assessment_method_id.in_(method_ids),
-                    MicrolearningModule.is_active == True,
-                )
-                .group_by(MicrolearningModule.assessment_method_id)
-                .all()
-            )
-        }
-
-    db.commit()
-    return {
-        "count": len(methods),
-        "methods": [
-            serialize_assessment_method(
-                method,
-                lesson_count=lesson_counts.get(method.id, 0),
-            )
-            for method in methods
-            if method.is_active
-        ],
-    }
+    """Trainer microlearning methods have been removed from the authoring workflow."""
+    return {"count": 0, "methods": []}
 
 
 @router.post("/microlearning-assessment-methods/seed-examples")
@@ -1782,16 +1758,11 @@ async def seed_microlearning_assessment_examples(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Create or refresh example assessment-based microlearning lessons for the current trainer."""
-    summary = ensure_assessment_method_examples(
-        db,
-        trainer_id=current_user.id,
+    """Legacy seed endpoint retained only to block reintroducing sample lessons."""
+    raise HTTPException(
+        status_code=410,
+        detail="Example microlearning lessons are disabled. Modules must be created by the trainer.",
     )
-    db.commit()
-    return {
-        "status": "seeded",
-        **summary,
-    }
 
 
 @router.get("/microlearning-modules")
@@ -1800,8 +1771,6 @@ async def list_microlearning_modules(
     db: Session = Depends(),
 ):
     """List active microlearning modules created by the current trainer."""
-    _ensure_trainer_default_microlearning_library(db, trainer_id=current_user.id)
-
     modules = (
         db.query(MicrolearningModule)
         .options(
@@ -1846,7 +1815,7 @@ async def create_microlearning_module(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Create a trainer-owned microlearning module with generated default exercises."""
+    """Create a trainer-owned microlearning module using trainer-authored content only."""
     title = payload.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Module title is required")
@@ -1856,19 +1825,13 @@ async def create_microlearning_module(
         raise HTTPException(status_code=400, detail="Passing score must be between 1 and 100")
 
     module_type = normalize_module_type(payload.module_type)
-
-    assessment_method: Optional[MicrolearningAssessmentMethod] = None
-    if payload.assessment_method_id:
-        assessment_method = (
-            db.query(MicrolearningAssessmentMethod)
-            .filter(
-                MicrolearningAssessmentMethod.id == payload.assessment_method_id,
-                MicrolearningAssessmentMethod.is_active == True,
-            )
-            .first()
+    if module_type == "case_study":
+        raise HTTPException(
+            status_code=400,
+            detail="Legacy case study modules can no longer be created. Use the Audio Lesson format instead.",
         )
-        if not assessment_method:
-            raise HTTPException(status_code=404, detail="Assessment method not found")
+    feedback_category_value = _feedback_category_api_value(payload.category)
+    feedback_category_db_label = _feedback_category_db_label(payload.category)
 
     topic_category: Optional[MicrolearningTopicCategory] = None
     if payload.topic_category_id:
@@ -1881,23 +1844,24 @@ async def create_microlearning_module(
     content_data = dict(payload.content_data or {})
     if payload.content_url and not content_data.get("asset_url"):
         content_data["asset_url"] = payload.content_url
+    if content_data.get("asset_record_id"):
+        content_data["storage_backend"] = content_data.get("storage_backend") or "supabase_postgres"
+    if content_data.get("asset_storage_path") and not content_data.get("asset_bucket"):
+        content_data["asset_bucket"] = get_supabase_client().microlearning_bucket_name
+    if content_data.get("asset_storage_path"):
+        content_data["signed_url_required"] = bool(content_data.get("signed_url_required", True))
 
     exercises = build_type_specific_exercises(
         module_type,
         content_data,
         title=title,
         skill_focus=payload.skill_focus,
-    ) or generate_default_exercises(
-        payload.category,
-        title=title,
-        skill_focus=payload.skill_focus,
-        assessment_method_slug=assessment_method.slug if assessment_method else None,
     )
 
     module = MicrolearningModule(
         title=title,
         description=(payload.description or "").strip() or None,
-        category=payload.category,
+        category=feedback_category_db_label,
         type=module_type,
         duration_minutes=payload.duration_minutes,
         content_data=content_data,
@@ -1906,19 +1870,15 @@ async def create_microlearning_module(
         content_url=(payload.content_url or "").strip() or None,
         difficulty=payload.difficulty,
         exercises=exercises,
-        assessment_method_id=assessment_method.id if assessment_method else None,
+        assessment_method_id=None,
         topic_category_id=topic_category.id if topic_category else None,
         created_by=current_user.id,
     )
-    if assessment_method:
-        module.assessment_method = assessment_method
     if topic_category:
         module.topic_category = topic_category
     db.add(module)
     db.commit()
     db.refresh(module)
-    if assessment_method:
-        module.assessment_method = assessment_method
     if topic_category:
         module.topic_category = topic_category
 
@@ -1954,19 +1914,13 @@ async def update_microlearning_module(
     next_description = (payload.description or "").strip() or None
     next_content_url = (payload.content_url or "").strip() or None
     module_type = normalize_module_type(payload.module_type)
-
-    assessment_method: Optional[MicrolearningAssessmentMethod] = None
-    if payload.assessment_method_id:
-        assessment_method = (
-            db.query(MicrolearningAssessmentMethod)
-            .filter(
-                MicrolearningAssessmentMethod.id == payload.assessment_method_id,
-                MicrolearningAssessmentMethod.is_active == True,
-            )
-            .first()
+    if module_type == "case_study" and normalize_module_type(module.type) != "case_study":
+        raise HTTPException(
+            status_code=400,
+            detail="Legacy case study modules can no longer be created. Use the Audio Lesson format instead.",
         )
-        if not assessment_method:
-            raise HTTPException(status_code=404, detail="Assessment method not found")
+    feedback_category_value = _feedback_category_api_value(payload.category)
+    feedback_category_db_label = _feedback_category_db_label(payload.category)
 
     topic_category: Optional[MicrolearningTopicCategory] = None
     if payload.topic_category_id:
@@ -1979,14 +1933,19 @@ async def update_microlearning_module(
     next_content_data = dict(payload.content_data or {})
     if next_content_url and not next_content_data.get("asset_url"):
         next_content_data["asset_url"] = next_content_url
+    if next_content_data.get("asset_record_id"):
+        next_content_data["storage_backend"] = next_content_data.get("storage_backend") or "supabase_postgres"
+    if next_content_data.get("asset_storage_path") and not next_content_data.get("asset_bucket"):
+        next_content_data["asset_bucket"] = get_supabase_client().microlearning_bucket_name
+    if next_content_data.get("asset_storage_path"):
+        next_content_data["signed_url_required"] = bool(next_content_data.get("signed_url_required", True))
 
     should_regenerate_exercises = any(
         [
             module.title != title,
-            module.category != payload.category,
+            str(getattr(module, "category", "") or "").strip().lower() != feedback_category_value,
             normalize_module_type(module.type) != module_type,
             module.skill_focus != next_skill_focus,
-            module.assessment_method_id != (assessment_method.id if assessment_method else None),
             module.topic_category_id != (topic_category.id if topic_category else None),
             (module.content_data or {}) != next_content_data,
             not module.exercises,
@@ -2001,7 +1960,7 @@ async def update_microlearning_module(
 
     module.title = title
     module.description = next_description
-    module.category = payload.category
+    module.category = feedback_category_db_label
     module.type = module_type
     module.duration_minutes = payload.duration_minutes
     module.content_data = next_content_data
@@ -2009,8 +1968,8 @@ async def update_microlearning_module(
     module.skill_focus = next_skill_focus
     module.content_url = next_content_url
     module.difficulty = payload.difficulty
-    module.assessment_method_id = assessment_method.id if assessment_method else None
-    module.assessment_method = assessment_method
+    module.assessment_method_id = None
+    module.assessment_method = None
     module.topic_category_id = topic_category.id if topic_category else None
     module.topic_category = topic_category
 
@@ -2025,17 +1984,11 @@ async def update_microlearning_module(
                 next_content_data,
                 title=title,
                 skill_focus=next_skill_focus,
-            ) or generate_default_exercises(
-                payload.category,
-                title=title,
-                skill_focus=next_skill_focus,
-                assessment_method_slug=assessment_method.slug if assessment_method else None,
             )
             exercises_regenerated = True
 
     db.commit()
     db.refresh(module)
-    module.assessment_method = assessment_method
     module.topic_category = topic_category
     assignment_count = _get_microlearning_assignment_counts(db, module_ids=[module.id]).get(module.id, 0)
 
@@ -2053,18 +2006,43 @@ async def delete_microlearning_module(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Soft-delete a trainer-owned microlearning module from the active library."""
+    """Permanently delete a trainer-owned microlearning module and its dependent records."""
     module = _get_trainer_microlearning_module(
         db,
         trainer_id=current_user.id,
         module_id=module_id,
     )
-    module.is_active = False
-    db.commit()
+    supabase_client = get_supabase_client()
+
+    try:
+        delete_summary = delete_microlearning_module_and_dependencies(
+            db,
+            module=module,
+            supabase_client=supabase_client,
+        )
+    except MicrolearningDeleteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    for trainee_id in delete_summary.impacted_trainee_ids:
+        await live_update_manager.broadcast(
+            f"trainee:{trainee_id}",
+            {
+                "type": "microlearning_module_deleted",
+                "module_id": delete_summary.module_id,
+                "title": delete_summary.module_title,
+                "deleted_assignments": delete_summary.deleted_assignment_count,
+            },
+        )
+
     return {
         "status": "deleted",
-        "module_id": module.id,
-        "title": module.title,
+        "module_id": delete_summary.module_id,
+        "title": delete_summary.module_title,
+        "deleted_assignments": delete_summary.deleted_assignment_count,
+        "deleted_certificates": delete_summary.deleted_certificate_count,
+        "deleted_storage_count": delete_summary.deleted_storage_count,
+        "impacted_trainee_ids": delete_summary.impacted_trainee_ids,
+        "impacted_batch_ids": delete_summary.impacted_batch_ids,
     }
 
 
@@ -2158,6 +2136,7 @@ async def assign_microlearning_modules(
         trainees = [trainee]
         batch_id = None
 
+    target_trainee_ids = [trainee.id for trainee in trainees]
     assigned_count = 0
     skipped_count = 0
     did_backfill = False
@@ -2197,6 +2176,18 @@ async def assign_microlearning_modules(
 
     db.commit()
 
+    for trainee_id in target_trainee_ids:
+        await live_update_manager.broadcast(
+            f"trainee:{trainee_id}",
+            {
+                "type": "microlearning_assignments_changed",
+                "batch_id": batch_id,
+                "module_ids": module_ids,
+                "assigned_count": assigned_count,
+                "skipped_count": skipped_count,
+            },
+        )
+
     return {
         "status": "assigned",
         "assigned_count": assigned_count,
@@ -2211,7 +2202,7 @@ async def delete_microlearning_assignment(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Remove a trainer-owned microlearning assignment that has not been certified."""
+    """Remove a trainer-owned microlearning assignment and its trainee-facing certificate records."""
     assignment = (
         db.query(MicrolearningAssignment)
         .options(
@@ -2226,21 +2217,43 @@ async def delete_microlearning_assignment(
     )
     if not assignment:
         raise HTTPException(status_code=404, detail="Microlearning assignment not found")
-    if assignment.certificate_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Certified assignments are locked for report and certificate history.",
-        )
 
     module_title = assignment.module.title if assignment.module else None
     trainee_name = assignment.trainee.full_name if assignment.trainee else None
+    trainee_id = assignment.trainee_id
+    linked_certificates: dict[str, CertificateRecord] = {
+        certificate.id: certificate
+        for certificate in (
+            db.query(CertificateRecord)
+            .filter(
+                CertificateRecord.source_type == "microlearning_assignment",
+                CertificateRecord.source_id == assignment.id,
+            )
+            .all()
+        )
+    }
+    if assignment.certificate_id:
+        certificate = (
+            db.query(CertificateRecord)
+            .filter(CertificateRecord.id == assignment.certificate_id)
+            .first()
+        )
+        if certificate:
+            linked_certificates[certificate.id] = certificate
+
+    for certificate in linked_certificates.values():
+        db.delete(certificate)
+
+    assignment.certificate_id = None
     db.delete(assignment)
     db.commit()
+    sync_trainee_completion_certificates(db, trainee_id)
     return {
         "status": "deleted",
         "assignment_id": assignment_id,
         "module_title": module_title,
         "trainee_name": trainee_name,
+        "deleted_certificates": len(linked_certificates),
     }
 
 

@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -166,14 +167,14 @@ def verify_token(token: str) -> TokenData:
 # ===================== Dependency: Get Current User =====================
 
 async def get_current_user(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
-    request: Request = None,
 ) -> User:
-    """Dependency to get the current authenticated user from token"""
-    if not authorization and request is not None:
-        authorization = request.headers.get("Authorization")
-
+    """Dependency to get the current authenticated user from token.
+    
+    This function can be used as a FastAPI dependency with automatic header extraction,
+    or called directly with an explicit authorization token.
+    """
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

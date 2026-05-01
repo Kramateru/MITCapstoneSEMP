@@ -136,6 +136,8 @@ async def create_assessment(
     """Create a new assessment"""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
+    provided_questions = payload.questions or []
+    question_count = len(provided_questions)
 
     assessment = Assessment(
         id=str(uuid4()),
@@ -143,7 +145,7 @@ async def create_assessment(
         description=payload.description,
         category=payload.category,
         difficulty=payload.difficulty,
-        question_count=payload.question_count,
+        question_count=question_count,
         passing_score=payload.passing_score,
         created_by=current_user.id,
         is_published=True,
@@ -152,32 +154,17 @@ async def create_assessment(
     db.add(assessment)
     db.flush()  # Get the ID without committing
 
-    # Add sample questions if not provided
-    if payload.questions:
-        for idx, q in enumerate(payload.questions):
-            question = AssessmentQuestion(
-                id=str(uuid4()),
-                assessment_id=assessment.id,
-                question_text=q.question_text,
-                options=q.options,
-                correct_answer=q.correct_answer,
-                explanation=q.explanation,
-                question_index=idx,
-            )
-            db.add(question)
-    else:
-        # Create placeholder sample questions
-        for i in range(len(payload.questions or []) or payload.question_count):
-            question = AssessmentQuestion(
-                id=str(uuid4()),
-                assessment_id=assessment.id,
-                question_text=f"Sample Question {i + 1}",
-                options=["Option A", "Option B", "Option C", "Option D"],
-                correct_answer="Option A",
-                explanation=f"This is a sample explanation for question {i + 1}",
-                question_index=i,
-            )
-            db.add(question)
+    for idx, q in enumerate(provided_questions):
+        question = AssessmentQuestion(
+            id=str(uuid4()),
+            assessment_id=assessment.id,
+            question_text=q.question_text,
+            options=q.options,
+            correct_answer=q.correct_answer,
+            explanation=q.explanation,
+            question_index=idx,
+        )
+        db.add(question)
     
     db.commit()
     db.refresh(assessment)

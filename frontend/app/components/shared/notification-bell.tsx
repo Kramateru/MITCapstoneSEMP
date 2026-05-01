@@ -212,14 +212,24 @@ export default function NotificationBell() {
     void loadNotifications('refresh');
   }, [loadNotifications, open]);
 
-  const handleReadNotification = useCallback(async (notificationId: string) => {
+  const handleReadNotification = useCallback(async (notificationId: string, href?: string) => {
+    const normalizedHref = (href || '').trim();
+
     // Immediate UI update
     setPayload((prevPayload) => {
-      const filtered = prevPayload.notifications.filter((item) => item.id !== notificationId);
+      const filtered = prevPayload.notifications.filter((item) => {
+        if (item.id === notificationId) {
+          return false;
+        }
+        if (normalizedHref && item.href === normalizedHref) {
+          return false;
+        }
+        return true;
+      });
       return {
         ...prevPayload,
         notifications: filtered,
-        count: Math.max(prevPayload.count - 1, 0),
+        count: filtered.length,
       };
     });
 
@@ -227,7 +237,10 @@ export default function NotificationBell() {
       const response = await fetchWithAuthRetry('/api/notifications/read', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notification_id: notificationId }),
+        body: JSON.stringify({
+          notification_id: notificationId,
+          href: normalizedHref,
+        }),
       });
       if (!response.ok) {
         throw new Error(await readErrorMessage(response, 'Unable to update the notification right now.'));
@@ -243,7 +256,7 @@ export default function NotificationBell() {
   const handleOpenNotification = useCallback(
     async (notification: NotificationItem) => {
       setOpen(false);
-      await handleReadNotification(notification.id);
+      await handleReadNotification(notification.id, notification.href);
       router.push(notification.href);
     },
     [handleReadNotification, router],

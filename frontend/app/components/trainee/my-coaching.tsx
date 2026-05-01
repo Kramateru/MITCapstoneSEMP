@@ -1,10 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, CheckCircle2, FileText, MessageSquare, Target } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 
-import { openSimFloorRealtimeStream } from '@/app/lib/assessment/sim-floor-client';
+import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
 
 import { Alert, AlertDescription } from '../ui/alert';
 import { Badge } from '../ui/badge';
@@ -85,7 +85,7 @@ export default function MyCoaching() {
   useEffect(() => {
     let stream: EventSource | null = null;
     try {
-      stream = openSimFloorRealtimeStream();
+      stream = openCallSimulationRealtimeStream();
       stream.onmessage = (event) => {
         try {
           const payload = JSON.parse(event.data) as { type?: string };

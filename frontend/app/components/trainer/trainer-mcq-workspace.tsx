@@ -467,11 +467,6 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
     [categories],
   );
 
-  const savedQuestionSetCount = useMemo(
-    () => categories.reduce((total, category) => total + Number(category.selected_question_count || 0), 0),
-    [categories],
-  );
-
   const categoriesReadyToPublish = useMemo(
     () => categories.filter((category) => Number(category.selected_question_count || 0) > 0).length,
     [categories],
@@ -798,9 +793,8 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
             Assessment Navigation
           </h2>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Trainers now manage assessments in one Supabase-backed workflow: create the assessment category, create
-            multiple-choice question bank items, assign those questions to the category, then assign the category to
-            trainer-owned batches or waves with a time limit.
+            Manage assessment categories, build the multiple-choice question bank, save selected question sets, and
+            assign each category to trainer-owned batches or waves with a time limit.
           </p>
         </div>
         <Button variant="outline" onClick={() => void loadWorkspace('refresh')} disabled={refreshing}>
@@ -826,41 +820,6 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
             label="Published Categories"
             value={String(completionSummary.activeAssignments)}
             hint={`${completionSummary.completed} completed | ${completionSummary.passed} passed`}
-          />
-        </CardContent>
-      </Card>
-
-      <Card className="border-slate-200 bg-white/90">
-        <CardHeader className="pb-4">
-          <CardTitle>Trainer Workflow</CardTitle>
-          <CardDescription>
-            Follow the same sequence every time so category creation, question-bank authoring, assignment, and trainee delivery stay easy to track.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-4">
-          <WorkflowStepCard
-            step="1"
-            title="Create Category"
-            description="Add the assessment category and set the pass mark."
-            status={categories.length ? `${categories.length} saved` : 'Start here'}
-          />
-          <WorkflowStepCard
-            step="2"
-            title="Build Question Bank"
-            description="Save multiple-choice questions with options A to D."
-            status={questionBankCount ? `${questionBankCount} questions ready` : 'Add questions'}
-          />
-          <WorkflowStepCard
-            step="3"
-            title="Save Category Set"
-            description="Choose which item-bank questions belong to the category."
-            status={savedQuestionSetCount ? `${savedQuestionSetCount} mapped` : 'Map questions'}
-          />
-          <WorkflowStepCard
-            step="4"
-            title="Assign To Batch / Wave"
-            description="Publish the category with a timer and monitor trainee results."
-            status={completionSummary.activeAssignments ? `${completionSummary.activeAssignments} live` : 'Publish first assignment'}
           />
         </CardContent>
       </Card>
@@ -1750,29 +1709,6 @@ function MiniStat({ label, value }: { label: string; value: string }) {
     <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
       <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-1 text-lg font-semibold text-slate-900">{value}</div>
-    </div>
-  );
-}
-
-function WorkflowStepCard({
-  step,
-  title,
-  description,
-  status,
-}: {
-  step: string;
-  title: string;
-  description: string;
-  status: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Step {step}</div>
-      <div className="mt-2 text-lg font-semibold text-slate-950">{title}</div>
-      <div className="mt-2 text-sm text-slate-600">{description}</div>
-      <Badge variant="outline" className="mt-4">
-        {status}
-      </Badge>
     </div>
   );
 }

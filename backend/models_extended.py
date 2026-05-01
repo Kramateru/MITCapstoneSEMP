@@ -82,34 +82,6 @@ class AdvancedKPISettings(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class BuddyBotConfiguration(Base):
-    """Configuration for Buddy Bot hint system - gives hints during practice"""
-    __tablename__ = 'buddy_bot_config'
-    
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    scenario_id = Column(String(36), ForeignKey('scenario.id'))
-    
-    is_enabled = Column(Boolean, default=False)  # Toggle Buddy Bot for this scenario
-    
-    # Hint Configuration
-    max_hints_per_session = Column(Integer, default=3)  # Max hints trainee can request
-    hint_delay_seconds = Column(Integer, default=3)    # Wait 3 seconds before showing hint button
-    
-    # Hints Structure: List of {step_number, hint_text, keywords_to_hint}
-    hints = Column(JSON, default=list)
-    # Example: [
-    #   {"step": 1, "hint": "Start with an empathy statement", "keywords": ["understand", "appreciate"]},
-    #   {"step": 2, "hint": "Ask a probing question to clarify", "keywords": ["could you", "tell me"]}
-    # ]
-    
-    # Visual Feedback
-    show_keyword_hints = Column(Boolean, default=True)   # Highlight expected keywords
-    show_structure_help = Column(Boolean, default=False) # Show "Ask a question" suggestions
-    
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class EnvironmentHealthCheck(Base):
     """Trainee's environment check before practice - Microphone test, noise detection"""
     __tablename__ = 'environment_health_check'
@@ -166,7 +138,7 @@ class ASRCorrectionLog(Base):
 
 
 class ScenarioEnhancements(Base):
-    """Additional scenario configuration for new features like Buddy Bot, Self-Registration"""
+    """Additional scenario configuration for self-registration, imports, and branching metadata."""
     __tablename__ = 'scenario_enhancements'
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -175,10 +147,6 @@ class ScenarioEnhancements(Base):
     # Self-Registration / Generic Use Case
     is_generic_use_case = Column(Boolean, default=False)  # Can trainees self-register?
     self_registration_description = Column(Text, nullable=True)
-    
-    # Buddy Bot Integration
-    enable_buddy_bot = Column(Boolean, default=False)
-    buddy_bot_config_id = Column(String(36), ForeignKey('buddy_bot_config.id'))
     
     # Excel Bulk Upload Metadata
     excel_import_source = Column(String(255), nullable=True)  # Path/reference to Excel template

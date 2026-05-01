@@ -1,7 +1,7 @@
 import sys
 import os
 
-os.environ.setdefault("USE_LOCAL_SQLITE", "1")
+os.environ.setdefault("USE_LOCAL_SQLITE", "0")
 
 CURRENT_DIR = os.path.dirname(__file__)
 REPO_ROOT = os.path.dirname(CURRENT_DIR)
@@ -53,6 +53,7 @@ def reset_credentials() -> None:
         # 1) Migrate legacy seeded emails before upserting canonical accounts.
         for old_email, new_email in {
             "admin@stpeterville.edu.ph": ADMIN_EMAIL,
+            "trainer@st.peterville.edu.ph": TRAINER_EMAIL,
             "training@stpeterville.edu.ph": "training@stpetervelle.edu.ph",
             "sample.trainee1@stpeterville.edu.ph": "sample.trainee1@stpetervelle.edu.ph",
             "sample.trainee2@stpeterville.edu.ph": "sample.trainee2@stpetervelle.edu.ph",

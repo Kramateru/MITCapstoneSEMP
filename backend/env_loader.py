@@ -1,6 +1,4 @@
-"""
-Environment helpers for the backend runtime.
-"""
+"""Environment helpers for the backend runtime."""
 
 from __future__ import annotations
 
@@ -24,30 +22,31 @@ def load_backend_environment() -> None:
 
 
 def use_local_sqlite() -> bool:
-    """Prefer an explicitly configured DATABASE_URL unless SQLite is forced."""
+    """Backward-compatible shim for the retired SQLite toggle."""
     raw_value = os.getenv("USE_LOCAL_SQLITE")
-    if raw_value is not None:
-        return raw_value.strip().lower() not in _FALSE_VALUES
-
-    return not bool(os.getenv("DATABASE_URL"))
-
-
-def default_sqlite_database_url() -> str:
-    """Keep the SQLite database path stable regardless of the current working directory."""
-    sqlite_path = (Path(__file__).resolve().parent / "test.db").as_posix()
-    return f"sqlite:///{sqlite_path}"
+    if raw_value is not None and raw_value.strip().lower() not in _FALSE_VALUES:
+        raise RuntimeError(
+            "SQLite mode has been removed. Configure the backend with the Supabase "
+            "Postgres DATABASE_URL and keep USE_LOCAL_SQLITE=0."
+        )
+    return False
 
 
 def resolve_database_url() -> str:
-    """Resolve the active database URL based on the configured runtime mode."""
-    if use_local_sqlite():
-        return os.getenv("LOCAL_DATABASE_URL", default_sqlite_database_url())
+    """Resolve the Supabase Postgres database URL for the live runtime."""
+    use_local_sqlite()
 
     database_url = os.getenv("DATABASE_URL")
-    if database_url:
-        return database_url
+    if not database_url:
+        raise RuntimeError(
+            "DATABASE_URL must point to the Supabase Postgres database for the live runtime."
+        )
 
-    raise RuntimeError(
-        "DATABASE_URL must be set when USE_LOCAL_SQLITE=0. "
-        "Set USE_LOCAL_SQLITE=1 to use the bundled SQLite database."
-    )
+    normalized = database_url.strip().lower()
+    if "postgresql" not in normalized:
+        raise RuntimeError(
+            "DATABASE_URL must be a PostgreSQL/Supabase connection string. "
+            "Other database engines are no longer supported."
+        )
+
+    return database_url
