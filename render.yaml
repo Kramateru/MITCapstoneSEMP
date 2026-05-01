@@ -4,8 +4,7 @@ services:
   - type: web
     name: speech-bpo-backend
     runtime: python
-    plan: standard
-    region: singapore
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: ./scripts/start-backend.sh
     healthCheckPath: /health
@@ -38,17 +37,12 @@ services:
       - key: OPENAI_API_KEY
         sync: false
         optional: true
-    disk:
-      name: media-storage
-      mountPath: /opt/render/project/src/media
-      sizeGB: 1
 
   # --- Frontend Next.js ---
   - type: web
     name: speech-bpo-frontend
     runtime: node
-    plan: standard
-    region: singapore
+    plan: free
     buildCommand: cd frontend && npm install && npm run build
     startCommand: ./scripts/start-frontend.sh
     envVars:
