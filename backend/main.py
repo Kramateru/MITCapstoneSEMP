@@ -1486,7 +1486,12 @@ async def speech_endpoint(websocket: WebSocket):
             pass
 
 
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
+
+
+@app.get("/health", include_in_schema=False)
+async def health():
+    return {"status": "ok"}
 
 
 @app.get("/")

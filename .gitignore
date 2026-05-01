@@ -9,8 +9,14 @@ backend/media/
 backend/test.db
 template_csv_test.db
 template_download_test.db
+# Environment files — NEVER commit credentials
 .env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
 frontend/.env.local
+frontend/.env
 media/profile-images/
 media/call-simulation-assets/
 media/call-simulation-recordings/
