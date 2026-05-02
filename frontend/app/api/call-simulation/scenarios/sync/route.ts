@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
 import {
+  deleteDialerScenarioFromSupabase,
   syncDialerScenarioToSupabase,
   type DialerScenarioSyncInput,
   type DialerScriptFlowStep,
@@ -26,6 +27,10 @@ type ScenarioSyncBody = {
   isPublished?: boolean | null
   isActive?: boolean | null
   metadata?: Record<string, unknown>
+}
+
+type ScenarioDeleteBody = {
+  scenarioId: string
 }
 
 export async function POST(request: Request) {
@@ -52,6 +57,22 @@ export async function POST(request: Request) {
     }
 
     const syncResult = await syncDialerScenarioToSupabase(syncInput)
+    if (syncResult.syncError) {
+      return NextResponse.json(syncResult, { status: 500 })
+    }
+
+    return NextResponse.json(syncResult)
+  } catch (error) {
+    return handleAssessmentRouteError(error)
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    await requireBackendSessionUser(request, ['trainer', 'admin'])
+    const body = (await request.json()) as ScenarioDeleteBody
+    const syncResult = await deleteDialerScenarioFromSupabase(body.scenarioId)
+
     if (syncResult.syncError) {
       return NextResponse.json(syncResult, { status: 500 })
     }

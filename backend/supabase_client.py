@@ -41,6 +41,7 @@ class SupabaseClient:
         self.key = normalize_env_value(
             os.getenv("SUPABASE_SERVICE_ROLE_KEY")
             or os.getenv("SUPABASE_SERVICE_KEY")
+            or os.getenv("SUPABASE_KEY")
             or os.getenv("SUPABASE_SERVICE_ROLE")
         )
         self.bucket_name = os.getenv("STORAGE_BUCKET_NAME", "audio-records")
@@ -66,6 +67,9 @@ class SupabaseClient:
                 self.config_status = "configured"
                 self.status_detail = "Supabase storage client initialized successfully."
                 logger.info("Supabase client initialized successfully")
+                
+                # Ensure required buckets exist
+                self._ensure_buckets_exist()
             except Exception as e:
                 self.config_status = "invalid"
                 self.status_detail = f"Supabase client initialization failed: {e}"
@@ -95,6 +99,40 @@ class SupabaseClient:
                     "SUPABASE_SERVICE_KEY is malformed. Use a full service-role JWT or an sb_secret key."
                 )
                 logger.warning(self.status_detail)
+
+    def _ensure_buckets_exist(self) -> None:
+        """Ensure required storage buckets exist in Supabase."""
+        if not self.client:
+            return
+            
+        buckets_to_check = [
+            self.bucket_name,
+            self.call_simulation_bucket_name,
+            self.microlearning_bucket_name,
+        ]
+        
+        try:
+            # Get existing buckets
+            existing_buckets = self.client.storage.list_buckets()
+            existing_bucket_names = {bucket.name for bucket in existing_buckets}
+            
+            # Create missing buckets
+            for bucket_name in buckets_to_check:
+                if bucket_name not in existing_bucket_names:
+                    try:
+                        self.client.storage.create_bucket(
+                            bucket_name,
+                            options={
+                                "public": True,
+                                "file_size_limit": 50 * 1024 * 1024,  # 50MB limit
+                                "allowed_mime_types": ["audio/*", "application/pdf", "text/*"]
+                            }
+                        )
+                        logger.info(f"Created Supabase storage bucket: {bucket_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create bucket {bucket_name}: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to check/create Supabase buckets: {e}")
 
     def upload_audio(
         self,
@@ -201,9 +239,28 @@ class SupabaseClient:
         content_type: Optional[str] = None,
     ) -> Optional[str]:
         """Upload trainer-managed Call Simulation audio assets such as member turns and call tones."""
+        import os
+        from pathlib import Path
+        
+        # Save locally first
+        local_dir = Path("media/practice-audio")
+        local_dir.mkdir(parents=True, exist_ok=True)
+        scenario_segment = scenario_id or "draft"
+        local_path = local_dir / trainer_id / scenario_segment / asset_kind
+        local_path.mkdir(parents=True, exist_ok=True)
+        local_file_path = local_path / filename
+        
+        try:
+            with open(local_file_path, "wb") as f:
+                f.write(file_data)
+            logger.info(f"Call Simulation asset saved locally: {local_file_path}")
+        except Exception as e:
+            logger.error(f"Failed to save Call Simulation asset locally: {e}")
+            # Continue with cloud upload even if local save fails
+        
         if not self.is_available:
             logger.warning("Supabase not available. Call Simulation asset upload skipped.")
-            return None
+            return f"/media/practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
 
         try:
             scenario_segment = scenario_id or "draft"
@@ -218,7 +275,8 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload Call Simulation asset: {e}")
-            return None
+            # Return local path if cloud upload fails
+            return f"/media/practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
 
     def upload_document(
         self,
@@ -484,15 +542,26 @@ class SupabaseClient:
 
         try:
             parsed = urlparse(public_url)
-            marker = f"/storage/v1/object/public/{self.bucket_name}/"
-            if marker not in parsed.path:
-                return False
+            bucket_names = [
+                self.bucket_name,
+                self.call_simulation_bucket_name,
+                self.microlearning_bucket_name,
+            ]
 
-            path = parsed.path.split(marker, 1)[1]
-            if not path:
-                return False
+            for bucket_name in bucket_names:
+                marker = f"/storage/v1/object/public/{bucket_name}/"
+                if marker not in parsed.path:
+                    continue
 
-            return self.delete_file(path)
+                path = parsed.path.split(marker, 1)[1]
+                if not path:
+                    return False
+
+                self.client.storage.from_(bucket_name).remove([path])
+                logger.info(f"File deleted from {bucket_name}: {path}")
+                return True
+
+            return False
         except Exception as e:
             logger.error(f"Failed to delete public Supabase file: {e}")
             return False

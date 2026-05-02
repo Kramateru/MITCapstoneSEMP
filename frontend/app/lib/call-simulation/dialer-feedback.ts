@@ -90,6 +90,7 @@ export type DialerScenarioSyncInput = {
   title?: string | null
   description?: string | null
   topic: string
+  scenarioGroup?: string | null
   targetKpis: Record<string, unknown>
   scriptFlow: DialerScriptFlowStep[]
   ringerAudioUrl?: string | null
@@ -112,6 +113,16 @@ export type DialerScoreSyncResult = {
   scenarioRecordId: string | null
   certificateRecordId: string | null
   syncError: string | null
+}
+
+export type ScenarioKpiMetricDefinition = {
+  metricName: string
+  weightPercentage: number
+}
+
+export type ScenarioKpiSyncInput = {
+  scenarioGroupIds: string[]
+  metrics: ScenarioKpiMetricDefinition[]
 }
 
 function normalizeEnvValue(value: string | undefined) {
@@ -161,6 +172,479 @@ function sanitizeScriptFlow(scriptFlow: DialerScriptFlowStep[]) {
 function buildCertificateTitle(topic: string) {
   const resolvedTopic = topic.trim() || 'Call Simulation'
   return `Certificate of Competency - ${resolvedTopic}`
+}
+
+function buildCertificateDownloadUrl(certificateId: string) {
+  return `/api/certification/certificate/${certificateId}/pdf`
+}
+
+function buildKpiMetricRowsFromTargetKpis(
+  scenarioGroupId: string,
+  targetKpis: Record<string, unknown>,
+) {
+  const metricCandidates: Array<[string, unknown]> = [
+    ['Script Accuracy', targetKpis.speech_to_text_weight],
+    ['AHT', targetKpis.aht_weight],
+    ['Rate of Speech', targetKpis.rate_of_speech_weight],
+    ['Dead Air', targetKpis.dead_air_weight],
+    ['Empathy', targetKpis.empathy_statements_weight],
+    ['Probing', targetKpis.probing_questions_weight],
+    ['Grammar', targetKpis.grammar_weight],
+    ['Pronunciation', targetKpis.pronunciation_weight],
+    ['Pacing', targetKpis.pacing_weight],
+  ]
+
+  return metricCandidates
+    .map(([metricName, value]) => {
+      const weightValue = typeof value === 'number'
+        ? value
+        : typeof value === 'string' && value.trim()
+          ? Number(value)
+          : Number.NaN
+
+      return {
+        metric_name: metricName,
+        weight_percentage: Number.isFinite(weightValue) ? Math.max(0, Math.round(weightValue)) : null,
+      }
+    })
+    .filter((metric) => metric.weight_percentage !== null)
+    .map((metric) => ({
+      scenario_group_id: scenarioGroupId,
+      ...metric,
+    }))
+}
+
+function readScenarioGroupFromStepId(stepId: string) {
+  const normalized = stepId.trim().replace(/^scenario[-_:]*/i, '').trim()
+  return normalized || stepId.trim() || '1'
+}
+
+function buildScenarioGroupSummary(scriptFlow: DialerScriptFlowStep[]) {
+  return Array.from(
+    new Set(
+      scriptFlow
+        .map((step) => readScenarioGroupFromStepId(step.step_id || ''))
+        .filter(Boolean),
+    ),
+  ).join(', ')
+}
+
+function buildSupabaseScenarioRows(
+  scenarioId: string,
+  scriptFlow: DialerScriptFlowStep[],
+) {
+  let sequenceOrder = 1
+
+  return scriptFlow.flatMap((step) => {
+    const scenarioGroup = readScenarioGroupFromStepId(step.step_id || '')
+    const expectedKeywords = Array.isArray(step.expected_keywords)
+      ? step.expected_keywords.map((keyword) => keyword.trim()).filter(Boolean)
+      : []
+    const rows: Array<Record<string, unknown>> = []
+    const csrScript = step.suggested_csr_script.trim()
+
+    if (csrScript) {
+      rows.push({
+        scenario_id: scenarioId,
+        actor_type: 'CSR',
+        content: csrScript,
+        score_weight: safeRound(Number(step.point_value || 0), 2),
+        sequence_order: sequenceOrder,
+        scenario_group: scenarioGroup,
+        audio_url: null,
+        metadata: {
+          step_id: step.step_id,
+          expected_keywords: expectedKeywords,
+          role: 'csr',
+        },
+      })
+      sequenceOrder += 1
+    }
+
+    const memberScript = step.member_response_text.trim()
+    if (memberScript || step.member_audio_url) {
+      rows.push({
+        scenario_id: scenarioId,
+        actor_type: 'Member',
+        content: memberScript,
+        score_weight: 0,
+        sequence_order: sequenceOrder,
+        scenario_group: scenarioGroup,
+        audio_url: step.member_audio_url || null,
+        metadata: {
+          step_id: step.step_id,
+          role: 'member',
+        },
+      })
+      sequenceOrder += 1
+    }
+
+    return rows
+  })
+}
+
+async function syncScenarioAuthoringTables(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  input: DialerScenarioSyncInput,
+  scriptFlow: DialerScriptFlowStep[],
+  nowIso: string,
+) {
+  const scenarioId = normalizeUuidCandidate(input.sourceScenarioId)
+  if (!scenarioId) {
+    return 'Scenario sync requires a UUID-shaped scenario id before it can mirror the trainer record to Supabase.'
+  }
+
+  const trainerId = normalizeUuidCandidate(input.trainerId)
+  const resolvedTopic = input.topic.trim() || input.title?.trim() || 'Call Scenario'
+  const resolvedTitle = input.title?.trim() || resolvedTopic
+  const resolvedDescription = input.description?.trim() || null
+  const scenarioGroup = input.scenarioGroup?.trim() || buildScenarioGroupSummary(scriptFlow) || null
+  const expectedKeywords = Array.from(
+    new Set(
+      scriptFlow.flatMap((step) => Array.isArray(step.expected_keywords) ? step.expected_keywords : []),
+    ),
+  )
+  const scenarioPayload = {
+    id: scenarioId,
+    title: resolvedTitle,
+    topic: resolvedTopic,
+    description: resolvedDescription,
+    scenario_group: scenarioGroup,
+    opening_prompt: resolvedDescription || scriptFlow[0]?.suggested_csr_script || resolvedTopic,
+    expected_keywords: expectedKeywords,
+    estimated_duration: Number.isFinite(Number(input.estimatedDurationSeconds))
+      ? Number(input.estimatedDurationSeconds)
+      : null,
+    difficulty: input.difficulty?.trim() || null,
+    purpose: 'practice',
+    member_profile: {},
+    cxone_metadata: {},
+    call_simulation_config: {
+      ...(input.metadata || {}),
+      scenario_group_label: scenarioGroup,
+      target_kpis: input.targetKpis,
+      script_flow: scriptFlow,
+    },
+    ringer_audio_url: input.ringerAudioUrl || null,
+    hold_audio_url: input.holdAudioUrl || null,
+    created_by: trainerId,
+    is_published: input.isPublished !== false,
+    is_draft: false,
+    updated_at: nowIso,
+  }
+
+  const { error: scenarioError } = await supabase
+    .from('scenarios')
+    .upsert(scenarioPayload, { onConflict: 'id' })
+
+  if (scenarioError) {
+    throw scenarioError
+  }
+
+  const { error: scenarioGroupError } = await supabase
+    .from('scenario_groups')
+    .upsert({
+      id: scenarioId,
+      title: resolvedTitle,
+      topic: resolvedTopic,
+      description: resolvedDescription,
+      created_by: trainerId,
+    }, { onConflict: 'id' })
+
+  if (scenarioGroupError) {
+    throw scenarioGroupError
+  }
+
+  const { error: deleteScriptsError } = await supabase
+    .from('scripts')
+    .delete()
+    .eq('scenario_id', scenarioId)
+
+  if (deleteScriptsError) {
+    throw deleteScriptsError
+  }
+
+  const scriptRows = buildSupabaseScenarioRows(scenarioId, scriptFlow)
+  if (scriptRows.length === 0) {
+    return null
+  }
+
+  const { error: insertScriptsError } = await supabase
+    .from('scripts')
+    .insert(scriptRows)
+
+  if (insertScriptsError) {
+    throw insertScriptsError
+  }
+
+  const { error: deleteScenarioScriptsError } = await supabase
+    .from('scenario_scripts')
+    .delete()
+    .eq('scenario_group_id', scenarioId)
+
+  if (deleteScenarioScriptsError) {
+    throw deleteScenarioScriptsError
+  }
+
+  const scenarioScriptRows = scriptRows.map((row) => ({
+    scenario_group_id: scenarioId,
+    actor_type: row.actor_type,
+    script_text: row.content,
+    score_value: Math.max(0, Math.round(Number(row.score_weight || 0))),
+    order_index: Number(row.sequence_order || 0),
+    audio_url: typeof row.audio_url === 'string' ? row.audio_url : null,
+  }))
+
+  if (scenarioScriptRows.length > 0) {
+    const { error: insertScenarioScriptsError } = await supabase
+      .from('scenario_scripts')
+      .insert(scenarioScriptRows)
+
+    if (insertScenarioScriptsError) {
+      throw insertScenarioScriptsError
+    }
+  }
+
+  const fallbackMetricRows = buildKpiMetricRowsFromTargetKpis(scenarioId, input.targetKpis)
+  if (fallbackMetricRows.length > 0) {
+    const { error: deleteMetricRowsError } = await supabase
+      .from('kpi_metrics')
+      .delete()
+      .eq('scenario_group_id', scenarioId)
+
+    if (deleteMetricRowsError) {
+      throw deleteMetricRowsError
+    }
+
+    const { error: insertMetricRowsError } = await supabase
+      .from('kpi_metrics')
+      .insert(fallbackMetricRows)
+
+    if (insertMetricRowsError) {
+      throw insertMetricRowsError
+    }
+  }
+
+  return null
+}
+
+async function syncUnifiedSimulationResults(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  input: DialerFeedbackInput,
+  report: DialerFeedbackReport,
+  nowIso: string,
+) {
+  const traineeId = normalizeUuidCandidate(input.traineeId)
+  const scenarioId = normalizeUuidCandidate(input.scenarioId)
+
+  if (!traineeId || !scenarioId) {
+    return 'Results sync requires UUID-shaped trainee and scenario ids before it can write the normalized Supabase result row.'
+  }
+
+  const fullTranscript = buildFullConversationTranscript(input.transcriptLog)
+  const sessionStartedAt = new Date(Date.now() - (Math.max(0, Number(input.ahtSeconds || 0)) * 1000)).toISOString()
+  const aiFeedback = {
+    report,
+    metrics: {
+      totalScore: safeRound(input.totalScore),
+      passingScore: safeRound(input.passingScore),
+      ahtSeconds: Math.max(0, Number(input.ahtSeconds || 0)),
+      speechAccuracy: safeRound(input.speechAccuracy),
+      grammarScore: safeRound(input.grammarScore),
+      pronunciationScore: safeRound(input.pronunciationScore),
+      pacingScore: safeRound(input.pacingScore),
+      softSkillSignals: input.softSkillSignals,
+    },
+    targetKpis: input.targetKpis,
+    scriptFlow: sanitizeScriptFlow(input.scriptFlow),
+    turnLogs: input.turnLogs,
+    transcriptLog: input.transcriptLog,
+  }
+
+  const { error } = await supabase
+    .from('simulations_results')
+    .upsert({
+      id: input.sessionId,
+      trainee_id: traineeId,
+      scenario_id: scenarioId,
+      scenario_title: input.scenarioTitle,
+      scenario_topic: input.topic,
+      final_score: safeRound(input.totalScore),
+      ai_feedback: aiFeedback,
+      transcript: fullTranscript,
+      passed: report.passed,
+      certificate_id: input.certificateId || null,
+      updated_at: nowIso,
+    }, { onConflict: 'id' })
+
+  if (error) {
+    throw error
+  }
+
+  const { error: traineeSessionError } = await supabase
+    .from('trainee_sessions')
+    .upsert({
+      id: input.sessionId,
+      trainee_id: traineeId,
+      scenario_group_id: scenarioId,
+      started_at: sessionStartedAt,
+      completed_at: nowIso,
+      total_score: Math.max(0, Math.round(input.totalScore)),
+      passed: report.passed,
+      ai_feedback: report.overallSummary,
+    }, { onConflict: 'id' })
+
+  if (traineeSessionError) {
+    throw traineeSessionError
+  }
+
+  const { data: scenarioScriptRows, error: scenarioScriptLookupError } = await supabase
+    .from('scenario_scripts')
+    .select('id, script_text, order_index')
+    .eq('scenario_group_id', scenarioId)
+    .eq('actor_type', 'CSR')
+    .order('order_index', { ascending: true })
+
+  if (scenarioScriptLookupError) {
+    throw scenarioScriptLookupError
+  }
+
+  const scriptIdByText = new Map(
+    (scenarioScriptRows || []).map((row) => [String(row.script_text || '').trim(), String(row.id || '')]),
+  )
+  const orderedScenarioScriptIds = (scenarioScriptRows || []).map((row) => String(row.id || ''))
+
+  const { error: deleteResponsesError } = await supabase
+    .from('session_responses')
+    .delete()
+    .eq('session_id', input.sessionId)
+
+  if (deleteResponsesError) {
+    throw deleteResponsesError
+  }
+
+  const responseRows = input.turnLogs
+    .filter((turn) => (turn.actor || '').toLowerCase() === 'csr')
+    .map((turn, index) => {
+      const expectedScript = String(turn.expected_script || input.scriptFlow[index]?.suggested_csr_script || '').trim()
+      const resolvedScriptId = scriptIdByText.get(expectedScript) || orderedScenarioScriptIds[index] || null
+      const stepId = resolvedScriptId && normalizeUuidCandidate(resolvedScriptId)
+        ? resolvedScriptId
+        : null
+
+      return {
+        session_id: input.sessionId,
+        script_id: stepId,
+        scenario_id: input.scenarioId,
+        trainee_id: input.traineeId,
+        step_number: index + 1,
+        turn_attempt_number: 1,
+        actor_type: 'CSR',
+        scenario_group: readScenarioGroupFromStepId(input.scriptFlow[index]?.step_id || String(index + 1)),
+        expected_script: expectedScript,
+        trainee_spoken_text: String(turn.transcript || ''),
+        matched_score: Math.max(0, Math.round(Number((turn as Record<string, unknown>).matched_score || (turn as Record<string, unknown>).earned_points || 0))),
+        grammar_score: Math.max(0, Math.round(Number(turn.grammar_score || 0))),
+        pronunciation_score: Math.max(0, Math.round(Number(turn.pronunciation_score || 0))),
+        pacing_score: Math.max(0, Math.round(Number(turn.pacing_score || 0))),
+        speech_to_text_accuracy: safeRound(Number(turn.speech_to_text_accuracy || 0), 2),
+        transcript_confidence: safeRound(Number((turn as Record<string, unknown>).transcript_confidence || 0), 2),
+        audio_url: (turn as Record<string, unknown>).audio_url || null,
+        ai_feedback: turn.coach_note || null,
+      }
+    })
+
+  if (responseRows.length > 0) {
+    const { error: insertResponsesError } = await supabase
+      .from('session_responses')
+      .insert(responseRows)
+
+    if (insertResponsesError) {
+      throw insertResponsesError
+    }
+  }
+
+  const normalizedCertificateId = normalizeUuidCandidate(input.certificateId)
+  const certificateUrl = normalizedCertificateId ? buildCertificateDownloadUrl(normalizedCertificateId) : null
+  if (report.passed && normalizedCertificateId) {
+    const { error: certificateError } = await supabase
+      .from('certificates')
+      .upsert({
+        id: normalizedCertificateId,
+        trainee_id: traineeId,
+        scenario_id: scenarioId,
+        scenario_group_id: scenarioId,
+        attempt_id: normalizeUuidCandidate(input.sessionId),
+        certificate_title: buildCertificateTitle(input.topic),
+        certificate_url: certificateUrl,
+        status: 'issued',
+        remarks: report.overallSummary,
+        issue_date: nowIso,
+        issued_at: nowIso,
+      }, { onConflict: 'id' })
+
+    if (certificateError) {
+      throw certificateError
+    }
+  }
+
+  return null
+}
+
+export async function syncScenarioKpiMetricsToSupabase(
+  input: ScenarioKpiSyncInput,
+) {
+  try {
+    const supabase = createSupabaseAdminClient()
+    const normalizedScenarioGroupIds = input.scenarioGroupIds
+      .map((scenarioGroupId) => normalizeUuidCandidate(scenarioGroupId))
+      .filter((scenarioGroupId): scenarioGroupId is string => Boolean(scenarioGroupId))
+
+    if (normalizedScenarioGroupIds.length === 0) {
+      return null
+    }
+
+    const normalizedMetrics = input.metrics
+      .map((metric) => ({
+        metric_name: metric.metricName.trim(),
+        weight_percentage: Math.max(0, Math.round(Number(metric.weightPercentage || 0))),
+      }))
+      .filter((metric) => metric.metric_name)
+
+    if (normalizedMetrics.length === 0) {
+      return null
+    }
+
+    const { error: deleteError } = await supabase
+      .from('kpi_metrics')
+      .delete()
+      .in('scenario_group_id', normalizedScenarioGroupIds)
+
+    if (deleteError) {
+      throw deleteError
+    }
+
+    const rows = normalizedScenarioGroupIds.flatMap((scenarioGroupId) => (
+      normalizedMetrics.map((metric) => ({
+        scenario_group_id: scenarioGroupId,
+        ...metric,
+      }))
+    ))
+
+    const { error: insertError } = await supabase
+      .from('kpi_metrics')
+      .insert(rows)
+
+    if (insertError) {
+      throw insertError
+    }
+
+    return null
+  } catch (error) {
+    return error instanceof Error
+      ? error.message
+      : 'Unable to sync KPI metrics to Supabase.'
+  }
 }
 
 function extractJsonCandidate(value: string) {
@@ -373,6 +857,7 @@ export async function syncDialerScenarioToSupabase(
     const resolvedEstimatedDuration = Number(input.estimatedDurationSeconds ?? input.targetKpis.estimated_duration_seconds ?? 0)
     const sanitizedScriptFlow = sanitizeScriptFlow(input.scriptFlow)
     const resolvedMetadata = input.metadata || {}
+    let scenarioRecordId: string | null = null
 
     try {
       const { data: scenarioRecord, error } = await supabase
@@ -400,14 +885,11 @@ export async function syncDialerScenarioToSupabase(
         .select('id')
         .single()
 
-      if (error) {
-        throw error
-      }
+        if (error) {
+          throw error
+        }
 
-      return {
-        scenarioRecordId: (scenarioRecord as { id?: string } | null)?.id || null,
-        syncError: null,
-      }
+      scenarioRecordId = (scenarioRecord as { id?: string } | null)?.id || null
     } catch {
       const { data: legacyScenarioRecord, error: legacyError } = await supabase
         .from('call_scenarios')
@@ -431,15 +913,104 @@ export async function syncDialerScenarioToSupabase(
         throw legacyError
       }
 
-      return {
-        scenarioRecordId: (legacyScenarioRecord as { id?: string } | null)?.id || null,
-        syncError: null,
-      }
+      scenarioRecordId = (legacyScenarioRecord as { id?: string } | null)?.id || null
+    }
+
+    let authoringSyncError: string | null = null
+    try {
+      authoringSyncError = await syncScenarioAuthoringTables(
+        supabase,
+        input,
+        sanitizedScriptFlow,
+        nowIso,
+      )
+    } catch (error) {
+      authoringSyncError = error instanceof Error
+        ? error.message
+        : 'Unable to mirror the scenario and script rows to the normalized Supabase authoring tables.'
+    }
+
+    return {
+      scenarioRecordId,
+      syncError: authoringSyncError,
     }
   } catch (error) {
     return {
       scenarioRecordId: null,
       syncError: error instanceof Error ? error.message : 'Unable to sync the dialer scenario to Supabase.',
+    }
+  }
+}
+
+export async function deleteDialerScenarioFromSupabase(
+  sourceScenarioId: string,
+): Promise<DialerScenarioSyncResult> {
+  try {
+    const supabase = createSupabaseAdminClient()
+    const normalizedScenarioId = normalizeUuidCandidate(sourceScenarioId)
+    let deletedScenarioRecordId: string | null = null
+    let cleanupError: string | null = null
+
+    try {
+      const { data: callScenarioRows, error: callScenarioError } = await supabase
+        .from('call_scenarios')
+        .delete()
+        .eq('source_scenario_id', sourceScenarioId)
+        .select('id')
+
+      if (callScenarioError) {
+        throw callScenarioError
+      }
+
+      deletedScenarioRecordId = callScenarioRows?.[0]?.id || null
+    } catch {
+      const { data: legacyCallScenarioRows, error: legacyCallScenarioError } = await supabase
+        .from('call_scenarios')
+        .delete()
+        .eq('scenario_id', sourceScenarioId)
+        .select('id')
+
+      if (legacyCallScenarioError) {
+        throw legacyCallScenarioError
+      }
+
+      deletedScenarioRecordId = legacyCallScenarioRows?.[0]?.id || null
+    }
+
+    if (normalizedScenarioId) {
+      try {
+        const { error: deleteScenarioGroupsError } = await supabase
+          .from('scenario_groups')
+          .delete()
+          .eq('id', normalizedScenarioId)
+
+        if (deleteScenarioGroupsError) {
+          throw deleteScenarioGroupsError
+        }
+
+        const { error: scenarioDeleteError } = await supabase
+          .from('scenarios')
+          .delete()
+          .eq('id', normalizedScenarioId)
+
+        if (scenarioDeleteError) {
+          throw scenarioDeleteError
+        }
+      } catch (error) {
+        cleanupError = error instanceof Error
+          ? error.message
+          : 'Unable to remove the normalized Supabase scenario record.'
+      }
+    }
+
+    return {
+      scenarioRecordId: deletedScenarioRecordId,
+      syncError: cleanupError,
+    }
+  } catch (error) {
+    return {
+      scenarioRecordId: null,
+      syncError: error instanceof Error ? error.message : 'Unable to delete the dialer scenario from Supabase.',
     }
   }
 }
@@ -560,6 +1131,7 @@ export async function syncDialerScoreToSupabase(
     let scoreRecordId: string | null = null
     let certificateRecordId: string | null = null
     let certificateSyncError: string | null = null
+    let normalizedResultsSyncError: string | null = null
 
     try {
       const { data: scoreRecord, error: scoreError } = await supabase
@@ -639,6 +1211,19 @@ export async function syncDialerScoreToSupabase(
       scoreRecordId = (legacyScoreRecord as { id?: string } | null)?.id || null
     }
 
+    try {
+      normalizedResultsSyncError = await syncUnifiedSimulationResults(
+        supabase,
+        input,
+        report,
+        nowIso,
+      )
+    } catch (error) {
+      normalizedResultsSyncError = error instanceof Error
+        ? error.message
+        : 'Unable to sync the normalized Supabase results row.'
+    }
+
     if (passed) {
       try {
         const { data: certificateRecord, error: certificateError } = await supabase
@@ -691,7 +1276,7 @@ export async function syncDialerScoreToSupabase(
       scoreRecordId,
       scenarioRecordId,
       certificateRecordId,
-      syncError: certificateSyncError,
+      syncError: [normalizedResultsSyncError, certificateSyncError].filter(Boolean).join(' ') || null,
     }
   } catch (error) {
     return {

@@ -85,6 +85,7 @@ interface Scenario {
   id: string;
   title: string;
   description?: string | null;
+  scenario_group?: string | null;
   opening_prompt: string;
   difficulty?: string | null;
   expected_keywords: string[];
@@ -192,6 +193,7 @@ interface ScenarioFormState {
   title: string;
   topic: string;
   description: string;
+  scenario_group_label: string;
   opening_prompt: string;
   expected_keywords: string;
   estimated_duration: string;
@@ -201,8 +203,6 @@ interface ScenarioFormState {
   plan_type: string;
   verification_status: string;
   problem_statement: string;
-  ringer_audio_url: string;
-  hold_audio_url: string;
   difficulty: string;
   rows: ScenarioRowForm[];
 }
@@ -212,6 +212,27 @@ interface AudioAssetUploadResponse {
   asset_kind: string;
   filename: string;
   scenario_id: string;
+  settings?: CallSimulationAudioSettings | null;
+}
+
+interface MemberSpeechAssetResponse {
+  audio_url?: string | null;
+  warning?: string | null;
+  storage_mode?: string | null;
+  detail?: string;
+}
+
+interface ScenarioKpiMetricPayload {
+  metricName: string;
+  weightPercentage: number;
+}
+
+interface CallSimulationAudioSettings {
+  ringer_audio_url: string;
+  hold_audio_url: string;
+  ringer_audio_source?: string | null;
+  hold_audio_source?: string | null;
+  updated_at?: string | null;
 }
 
 type ScenarioRowPayload = {
@@ -269,6 +290,7 @@ const createDefaultScenarioForm = (): ScenarioFormState => ({
   title: '',
   topic: 'Benefits verification and order support',
   description: '',
+  scenario_group_label: '',
   opening_prompt: 'Answer the call, review the member context, and deliver the expected CSR spiel.',
   expected_keywords: 'thank you for calling, member id, verification',
   estimated_duration: '180',
@@ -287,11 +309,28 @@ const createDefaultScenarioForm = (): ScenarioFormState => ({
   plan_type: 'Healthy Benefits Plus',
   verification_status: 'Pending verification',
   problem_statement: 'Member wants help checking plan benefits and delivery status.',
-  ringer_audio_url: '',
-  hold_audio_url: '',
   difficulty: 'intermediate',
   rows: createStarterScenarioRows(),
 });
+
+const createDefaultCallSimulationAudioSettings = (): CallSimulationAudioSettings => ({
+  ringer_audio_url: '',
+  hold_audio_url: '',
+  ringer_audio_source: null,
+  hold_audio_source: null,
+  updated_at: null,
+});
+
+const isEmbeddedAudioDataUrl = (value: string) => value.trim().startsWith('data:audio/');
+
+const formatGeneratedAudioValue = (value: string) => {
+  if (!value.trim()) {
+    return '';
+  }
+  return isEmbeddedAudioDataUrl(value)
+    ? 'Embedded audio saved in the scenario record'
+    : value;
+};
 
 const splitKeywords = (value: string) =>
   value
@@ -470,6 +509,11 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
     title: scenario.title || '',
     topic: String(readString(scenarioConfig.topic) || scenario.title || 'Call scenario'),
     description: scenario.description || '',
+    scenario_group_label: String(
+      readString(scenarioConfig.scenario_group_label)
+      || readString(scenario.scenario_group)
+      || '',
+    ),
     opening_prompt: scenario.opening_prompt || '',
     expected_keywords: (scenario.expected_keywords || []).join(', '),
     estimated_duration: String(scenario.estimated_duration || 120),
@@ -485,10 +529,142 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
     problem_statement: String(
       scenario.member_profile?.problem_statement || scenario.cxone_metadata?.problem_statement || scenario.description || '',
     ),
-    ringer_audio_url: scenario.ringer_audio_url || '',
-    hold_audio_url: scenario.hold_audio_url || '',
     difficulty: scenario.difficulty || 'intermediate',
     rows: sourceRows.length > 0 ? sourceRows : [createScenarioRow()],
+  };
+}
+
+function parseBulkScenarioFileName(fileName: string) {
+  const cleanedName = fileName.replace(/\.[^.]+$/, '').trim();
+  if (!cleanedName) {
+    return {
+      title: '',
+      topic: '',
+      description: '',
+    };
+  }
+
+  const underscoreParts = cleanedName
+    .split('_')
+    .map((segment) => segment.replace(/-/g, ' ').trim())
+    .filter(Boolean);
+
+  if (underscoreParts.length >= 3) {
+    return {
+      title: underscoreParts[0] || '',
+      topic: underscoreParts[1] || underscoreParts[0] || '',
+      description: underscoreParts.slice(2).join(' ').trim() || underscoreParts[1] || underscoreParts[0] || '',
+    };
+  }
+
+  const dashedParts = cleanedName
+    .split(/\s+-\s+/)
+    .map((segment) => segment.replace(/_/g, ' ').trim())
+    .filter(Boolean);
+
+  if (dashedParts.length >= 2) {
+    const title = dashedParts[0] || '';
+    const topic = dashedParts[1] || title;
+    const description = dashedParts.slice(2).join(' ').trim() || cleanedName.replace(/_/g, ' ').trim();
+    return {
+      title,
+      topic,
+      description: description || topic || title,
+    };
+  }
+
+  const normalized = cleanedName.replace(/[_-]+/g, ' ').trim();
+  return {
+    title: normalized,
+    topic: normalized,
+    description: normalized,
+  };
+}
+
+function buildTargetKpisFromConfig(config: KPIConfig) {
+  return {
+    speech_to_text_weight: config.speech_to_text_weight,
+    aht_weight: config.aht_weight,
+    rate_of_speech_weight: config.rate_of_speech_weight,
+    dead_air_weight: config.dead_air_weight,
+    empathy_statements_weight: config.empathy_statements_weight,
+    probing_questions_weight: config.probing_questions_weight,
+    grammar_weight: config.grammar_weight,
+    pronunciation_weight: config.pronunciation_weight,
+    pacing_weight: config.pacing_weight,
+    forbidden_words_penalty: config.forbidden_words_penalty,
+    passing_score: config.passing_score,
+    target_aht_seconds: config.target_aht_seconds,
+    target_ros_words_per_min: config.target_ros_words_per_min,
+    target_dead_air_seconds: config.target_dead_air_seconds,
+    forbidden_words: config.forbidden_words,
+    empathy_keywords: config.empathy_keywords,
+    probing_keywords: config.probing_keywords,
+  };
+}
+
+function buildScenarioKpiMetricPayload(config: KPIConfig): ScenarioKpiMetricPayload[] {
+  return [
+    { metricName: 'Script Accuracy', weightPercentage: config.speech_to_text_weight },
+    { metricName: 'AHT', weightPercentage: config.aht_weight },
+    { metricName: 'Rate of Speech', weightPercentage: config.rate_of_speech_weight },
+    { metricName: 'Dead Air', weightPercentage: config.dead_air_weight },
+    { metricName: 'Empathy', weightPercentage: config.empathy_statements_weight },
+    { metricName: 'Probing', weightPercentage: config.probing_questions_weight },
+    { metricName: 'Grammar', weightPercentage: config.grammar_weight },
+    { metricName: 'Pronunciation', weightPercentage: config.pronunciation_weight },
+    { metricName: 'Pacing', weightPercentage: config.pacing_weight },
+  ];
+}
+
+function buildSupabaseScriptFlowFromScenario(scenario: Scenario) {
+  const scenarioConfig = parseScenarioConfig(scenario);
+  const configuredFlow = Array.isArray(scenarioConfig.script_flow)
+    ? (scenarioConfig.script_flow as Array<Record<string, unknown>>)
+    : [];
+
+  if (!configuredFlow.length) {
+    return [];
+  }
+
+  return configuredFlow.map((step, index) => ({
+    step_id: String(step.step_id || `step-${index + 1}`),
+    suggested_csr_script: String(step.suggested_csr_script || ''),
+    member_response_text: String(step.member_response_text || ''),
+    point_value: readPointValue(step.point_value, 0),
+    expected_keywords: Array.isArray(step.expected_keywords)
+      ? step.expected_keywords.map((keyword) => String(keyword).trim()).filter(Boolean)
+      : [],
+    member_audio_url: readString(step.member_audio_url),
+  }));
+}
+
+function buildSupabaseScenarioSyncBody(scenario: Scenario) {
+  const scenarioConfig = parseScenarioConfig(scenario);
+  const targetKpis = typeof scenarioConfig.target_kpis === 'object' && scenarioConfig.target_kpis
+    ? scenarioConfig.target_kpis as Record<string, unknown>
+    : { passing_score: 80 };
+  const passingScoreCandidate = targetKpis.passing_score ?? scenarioConfig.certification_threshold ?? 80;
+  const passingScore = typeof passingScoreCandidate === 'number'
+    ? passingScoreCandidate
+    : Number(passingScoreCandidate || 80);
+
+  return {
+    scenarioId: scenario.id,
+    title: scenario.title,
+    description: scenario.description || null,
+    topic: String(readString(scenarioConfig.topic) || scenario.title || 'Call scenario'),
+    scenarioGroup: readString(scenarioConfig.scenario_group_label) || readString(scenario.scenario_group) || null,
+    targetKpis,
+    scriptFlow: buildSupabaseScriptFlowFromScenario(scenario),
+    ringerAudioUrl: scenario.ringer_audio_url || null,
+    holdAudioUrl: scenario.hold_audio_url || null,
+    difficulty: scenario.difficulty || null,
+    estimatedDurationSeconds: scenario.estimated_duration ?? null,
+    passingScore: Number.isFinite(passingScore) ? passingScore : 80,
+    isPublished: true,
+    isActive: true,
+    metadata: scenarioConfig,
   };
 }
 
@@ -522,22 +698,108 @@ export default function TrainerSimFloorPage() {
   const [deleteScenarioId, setDeleteScenarioId] = useState<string | null>(null);
   const [deleteScenarioTitle, setDeleteScenarioTitle] = useState('');
   const [playbackTime, setPlaybackTime] = useState(0);
+  const [callToneSettings, setCallToneSettings] = useState<CallSimulationAudioSettings>(createDefaultCallSimulationAudioSettings());
+  const [loadingCallToneSettings, setLoadingCallToneSettings] = useState(false);
+  const [savingCallToneTarget, setSavingCallToneTarget] = useState<string | null>(null);
   const [uploadingAudioTarget, setUploadingAudioTarget] = useState<string | null>(null);
   const [generatingSpeechRowIndex, setGeneratingSpeechRowIndex] = useState<number | null>(null);
+  const [isGeneratingAllMemberSpeech, setIsGeneratingAllMemberSpeech] = useState(false);
+  const [memberSpeechGenerationProgress, setMemberSpeechGenerationProgress] = useState<{ current: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sessionAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const authedFetch = useCallback(async (url: string, init?: RequestInit) => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('token') || '';
+    const headers = new Headers(init?.headers || {});
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+
     return fetch(url, {
       ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        ...(init?.headers || {}),
-      },
+      headers,
       cache: 'no-store',
     });
   }, []);
+
+  const syncScenarioRecordToSupabase = useCallback(async (scenarioInput: Scenario | string) => {
+    const scenario = typeof scenarioInput === 'string'
+      ? await (async () => {
+          const response = await authedFetch(`/api/call-simulation/scenarios/${scenarioInput}`);
+          if (!response.ok) {
+            const error = await response.json().catch(() => null);
+            throw new Error(error?.detail || 'Unable to load the saved scenario for Supabase sync.');
+          }
+          return response.json() as Promise<Scenario>;
+        })()
+      : scenarioInput;
+
+    const response = await authedFetch('/api/call-simulation/scenarios/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSupabaseScenarioSyncBody(scenario)),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.syncError || payload?.detail || 'Unable to sync the scenario and scripts to Supabase.');
+    }
+
+    return payload;
+  }, [authedFetch]);
+
+  const syncScenarioKpiMetrics = useCallback(async (scenarioGroupIds: string[], config: KPIConfig) => {
+    const response = await authedFetch('/api/call-simulation/kpi/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        scenarioGroupIds,
+        metrics: buildScenarioKpiMetricPayload(config),
+      }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.syncError || payload?.detail || 'Unable to sync KPI metrics to Supabase.');
+    }
+    return payload;
+  }, [authedFetch]);
+
+  const deleteScenarioRecordFromSupabase = useCallback(async (scenarioId: string) => {
+    const response = await authedFetch('/api/call-simulation/scenarios/sync', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scenarioId }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.syncError || payload?.detail || 'Unable to remove the Supabase scenario mirror.');
+    }
+
+    return payload;
+  }, [authedFetch]);
+
+  const applyCallToneSettings = useCallback((payload: Partial<CallSimulationAudioSettings> | null | undefined) => {
+    setCallToneSettings({
+      ringer_audio_url: typeof payload?.ringer_audio_url === 'string' ? payload.ringer_audio_url : '',
+      hold_audio_url: typeof payload?.hold_audio_url === 'string' ? payload.hold_audio_url : '',
+      ringer_audio_source: typeof payload?.ringer_audio_source === 'string' ? payload.ringer_audio_source : null,
+      hold_audio_source: typeof payload?.hold_audio_source === 'string' ? payload.hold_audio_source : null,
+      updated_at: typeof payload?.updated_at === 'string' ? payload.updated_at : null,
+    });
+  }, []);
+
+  const fetchCallToneSettings = useCallback(async () => {
+    setLoadingCallToneSettings(true);
+    try {
+      const response = await authedFetch('/api/call-simulation/audio-settings');
+      if (!response.ok) {
+        throw new Error('Unable to load Call Simulation audio settings');
+      }
+      const payload = (await response.json().catch(() => null)) as CallSimulationAudioSettings | null;
+      applyCallToneSettings(payload);
+    } finally {
+      setLoadingCallToneSettings(false);
+    }
+  }, [applyCallToneSettings, authedFetch]);
 
   const fetchBatches = useCallback(async () => {
     const response = await authedFetch('/api/trainer/batches');
@@ -620,7 +882,7 @@ export default function TrainerSimFloorPage() {
     const load = async () => {
       try {
         setLoading(true);
-        await Promise.all([fetchBatches(), fetchScenarioLibrary()]);
+        await Promise.all([fetchBatches(), fetchScenarioLibrary(), fetchCallToneSettings()]);
       } catch (error) {
         console.error(error);
         toast.error('Unable to load Call Simulation batches.');
@@ -629,7 +891,7 @@ export default function TrainerSimFloorPage() {
       }
     };
     void load();
-  }, [fetchBatches, fetchScenarioLibrary]);
+  }, [fetchBatches, fetchCallToneSettings, fetchScenarioLibrary]);
 
   useEffect(() => {
     if (!selectedBatch) return;
@@ -701,7 +963,12 @@ export default function TrainerSimFloorPage() {
 
   const openCreateScenario = () => {
     setEditingScenarioId(null);
-    setScenarioForm(createDefaultScenarioForm());
+    const nextForm = createDefaultScenarioForm();
+    nextForm.target_kpis_json = JSON.stringify(buildTargetKpisFromConfig(kpiForm), null, 2);
+    setGeneratingSpeechRowIndex(null);
+    setIsGeneratingAllMemberSpeech(false);
+    setMemberSpeechGenerationProgress(null);
+    setScenarioForm(nextForm);
     setShowScenarioDialog(true);
   };
 
@@ -719,6 +986,9 @@ export default function TrainerSimFloorPage() {
       if (!response.ok) throw new Error('Unable to load scenario details');
       const scenario: Scenario = await response.json();
       setEditingScenarioId(scenarioId);
+      setGeneratingSpeechRowIndex(null);
+      setIsGeneratingAllMemberSpeech(false);
+      setMemberSpeechGenerationProgress(null);
       setScenarioForm(createScenarioFormFromScenario(scenario));
       setShowScenarioDialog(true);
     } catch (error) {
@@ -738,6 +1008,7 @@ export default function TrainerSimFloorPage() {
 
     try {
       setSaving(true);
+      const scenarioIdToDelete = deleteScenarioId;
       const response = await authedFetch(`/api/call-simulation/scenarios/${deleteScenarioId}`, {
         method: 'DELETE',
       });
@@ -747,11 +1018,18 @@ export default function TrainerSimFloorPage() {
         throw new Error(error?.detail || 'Unable to delete scenario');
       }
 
+      try {
+        await deleteScenarioRecordFromSupabase(scenarioIdToDelete);
+      } catch (syncError) {
+        console.warn('Call simulation scenario Supabase delete sync failed:', syncError);
+        toast.error('Scenario deleted locally, but Supabase cleanup did not complete.');
+      }
+
       toast.success(`"${deleteScenarioTitle}" has been deleted.`);
       setShowDeleteDialog(false);
       setDeleteScenarioId(null);
       setDeleteScenarioTitle('');
-      await fetchScenarioLibrary();
+      await refreshScenarioData();
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to delete scenario.');
@@ -763,6 +1041,10 @@ export default function TrainerSimFloorPage() {
   const handleSaveScenario = async () => {
     if (!selectedBatch || !scenarioForm.title.trim()) {
       toast.error('Add a scenario title before saving.');
+      return;
+    }
+    if (!scenarioForm.topic.trim() || !scenarioForm.description.trim() || !scenarioForm.scenario_group_label.trim()) {
+      toast.error('Add the scenario topic, description, and scenario group before saving.');
       return;
     }
 
@@ -782,8 +1064,8 @@ export default function TrainerSimFloorPage() {
             actor_name: scenarioForm.member_name.trim() || 'Member',
           },
     );
-    if (rows.length < 4) {
-      toast.error('Add at least four complete Actor, Script, Score, and Scenario rows before saving.');
+    if (rows.length < 5) {
+      toast.error('Add at least five complete Actor, Script, Score, and Scenario rows before saving.');
       return;
     }
 
@@ -922,11 +1204,13 @@ export default function TrainerSimFloorPage() {
           member_id: scenarioForm.member_id.trim() || null,
           plan_type: scenarioForm.plan_type.trim() || null,
           verification_status: scenarioForm.verification_status.trim() || null,
+          scenario_group: scenarioForm.scenario_group_label.trim() || null,
           problem_statement: scenarioForm.problem_statement.trim() || firstMemberLine || scenarioForm.description.trim() || null,
         },
         call_simulation_config: {
           mode: 'dialer_call_scenario',
           topic: scenarioForm.topic.trim() || scenarioForm.title.trim(),
+          scenario_group_label: scenarioForm.scenario_group_label.trim() || null,
           target_kpis: targetKpis,
           script_flow: scriptFlow,
           script_rows: rows,
@@ -937,8 +1221,6 @@ export default function TrainerSimFloorPage() {
           show_actor_script_overlay: true,
           require_hold_before_member_response: true,
         },
-        ringer_audio_url: scenarioForm.ringer_audio_url.trim() || null,
-        hold_audio_url: scenarioForm.hold_audio_url.trim() || null,
         difficulty: scenarioForm.difficulty || 'intermediate',
         steps,
         variations,
@@ -959,32 +1241,25 @@ export default function TrainerSimFloorPage() {
       }
 
       const savedScenario = (await response.json().catch(() => null)) as Scenario | null;
+      const scenarioReference = savedScenario?.id ? savedScenario : editingScenarioId;
 
-      const syncResponse = await authedFetch('/api/call-simulation/scenarios/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          scenarioId: savedScenario?.id || editingScenarioId || '',
-          title: payload.title,
-          description: payload.description,
-          topic: scenarioForm.topic.trim() || payload.title,
-          targetKpis,
-          scriptFlow,
-          ringerAudioUrl: payload.ringer_audio_url,
-          holdAudioUrl: payload.hold_audio_url,
-          difficulty: payload.difficulty,
-          estimatedDurationSeconds: payload.estimated_duration,
-          passingScore: Number(targetKpis.passing_score || 80),
-          isPublished: true,
-          isActive: true,
-          metadata: payload.call_simulation_config,
-        }),
-      });
+      if (scenarioReference) {
+        try {
+          await syncScenarioRecordToSupabase(scenarioReference);
+        } catch (syncError) {
+          console.warn('Call simulation scenario Supabase sync failed:', syncError);
+          toast.error('Scenario saved locally, but Supabase scenario/script sync did not complete.');
+        }
 
-      if (!syncResponse.ok) {
-        const syncError = await syncResponse.json().catch(() => null);
-        console.warn('Call simulation scenario Supabase sync failed:', syncError);
-        toast.error('Scenario saved, but Supabase dialer sync did not complete.');
+        try {
+          await syncScenarioKpiMetrics(
+            [typeof scenarioReference === 'string' ? scenarioReference : scenarioReference.id],
+            kpiForm,
+          );
+        } catch (syncError) {
+          console.warn('Call simulation KPI metric Supabase sync failed:', syncError);
+          toast.error('Scenario saved locally, but KPI metric sync to Supabase did not complete.');
+        }
       }
 
       setShowScenarioDialog(false);
@@ -1072,6 +1347,15 @@ export default function TrainerSimFloorPage() {
       }
       setShowKpiDialog(false);
       await fetchKpiConfig(selectedBatch);
+      const scenarioIds = scenarios.map((scenario) => scenario.id).filter(Boolean);
+      if (scenarioIds.length > 0) {
+        try {
+          await syncScenarioKpiMetrics(scenarioIds, kpiForm);
+        } catch (syncError) {
+          console.warn('Call simulation KPI management Supabase sync failed:', syncError);
+          toast.error('KPI configuration saved locally, but KPI metric sync to Supabase did not complete.');
+        }
+      }
       toast.success('KPI configuration saved.');
     } catch (error) {
       console.error(error);
@@ -1081,7 +1365,7 @@ export default function TrainerSimFloorPage() {
     }
   };
 
-  const handleDownloadTemplate = async (format: 'csv' | 'xlsx' | 'txt' = 'csv') => {
+  const handleDownloadTemplate = async (format: 'csv' | 'xlsx' = 'csv') => {
     try {
       const response = await authedFetch(`/api/call-simulation/bulk-upload-template?format=${format}`);
       if (!response.ok) {
@@ -1092,12 +1376,7 @@ export default function TrainerSimFloorPage() {
       const objectUrl = window.URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = objectUrl;
-      anchor.download =
-        format === 'csv'
-          ? 'call-simulation-template.csv'
-          : format === 'txt'
-            ? 'call-simulation-template.txt'
-            : 'call-simulation-template.xlsx';
+      anchor.download = format === 'csv' ? 'call-simulation-template.csv' : 'call-simulation-template.xlsx';
       anchor.click();
       window.URL.revokeObjectURL(objectUrl);
     } catch (error) {
@@ -1109,7 +1388,11 @@ export default function TrainerSimFloorPage() {
   const handleBulkUpload = async () => {
     const file = fileInputRef.current?.files?.[0];
     if (!selectedBatch || !file) {
-      toast.error('Choose a CSV, Excel, TXT, or DOCX scenario file first.');
+      toast.error(
+        !selectedBatch
+          ? 'Select a batch and choose a CSV, Excel, TXT, or DOCX scenario file first.'
+          : 'Choose a CSV, Excel, TXT, or DOCX scenario file first.',
+      );
       return;
     }
 
@@ -1125,10 +1408,36 @@ export default function TrainerSimFloorPage() {
         method: 'POST',
         body: formData,
       });
+      const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        const error = await response.json().catch(() => null);
-        throw new Error(error?.detail || 'Unable to bulk upload scenarios');
+        throw new Error(payload?.detail || 'Unable to bulk upload scenarios');
       }
+
+      const scenarioId = payload?.scenario_id;
+      if (scenarioId) {
+        try {
+          const syncResponse = await authedFetch('/api/call-simulation/scenarios/sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scenarioId, syncFromDatabase: true }),
+          });
+          if (!syncResponse.ok) {
+            throw new Error('Supabase scenario sync failed');
+          }
+          await syncScenarioRecordToSupabase(String(scenarioId));
+        } catch (syncError) {
+          console.warn('Call simulation bulk-upload Supabase sync failed:', syncError);
+          toast.error('Bulk upload saved locally, but Supabase scenario/script sync did not complete.');
+        }
+
+        try {
+          await syncScenarioKpiMetrics([String(scenarioId)], kpiForm);
+        } catch (syncError) {
+          console.warn('Call simulation bulk-upload KPI sync failed:', syncError);
+          toast.error('Bulk upload saved locally, but KPI metric sync to Supabase did not complete.');
+        }
+      }
+
       setBulkTitle('');
       if (fileInputRef.current) fileInputRef.current.value = '';
       setShowBulkDialog(false);
@@ -1142,8 +1451,8 @@ export default function TrainerSimFloorPage() {
     }
   };
 
-  const handleUploadAudioAsset = useCallback(
-    (target: { type: 'ringer' | 'hold' }) => {
+  const handleUploadCallToneAsset = useCallback(
+    (target: 'ringer' | 'hold') => {
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'audio/*';
@@ -1155,16 +1464,12 @@ export default function TrainerSimFloorPage() {
           return;
         }
 
-        const targetKey = target.type;
-        setUploadingAudioTarget(targetKey);
+        setUploadingAudioTarget(target);
 
         try {
           const formData = new FormData();
           formData.append('file', selectedFile);
-          formData.append('asset_kind', target.type);
-          if (editingScenarioId) {
-            formData.append('scenario_id', editingScenarioId);
-          }
+          formData.append('asset_kind', target);
 
           const response = await authedFetch('/api/call-simulation/assets/audio', {
             method: 'POST',
@@ -1175,17 +1480,27 @@ export default function TrainerSimFloorPage() {
             throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to upload the audio asset');
           }
 
-          const uploadedUrl = payload.audio_url;
-          setScenarioForm((previous) => {
-            if (target.type === 'ringer') {
-              return { ...previous, ringer_audio_url: uploadedUrl };
-            }
-            return { ...previous, hold_audio_url: uploadedUrl };
+          applyCallToneSettings(payload.settings || {
+            ...callToneSettings,
+            ...(target === 'ringer' ? { ringer_audio_url: payload.audio_url } : { hold_audio_url: payload.audio_url }),
           });
-
-          toast.success(
-            `${target.type === 'ringer' ? 'Ringer' : 'Hold'} audio uploaded.`,
-          );
+          
+          try {
+            const audioSettings = payload.settings || {
+              ...callToneSettings,
+              ...(target === 'ringer' ? { ringer_audio_url: payload.audio_url } : { hold_audio_url: payload.audio_url }),
+            };
+            await authedFetch('/api/call-simulation/audio/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: audioSettings }),
+            });
+          } catch (syncError) {
+            console.warn('Call tone audio Supabase sync failed:', syncError);
+          }
+          
+          await refreshScenarioData();
+          toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio uploaded and applied to your Call Simulation scenarios.`);
         } catch (error) {
           console.error(error);
           toast.error(error instanceof Error ? error.message : 'Unable to upload the audio asset.');
@@ -1197,8 +1512,94 @@ export default function TrainerSimFloorPage() {
 
       input.click();
     },
-    [authedFetch, editingScenarioId],
+    [applyCallToneSettings, authedFetch, callToneSettings, refreshScenarioData],
   );
+
+  const handleSaveCallTone = useCallback(async (target: 'ringer' | 'hold') => {
+    const audioUrl = target === 'ringer' ? callToneSettings.ringer_audio_url.trim() : callToneSettings.hold_audio_url.trim();
+    setSavingCallToneTarget(target);
+    try {
+      const response = await authedFetch('/api/call-simulation/audio-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(target === 'ringer' ? { ringer_audio_url: audioUrl || null } : { hold_audio_url: audioUrl || null }),
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as CallSimulationAudioSettings | { detail?: string } | null;
+      if (!response.ok || !payload) {
+        throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to save the audio setting');
+      }
+
+      applyCallToneSettings(payload as CallSimulationAudioSettings);
+      
+      try {
+        await authedFetch('/api/call-simulation/audio/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ settings: payload }),
+        });
+      } catch (syncError) {
+        console.warn('Call tone audio Supabase sync failed:', syncError);
+      }
+      
+      await refreshScenarioData();
+      toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio saved for all of your Call Simulation scenarios.`);
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to save the audio setting.');
+    } finally {
+      setSavingCallToneTarget(null);
+    }
+  }, [applyCallToneSettings, authedFetch, callToneSettings.hold_audio_url, callToneSettings.ringer_audio_url, refreshScenarioData]);
+
+  const handleDeleteCallTone = useCallback(async (target: 'ringer' | 'hold') => {
+    setSavingCallToneTarget(target);
+    try {
+      const response = await authedFetch(`/api/call-simulation/audio-settings?asset_kind=${encodeURIComponent(target)}`, {
+        method: 'DELETE',
+      });
+      const payload = (await response.json().catch(() => null)) as CallSimulationAudioSettings | { detail?: string } | null;
+      if (!response.ok || !payload) {
+        throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to remove the audio setting');
+      }
+
+      applyCallToneSettings(payload as CallSimulationAudioSettings);
+      await refreshScenarioData();
+      toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio removed from your Call Simulation scenarios.`);
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to remove the audio setting.');
+    } finally {
+      setSavingCallToneTarget(null);
+    }
+  }, [applyCallToneSettings, authedFetch, refreshScenarioData]);
+
+  const requestMemberSpeechAsset = useCallback(async (script: string, rowIndex: number) => {
+      const params = new URLSearchParams({
+        text: script.trim(),
+        persist: 'true',
+        asset_kind: 'member-step',
+        step_number: String(rowIndex + 1),
+      });
+      if (editingScenarioId) {
+        params.set('scenario_id', editingScenarioId);
+      }
+
+      const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
+        method: 'POST',
+      });
+      const payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+      if (!response.ok || !payload?.audio_url) {
+        throw new Error(payload?.detail || 'Unable to generate member speech');
+      }
+
+      return {
+        audioUrl: payload.audio_url,
+        warning: payload.warning || null,
+        storageMode: payload.storage_mode || null,
+      };
+    }, [authedFetch, editingScenarioId]);
 
   const handleGenerateMemberSpeech = useCallback(async (rowIndex: number) => {
     const row = scenarioForm.rows[rowIndex];
@@ -1213,40 +1614,97 @@ export default function TrainerSimFloorPage() {
 
     setGeneratingSpeechRowIndex(rowIndex);
     try {
-      const params = new URLSearchParams({
-        text: row.script.trim(),
-        persist: 'true',
-        asset_kind: 'member-step',
-        step_number: String(rowIndex + 1),
-      });
-      if (editingScenarioId) {
-        params.set('scenario_id', editingScenarioId);
-      }
-
-      const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
-        method: 'POST',
-      });
-      const payload = (await response.json().catch(() => null)) as { audio_url?: string | null; detail?: string } | null;
-      if (!response.ok || !payload?.audio_url) {
-        throw new Error(payload?.detail || 'Unable to generate member speech');
-      }
+      const result = await requestMemberSpeechAsset(row.script.trim(), rowIndex);
 
       setScenarioForm((previous) => ({
         ...previous,
         rows: previous.rows.map((entry, entryIndex) => (
           entryIndex === rowIndex
-            ? { ...entry, audio_url: payload.audio_url || '' }
+            ? { ...entry, audio_url: result.audioUrl || '' }
             : entry
         )),
       }));
-      toast.success('Member speech generated and stored in Supabase.');
+      if (result.warning) {
+        toast.success('Member speech generated and saved for trainee playback.');
+        toast(result.warning);
+      } else {
+        toast.success('Member speech generated and stored in Supabase.');
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to generate member speech.');
     } finally {
       setGeneratingSpeechRowIndex(null);
     }
-  }, [authedFetch, editingScenarioId, scenarioForm.rows]);
+  }, [requestMemberSpeechAsset, scenarioForm.rows]);
+
+  const handleGenerateAllMemberSpeech = useCallback(async () => {
+    const memberRowsToGenerate = scenarioForm.rows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => !isCsrActor(row.actor_name) && row.script.trim());
+
+    if (memberRowsToGenerate.length === 0) {
+      toast.error('Add at least one Member script before generating speech.');
+      return;
+    }
+
+    setIsGeneratingAllMemberSpeech(true);
+    setMemberSpeechGenerationProgress({ current: 0, total: memberRowsToGenerate.length });
+
+    let successCount = 0;
+    let failedCount = 0;
+    let firstFailureMessage: string | null = null;
+
+    try {
+      for (const [sequenceIndex, entry] of memberRowsToGenerate.entries()) {
+        setGeneratingSpeechRowIndex(entry.index);
+        setMemberSpeechGenerationProgress({ current: sequenceIndex + 1, total: memberRowsToGenerate.length });
+
+        try {
+          const result = await requestMemberSpeechAsset(entry.row.script.trim(), entry.index);
+          setScenarioForm((previous) => ({
+            ...previous,
+            rows: previous.rows.map((row, rowIndex) => (
+              rowIndex === entry.index
+                ? { ...row, audio_url: result.audioUrl || '' }
+                : row
+            )),
+          }));
+          successCount += 1;
+        } catch (error) {
+          console.error(error);
+          failedCount += 1;
+          if (!firstFailureMessage) {
+            firstFailureMessage =
+              error instanceof Error
+                ? error.message
+                : `Unable to generate speech for Member row ${entry.index + 1}.`;
+          }
+        }
+      }
+
+      if (failedCount === 0) {
+        toast.success(`Generated Gemini speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
+        return;
+      }
+
+      if (successCount > 0) {
+        toast.error(
+          `${successCount} Member row${successCount === 1 ? '' : 's'} generated, but ${failedCount} failed. ${firstFailureMessage || ''}`.trim(),
+        );
+        return;
+      }
+
+      throw new Error(firstFailureMessage || 'Unable to generate Member speech.');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to generate Member speech.');
+    } finally {
+      setGeneratingSpeechRowIndex(null);
+      setIsGeneratingAllMemberSpeech(false);
+      setMemberSpeechGenerationProgress(null);
+    }
+  }, [requestMemberSpeechAsset, scenarioForm.rows]);
 
   const handleBulkFileSelected = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
@@ -1255,7 +1713,7 @@ export default function TrainerSimFloorPage() {
     }
 
     if (!bulkTitle.trim()) {
-      const inferredTitle = selectedFile.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim();
+      const inferredTitle = parseBulkScenarioFileName(selectedFile.name).title;
       if (inferredTitle) {
         setBulkTitle(inferredTitle);
       }
@@ -1413,6 +1871,10 @@ export default function TrainerSimFloorPage() {
         )
       : 0;
   const sidebarItems = trainerSidebarItems();
+  const memberRows = useMemo(
+    () => scenarioForm.rows.filter((row) => !isCsrActor(row.actor_name)),
+    [scenarioForm.rows],
+  );
   const scenarioGroupSuggestions = useMemo(
     () =>
       Array.from(
@@ -1428,6 +1890,14 @@ export default function TrainerSimFloorPage() {
     () => scenarioForm.rows.filter((row) => row.actor_name.trim() && row.scenario.trim() && row.script.trim()).length,
     [scenarioForm.rows],
   );
+  const memberRowsWithScriptCount = useMemo(
+    () => memberRows.filter((row) => row.script.trim()).length,
+    [memberRows],
+  );
+  const memberAudioReadyCount = useMemo(
+    () => memberRows.filter((row) => row.audio_url.trim()).length,
+    [memberRows],
+  );
   const updateScenarioRow = useCallback((index: number, field: keyof ScenarioRowForm, value: string) => {
     setScenarioForm((previous) => ({
       ...previous,
@@ -1440,7 +1910,7 @@ export default function TrainerSimFloorPage() {
           return {
             ...row,
             actor_name: nextActor,
-            score: nextActor === 'CSR' ? row.score : '',
+            score: row.score.trim() || (nextActor === 'Member' ? '0' : row.score),
           };
         }
         return { ...row, [field]: value };
@@ -1484,11 +1954,156 @@ export default function TrainerSimFloorPage() {
               trainee recordings for coaching.
             </p>
           </div>
-          <Button variant="outline" onClick={() => selectedBatch && loadBatchData(selectedBatch)} disabled={!selectedBatch || loading}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (!selectedBatch) return;
+              void Promise.all([loadBatchData(selectedBatch), fetchCallToneSettings()]);
+            }}
+            disabled={!selectedBatch || loading}
+          >
             <RefreshCw className="mr-2 h-4 w-4" />
             Refresh
           </Button>
         </div>
+
+        <Card className="border-sky-200/80 bg-slate-50/70 shadow-sm">
+          <CardHeader className="pb-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <CardTitle>Shared Call Audio</CardTitle>
+                <CardDescription>
+                  Upload or paste the trainer-wide ringer and hold audio once. These tones are saved to Supabase and automatically
+                  applied across every Call Simulation scenario you create.
+                </CardDescription>
+              </div>
+              <Badge variant="outline" className="w-fit bg-white text-slate-700">
+                {callToneSettings.updated_at ? `Updated ${new Date(callToneSettings.updated_at).toLocaleString()}` : 'No shared audio saved yet'}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-3xl border bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Ringer Audio</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Plays when the trainee starts a scenario and receives the incoming mock call.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleUploadCallToneAsset('ringer')}
+                    disabled={uploadingAudioTarget === 'ringer'}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    {uploadingAudioTarget === 'ringer' ? 'Uploading...' : 'Upload Audio'}
+                  </Button>
+                </div>
+                <div className="mt-4 space-y-2">
+                  <Label>Ringer Audio URL</Label>
+                  <Input
+                    value={callToneSettings.ringer_audio_url}
+                    onChange={(event) => setCallToneSettings((previous) => ({ ...previous, ringer_audio_url: event.target.value }))}
+                    placeholder="Paste a Supabase or public audio URL"
+                    disabled={loadingCallToneSettings}
+                  />
+                </div>
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void handleSaveCallTone('ringer')}
+                    disabled={savingCallToneTarget === 'ringer' || loadingCallToneSettings}
+                  >
+                    <Save className="mr-2 h-4 w-4" />
+                    {savingCallToneTarget === 'ringer' ? 'Saving...' : 'Save Ringer Audio'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleDeleteCallTone('ringer')}
+                    disabled={savingCallToneTarget === 'ringer' || uploadingAudioTarget === 'ringer' || !callToneSettings.ringer_audio_url.trim()}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remove Audio
+                  </Button>
+                </div>
+                {callToneSettings.ringer_audio_url ? (
+                  <audio controls preload="metadata" className="mt-4 w-full" src={callToneSettings.ringer_audio_url}>
+                    Your browser does not support audio preview.
+                  </audio>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-dashed bg-slate-50 p-4 text-sm text-slate-500">
+                    No shared ringer audio has been saved yet.
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-3xl border bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Hold Audio</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Plays whenever the trainee places the caller on hold before the Member response continues.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleUploadCallToneAsset('hold')}
+                    disabled={uploadingAudioTarget === 'hold'}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    {uploadingAudioTarget === 'hold' ? 'Uploading...' : 'Upload Audio'}
+                  </Button>
+                </div>
+                <div className="mt-4 space-y-2">
+                  <Label>Hold Audio URL</Label>
+                  <Input
+                    value={callToneSettings.hold_audio_url}
+                    onChange={(event) => setCallToneSettings((previous) => ({ ...previous, hold_audio_url: event.target.value }))}
+                    placeholder="Paste a Supabase or public audio URL"
+                    disabled={loadingCallToneSettings}
+                  />
+                </div>
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void handleSaveCallTone('hold')}
+                    disabled={savingCallToneTarget === 'hold' || loadingCallToneSettings}
+                  >
+                    <Save className="mr-2 h-4 w-4" />
+                    {savingCallToneTarget === 'hold' ? 'Saving...' : 'Save Hold Audio'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleDeleteCallTone('hold')}
+                    disabled={savingCallToneTarget === 'hold' || uploadingAudioTarget === 'hold' || !callToneSettings.hold_audio_url.trim()}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Remove Audio
+                  </Button>
+                </div>
+                {callToneSettings.hold_audio_url ? (
+                  <audio controls preload="metadata" className="mt-4 w-full" src={callToneSettings.hold_audio_url}>
+                    Your browser does not support audio preview.
+                  </audio>
+                ) : (
+                  <div className="mt-4 rounded-2xl border border-dashed bg-slate-50 p-4 text-sm text-slate-500">
+                    No shared hold audio has been saved yet.
+                  </div>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <Card>
@@ -1553,8 +2168,8 @@ export default function TrainerSimFloorPage() {
         </div>
 
         {selectedBatch ? (
-          <div className="grid gap-6 lg:grid-cols-2">
-            <Card>
+          <div className="grid gap-6 xl:grid-cols-2">
+            <Card className="h-full">
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -1649,7 +2264,7 @@ export default function TrainerSimFloorPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="h-full">
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div>
@@ -1873,23 +2488,60 @@ export default function TrainerSimFloorPage() {
         </Card>
       </div>
 
-      <Dialog open={showScenarioDialog} onOpenChange={setShowScenarioDialog}>
-        <DialogContent className="max-h-[92vh] max-w-[96vw] overflow-hidden p-0 sm:max-w-6xl 2xl:max-w-7xl">
-          <DialogHeader className="border-b px-6 py-5">
+      <Dialog
+        open={showScenarioDialog}
+        onOpenChange={(open) => {
+          setShowScenarioDialog(open);
+          if (!open) {
+            setGeneratingSpeechRowIndex(null);
+            setIsGeneratingAllMemberSpeech(false);
+            setMemberSpeechGenerationProgress(null);
+          }
+        }}
+      >
+        <DialogContent className="flex h-[94vh] max-h-[94vh] max-w-[98vw] flex-col overflow-hidden p-0 sm:max-w-7xl 2xl:max-w-[1800px]">
+          <DialogHeader className="shrink-0 border-b bg-white px-6 py-5">
             <DialogTitle>{editingScenarioId ? 'Edit Scenario' : 'Create Scenario'}</DialogTitle>
             <DialogDescription>
               Build a clean trainer flow with Scenario title, topic, description, then alternating CSR and Member rows
               that persist to Supabase and drive the trainee mock call.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid max-h-[calc(92vh-9rem)] gap-0 lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
-            <div className="space-y-5 overflow-y-auto border-b bg-slate-50/70 p-6 lg:border-b-0 lg:border-r">
+          <div className="grid min-h-0 flex-1 gap-0 lg:grid-cols-[minmax(0,0.96fr)_minmax(0,1.04fr)]">
+            <div className="min-h-0 space-y-5 overflow-y-auto border-b bg-slate-50/70 p-6 pb-8 lg:border-b-0 lg:border-r">
               <div className="rounded-3xl border bg-white p-5 shadow-sm">
-                <div className="mb-4">
-                  <h3 className="text-base font-semibold text-slate-950">Scenario Overview</h3>
-                  <p className="mt-1 text-sm text-slate-500">
-                    These values become the trainer-facing title, trainee topic label, and saved Supabase scenario metadata.
-                  </p>
+                <div className="mb-4 flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-950">Scenario Overview</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      These values become the trainer-facing title, trainee topic label, and saved Supabase scenario metadata.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full shrink-0 xl:w-auto"
+                    onClick={() => void handleGenerateAllMemberSpeech()}
+                    disabled={isGeneratingAllMemberSpeech || memberRowsWithScriptCount === 0}
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${isGeneratingAllMemberSpeech ? 'animate-spin' : ''}`} />
+                    {isGeneratingAllMemberSpeech
+                      ? `Generating ${memberSpeechGenerationProgress?.current ?? 0}/${memberSpeechGenerationProgress?.total ?? memberRowsWithScriptCount}`
+                      : 'Generate Speech'}
+                  </Button>
+                </div>
+                <div className="mb-4 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-cyan-950">Member AI audio coverage</div>
+                      <p className="mt-1 text-xs text-cyan-900/80">
+                        One click will convert every Member script into Gemini speech and store each audio file in Supabase.
+                      </p>
+                    </div>
+                    <Badge variant="secondary" className="w-fit bg-white text-cyan-950">
+                      {memberAudioReadyCount}/{memberRowsWithScriptCount || memberRows.length || 0} ready
+                    </Badge>
+                  </div>
                 </div>
                 <div className="space-y-4">
                   <div className="space-y-2">
@@ -1916,6 +2568,17 @@ export default function TrainerSimFloorPage() {
                       rows={4}
                       placeholder="Describe the call objective, customer need, and coaching focus."
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Scenario Group</Label>
+                    <Input
+                      value={scenarioForm.scenario_group_label}
+                      onChange={(event) => setScenarioForm((previous) => ({ ...previous, scenario_group_label: event.target.value }))}
+                      placeholder="Benefits Balance, Card Replacement, Billing Escalation"
+                    />
+                    <p className="text-xs text-slate-500">
+                      Save the broader scenario family here, then use the row-level Scenario Group field to organize each call turn.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -1984,61 +2647,21 @@ export default function TrainerSimFloorPage() {
                       Stored in Supabase-linked scenario metadata and reused by the dialer feedback sync route.
                     </p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <Label>Ringer Audio URL</Label>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleUploadAudioAsset({ type: 'ringer' })}
-                          disabled={uploadingAudioTarget === 'ringer'}
-                        >
-                          <Upload className="mr-2 h-4 w-4" />
-                          {uploadingAudioTarget === 'ringer' ? 'Uploading...' : 'Upload Audio'}
-                        </Button>
-                      </div>
-                      <Input value={scenarioForm.ringer_audio_url} onChange={(event) => setScenarioForm((previous) => ({ ...previous, ringer_audio_url: event.target.value }))} placeholder="Optional uploaded or public URL" />
-                      {scenarioForm.ringer_audio_url ? (
-                        <audio controls className="w-full" src={scenarioForm.ringer_audio_url}>
-                          Your browser does not support audio preview.
-                        </audio>
-                      ) : null}
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <Label>Hold Audio URL</Label>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleUploadAudioAsset({ type: 'hold' })}
-                          disabled={uploadingAudioTarget === 'hold'}
-                        >
-                          <Upload className="mr-2 h-4 w-4" />
-                          {uploadingAudioTarget === 'hold' ? 'Uploading...' : 'Upload Audio'}
-                        </Button>
-                      </div>
-                      <Input value={scenarioForm.hold_audio_url} onChange={(event) => setScenarioForm((previous) => ({ ...previous, hold_audio_url: event.target.value }))} placeholder="Optional uploaded or public URL" />
-                      {scenarioForm.hold_audio_url ? (
-                        <audio controls className="w-full" src={scenarioForm.hold_audio_url}>
-                          Your browser does not support audio preview.
-                        </audio>
-                      ) : null}
-                    </div>
+                  <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 text-sm text-sky-950">
+                    Shared ringer and hold audio now live in <span className="font-semibold">Call Simulation Management</span> above.
+                    Any change there is saved to Supabase and applied automatically to every scenario you create.
                   </div>
                 </div>
               </div>
             </div>
 
-            <div className="space-y-5 overflow-y-auto p-6">
+            <div className="min-h-0 space-y-5 overflow-y-auto p-6 pb-8">
               <div className="rounded-3xl border bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div>
                     <h3 className="text-base font-semibold text-slate-950">Scenario Builder</h3>
                     <p className="mt-1 text-sm text-slate-500">
-                      Use Actor, Script, Score, and Scenario Group rows. Keep at least 4 completed rows, and generate Member audio for hold playback.
+                      Use Actor, Script, Score, and Scenario Group rows. Keep at least 5 completed rows, and generate Member audio for hold playback.
                     </p>
                   </div>
                   <Button variant="outline" size="sm" onClick={() => addScenarioRow()}>
@@ -2058,7 +2681,7 @@ export default function TrainerSimFloorPage() {
                   <div className="rounded-2xl border bg-slate-50 p-4">
                     <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Member Audio Rows</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">
-                      {scenarioForm.rows.filter((row) => !isCsrActor(row.actor_name) && row.audio_url.trim()).length}
+                      {memberAudioReadyCount}
                     </div>
                   </div>
                 </div>
@@ -2081,7 +2704,7 @@ export default function TrainerSimFloorPage() {
                       </Button>
                     </div>
 
-                    <div className="grid gap-4 xl:grid-cols-[minmax(0,0.45fr)_minmax(0,0.55fr)]">
+                    <div className="grid gap-4 xl:grid-cols-2">
                       <div className="grid gap-4 sm:grid-cols-3">
                         <div className="space-y-2">
                           <Label>Actor</Label>
@@ -2111,8 +2734,7 @@ export default function TrainerSimFloorPage() {
                             min="0"
                             value={row.score}
                             onChange={(event) => updateScenarioRow(index, 'score', event.target.value)}
-                            placeholder={memberRow ? '0 for Member' : '0-100'}
-                            disabled={memberRow}
+                            placeholder={memberRow ? '0 or optional weight' : '0-100'}
                           />
                         </div>
                       </div>
@@ -2142,15 +2764,25 @@ export default function TrainerSimFloorPage() {
                             variant="outline"
                             size="sm"
                             onClick={() => void handleGenerateMemberSpeech(index)}
-                            disabled={generatingSpeechRowIndex === index || !row.script.trim()}
+                            disabled={isGeneratingAllMemberSpeech || generatingSpeechRowIndex === index || !row.script.trim()}
                           >
                             <RefreshCw className={`mr-2 h-4 w-4 ${generatingSpeechRowIndex === index ? 'animate-spin' : ''}`} />
-                            {generatingSpeechRowIndex === index ? 'Generating...' : 'Generate Speech'}
+                            {generatingSpeechRowIndex === index ? 'Generating...' : row.audio_url ? 'Regenerate Speech' : 'Generate Speech'}
                           </Button>
                         </div>
                         <div className="mt-3 space-y-2">
                           <Label>Generated Audio URL</Label>
-                          <Input value={row.audio_url} onChange={(event) => updateScenarioRow(index, 'audio_url', event.target.value)} placeholder="Stored Supabase audio URL" />
+                          <Input
+                            value={formatGeneratedAudioValue(row.audio_url)}
+                            onChange={(event) => updateScenarioRow(index, 'audio_url', event.target.value)}
+                            placeholder="Stored Supabase audio URL"
+                            readOnly={isEmbeddedAudioDataUrl(row.audio_url)}
+                          />
+                          {isEmbeddedAudioDataUrl(row.audio_url) ? (
+                            <p className="text-xs text-cyan-900/80">
+                              Supabase storage is unavailable right now, so this row is carrying embedded audio inside the saved scenario data.
+                            </p>
+                          ) : null}
                           {row.audio_url ? (
                             <audio controls className="w-full" src={row.audio_url}>
                               Your browser does not support audio preview.
@@ -2175,30 +2807,37 @@ export default function TrainerSimFloorPage() {
 
               <div className="rounded-3xl border border-dashed bg-slate-50 p-4 text-sm text-slate-600">
                 Bulk upload tip: spreadsheet uploads use the exact `Actor`, `Script`, `Score`, and `Scenario` columns.
-                TXT and DOCX uploads use the file name as the default title/topic, the first paragraph as the description,
-                then structured lines like `Actor | Script | Score | Scenario`.
+                TXT and DOCX uploads use the file name pattern `Title_Topic_Description`, then structured lines like
+                `Actor | Script | Score | Scenario`.
               </div>
             </div>
           </div>
-          <DialogFooter className="border-t px-6 py-4">
-            <Button variant="outline" onClick={() => setShowScenarioDialog(false)}>Cancel</Button>
-            <Button onClick={handleSaveScenario} disabled={saving}>
-              <Save className="mr-2 h-4 w-4" />
-              {saving ? 'Saving...' : editingScenarioId ? 'Update Scenario' : 'Create Scenario'}
-            </Button>
-          </DialogFooter>
+          <div className="shrink-0 border-t bg-white px-6 py-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <p className="text-xs text-slate-500">
+                Keep at least 5 complete rows, make sure Member rows have playable audio, and use Save when the scenario is ready for trainees.
+              </p>
+              <div className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button variant="outline" onClick={() => setShowScenarioDialog(false)}>Cancel</Button>
+                <Button onClick={handleSaveScenario} disabled={saving || isGeneratingAllMemberSpeech}>
+                  <Save className="mr-2 h-4 w-4" />
+                  {saving ? 'Saving...' : editingScenarioId ? 'Update Scenario' : 'Create Scenario'}
+                </Button>
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={showKpiDialog} onOpenChange={setShowKpiDialog}>
-        <DialogContent className="max-h-[90vh] max-w-[92vw] overflow-hidden p-0 sm:max-w-5xl">
+        <DialogContent className="max-h-[90vh] max-w-[96vw] overflow-hidden p-0 sm:max-w-6xl 2xl:max-w-7xl">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle>KPI Management</DialogTitle>
             <DialogDescription>
               Keep the KPI Management panel wide and clean. The scoring weights below are saved to Supabase for the selected batch.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid max-h-[calc(90vh-9rem)] gap-0 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="grid max-h-[calc(90vh-9rem)] gap-0 lg:grid-cols-2">
             <div className="space-y-5 overflow-y-auto border-b bg-slate-50/70 p-6 lg:border-b-0 lg:border-r">
               <div className="rounded-3xl border bg-white p-5 shadow-sm">
                 <h3 className="text-base font-semibold text-slate-950">Score Balance</h3>
@@ -2276,7 +2915,7 @@ export default function TrainerSimFloorPage() {
             <DialogTitle>Bulk Upload Scenarios</DialogTitle>
             <DialogDescription>
               Upload a CSV, Excel, TXT, or DOCX file. Spreadsheet uploads use `Actor`, `Script`, `Score`, and
-              `Scenario` columns, while TXT or DOCX files use the first paragraph as the description and structured
+              `Scenario` columns, while TXT or DOCX files use the file name pattern `Title_Topic_Description` and structured
               lines like `Actor | Script | Score | Scenario`.
             </DialogDescription>
           </DialogHeader>
@@ -2290,20 +2929,17 @@ export default function TrainerSimFloorPage() {
                 <Download className="mr-2 h-4 w-4" />
                 Excel Template
               </Button>
-              <Button variant="outline" type="button" onClick={() => void handleDownloadTemplate('txt')}>
-                <Download className="mr-2 h-4 w-4" />
-                TXT Template
-              </Button>
             </div>
             <div className="space-y-2">
               <Label>Scenario Title Override</Label>
-              <Input value={bulkTitle} onChange={(event) => setBulkTitle(event.target.value)} placeholder="Optional. Leave blank to use the uploaded file name." />
+              <Input value={bulkTitle} onChange={(event) => setBulkTitle(event.target.value)} placeholder="Optional. Leave blank to use the file name title segment." />
             </div>
             <div className="space-y-2">
               <Label>Upload File</Label>
               <Input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.txt,.docx" onChange={handleBulkFileSelected} />
               <p className="text-xs text-slate-500">
-                For TXT and DOCX, the file name becomes the default Scenario Title and Topic if you do not override it here.
+                For TXT and DOCX, the platform parses `Title_Topic_Description` into the Scenario Title, Scenario Topic,
+                and Description before syncing the scenario to Supabase.
               </p>
             </div>
           </div>

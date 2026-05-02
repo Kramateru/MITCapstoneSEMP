@@ -73,6 +73,44 @@ function hasTwoValidOptions(options?: string[]) {
   return getSelectableOptionEntries(options).length >= 2;
 }
 
+function getTrainerYouTubeEmbedUrl(url?: string | null) {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    const hostname = parsed.hostname.toLowerCase();
+    let videoId = '';
+
+    if (hostname === 'youtu.be') {
+      videoId = parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
+    } else if (hostname.includes('youtube.com') || hostname.includes('youtube-nocookie.com')) {
+      if (parsed.pathname === '/watch') {
+        videoId = parsed.searchParams.get('v') || '';
+      } else if (parsed.pathname.startsWith('/embed/')) {
+        videoId = parsed.pathname.split('/embed/')[1]?.split('/')[0] || '';
+      } else if (parsed.pathname.startsWith('/shorts/')) {
+        videoId = parsed.pathname.split('/shorts/')[1]?.split('/')[0] || '';
+      }
+    }
+
+    return /^[A-Za-z0-9_-]{11}$/.test(videoId)
+      ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTrainerDirectVideoFile(url?: string | null) {
+  if (!url) {
+    return false;
+  }
+
+  return /(^\/|\.mp4($|[?#])|\.webm($|[?#])|\.ogg($|[?#])|\.mov($|[?#])|\.m4v($|[?#]))/i.test(url);
+}
+
 function validateModuleForm(form: ModuleFormState) {
   if (!form.title.trim()) {
     return 'Module title is required.';
@@ -87,6 +125,9 @@ function validateModuleForm(form: ModuleFormState) {
   }
 
   if (form.module_type === 'video') {
+    if (!form.content_url.trim()) {
+      return 'Upload a trainer video to Supabase or paste a YouTube link before saving this video module.';
+    }
     if (!form.video_questions.length) {
       return 'Add at least one video question for the module.';
     }
@@ -311,6 +352,10 @@ export default function TrainerMicrolearningStudio() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      if (editingModule?.id) {
+        formData.append('module_id', editingModule.id);
+      }
+      formData.append('module_type', moduleForm.module_type);
       const response = await authedFetch('/api/trainer/microlearning-assets/upload', {
         method: 'POST',
         body: formData,
@@ -323,9 +368,13 @@ export default function TrainerMicrolearningStudio() {
         asset_storage_path: typeof payload?.storage_path === 'string' ? payload.storage_path : '',
         asset_bucket_name: typeof payload?.bucket_name === 'string' ? payload.bucket_name : '',
         asset_content_type: typeof payload?.content_type === 'string' ? payload.content_type : (file.type || ''),
-        asset_signed_url_required: Boolean(payload?.signed_url_required),
+        asset_signed_url_required: Boolean(payload?.storage_path || payload?.signed_url_required),
       }));
-      toast.success('Asset uploaded.');
+      toast.success(
+        moduleForm.module_type === 'video'
+          ? 'Video uploaded to Supabase. Trainees will be able to watch it after the module is saved and assigned.'
+          : 'Asset uploaded to Supabase.',
+      );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Asset upload failed.');
     } finally {
@@ -660,7 +709,7 @@ export default function TrainerMicrolearningStudio() {
             : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
-      ? 'Upload a trainer video or paste a YouTube link trainees should review before the practice prompt.'
+      ? 'Upload a trainer video to Supabase storage or paste a YouTube link trainees should review before the practice prompt.'
       : moduleForm.module_type === 'infographic'
         ? 'Upload the infographic or image trainees should review.'
         : moduleForm.module_type === 'case_study'
@@ -701,6 +750,10 @@ export default function TrainerMicrolearningStudio() {
   const selectedTopicName =
     categories.find((category) => category.id === moduleForm.topic_category_id)?.name || 'No topic selected';
   const selectedFeedbackCategoryName = formatLabel(moduleForm.feedback_category);
+  const trainerVideoPreviewUrl = moduleForm.module_type === 'video' ? moduleForm.content_url.trim() : '';
+  const trainerYouTubePreviewUrl = getTrainerYouTubeEmbedUrl(trainerVideoPreviewUrl);
+  const trainerShowsDirectVideoPreview =
+    Boolean(trainerVideoPreviewUrl) && !trainerYouTubePreviewUrl && isTrainerDirectVideoFile(trainerVideoPreviewUrl);
   const selectedBatch = useMemo(
     () => batches.find((batch) => batch.id === assignmentBatchId) || null,
     [assignmentBatchId, batches],
@@ -1298,6 +1351,30 @@ export default function TrainerMicrolearningStudio() {
                       placeholder="https://youtube.com/... or a Supabase-hosted asset URL"
                     />
                   </div>
+                  {moduleForm.module_type === 'video' && trainerVideoPreviewUrl ? (
+                    <div className="mt-4 rounded-xl border bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-muted-foreground">Trainer Preview</div>
+                      {trainerYouTubePreviewUrl ? (
+                        <div className="mt-3 overflow-hidden rounded-lg border">
+                          <div className="aspect-video bg-slate-100">
+                            <iframe
+                              className="h-full w-full"
+                              src={trainerYouTubePreviewUrl}
+                              title={moduleForm.title || 'Video preview'}
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                              allowFullScreen
+                            />
+                          </div>
+                        </div>
+                      ) : trainerShowsDirectVideoPreview ? (
+                        <video controls className="mt-3 w-full rounded-lg border" src={trainerVideoPreviewUrl} />
+                      ) : (
+                        <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                          External lesson reference saved. Trainees will open the same link from their microlearning workspace.
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

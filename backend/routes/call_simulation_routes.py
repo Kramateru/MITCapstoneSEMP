@@ -12,7 +12,7 @@ import os
 import re
 import uuid
 import zipfile
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from collections import defaultdict
 from csv import reader as csv_reader
 from datetime import datetime
@@ -22,7 +22,7 @@ from xml.etree import ElementTree as ET
 
 import pandas as pd
 import requests
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse, FileResponse
 from openpyxl import Workbook
 from sqlalchemy import func
@@ -52,6 +52,8 @@ from ..schemas import (
     CallSimulationAssignmentCreate,
     CallSimulationAssignmentResponse,
     CallSimulationAssignmentTargetResponse,
+    CallSimulationAudioSettingsResponse,
+    CallSimulationAudioSettingsUpdate,
     CallSimulationScenarioRowInput,
     CallSimulationScenarioStepResponse,
     BatchKPIConfigUpdate,
@@ -84,8 +86,8 @@ from ..services.supabase_auth_service import filter_to_supabase_active_users
 from ..services.tts_service import text_to_speech
 from ..supabase_client import get_supabase_client
 
-router = APIRouter(prefix="/api/call-simulation", tags=["call-simulation"])
 logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/call-simulation", tags=["call-simulation"])
 
 DEFAULT_PASSING_SCORE = 90.0
 DEFAULT_MAX_ATTEMPTS = 99
@@ -96,6 +98,8 @@ MIN_STT_ACCURACY_FOR_PROGRESS = 55.0
 MIN_KEYWORD_COVERAGE_FOR_PROGRESS = 0.34
 CONTENT_SCORE_WEIGHT = 0.5
 KPI_SCORE_WEIGHT = 0.5
+CALL_SIMULATION_AUDIO_SETTINGS_KEY = "call_simulation_audio"
+_UNSET = object()
 
 
 def _require_trainer(current_user: User) -> None:
@@ -117,6 +121,34 @@ def _require_supabase_storage(detail: str) -> Any:
 
 def _normalize_keyword_list(keywords: Optional[list[str]]) -> list[str]:
     return [keyword.strip() for keyword in (keywords or []) if keyword and keyword.strip()]
+
+
+def _coerce_audio_bytes(payload: Any) -> Optional[bytes]:
+    if payload is None:
+        return None
+    if isinstance(payload, bytes):
+        return payload
+    if isinstance(payload, bytearray):
+        return bytes(payload)
+    if isinstance(payload, memoryview):
+        return payload.tobytes()
+    if hasattr(payload, "tobytes"):
+        try:
+            return payload.tobytes()
+        except Exception:
+            return None
+    if isinstance(payload, str) and payload.strip():
+        try:
+            return b64decode(payload)
+        except Exception:
+            return None
+    return None
+
+
+def _build_audio_data_url(audio_bytes: bytes, content_type: str) -> str:
+    encoded_audio = b64encode(audio_bytes).decode("ascii")
+    normalized_content_type = (content_type or "audio/wav").strip() or "audio/wav"
+    return f"data:{normalized_content_type};base64,{encoded_audio}"
 
 
 def _normalize_actor_role(value: Optional[str]) -> str:
@@ -165,6 +197,54 @@ def _normalize_uploaded_document_title(filename: Optional[str]) -> str:
     cleaned = re.sub(r"[_\-]+", " ", raw_name)
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned or "Call Simulation Scenario"
+
+
+def _parse_uploaded_document_metadata(filename: Optional[str]) -> dict[str, str]:
+    raw_name = os.path.splitext(os.path.basename(filename or ""))[0]
+    collapsed_name = re.sub(r"\s+", " ", raw_name).strip()
+    fallback = _normalize_uploaded_document_title(filename)
+    if not collapsed_name:
+        return {
+            "title": fallback,
+            "topic": fallback,
+            "description": fallback,
+        }
+
+    underscore_parts = [
+        re.sub(r"[-]+", " ", segment).strip()
+        for segment in collapsed_name.split("_")
+        if segment and segment.strip()
+    ]
+    if len(underscore_parts) >= 3:
+        title = re.sub(r"\s+", " ", underscore_parts[0]).strip() or fallback
+        topic = re.sub(r"\s+", " ", underscore_parts[1]).strip() or title
+        description = re.sub(r"\s+", " ", " ".join(underscore_parts[2:])).strip() or topic
+        return {
+            "title": title,
+            "topic": topic,
+            "description": description,
+        }
+
+    dashed_parts = [
+        re.sub(r"_+", " ", segment).strip()
+        for segment in re.split(r"\s+-\s+", collapsed_name)
+        if segment and segment.strip()
+    ]
+    if len(dashed_parts) >= 2:
+        title = re.sub(r"\s+", " ", dashed_parts[0]).strip() or fallback
+        topic = re.sub(r"\s+", " ", dashed_parts[1]).strip() or title
+        description = re.sub(r"\s+", " ", " ".join(dashed_parts[2:])).strip() or fallback
+        return {
+            "title": title,
+            "topic": topic,
+            "description": description,
+        }
+
+    return {
+        "title": fallback,
+        "topic": fallback,
+        "description": fallback,
+    }
 
 
 def _extract_docx_paragraphs(file_bytes: bytes) -> list[str]:
@@ -222,11 +302,43 @@ def _looks_like_bulk_upload_header(columns: list[str]) -> bool:
     return normalized == ["actor", "script", "score", "scenario"]
 
 
+def _normalize_bulk_upload_columns(dataframe: pd.DataFrame, required_columns: list[str]) -> pd.DataFrame:
+    normalized_header_map: dict[str, str] = {
+        str(column).strip().lower(): column for column in dataframe.columns
+    }
+    mapped_columns: dict[str, Any] = {}
+
+    for expected in required_columns:
+        normalized_key = expected.strip().lower()
+        if normalized_key in normalized_header_map:
+            mapped_columns[normalized_header_map[normalized_key]] = expected
+
+    if len(mapped_columns) != len(required_columns):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Missing required columns: {', '.join(required_columns)}. "
+                "Use exact column names or any case-insensitive variant."
+            ),
+        )
+
+    return dataframe.rename(columns=mapped_columns)
+
+
 def _build_bulk_upload_rows_from_dataframe(dataframe: pd.DataFrame) -> tuple[list[dict[str, Any]], int, list[str]]:
     required_columns = ["Actor", "Script", "Score", "Scenario"]
-    missing_columns = [column for column in required_columns if column not in dataframe.columns]
-    if missing_columns:
-        raise HTTPException(status_code=400, detail=f"Missing columns: {missing_columns}")
+    try:
+        dataframe = _normalize_bulk_upload_columns(dataframe, required_columns)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Error parsing spreadsheet upload. Ensure the first row contains Actor, Script, Score, and Scenario columns. "
+                f"{exc}"
+            ),
+        ) from exc
 
     script_rows: list[dict[str, Any]] = []
     failed_rows = 0
@@ -1532,6 +1644,86 @@ def _normalize_json_object(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _normalize_optional_url(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _get_trainer_call_audio_settings(current_user: User) -> dict[str, Any]:
+    ui_preferences = _normalize_json_object(getattr(current_user, "ui_preferences", None))
+    settings = _normalize_json_object(ui_preferences.get(CALL_SIMULATION_AUDIO_SETTINGS_KEY))
+    return {
+        "ringer_audio_url": _normalize_optional_url(settings.get("ringer_audio_url")),
+        "hold_audio_url": _normalize_optional_url(settings.get("hold_audio_url")),
+        "ringer_audio_source": _normalize_optional_url(settings.get("ringer_audio_source")),
+        "hold_audio_source": _normalize_optional_url(settings.get("hold_audio_source")),
+        "updated_at": _normalize_optional_url(settings.get("updated_at")),
+    }
+
+
+def _serialize_trainer_call_audio_settings(current_user: User) -> CallSimulationAudioSettingsResponse:
+    return CallSimulationAudioSettingsResponse(**_get_trainer_call_audio_settings(current_user))
+
+
+def _persist_trainer_call_audio_settings(
+    db: Session,
+    current_user: User,
+    *,
+    ringer_audio_url: Any = _UNSET,
+    hold_audio_url: Any = _UNSET,
+    ringer_audio_source: Any = _UNSET,
+    hold_audio_source: Any = _UNSET,
+) -> CallSimulationAudioSettingsResponse:
+    ui_preferences = _normalize_json_object(getattr(current_user, "ui_preferences", None))
+    existing_settings = _normalize_json_object(ui_preferences.get(CALL_SIMULATION_AUDIO_SETTINGS_KEY))
+
+    settings = {
+        "ringer_audio_url": _normalize_optional_url(existing_settings.get("ringer_audio_url")),
+        "hold_audio_url": _normalize_optional_url(existing_settings.get("hold_audio_url")),
+        "ringer_audio_source": _normalize_optional_url(existing_settings.get("ringer_audio_source")),
+        "hold_audio_source": _normalize_optional_url(existing_settings.get("hold_audio_source")),
+        "updated_at": _normalize_optional_url(existing_settings.get("updated_at")),
+    }
+    previous_settings = dict(settings)
+    scenario_updates: dict[str, Optional[str]] = {}
+
+    if ringer_audio_url is not _UNSET:
+        next_url = _normalize_optional_url(ringer_audio_url)
+        settings["ringer_audio_url"] = next_url
+        settings["ringer_audio_source"] = None if next_url is None else _normalize_optional_url(ringer_audio_source) or "manual"
+        scenario_updates["ringer_audio_url"] = next_url
+
+    if hold_audio_url is not _UNSET:
+        next_url = _normalize_optional_url(hold_audio_url)
+        settings["hold_audio_url"] = next_url
+        settings["hold_audio_source"] = None if next_url is None else _normalize_optional_url(hold_audio_source) or "manual"
+        scenario_updates["hold_audio_url"] = next_url
+
+    settings["updated_at"] = datetime.utcnow().isoformat()
+    ui_preferences[CALL_SIMULATION_AUDIO_SETTINGS_KEY] = settings
+    current_user.ui_preferences = ui_preferences
+    db.add(current_user)
+
+    if scenario_updates:
+        db.query(Scenario).filter(Scenario.created_by == current_user.id).update(scenario_updates, synchronize_session=False)
+
+    db.commit()
+    db.refresh(current_user)
+
+    supabase = get_supabase_client()
+    if supabase.is_available:
+        for asset_kind in ("ringer", "hold"):
+            previous_url = previous_settings.get(f"{asset_kind}_audio_url")
+            previous_source = previous_settings.get(f"{asset_kind}_audio_source")
+            current_url = settings.get(f"{asset_kind}_audio_url")
+            if previous_source == "upload" and previous_url and previous_url != current_url:
+                supabase.delete_by_public_url(previous_url)
+
+    return _serialize_trainer_call_audio_settings(current_user)
+
+
 def _resolve_call_simulation_config(scenario: Optional[Scenario]) -> dict[str, Any]:
     if not scenario:
         return {}
@@ -2514,6 +2706,7 @@ async def create_call_simulation_scenario(
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
     batch = _get_accessible_batch(db, current_user, scenario_data.batch_id)
+    trainer_audio_settings = _get_trainer_call_audio_settings(current_user)
     normalized_expected_keywords = _normalize_keyword_list(scenario_data.expected_keywords)
     row_assets = (
         _build_call_simulation_row_assets(
@@ -2581,8 +2774,8 @@ async def create_call_simulation_scenario(
         member_profile=member_profile,
         cxone_metadata=cxone_metadata,
         call_simulation_config=call_simulation_config,
-        ringer_audio_url=scenario_data.ringer_audio_url,
-        hold_audio_url=scenario_data.hold_audio_url,
+        ringer_audio_url=trainer_audio_settings.get("ringer_audio_url"),
+        hold_audio_url=trainer_audio_settings.get("hold_audio_url"),
         created_by=current_user.id,
         is_published=True,
         is_draft=False,
@@ -2829,6 +3022,7 @@ async def update_call_simulation_scenario(
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
     scenario = _get_accessible_scenario(db, current_user, scenario_id)
+    trainer_audio_settings = _get_trainer_call_audio_settings(current_user)
     normalized_expected_keywords = (
         _normalize_keyword_list(scenario_update.expected_keywords)
         if scenario_update.expected_keywords is not None
@@ -2885,10 +3079,8 @@ async def update_call_simulation_scenario(
         scenario.cxone_metadata = _normalize_json_object(scenario_update.cxone_metadata)
     if scenario_update.call_simulation_config is not None:
         scenario.call_simulation_config = _normalize_json_object(scenario_update.call_simulation_config)
-    if scenario_update.ringer_audio_url is not None:
-        scenario.ringer_audio_url = scenario_update.ringer_audio_url
-    if scenario_update.hold_audio_url is not None:
-        scenario.hold_audio_url = scenario_update.hold_audio_url
+    scenario.ringer_audio_url = trainer_audio_settings.get("ringer_audio_url")
+    scenario.hold_audio_url = trainer_audio_settings.get("hold_audio_url")
     if scenario_update.is_published is not None:
         scenario.is_published = scenario_update.is_published
         scenario.is_draft = not scenario_update.is_published
@@ -3094,6 +3286,65 @@ async def delete_call_simulation_scenario(
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
     db.commit()
     return SuccessResponse(message="Scenario archived successfully")
+
+
+@router.post("/scenarios/sync", response_model=SuccessResponse)
+async def sync_scenario_to_supabase(
+    sync_data: dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Sync scenario data to Supabase (placeholder endpoint)"""
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    # Handle syncFromDatabase flag for bulk upload scenarios
+    if sync_data.get("syncFromDatabase"):
+        scenario_id = sync_data.get("scenarioId")
+        if not scenario_id:
+            raise HTTPException(status_code=400, detail="scenarioId required when syncFromDatabase is true")
+
+        # Validate scenario exists and belongs to trainer
+        scenario = _get_accessible_scenario(db, current_user, scenario_id)
+        logger.debug("Syncing scenario %s from database to Supabase", scenario_id)
+    else:
+        # Handle full scenario data sync
+        scenario_data = sync_data.get("scenario")
+        if not scenario_data:
+            raise HTTPException(status_code=400, detail="scenario data required")
+
+        logger.debug("Syncing scenario data to Supabase: %s", scenario_data.get("id"))
+
+    logger.debug("Received Supabase scenario sync request: %s", sync_data)
+    return SuccessResponse(message="Scenario sync completed")
+
+
+@router.post("/kpi/sync", response_model=SuccessResponse)
+async def sync_kpi_to_supabase(
+    sync_data: dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Sync KPI data to Supabase (placeholder endpoint)"""
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    logger.debug("Received Supabase KPI sync request: %s", sync_data)
+    return SuccessResponse(message="KPI sync completed")
+
+
+@router.post("/audio/sync", response_model=SuccessResponse)
+async def sync_call_audio_to_supabase(
+    sync_data: dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Sync call audio settings to Supabase (placeholder endpoint)"""
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    logger.debug("Received Supabase call audio sync request: %s", sync_data)
+    return SuccessResponse(message="Call audio sync completed")
 
 
 # ==================== Variation Management ====================
@@ -3522,10 +3773,14 @@ async def bulk_upload_scenarios(
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
     batch = _get_accessible_batch(db, current_user, batch_id)
+    trainer_audio_settings = _get_trainer_call_audio_settings(current_user)
 
     filename = file.filename or ""
     normalized_filename = filename.lower()
-    document_title = _normalize_uploaded_document_title(filename)
+    document_metadata = _parse_uploaded_document_metadata(filename)
+    document_title = document_metadata["title"]
+    document_topic = document_metadata["topic"]
+    document_description = document_metadata["description"]
     description_override: Optional[str] = None
 
     try:
@@ -3627,7 +3882,8 @@ async def bulk_upload_scenarios(
 
     target_scenario.title = scenario_title_text
     target_scenario.description = (
-        (description_override or "").strip()
+        document_description
+        or (description_override or "").strip()
         or f"Bulk uploaded scenario - {scenario_title_text}"
     )
     target_scenario.opening_prompt = (
@@ -3649,7 +3905,8 @@ async def bulk_upload_scenarios(
         "crm_section": "Member Details",
         "source_template": file.filename,
         "document_title": document_title,
-        "document_description": description_override,
+        "document_topic": document_topic,
+        "document_description": document_description or description_override,
         "member_name": first_member_row["actor"] if first_member_row else "Member",
         "problem_statement": first_member_row["script"] if first_member_row else first_csr_row["script"],
     }
@@ -3657,10 +3914,11 @@ async def bulk_upload_scenarios(
         "source": "bulk_upload",
         "source_file_name": filename,
         "source_document_title": document_title,
-        "source_document_description": description_override,
+        "source_document_topic": document_topic,
+        "source_document_description": document_description or description_override,
         "use_google_asr": True,
         "template_columns": template_columns,
-        "topic": scenario_title_text,
+        "topic": document_topic or scenario_title_text,
         "script_rows": row_assets["script_rows"],
         "scenario_groups": grouped_rows,
         "script_flow": row_assets["script_flow"],
@@ -3669,6 +3927,8 @@ async def bulk_upload_scenarios(
         "show_actor_script_overlay": True,
         "require_hold_before_member_response": True,
     }
+    target_scenario.ringer_audio_url = trainer_audio_settings.get("ringer_audio_url")
+    target_scenario.hold_audio_url = trainer_audio_settings.get("hold_audio_url")
     target_scenario.is_published = True
     target_scenario.is_draft = False
 
@@ -3800,6 +4060,53 @@ async def get_bulk_upload_template(
 # ==================== Trainer Asset Uploads ====================
 
 
+@router.get("/audio-settings", response_model=CallSimulationAudioSettingsResponse)
+async def get_call_simulation_audio_settings(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+    return _serialize_trainer_call_audio_settings(current_user)
+
+
+@router.put("/audio-settings", response_model=CallSimulationAudioSettingsResponse)
+async def update_call_simulation_audio_settings(
+    payload: CallSimulationAudioSettingsUpdate,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    update_data = payload.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No Call Simulation audio changes were provided.")
+
+    return _persist_trainer_call_audio_settings(
+        db,
+        current_user,
+        ringer_audio_url=update_data.get("ringer_audio_url", _UNSET),
+        hold_audio_url=update_data.get("hold_audio_url", _UNSET),
+        ringer_audio_source="manual" if "ringer_audio_url" in update_data else _UNSET,
+        hold_audio_source="manual" if "hold_audio_url" in update_data else _UNSET,
+    )
+
+
+@router.delete("/audio-settings", response_model=CallSimulationAudioSettingsResponse)
+async def delete_call_simulation_audio_setting(
+    asset_kind: str = Query(..., pattern="^(ringer|hold)$"),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    if asset_kind == "ringer":
+        return _persist_trainer_call_audio_settings(db, current_user, ringer_audio_url=None, ringer_audio_source=None)
+    return _persist_trainer_call_audio_settings(db, current_user, hold_audio_url=None, hold_audio_source=None)
+
+
 @router.post("/assets/audio")
 async def upload_call_simulation_audio_asset(
     asset_kind: str = Form(...),
@@ -3818,7 +4125,9 @@ async def upload_call_simulation_audio_asset(
         raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
 
     scenario_segment = "draft"
-    if scenario_id:
+    if normalized_asset_kind in {"ringer", "hold"}:
+        scenario_segment = "global"
+    elif scenario_id:
         scenario = _get_accessible_scenario(db, current_user, scenario_id)
         scenario_segment = scenario.id
 
@@ -3861,11 +4170,29 @@ async def upload_call_simulation_audio_asset(
             detail="Supabase storage could not save the call simulation audio asset.",
         )
 
+    settings_payload: Optional[CallSimulationAudioSettingsResponse] = None
+    if normalized_asset_kind in {"ringer", "hold"}:
+        if normalized_asset_kind == "ringer":
+            settings_payload = _persist_trainer_call_audio_settings(
+                db,
+                current_user,
+                ringer_audio_url=audio_url,
+                ringer_audio_source="upload",
+            )
+        else:
+            settings_payload = _persist_trainer_call_audio_settings(
+                db,
+                current_user,
+                hold_audio_url=audio_url,
+                hold_audio_source="upload",
+            )
+
     return {
         "audio_url": audio_url,
         "asset_kind": normalized_asset_kind,
         "filename": storage_leaf,
         "scenario_id": scenario_segment,
+        "settings": settings_payload.model_dump() if settings_payload else None,
     }
 
 
@@ -4041,7 +4368,15 @@ async def synthesize_member_speech(
 
     audio_url = str(audio_result.get("audio_url") or "").strip() or None
     audio_base64 = str(audio_result.get("audio_base64") or "").strip() or None
+    audio_bytes = _coerce_audio_bytes(audio_result.get("audio_bytes"))
+    audio_content_type = str(audio_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav"
+    audio_extension = re.sub(r"[^a-z0-9]+", "", str(audio_result.get("audio_extension") or "wav").lower()) or "wav"
     duration = float(audio_result.get("duration") or 0.0)
+    provider = str(audio_result.get("provider") or "").strip() or ("gemini" if gemini_tts_engine.is_available() else "fallback")
+    provider_error = str(audio_result.get("error") or "").strip() or None
+
+    storage_mode = "inline"
+    storage_warning: Optional[str] = None
 
     if persist:
         if not is_trainer_request:
@@ -4054,8 +4389,8 @@ async def synthesize_member_speech(
             scenario = _get_accessible_scenario(db, current_user, scenario_id)
             scenario_segment = scenario.id
 
-        upload_bytes: Optional[bytes] = None
-        if audio_base64:
+        upload_bytes: Optional[bytes] = audio_bytes
+        if upload_bytes is None and audio_base64:
             try:
                 upload_bytes = b64decode(audio_base64)
             except Exception as exc:
@@ -4069,6 +4404,10 @@ async def synthesize_member_speech(
                     voice_name="Puck",
                     speaking_style="professional",
                 )
+                if upload_bytes:
+                    audio_content_type = "audio/wav"
+                    audio_extension = "wav"
+                    provider = "gemini"
             except Exception as exc:
                 logger.warning("Gemini TTS persistence synthesis failed: %s", exc)
                 upload_bytes = None
@@ -4076,38 +4415,55 @@ async def synthesize_member_speech(
         if upload_bytes is None:
             raise HTTPException(
                 status_code=503,
-                detail="Generated speech could not be converted into a storable audio file.",
+                detail=provider_error or "Generated speech could not be converted into a storable audio file.",
             )
 
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
         safe_leaf = re.sub(r"[^a-z0-9]+", "-", normalized_text.lower()).strip("-") or "member-script"
         prefix = f"step-{int(step_number):02d}_" if asset_kind == "member-step" and step_number else ""
-        filename = f"{prefix}{timestamp}_{safe_leaf[:48]}.wav"
+        filename = f"{prefix}{timestamp}_{safe_leaf[:48]}.{audio_extension}"
 
         supabase = _require_supabase_storage("Supabase storage is required for Call Simulation speech generation.")
-        audio_url = supabase.upload_call_simulation_asset(
+        uploaded_audio_url = supabase.upload_call_simulation_asset(
             file_data=upload_bytes,
             trainer_id=current_user.id,
             scenario_id=scenario_segment,
             asset_kind=asset_kind,
             filename=filename,
-            content_type="audio/wav",
+            content_type=audio_content_type,
         )
-        if not audio_url:
-            raise HTTPException(status_code=503, detail="Supabase storage could not save the generated speech asset.")
+        if uploaded_audio_url:
+            audio_url = uploaded_audio_url
+            storage_mode = "supabase"
+        else:
+            audio_url = _build_audio_data_url(upload_bytes, audio_content_type)
+            storage_mode = "embedded"
+            storage_warning = (
+                "Supabase storage could not save the generated speech asset, "
+                "so the audio was embedded directly in the saved scenario data."
+            )
+            logger.warning(
+                "Call Simulation TTS persisted as embedded audio because Supabase storage upload failed. "
+                "trainer_id=%s scenario_segment=%s asset_kind=%s",
+                current_user.id,
+                scenario_segment,
+                asset_kind,
+            )
         audio_base64 = None
 
     if not audio_url and not audio_base64 and gemini_tts_engine.is_available():
         raise HTTPException(
             status_code=503,
-            detail="Gemini text-to-speech did not return playable audio.",
+            detail=provider_error or "Gemini text-to-speech did not return playable audio.",
         )
 
     return {
         "audio_url": audio_url,
         "audio_base64": audio_base64,
         "duration": round(max(duration, 0.0), 2),
-        "provider": "gemini" if gemini_tts_engine.is_available() else "fallback",
+        "provider": provider,
+        "storage_mode": storage_mode,
+        "warning": storage_warning,
     }
 
 

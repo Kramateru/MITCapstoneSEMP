@@ -13,6 +13,7 @@ from fastapi import (
     APIRouter,
     Depends as FastAPIDepends,
     File,
+    Form,
     HTTPException,
     Query,
     UploadFile,
@@ -358,6 +359,23 @@ def _sanitize_asset_name(filename: str) -> str:
     return cleaned.strip("-") or "asset.bin"
 
 
+def _resolve_microlearning_asset_folder(
+    *,
+    module_type: Optional[str],
+    content_type: Optional[str],
+) -> str:
+    normalized_type = normalize_module_type(module_type) if module_type else ""
+    normalized_content_type = _normalize_text_value(content_type).lower()
+
+    if normalized_type == "video" or normalized_content_type.startswith("video/"):
+        return "videos"
+    if normalized_type == "infographic" or normalized_content_type.startswith("image/"):
+        return "images"
+    if normalized_type in {"audio", "case_study"} or normalized_content_type.startswith("audio/"):
+        return "audio-assets"
+    return "assets"
+
+
 def _upload_microlearning_asset(
     *,
     db: Session,
@@ -365,8 +383,44 @@ def _upload_microlearning_asset(
     file_bytes: bytes,
     filename: str,
     content_type: Optional[str],
+    module_id: Optional[str] = None,
+    module_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     sanitized = _sanitize_asset_name(filename)
+    normalized_module_id = _normalize_text_value(module_id)
+    normalized_module_type = normalize_module_type(module_type) if module_type else ""
+    module_storage_segment = (
+        normalized_module_id
+        or f"draft-{normalized_module_type or 'asset'}"
+    )
+    storage_folder = _resolve_microlearning_asset_folder(
+        module_type=normalized_module_type,
+        content_type=content_type,
+    )
+
+    supabase_client = get_supabase_client()
+    if not supabase_client.is_available:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase storage is required for trainer microlearning video and media uploads.",
+        )
+
+    bucket_name = supabase_client.microlearning_bucket_name
+    storage_path = f"{storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
+    asset_url = supabase_client.upload_microlearning_binary(
+        module_id=module_storage_segment,
+        trainer_id=trainer_id,
+        filename=sanitized,
+        file_data=file_bytes,
+        content_type=content_type or "application/octet-stream",
+        folder=storage_folder,
+    )
+    if not asset_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Supabase storage could not save the uploaded microlearning media asset.",
+        )
+
     asset = MicrolearningUploadedAsset(
         trainer_id=trainer_id,
         filename=sanitized,
@@ -378,13 +432,13 @@ def _upload_microlearning_asset(
     db.commit()
     db.refresh(asset)
 
-    asset_url = f"/api/microlearning/assets/{asset.id}/stream"
-
     return {
         "asset_url": asset_url,
         "asset_record_id": asset.id,
-        "storage_backend": "supabase_postgres",
-        "signed_url_required": False,
+        "storage_backend": "supabase_storage",
+        "storage_path": storage_path,
+        "bucket_name": bucket_name,
+        "signed_url_required": True,
         "content_type": content_type or "application/octet-stream",
         "byte_size": asset.byte_size,
     }
@@ -1701,6 +1755,8 @@ async def delete_microlearning_topic_category(
 @router.post("/microlearning-assets/upload")
 async def upload_microlearning_asset(
     file: UploadFile = File(...),
+    module_id: Optional[str] = Form(None),
+    module_type: Optional[str] = Form(None),
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
@@ -1715,6 +1771,8 @@ async def upload_microlearning_asset(
         file_bytes=file_bytes,
         filename=file.filename or "microlearning-asset.bin",
         content_type=file.content_type,
+        module_id=module_id,
+        module_type=module_type,
     )
     return {
         "status": "uploaded",

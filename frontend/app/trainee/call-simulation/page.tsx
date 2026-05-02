@@ -1588,7 +1588,7 @@ function TraineeSimFloorPageContent() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulation</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Practice in a softphone-style mock-call floor with live voice activity, script confirmation, Supabase-backed recordings,
+              Practice in a BPO softphone-style mock-call floor with live voice activity, script confirmation, Supabase-backed recordings,
               and trainer coaching visibility.
             </p>
           </div>
@@ -1602,7 +1602,7 @@ function TraineeSimFloorPageContent() {
             <Card className="border-slate-200 bg-[linear-gradient(135deg,#f8fafc,white)]">
               <CardHeader>
                 <CardTitle>Assigned Mock Calls</CardTitle>
-                <CardDescription>Choose the trainer-assigned mock call that should ring into your MAX workspace.</CardDescription>
+                <CardDescription>Choose the trainer-assigned mock call that should ring into your BPO softphone workspace.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {scenarios.map((scenario) => (
@@ -1666,7 +1666,7 @@ function TraineeSimFloorPageContent() {
               <CardHeader>
                 <CardTitle>Ready Check</CardTitle>
                 <CardDescription className="text-slate-300">
-                  Stay Available, start the simulation, answer the ring, then respond when the member finishes speaking.
+                  Stay Available, launch the BPO softphone, answer the ring, then respond when the member finishes speaking.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -1706,7 +1706,7 @@ function TraineeSimFloorPageContent() {
                   disabled={!selectedScenarioId || !isAvailable}
                 >
                   <Phone className="mr-2 h-4 w-4" />
-                  Launch MAX Workspace
+                  Launch BPO Softphone
                 </Button>
               </CardContent>
             </Card>
@@ -1825,12 +1825,12 @@ function TraineeSimFloorPageContent() {
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
                           <div>
                             <div className="text-sm font-semibold">Member (AI) is calling...</div>
-                            <div className="text-xs">Click Answer to start the mock call and speak the first CSR spiel.</div>
+                            <div className="text-xs">Click Accept Call to start the mock call and speak the first CSR spiel.</div>
                           </div>
                         </div>
                         <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void acceptCall()}>
                           <Phone className="mr-2 h-4 w-4" />
-                          Answer
+                          Accept Call
                         </Button>
                       </div>
                     </CardContent>

@@ -494,3 +494,326 @@ with
 
 comment on
 table public.mock_call_attempts is 'Storage path conventions: recordings/{trainee_id}/{scenario_id}/{attempt_id}/{timestamp}.wav for attempts and assets/{trainer_id}/{scenario_id_or_draft}/{asset_kind}/{timestamp}_{filename} for trainer-managed member, ringer, and hold audio.';
+
+alter table public.scenarios
+  add column if not exists topic text,
+  add column if not exists scenario_group text;
+
+create table if not exists public.scripts (
+  id uuid primary key default gen_random_uuid(),
+  scenario_id uuid not null references public.scenarios(id) on delete cascade,
+  actor_type text not null check (actor_type in ('CSR', 'Member', 'System')),
+  content text not null,
+  score_weight numeric(8,2) not null default 0,
+  sequence_order integer not null,
+  scenario_group text,
+  audio_url text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.simulations_results (
+  id text primary key,
+  trainee_id uuid not null references public.profiles(id) on delete cascade,
+  scenario_id uuid references public.scenarios(id) on delete set null,
+  scenario_title text,
+  scenario_topic text,
+  final_score numeric(8,2) not null default 0,
+  ai_feedback jsonb not null default '{}'::jsonb,
+  transcript text,
+  passed boolean not null default false,
+  certificate_id text,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.scenario_groups (
+  id uuid primary key,
+  title text not null,
+  topic text,
+  description text,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+create table if not exists public.scenario_scripts (
+  id uuid primary key default gen_random_uuid(),
+  scenario_group_id uuid not null references public.scenario_groups(id) on delete cascade,
+  actor_type text not null check (actor_type in ('CSR', 'Member')),
+  script_text text not null,
+  score_value integer not null default 0,
+  audio_url text,
+  order_index integer not null,
+  created_at timestamptz not null default timezone('utc', now())
+);
+
+alter table public.scenario_scripts
+  add column if not exists audio_url text;
+
+create table if not exists public.kpi_metrics (
+  id uuid primary key default gen_random_uuid(),
+  scenario_group_id uuid not null references public.scenario_groups(id) on delete cascade,
+  metric_name text not null,
+  weight_percentage integer not null default 0
+);
+
+create table if not exists public.trainee_sessions (
+  id uuid primary key,
+  trainee_id uuid not null references public.profiles(id) on delete cascade,
+  scenario_group_id uuid not null references public.scenario_groups(id) on delete cascade,
+  started_at timestamptz,
+  completed_at timestamptz,
+  total_score integer not null default 0,
+  passed boolean not null default false,
+  ai_feedback text
+);
+
+create table if not exists public.session_responses (
+  id uuid primary key default gen_random_uuid(),
+  session_id uuid not null references public.trainee_sessions(id) on delete cascade,
+  script_id uuid references public.scenario_scripts(id) on delete set null,
+  scenario_id uuid references public.scenario_groups(id) on delete cascade,
+  trainee_id uuid references public.profiles(id) on delete cascade,
+  step_number integer,
+  turn_attempt_number integer not null default 1,
+  actor_type text not null default 'CSR',
+  scenario_group text,
+  expected_script text,
+  trainee_spoken_text text,
+  matched_score integer not null default 0,
+  grammar_score integer not null default 0,
+  pronunciation_score integer not null default 0,
+  pacing_score integer not null default 0,
+  speech_to_text_accuracy numeric(8,2) not null default 0,
+  transcript_confidence numeric(8,2) not null default 0,
+  audio_url text,
+  ai_feedback text
+);
+
+alter table public.certificates
+  add column if not exists scenario_group_id uuid references public.scenario_groups(id) on delete set null,
+  add column if not exists issued_at timestamptz;
+
+create index if not exists idx_scripts_scenario_sequence
+  on public.scripts (scenario_id, sequence_order);
+
+create index if not exists idx_simulations_results_trainee
+  on public.simulations_results (trainee_id, created_at desc);
+
+create index if not exists idx_simulations_results_scenario
+  on public.simulations_results (scenario_id, created_at desc);
+
+create index if not exists idx_scenario_scripts_group_sequence
+  on public.scenario_scripts (scenario_group_id, order_index);
+
+create index if not exists idx_kpi_metrics_group
+  on public.kpi_metrics (scenario_group_id);
+
+create index if not exists idx_trainee_sessions_trainee
+  on public.trainee_sessions (trainee_id, completed_at desc);
+
+create index if not exists idx_session_responses_session
+  on public.session_responses (session_id);
+
+drop trigger if exists trg_scripts_updated_at on public.scripts;
+
+create trigger trg_scripts_updated_at
+before update on public.scripts
+for each row execute function public.set_updated_at();
+
+drop trigger if exists trg_simulations_results_updated_at on public.simulations_results;
+
+create trigger trg_simulations_results_updated_at
+before update on public.simulations_results
+for each row execute function public.set_updated_at();
+
+alter table public.scripts enable row level security;
+
+alter table public.simulations_results enable row level security;
+
+alter table public.scenario_groups enable row level security;
+
+alter table public.scenario_scripts enable row level security;
+
+alter table public.kpi_metrics enable row level security;
+
+alter table public.trainee_sessions enable row level security;
+
+alter table public.session_responses enable row level security;
+
+drop policy if exists "scripts_select_authenticated" on public.scripts;
+
+create policy "scripts_select_authenticated" on public.scripts
+for select using (
+  auth.role() = 'authenticated'
+);
+
+drop policy if exists "scripts_manage_trainers" on public.scripts;
+
+create policy "scripts_manage_trainers" on public.scripts
+for all using (public.is_trainer_or_admin())
+with check (public.is_trainer_or_admin());
+
+drop policy if exists "scenario_groups_select_authenticated" on public.scenario_groups;
+
+create policy "scenario_groups_select_authenticated" on public.scenario_groups
+for select using (
+  auth.role() = 'authenticated'
+);
+
+drop policy if exists "scenario_groups_manage_trainers" on public.scenario_groups;
+
+create policy "scenario_groups_manage_trainers" on public.scenario_groups
+for all using (public.is_trainer_or_admin())
+with check (public.is_trainer_or_admin());
+
+drop policy if exists "scenario_scripts_select_authenticated" on public.scenario_scripts;
+
+create policy "scenario_scripts_select_authenticated" on public.scenario_scripts
+for select using (
+  auth.role() = 'authenticated'
+);
+
+drop policy if exists "scenario_scripts_manage_trainers" on public.scenario_scripts;
+
+create policy "scenario_scripts_manage_trainers" on public.scenario_scripts
+for all using (public.is_trainer_or_admin())
+with check (public.is_trainer_or_admin());
+
+drop policy if exists "kpi_metrics_select_authenticated" on public.kpi_metrics;
+
+create policy "kpi_metrics_select_authenticated" on public.kpi_metrics
+for select using (
+  auth.role() = 'authenticated'
+);
+
+drop policy if exists "kpi_metrics_manage_trainers" on public.kpi_metrics;
+
+create policy "kpi_metrics_manage_trainers" on public.kpi_metrics
+for all using (public.is_trainer_or_admin())
+with check (public.is_trainer_or_admin());
+
+drop policy if exists "trainee_sessions_select_related_users" on public.trainee_sessions;
+
+create policy "trainee_sessions_select_related_users" on public.trainee_sessions
+for select using (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+drop policy if exists "trainee_sessions_insert_related_users" on public.trainee_sessions;
+
+create policy "trainee_sessions_insert_related_users" on public.trainee_sessions
+for insert with check (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+drop policy if exists "trainee_sessions_update_related_users" on public.trainee_sessions;
+
+create policy "trainee_sessions_update_related_users" on public.trainee_sessions
+for update using (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+)
+with check (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+drop policy if exists "session_responses_select_related_users" on public.session_responses;
+
+create policy "session_responses_select_related_users" on public.session_responses
+for select using (
+  exists (
+    select 1
+    from public.trainee_sessions trainee_session
+    where trainee_session.id = session_responses.session_id
+      and (
+        trainee_session.trainee_id = auth.uid()
+        or public.is_trainer_or_admin()
+      )
+  )
+);
+
+drop policy if exists "session_responses_insert_related_users" on public.session_responses;
+
+create policy "session_responses_insert_related_users" on public.session_responses
+for insert with check (
+  exists (
+    select 1
+    from public.trainee_sessions trainee_session
+    where trainee_session.id = session_responses.session_id
+      and (
+        trainee_session.trainee_id = auth.uid()
+        or public.is_trainer_or_admin()
+      )
+  )
+);
+
+drop policy if exists "session_responses_update_related_users" on public.session_responses;
+
+create policy "session_responses_update_related_users" on public.session_responses
+for update using (
+  exists (
+    select 1
+    from public.trainee_sessions trainee_session
+    where trainee_session.id = session_responses.session_id
+      and (
+        trainee_session.trainee_id = auth.uid()
+        or public.is_trainer_or_admin()
+      )
+  )
+)
+with check (
+  exists (
+    select 1
+    from public.trainee_sessions trainee_session
+    where trainee_session.id = session_responses.session_id
+      and (
+        trainee_session.trainee_id = auth.uid()
+        or public.is_trainer_or_admin()
+      )
+  )
+);
+
+drop policy if exists "simulations_results_select_related_users" on public.simulations_results;
+
+create policy "simulations_results_select_related_users" on public.simulations_results
+for select using (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+drop policy if exists "simulations_results_insert_related_users" on public.simulations_results;
+
+create policy "simulations_results_insert_related_users" on public.simulations_results
+for insert with check (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+drop policy if exists "simulations_results_update_related_users" on public.simulations_results;
+
+create policy "simulations_results_update_related_users" on public.simulations_results
+for update using (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+)
+with check (
+  trainee_id = auth.uid()
+  or public.is_trainer_or_admin()
+);
+
+comment on table public.scripts is 'Normalized trainer-authored call simulation script rows mirrored from the scenario builder and bulk upload flows.';
+
+comment on table public.simulations_results is 'Normalized trainee call simulation results mirrored from the final scoring and Gemini feedback workflow.';
+
+comment on table public.scenario_groups is 'Prompt-aligned Supabase scenario group records mirrored from trainer-authored call simulations.';
+
+comment on table public.scenario_scripts is 'Prompt-aligned Supabase scenario scripts for alternating CSR and Member rows.';
+
+comment on table public.kpi_metrics is 'Prompt-aligned KPI metric weights mirrored from Call Simulation KPI Management.';
+
+comment on table public.trainee_sessions is 'Prompt-aligned trainee session summary rows for BPO call simulations.';

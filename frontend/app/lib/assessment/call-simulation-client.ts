@@ -37,6 +37,20 @@ function isLikelySupabasePublishableKey(value?: string) {
   return segments.length === 3 && segments.every((segment) => segment.length >= 8)
 }
 
+function getSupabaseUrl() {
+  return (
+    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_URL)
+    || normalizeEnvValue(process.env.REACT_APP_SUPABASE_URL)
+  )
+}
+
+function getSupabaseAnonKey() {
+  return (
+    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+    || normalizeEnvValue(process.env.REACT_APP_ANON_KEY)
+  )
+}
+
 function getToken() {
   return window.localStorage.getItem('token')
 }
@@ -48,8 +62,8 @@ export function openCallSimulationRealtimeStream(options?: { batchId?: string | 
   }
 
   if (
-    !isLikelySupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL)
-    || !isLikelySupabasePublishableKey(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+    !isLikelySupabaseUrl(getSupabaseUrl())
+    || !isLikelySupabasePublishableKey(getSupabaseAnonKey())
   ) {
     throw new Error('Supabase realtime is not configured for this client session.')
   }

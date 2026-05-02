@@ -812,6 +812,19 @@ class CallSimulationScenarioResponse(BaseModel):
     updated_at: datetime
 
 
+class CallSimulationAudioSettingsUpdate(BaseModel):
+    ringer_audio_url: Optional[str] = None
+    hold_audio_url: Optional[str] = None
+
+
+class CallSimulationAudioSettingsResponse(BaseModel):
+    ringer_audio_url: Optional[str] = None
+    hold_audio_url: Optional[str] = None
+    ringer_audio_source: Optional[str] = None
+    hold_audio_source: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
 class BatchScenarioMappingCreate(BaseModel):
     """Create batch-scenario mapping"""
 

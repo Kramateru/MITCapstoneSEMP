@@ -90,6 +90,7 @@ function resolveSupabaseApiKey() {
   const serviceRoleKey = normalizeEnvValue(getConfigValue([
     'SUPABASE_SERVICE_ROLE_KEY',
     'SUPABASE_SERVICE_KEY',
+    'SUPABASE_KEY',
     'SUPABASE_SERVICE_ROLE',
   ], ''))
 

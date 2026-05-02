@@ -252,8 +252,14 @@ export function buildContentData(form: ModuleFormState) {
         asset_storage_path: form.asset_storage_path || undefined,
         asset_bucket: form.asset_bucket_name || undefined,
         asset_content_type: form.asset_content_type || undefined,
-        storage_backend: form.asset_record_id ? 'supabase_postgres' : undefined,
-        signed_url_required: form.asset_signed_url_required || undefined,
+        storage_backend: form.asset_storage_path
+          ? 'supabase_storage'
+          : form.asset_record_id
+            ? 'supabase_postgres'
+            : undefined,
+        signed_url_required: form.asset_storage_path
+          ? form.asset_signed_url_required !== false
+          : undefined,
         video_questions: form.video_questions.map(q => ({
           question: q.question,
           type: q.type,
@@ -286,8 +292,14 @@ export function buildContentData(form: ModuleFormState) {
         asset_storage_path: form.asset_storage_path || undefined,
         asset_bucket: form.asset_bucket_name || undefined,
         asset_content_type: form.asset_content_type || undefined,
-        storage_backend: form.asset_record_id ? 'supabase_postgres' : undefined,
-        signed_url_required: form.asset_signed_url_required || undefined,
+        storage_backend: form.asset_storage_path
+          ? 'supabase_storage'
+          : form.asset_record_id
+            ? 'supabase_postgres'
+            : undefined,
+        signed_url_required: form.asset_storage_path
+          ? form.asset_signed_url_required !== false
+          : undefined,
         questions: form.infographic_questions.map(q => ({
           question: q.question,
           type: q.type,

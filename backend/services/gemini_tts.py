@@ -4,11 +4,12 @@ Gemini Text-to-Speech service for generating audio from text.
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import os
 import wave
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from google import genai
@@ -112,16 +113,57 @@ class GeminiTextToSpeechEngine:
                 )
             )
 
-            # Extract audio data
-            if response.candidates and response.candidates[0].content.parts:
-                audio_data = response.candidates[0].content.parts[0].inline_data.data
+            audio_payload = self._extract_audio_payload(response)
+            if audio_payload:
+                audio_bytes, mime_type = audio_payload
+                normalized_mime_type = (mime_type or "").lower()
+                if audio_bytes[:4] == b"RIFF" or "wav" in normalized_mime_type or "wave" in normalized_mime_type:
+                    return audio_bytes
+                if "mpeg" in normalized_mime_type or "mp3" in normalized_mime_type or "ogg" in normalized_mime_type:
+                    return audio_bytes
+                return self._create_wav_file(audio_bytes)
 
-                # Convert to WAV format
-                return self._create_wav_file(audio_data)
+            logger.warning("Gemini TTS response did not include any inline audio payload.")
 
         except Exception as exc:
             logger.warning("Gemini TTS synthesis failed: %s", exc)
             return None
+
+    def _extract_audio_payload(self, response: Any) -> Optional[tuple[bytes, Optional[str]]]:
+        """Scan Gemini candidates/parts until an inline audio payload is found."""
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            for part in getattr(content, "parts", []) or []:
+                inline_data = getattr(part, "inline_data", None)
+                if not inline_data:
+                    continue
+                audio_bytes = self._coerce_audio_bytes(getattr(inline_data, "data", None))
+                if audio_bytes:
+                    return audio_bytes, getattr(inline_data, "mime_type", None)
+        return None
+
+    def _coerce_audio_bytes(self, payload: Any) -> Optional[bytes]:
+        """Normalize Gemini inline audio into raw bytes."""
+        if payload is None:
+            return None
+        if isinstance(payload, bytes):
+            return payload
+        if isinstance(payload, bytearray):
+            return bytes(payload)
+        if isinstance(payload, memoryview):
+            return payload.tobytes()
+        if hasattr(payload, "tobytes"):
+            try:
+                return payload.tobytes()
+            except Exception:
+                return None
+        if isinstance(payload, str):
+            try:
+                return base64.b64decode(payload, validate=True)
+            except Exception:
+                logger.warning("Gemini TTS returned string audio data that could not be base64-decoded.")
+                return None
+        return None
 
     def _create_wav_file(self, pcm_data: bytes, channels: int = 1, rate: int = 24000, sample_width: int = 2) -> bytes:
         """Create a WAV file from PCM audio data."""
