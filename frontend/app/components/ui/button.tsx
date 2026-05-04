@@ -1,8 +1,8 @@
 'use client';
 
-import * as React from "react";
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import * as React from "react";
 
 import { cn } from "./utils";
 
@@ -11,17 +11,17 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "cta-button bg-primary text-primary-foreground shadow-[0_14px_28px_-18px_rgba(37,99,235,0.55)] hover:bg-primary/92 hover:shadow-[0_18px_32px_-18px_rgba(37,99,235,0.62)]",
-        success: "bg-accent text-accent-foreground shadow-[0_14px_28px_-18px_rgba(22,163,74,0.45)] hover:bg-accent/92 hover:shadow-[0_18px_32px_-18px_rgba(22,163,74,0.55)]",
+        default: "bg-gradient-to-r from-blue-500 to-teal-500 text-white shadow-[0_14px_28px_-18px_rgba(59,130,246,0.55)] hover:from-blue-600 hover:to-teal-600 hover:shadow-[0_18px_32px_-18px_rgba(59,130,246,0.62)]",
+        success: "bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-[0_14px_28px_-18px_rgba(34,197,94,0.45)] hover:from-green-600 hover:to-emerald-600 hover:shadow-[0_18px_32px_-18px_rgba(34,197,94,0.55)]",
         destructive:
-          "bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-500/20 dark:focus-visible:ring-red-500/40 dark:bg-red-500/60",
         outline:
-          "border border-border bg-card text-foreground hover:bg-muted hover:text-foreground dark:border-input dark:hover:bg-input/50",
+          "border-2 border-blue-200 bg-white text-blue-700 hover:bg-blue-50 hover:border-blue-300 dark:border-blue-700 dark:bg-slate-900 dark:text-blue-300 dark:hover:bg-slate-800",
         secondary:
-          "bg-secondary text-secondary-foreground hover:bg-secondary/90",
+          "bg-gradient-to-r from-slate-100 to-slate-200 text-slate-700 hover:from-slate-200 hover:to-slate-300 dark:from-slate-700 dark:to-slate-600 dark:text-slate-200 dark:hover:from-slate-600 dark:hover:to-slate-500",
         ghost:
-          "text-foreground hover:bg-muted hover:text-foreground dark:hover:bg-accent/35",
-        link: "text-primary underline-offset-4 hover:underline",
+          "text-slate-600 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300",
+        link: "text-blue-600 underline-offset-4 hover:underline hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
       },
       size: {
         default: "h-10 px-4 py-2.5 has-[>svg]:px-3",
@@ -59,3 +59,4 @@ function Button({
 }
 
 export { Button, buttonVariants };
+

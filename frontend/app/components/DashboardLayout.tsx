@@ -261,7 +261,13 @@ export function DashboardLayout({
 
   return (
     <div className="relative flex min-h-[100dvh] overflow-hidden bg-background text-foreground">
-      <div className="absolute inset-0 bg-[linear-gradient(180deg,#fcfdff_0%,var(--background)_34%,#eef2f6_100%)]" />
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage:
+            'linear-gradient(180deg, #fcfdff 0%, var(--background) 34%, #eef2f6 100%)',
+        }}
+      />
       <Toaster position="top-right" richColors />
       {sidebarOpen && (
         <button

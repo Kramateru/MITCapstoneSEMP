@@ -13,7 +13,6 @@ import React, { useEffect, useEffectEvent, useMemo, useState } from 'react';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Badge } from '@/app/components/ui/badge';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
 import { Progress } from '@/app/components/ui/progress';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 import { getBackendWebSocketUrl } from '@/app/utils/ws';
@@ -354,10 +353,11 @@ export default function TrainerDashboardPage() {
   return (
     <DashboardLayout sidebarItems={sidebarItems} userRole="trainer">
       <div className="space-y-6">
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Trainer Dashboard</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+        <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+          <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+          <div className="relative">
+            <h2 className="text-3xl font-bold text-slate-900">Trainer Dashboard</h2>
+            <p className="mt-3 max-w-3xl text-sm text-slate-600">
               Focus on the batches that need attention, the trainees waiting for coaching, and the outcomes that
               matter most right now.
             </p>
@@ -416,26 +416,28 @@ export default function TrainerDashboardPage() {
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
-          <Card>
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Priority Batches</CardTitle>
-                <CardDescription>
-                  The most important batch snapshots live here, ranked by coaching risk and activity level.
-                </CardDescription>
+          <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">Priority Batches</h3>
+                  <p className="text-sm text-slate-600 mt-2">
+                    The most important batch snapshots live here, ranked by coaching risk and activity level.
+                  </p>
+                </div>
+                <Link
+                  href="/trainer/batches"
+                  className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Open Batches
+                  <ArrowRight className="size-4" />
+                </Link>
               </div>
-              <Link
-                href="/trainer/batches"
-                className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-              >
-                Open Batches
-                <ArrowRight className="size-4" />
-              </Link>
-            </CardHeader>
-            <CardContent>
+
               {loading && !highlightedBatches.length ? (
-                <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-                  Loading batch snapshots...
+                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-10 text-center">
+                  <div className="text-sm font-medium text-slate-500">Loading batch snapshots...</div>
                 </div>
               ) : highlightedBatches.length ? (
                 <div className="space-y-4">
@@ -443,28 +445,29 @@ export default function TrainerDashboardPage() {
                     const health = batchHealth(batch);
 
                     return (
-                      <div key={batch.id} className="rounded-xl border border-border p-4">
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div key={batch.id} className="group/item relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+                        <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                           <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h3 className="font-semibold text-foreground">{formatBatchLabel(batch)}</h3>
-                              <Badge className={health.className}>{health.label}</Badge>
+                            <div className="flex flex-wrap items-center gap-3">
+                              <h3 className="font-bold text-slate-900">{formatBatchLabel(batch)}</h3>
+                              <Badge className={`${health.className} font-bold`}>{health.label}</Badge>
                             </div>
-                            <p className="mt-1 text-sm text-muted-foreground">
+                            <p className="mt-2 text-sm text-slate-600">
                               {batch.description || 'No batch description provided.'}
                             </p>
                           </div>
 
                           <Link
                             href="/trainer/batches"
-                            className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                            className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline"
                           >
                             Manage
                             <ArrowRight className="size-4" />
                           </Link>
                         </div>
 
-                        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                        <div className="relative mt-6 grid gap-4 sm:grid-cols-3">
                           <MiniMetric label="Trainees" value={batch.users_count} />
                           <MiniMetric label="Sessions" value={batch.total_sessions} />
                           <MiniMetric
@@ -474,10 +477,10 @@ export default function TrainerDashboardPage() {
                           />
                         </div>
 
-                        <div className="mt-4 space-y-2">
-                          <div className="flex items-center justify-between text-sm text-muted-foreground">
-                            <span>Engagement</span>
-                            <span>{batch.progress}%</span>
+                        <div className="relative mt-6 space-y-3">
+                          <div className="flex items-center justify-between text-sm text-slate-600">
+                            <span className="font-medium">Engagement</span>
+                            <span className="font-bold">{batch.progress}%</span>
                           </div>
                           <Progress value={batch.progress} />
                         </div>
@@ -486,78 +489,83 @@ export default function TrainerDashboardPage() {
                   })}
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-                  No batch data is available yet. Create a batch and start assigning trainees to surface cohort health
-                  here.
+                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-10 text-center">
+                  <div className="text-sm font-medium text-slate-500">
+                    No batch data is available yet. Create a batch and start assigning trainees to surface cohort health
+                    here.
+                  </div>
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
 
-          <Card>
-            <CardHeader className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <CardTitle>Coaching Queue</CardTitle>
-                <CardDescription>
-                  Recent trainee interactions sorted so unverified and lower-scoring attempts appear first.
-                </CardDescription>
+          <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between mb-6">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">Coaching Queue</h3>
+                  <p className="text-sm text-slate-600 mt-2">
+                    Recent trainee interactions sorted so unverified and lower-scoring attempts appear first.
+                  </p>
+                </div>
+                <Link
+                  href="/trainer/coaching"
+                  className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Open Coaching
+                  <ArrowRight className="size-4" />
+                </Link>
               </div>
-              <Link
-                href="/trainer/coaching"
-                className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-              >
-                Open Coaching
-                <ArrowRight className="size-4" />
-              </Link>
-            </CardHeader>
-            <CardContent>
+
               {loading && !coachingQueue.length ? (
-                <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-                  Loading coaching queue...
+                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-10 text-center">
+                  <div className="text-sm font-medium text-slate-500">Loading coaching queue...</div>
                 </div>
               ) : coachingQueue.length ? (
                 <div className="space-y-4">
                   {coachingQueue.map((session) => (
-                    <div key={session.id} className="rounded-xl border border-border p-4">
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div key={session.id} className="group/item relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+                      <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <h3 className="font-semibold text-foreground">{session.user_name}</h3>
-                            <Badge variant="outline">{session.scenario_title}</Badge>
+                          <div className="flex flex-wrap items-center gap-3">
+                            <h3 className="font-bold text-slate-900">{session.user_name}</h3>
+                            <Badge variant="outline" className="font-medium">{session.scenario_title}</Badge>
                             <Badge
                               className={
                                 session.is_verified
-                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                  : 'border-amber-200 bg-amber-50 text-amber-700'
+                                  ? 'border-emerald-200 bg-gradient-to-r from-emerald-100 to-green-100 text-emerald-800 font-bold'
+                                  : 'border-amber-200 bg-gradient-to-r from-amber-100 to-orange-100 text-amber-800 font-bold'
                               }
                             >
                               {session.is_verified ? 'Verified' : 'Needs coaching'}
                             </Badge>
                           </div>
-                          <p className="mt-1 text-sm text-muted-foreground">{formatDateTime(session.created_at)}</p>
+                          <p className="mt-2 text-sm text-slate-600">{formatDateTime(session.created_at)}</p>
                         </div>
 
                         <div className="text-right">
                           <div
-                            className={`inline-flex rounded-full border px-3 py-1 text-sm font-semibold ${scoreBadgeClassName(
+                            className={`inline-flex rounded-full border px-4 py-2 text-sm font-bold ${scoreBadgeClassName(
                               session.overall_score,
                             )}`}
                           >
                             {session.overall_score.toFixed(1)}%
                           </div>
-                          <p className="mt-1 text-xs text-muted-foreground">Overall score</p>
+                          <p className="mt-2 text-xs text-slate-500 font-medium">Overall score</p>
                         </div>
                       </div>
 
-                      <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                          <span>Accuracy: {session.accuracy.toFixed(1)}%</span>
-                          <span>Fluency: {session.fluency.toFixed(1)}%</span>
+                      <div className="relative mt-6 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex flex-wrap gap-4 text-sm text-slate-600">
+                          <span className="font-medium">Accuracy: {session.accuracy.toFixed(1)}%</span>
+                          <span className="font-medium">Fluency: {session.fluency.toFixed(1)}%</span>
                         </div>
 
                         <Link
                           href="/trainer/coaching"
-                          className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                          className="inline-flex items-center gap-2 text-sm font-bold text-blue-600 hover:text-blue-700 hover:underline"
                         >
                           Review in Coaching
                           <ArrowRight className="size-4" />
@@ -567,12 +575,14 @@ export default function TrainerDashboardPage() {
                   ))}
                 </div>
               ) : (
-                <div className="rounded-lg border border-dashed p-10 text-center text-sm text-muted-foreground">
-                  No trainee interactions are available yet.
+                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-10 text-center">
+                  <div className="text-sm font-medium text-slate-500">
+                    No trainee interactions are available yet.
+                  </div>
                 </div>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          </div>
         </div>
       </div>
     </DashboardLayout>
@@ -591,18 +601,19 @@ function SummaryCard({
   icon: React.ReactNode;
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm text-muted-foreground">
-          {icon}
-          {label}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-3xl font-semibold text-foreground">{value}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{hint}</p>
-      </CardContent>
-    </Card>
+    <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="rounded-2xl bg-gradient-to-br from-blue-500 to-teal-500 p-3 shadow-lg transition-transform group-hover:scale-110">
+            <div className="text-white">{icon}</div>
+          </div>
+          <div className="text-sm font-bold uppercase tracking-[0.14em] text-slate-600">{label}</div>
+        </div>
+        <p className="text-3xl font-bold text-slate-900">{value}</p>
+        <p className="mt-2 text-sm text-slate-600">{hint}</p>
+      </div>
+    </div>
   );
 }
 
@@ -616,9 +627,9 @@ function MiniMetric({
   tone?: string;
 }) {
   return (
-    <div className="rounded-lg border border-border bg-muted/30 p-3">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className={`mt-2 text-lg font-semibold ${tone || 'text-foreground'}`}>{value}</div>
+    <div className="group rounded-3xl border border-slate-200 bg-gradient-to-br from-white to-slate-50 p-4 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+      <div className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{label}</div>
+      <div className={`mt-3 text-lg font-bold ${tone || 'text-slate-900'}`}>{value}</div>
     </div>
   );
 }

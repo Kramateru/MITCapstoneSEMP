@@ -478,202 +478,222 @@ export default function TraineeDashboard() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Content - Assigned Learning */}
           <div className="lg:col-span-2">
-            <div className="bg-card rounded-lg shadow-md p-6 border border-border">
-              <h3 className="text-xl font-bold text-foreground mb-6">
-                Assigned Learning
-              </h3>
+            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <h3 className="text-xl font-bold text-slate-900 mb-6">
+                  Assigned Learning
+                </h3>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <QuickLinkCard
-                  title="Call Simulation"
-                  description={simFloorDescription}
-                  href={simFloorHref}
-                  icon={<Mic size={20} />}
-                  accent="violet"
-                />
-                <QuickLinkCard
-                  title="Microlearning"
-                  description="Continue your assigned learning modules and save exercise progress."
-                  href="/trainee/microlearning"
-                  icon={<BookOpen size={20} />}
-                  accent="sky"
-                />
-                <QuickLinkCard
-                  title="Assessment Hub"
-                  description="Start assigned tests, unlock certificates, and retake failed assessments right away."
-                  href="/trainee/assessment"
-                  icon={<ClipboardList size={20} />}
-                  accent="emerald"
-                />
-                <QuickLinkCard
-                  title="My Progress"
-                  description="Review score history, coaching notes, and category-level performance trends."
-                  href="/trainee/progress"
-                  icon={<TrendingUp size={20} />}
-                  accent="emerald"
-                />
-                <QuickLinkCard
-                  title="My Coaching"
-                  description={
-                    coachingSummary.pending
-                      ? `${coachingSummary.pending} coaching item${coachingSummary.pending === 1 ? '' : 's'} still need acknowledgement.`
-                      : 'Review your latest coaching guidance and competency updates.'
-                  }
-                  href="/trainee/coaching"
-                  icon={<MessageSquare size={20} />}
-                  accent="amber"
-                />
+                <div className="relative grid gap-4 md:grid-cols-2">
+                  <QuickLinkCard
+                    title="Call Simulation"
+                    description={simFloorDescription}
+                    href={simFloorHref}
+                    icon={<Mic size={20} />}
+                    accent="violet"
+                  />
+                  <QuickLinkCard
+                    title="Microlearning"
+                    description="Continue your assigned learning modules and save exercise progress."
+                    href="/trainee/microlearning"
+                    icon={<BookOpen size={20} />}
+                    accent="sky"
+                  />
+                  <QuickLinkCard
+                    title="Assessment Hub"
+                    description="Start assigned tests, unlock certificates, and retake failed assessments right away."
+                    href="/trainee/assessment"
+                    icon={<ClipboardList size={20} />}
+                    accent="emerald"
+                  />
+                  <QuickLinkCard
+                    title="My Progress"
+                    description="Review score history, coaching notes, and category-level performance trends."
+                    href="/trainee/progress"
+                    icon={<TrendingUp size={20} />}
+                    accent="emerald"
+                  />
+                  <QuickLinkCard
+                    title="My Coaching"
+                    description={
+                      coachingSummary.pending
+                        ? `${coachingSummary.pending} coaching item${coachingSummary.pending === 1 ? '' : 's'} still need acknowledgement.`
+                        : 'Review your latest coaching guidance and competency updates.'
+                    }
+                    href="/trainee/coaching"
+                    icon={<MessageSquare size={20} />}
+                    accent="amber"
+                  />
+                </div>
               </div>
             </div>
           </div>
 
           {/* Sidebar - Coaching and Recent Sessions */}
           <div className="space-y-6">
-            <div className="bg-card rounded-lg shadow-md p-6 border border-border">
-              <h3 className="text-lg font-bold text-foreground mb-4">Call Simulation Snapshot</h3>
-              {simFloorReport ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
-                      <div className="text-xs text-violet-700">Mock Calls</div>
-                      <div className="mt-2 text-2xl font-bold text-violet-700">{simFloorReport.summary.total_sessions}</div>
-                    </div>
-                    <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                      <div className="text-xs text-emerald-700">Certificates</div>
-                      <div className="mt-2 text-2xl font-bold text-emerald-700">{simFloorReport.certificates.length}</div>
-                    </div>
-                    <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                      <div className="text-xs text-sky-700">Average</div>
-                      <div className="mt-2 text-2xl font-bold text-sky-700">{simFloorReport.summary.average_score.toFixed(1)}%</div>
-                    </div>
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                      <div className="text-xs text-amber-700">Retakes</div>
-                      <div className="mt-2 flex items-center gap-2 text-2xl font-bold text-amber-700">
-                        <RotateCcw size={18} />
-                        {simFloorReport.summary.retakes}
+            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-br from-violet-500/5 to-purple-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <h3 className="text-xl font-bold text-slate-900 mb-6">Call Simulation Snapshot</h3>
+                {simFloorReport ? (
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="group/item rounded-3xl border border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-violet-700">Mock Calls</div>
+                        <div className="mt-3 text-2xl font-bold text-violet-900">{simFloorReport.summary.total_sessions}</div>
+                      </div>
+                      <div className="group/item rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Certificates</div>
+                        <div className="mt-3 text-2xl font-bold text-emerald-900">{simFloorReport.certificates.length}</div>
+                      </div>
+                      <div className="group/item rounded-3xl border border-sky-200 bg-gradient-to-br from-sky-50 to-blue-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">Average</div>
+                        <div className="mt-3 text-2xl font-bold text-sky-900">{simFloorReport.summary.average_score.toFixed(1)}%</div>
+                      </div>
+                      <div className="group/item rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-amber-700">Retakes</div>
+                        <div className="mt-3 flex items-center gap-2 text-2xl font-bold text-amber-900">
+                          <RotateCcw size={18} />
+                          {simFloorReport.summary.retakes}
+                        </div>
                       </div>
                     </div>
-                  </div>
 
-                  {simFloorReport.recent_sessions.slice(0, 2).map((session) => (
-                    <div key={session.session_id} className="rounded-lg border border-border p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <div className="font-semibold text-foreground text-sm">{session.scenario_title}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            Attempt {session.attempt_number} | {session.created_at ? new Date(session.created_at).toLocaleDateString() : 'No date'}
+                    {simFloorReport.recent_sessions.slice(0, 2).map((session) => (
+                      <div key={session.session_id} className="group/item rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                        <div className="flex items-start justify-between gap-4">
+                          <div>
+                            <div className="font-bold text-slate-900 text-sm">{session.scenario_title}</div>
+                            <div className="mt-2 text-xs text-slate-600">
+                              Attempt {session.attempt_number} | {session.created_at ? new Date(session.created_at).toLocaleDateString() : 'No date'}
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="font-bold text-slate-900">{session.score.toFixed(1)}%</div>
+                            <div className="mt-2 text-xs text-slate-600">{verdictLabel(session.trainer_verdict_status)}</div>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <div className="font-bold text-foreground">{session.score.toFixed(1)}%</div>
-                          <div className="mt-1 text-xs text-muted-foreground">{verdictLabel(session.trainer_verdict_status)}</div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-slate-700">
-                          <ShieldCheck size={12} />
-                          {verdictLabel(session.trainer_verdict_status)}
-                        </span>
-                        {session.certificate_id ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">
-                            <Award size={12} />
-                            Certificate issued
+                        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                          <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-slate-100 to-slate-200 px-3 py-1 text-slate-700 font-medium">
+                            <ShieldCheck size={12} />
+                            {verdictLabel(session.trainer_verdict_status)}
                           </span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-
-                  {!simFloorReport.recent_sessions.length ? (
-                    <div className="text-sm text-muted-foreground">No Call Simulation attempts yet.</div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="text-sm text-muted-foreground">
-                  Start a Call Simulation scenario and your mock-call performance summary will appear here.
-                </div>
-              )}
-            </div>
-
-            <div className="bg-card rounded-lg shadow-md p-6 border border-border">
-              <h3 className="text-lg font-bold text-foreground mb-4">Coaching Snapshot</h3>
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                  <div className="text-xs text-amber-700">Pending Ack</div>
-                  <div className="mt-2 text-2xl font-bold text-amber-700">{coachingSummary.pending}</div>
-                </div>
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                  <div className="text-xs text-emerald-700">Acknowledged</div>
-                  <div className="mt-2 text-2xl font-bold text-emerald-700">{coachingSummary.acknowledged}</div>
-                </div>
-                <div className="rounded-lg border border-rose-200 bg-rose-50 p-3">
-                  <div className="text-xs text-rose-700">Retake</div>
-                  <div className="mt-2 text-2xl font-bold text-rose-700">{coachingSummary.retake}</div>
-                </div>
-              </div>
-
-              {coachingLogs.slice(0, 2).map((log) => (
-                <div key={log.id} className="rounded-lg border border-border p-3 mb-3 last:mb-0">
-                  <div className="font-semibold text-foreground text-sm">{log.coaching_id}</div>
-                  <div className="text-xs text-muted-foreground mt-1">
-                    {log.scenario_title || 'General coaching'}
-                  </div>
-                  <div className="text-xs text-muted-foreground mt-2">
-                    {log.status === 'sent' ? 'Needs acknowledgement' : 'Acknowledged'} | {log.competency_status.replace('_', ' ')}
-                  </div>
-                </div>
-              ))}
-
-              {!coachingLogs.length && (
-                <div className="text-sm text-muted-foreground">No coaching logs yet.</div>
-              )}
-            </div>
-
-            <div className="bg-card rounded-lg shadow-md p-6 border border-border">
-              <h3 className="text-lg font-bold text-foreground mb-6">
-                Recent Activity
-              </h3>
-
-              {sessions.length > 0 ? (
-                <div className="space-y-4">
-                  {sessions.slice(0, 5).map((session) => (
-                    <div
-                      key={session.id}
-                      className="p-4 bg-background rounded-lg border border-border hover:border-primary/40 transition-colors"
-                    >
-                      <div className="flex justify-between items-start mb-2">
-                        <h4 className="font-semibold text-foreground text-sm">
-                          {session.scenario_title}
-                        </h4>
-                        <span
-                          className={`text-sm font-bold ${
-                            session.overall_score >= 80
-                              ? 'text-green-600'
-                              : session.overall_score >= 60
-                                ? 'text-yellow-600'
-                                : 'text-red-600'
-                          }`}
-                        >
-                          {session.overall_score.toFixed(0)}%
-                        </span>
-                      </div>
-                      <div className="text-xs text-muted-foreground space-y-1">
-                        <div>Accuracy: {session.accuracy.toFixed(0)}%</div>
-                        <div>Fluency: {session.fluency.toFixed(0)}%</div>
-                        <div>
-                          {new Date(session.created_at).toLocaleDateString()}
+                          {session.certificate_id ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-emerald-100 to-green-100 px-3 py-1 text-emerald-700 font-medium">
+                              <Award size={12} />
+                              Certificate issued
+                            </span>
+                          ) : null}
                         </div>
                       </div>
+                    ))}
+
+                    {!simFloorReport.recent_sessions.length ? (
+                      <div className="text-sm text-slate-500 font-medium">No Call Simulation attempts yet.</div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500 font-medium">
+                    Start a Call Simulation scenario and your mock-call performance summary will appear here.
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <h3 className="text-xl font-bold text-slate-900 mb-6">Coaching Snapshot</h3>
+                <div className="grid grid-cols-3 gap-4 mb-6">
+                  <div className="group/item rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-amber-700">Pending Ack</div>
+                    <div className="mt-3 text-2xl font-bold text-amber-900">{coachingSummary.pending}</div>
+                  </div>
+                  <div className="group/item rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Acknowledged</div>
+                    <div className="mt-3 text-2xl font-bold text-emerald-900">{coachingSummary.acknowledged}</div>
+                  </div>
+                  <div className="group/item rounded-3xl border border-rose-200 bg-gradient-to-br from-rose-50 to-red-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-rose-700">Retake</div>
+                    <div className="mt-3 text-2xl font-bold text-rose-900">{coachingSummary.retake}</div>
+                  </div>
+                </div>
+
+                {coachingLogs.slice(0, 2).map((log) => (
+                  <div key={log.id} className="group/item rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 mb-4 last:mb-0">
+                    <div className="font-bold text-slate-900 text-sm">{log.coaching_id}</div>
+                    <div className="text-xs text-slate-600 mt-2">
+                      {log.scenario_title || 'General coaching'}
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-8">
-                  <p className="text-muted-foreground text-sm">
-                    No recorded activity yet.
-                  </p>
-                </div>
-              )}
+                    <div className="text-xs text-slate-600 mt-3">
+                      {log.status === 'sent' ? 'Needs acknowledgement' : 'Acknowledged'} | {log.competency_status.replace('_', ' ')}
+                    </div>
+                  </div>
+                ))}
+
+                {!coachingLogs.length && (
+                  <div className="text-sm text-slate-500 font-medium">No coaching logs yet.</div>
+                )}
+              </div>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+              <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <h3 className="text-xl font-bold text-slate-900 mb-6">
+                  Recent Activity
+                </h3>
+
+                {sessions.length > 0 ? (
+                  <div className="space-y-4">
+                    {sessions.slice(0, 5).map((session) => (
+                      <div
+                        key={session.id}
+                        className="group/item relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1"
+                      >
+                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+                        <div className="relative flex justify-between items-start mb-3">
+                          <h4 className="font-bold text-slate-900 text-sm">
+                            {session.scenario_title}
+                          </h4>
+                          <span
+                            className={`text-sm font-bold px-3 py-1 rounded-full ${
+                              session.overall_score >= 80
+                                ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800'
+                                : session.overall_score >= 60
+                                  ? 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-800'
+                                  : 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800'
+                            }`}
+                          >
+                            {session.overall_score.toFixed(0)}%
+                          </span>
+                        </div>
+                        <div className="relative text-xs text-slate-600 space-y-2">
+                          <div className="flex justify-between">
+                            <span>Accuracy:</span>
+                            <span className="font-medium">{session.accuracy.toFixed(0)}%</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Fluency:</span>
+                            <span className="font-medium">{session.fluency.toFixed(0)}%</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Date:</span>
+                            <span className="font-medium">{new Date(session.created_at).toLocaleDateString()}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <p className="text-slate-500 text-sm font-medium">
+                      No recorded activity yet.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -695,46 +715,51 @@ function StatCard({
 }) {
   const colorMap: Record<
     string,
-    { bg: string; border: string; text: string; iconColor: string }
+    { bg: string; border: string; text: string; iconBg: string; iconColor: string }
   > = {
     blue: {
-      bg: 'bg-primary/10',
-      border: 'border-primary/30',
-      text: 'text-primary',
-      iconColor: 'text-primary',
+      bg: 'bg-gradient-to-br from-blue-50 to-slate-50',
+      border: 'border-blue-200',
+      text: 'text-blue-900',
+      iconBg: 'bg-gradient-to-br from-blue-500 to-teal-500',
+      iconColor: 'text-white',
     },
     green: {
-      bg: 'bg-green-50',
+      bg: 'bg-gradient-to-br from-green-50 to-emerald-50',
       border: 'border-green-200',
-      text: 'text-green-700',
-      iconColor: 'text-green-600',
+      text: 'text-green-900',
+      iconBg: 'bg-gradient-to-br from-green-500 to-emerald-500',
+      iconColor: 'text-white',
     },
     purple: {
-      bg: 'bg-secondary',
-      border: 'border-border',
-      text: 'text-foreground',
-      iconColor: 'text-muted-foreground',
+      bg: 'bg-gradient-to-br from-purple-50 to-violet-50',
+      border: 'border-purple-200',
+      text: 'text-purple-900',
+      iconBg: 'bg-gradient-to-br from-purple-500 to-violet-500',
+      iconColor: 'text-white',
     },
     orange: {
-      bg: 'bg-accent/20',
-      border: 'border-accent/50',
-      text: 'text-foreground',
-      iconColor: 'text-accent-foreground',
+      bg: 'bg-gradient-to-br from-orange-50 to-amber-50',
+      border: 'border-orange-200',
+      text: 'text-orange-900',
+      iconBg: 'bg-gradient-to-br from-orange-500 to-amber-500',
+      iconColor: 'text-white',
     },
   };
 
   const styles = colorMap[color];
 
   return (
-    <div
-      className={`${styles.bg} border ${styles.border} rounded-lg p-6`}
-    >
-      <div className="flex items-start justify-between">
+    <div className={`group relative overflow-hidden rounded-3xl border ${styles.border} ${styles.bg} p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1`}>
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative flex items-start justify-between">
         <div>
-          <p className="text-sm font-medium text-muted-foreground mb-2">{label}</p>
+          <p className="text-sm font-bold text-slate-600 mb-3 uppercase tracking-[0.14em]">{label}</p>
           <p className={`text-3xl font-bold ${styles.text}`}>{value}</p>
         </div>
-        <div className={styles.iconColor}>{icon}</div>
+        <div className={`rounded-2xl ${styles.iconBg} p-3 shadow-lg transition-transform group-hover:scale-110`}>
+          <div className={styles.iconColor}>{icon}</div>
+        </div>
       </div>
     </div>
   );
@@ -761,23 +786,44 @@ function QuickLinkCard({
   icon: React.ReactNode;
   accent: 'sky' | 'amber' | 'emerald' | 'violet';
 }) {
-  const accentStyles: Record<string, string> = {
-    sky: 'border-sky-200 bg-sky-50/70 text-sky-700',
-    amber: 'border-amber-200 bg-amber-50/70 text-amber-700',
-    emerald: 'border-emerald-200 bg-emerald-50/70 text-emerald-700',
-    violet: 'border-violet-200 bg-violet-50/70 text-violet-700',
+  const accentStyles: Record<string, { bg: string; text: string; iconBg: string }> = {
+    sky: {
+      bg: 'bg-gradient-to-br from-sky-50 to-blue-50',
+      text: 'text-sky-900',
+      iconBg: 'bg-gradient-to-br from-sky-500 to-blue-500',
+    },
+    amber: {
+      bg: 'bg-gradient-to-br from-amber-50 to-orange-50',
+      text: 'text-amber-900',
+      iconBg: 'bg-gradient-to-br from-amber-500 to-orange-500',
+    },
+    emerald: {
+      bg: 'bg-gradient-to-br from-emerald-50 to-green-50',
+      text: 'text-emerald-900',
+      iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
+    },
+    violet: {
+      bg: 'bg-gradient-to-br from-violet-50 to-purple-50',
+      text: 'text-violet-900',
+      iconBg: 'bg-gradient-to-br from-violet-500 to-purple-500',
+    },
   };
+
+  const styles = accentStyles[accent];
 
   return (
     <Link
       href={href}
-      className="rounded-2xl border border-border bg-background p-5 transition-colors hover:border-primary/40 hover:bg-muted/40"
+      className={`group relative overflow-hidden rounded-3xl border border-slate-200 ${styles.bg} p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-blue-300`}
     >
-      <div className={`inline-flex rounded-full border px-3 py-2 ${accentStyles[accent]}`}>
-        {icon}
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative">
+        <div className={`inline-flex rounded-2xl ${styles.iconBg} p-3 shadow-lg transition-transform group-hover:scale-110`}>
+          <div className="text-white">{icon}</div>
+        </div>
+        <div className="mt-4 text-lg font-bold text-slate-900">{title}</div>
+        <div className="mt-2 text-sm text-slate-600">{description}</div>
       </div>
-      <div className="mt-4 text-lg font-semibold text-foreground">{title}</div>
-      <div className="mt-2 text-sm text-muted-foreground">{description}</div>
     </Link>
   );
 }

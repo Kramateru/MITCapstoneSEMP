@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
@@ -79,14 +80,21 @@ def validate_environment():
         'SECRET_KEY': 'JWT signing key (must be >= 32 characters, not default)',
         'BACKEND_URL': 'Backend public URL for CORS',
         'DATABASE_URL': 'PostgreSQL/Supabase database URL',
-        'SUPABASE_URL': 'Supabase project URL',
-        'SUPABASE_SERVICE_KEY': 'Supabase service account key',
     }
 
     missing = []
     for var, description in required.items():
         if not os.getenv(var):
             missing.append(f"{var}: {description}")
+
+    # SUPABASE_URL may be provided through frontend-compatible env names in local development.
+    supabase_url = (
+        os.getenv('SUPABASE_URL')
+        or os.getenv('NEXT_PUBLIC_SUPABASE_URL')
+        or os.getenv('REACT_APP_SUPABASE_URL')
+    )
+    if not supabase_url:
+        missing.append("SUPABASE_URL: Supabase project URL")
 
     if missing:
         error_msg = "Missing required environment variables:\n" + "\n".join(missing)
@@ -109,11 +117,27 @@ def validate_environment():
     except Exception as e:
         raise RuntimeError(f"Invalid BACKEND_URL format: {e}")
 
-    supabase_url = os.getenv('SUPABASE_URL')
+    supabase_url = (
+        os.getenv('SUPABASE_URL')
+        or os.getenv('NEXT_PUBLIC_SUPABASE_URL')
+        or os.getenv('REACT_APP_SUPABASE_URL')
+    )
     try:
         urlparse(supabase_url)
     except Exception as e:
         raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
+
+    if not any(
+        os.getenv(key)
+        for key in (
+            'SUPABASE_SERVICE_KEY',
+            'SUPABASE_SERVICE_ROLE_KEY',
+            'SUPABASE_KEY',
+        )
+    ):
+        logger.warning(
+            'Supabase service role key is not configured. Supabase storage and upload features will be disabled until SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY is set.'
+        )
 
     logger.info("Environment validation passed")
 
@@ -161,10 +185,19 @@ from backend.services.speech_pipeline import (
     SpeechPipelineError,
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    ensure_admin_user()
+    sync_runtime_users_to_supabase_auth(fail_fast=True)
+    yield
+    engine.dispose()
+    logger.info("Database connection pool cleaned up")
+
 app = FastAPI(
     title="Speech-Enabled BPO Platform",
     description="Comprehensive BPO training platform with speech assessment",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # Create database tables
@@ -1105,19 +1138,6 @@ def sync_runtime_users_to_supabase_auth(*, fail_fast: bool) -> None:
     finally:
         db.close()
 
-
-@app.on_event("startup")
-def startup_event() -> None:
-    """Run the production Supabase preflight before serving traffic."""
-    ensure_admin_user()
-    sync_runtime_users_to_supabase_auth(fail_fast=True)
-
-# Add shutdown event to clean up database connections
-@app.on_event("shutdown")
-def shutdown_event():
-    """Clean up database connection pool on shutdown"""
-    engine.dispose()
-    logger.info("Database connection pool cleaned up")
 
 # Include route blueprints
 app.include_router(auth_routes.router)

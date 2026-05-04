@@ -57,7 +57,12 @@ if /I not "%SKIP_FRONTEND_BUILD%"=="1" (
   call npm.cmd run build
   if errorlevel 1 exit /b 1
 )
-if /I "%SKIP_FRONTEND_BUILD%"=="1" if not exist ".next\BUILD_ID" (
+set "FRONTEND_BUILD_READY=0"
+if exist ".next\BUILD_ID" set "FRONTEND_BUILD_READY=1"
+if exist ".next\build" set "FRONTEND_BUILD_READY=1"
+if exist ".next\server" set "FRONTEND_BUILD_READY=1"
+
+if /I "%SKIP_FRONTEND_BUILD%"=="1" if /I not "%FRONTEND_BUILD_READY%"=="1" (
   echo SKIP_FRONTEND_BUILD=1 was set, but no compiled frontend build was found.
   echo Run this script without SKIP_FRONTEND_BUILD=1 or build the frontend manually first.
   exit /b 1

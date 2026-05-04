@@ -3294,29 +3294,107 @@ async def sync_scenario_to_supabase(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Sync scenario data to Supabase (placeholder endpoint)"""
+    """Sync scenario data to Supabase"""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
+    
+    try:
+        supabase = get_supabase_client()
+        
+        # Handle syncFromDatabase flag for bulk upload scenarios
+        if sync_data.get("syncFromDatabase"):
+            scenario_id = sync_data.get("scenarioId")
+            if not scenario_id:
+                raise HTTPException(status_code=400, detail="scenarioId required when syncFromDatabase is true")
 
-    # Handle syncFromDatabase flag for bulk upload scenarios
-    if sync_data.get("syncFromDatabase"):
-        scenario_id = sync_data.get("scenarioId")
-        if not scenario_id:
-            raise HTTPException(status_code=400, detail="scenarioId required when syncFromDatabase is true")
+            # Validate scenario exists and belongs to trainer
+            scenario = _get_accessible_scenario(db, current_user, scenario_id)
+            logger.debug("Syncing scenario %s from database to Supabase", scenario_id)
+            
+            # Build scenario data from database scenario
+            scenario_sync_data = {
+                "source_scenario_id": str(scenario.id),
+                "trainer_id": str(current_user.id),
+                "title": scenario.title,
+                "topic": scenario.lob or scenario.title,
+                "description": scenario.description,
+                "target_kpis": scenario.call_simulation_config.get("target_kpis", {}) if scenario.call_simulation_config else {},
+                "script_flow": scenario.call_simulation_config.get("script_flow", []) if scenario.call_simulation_config else [],
+                "ringer_audio_url": scenario.ringer_audio_url,
+                "hold_audio_url": scenario.hold_audio_url,
+                "difficulty": scenario.difficulty or "intermediate",
+                "estimated_duration_seconds": scenario.estimated_duration or 300,
+                "passing_score": float(scenario.call_simulation_config.get("certification_threshold", 80)) if scenario.call_simulation_config else 80.0,
+                "is_published": bool(scenario.is_published),
+                "is_active": True,
+                "metadata": scenario.call_simulation_config or {},
+            }
+        else:
+            # Handle full scenario data sync from frontend
+            scenario_data = sync_data.get("scenario")
+            if not scenario_data:
+                raise HTTPException(status_code=400, detail="scenario data required")
 
-        # Validate scenario exists and belongs to trainer
-        scenario = _get_accessible_scenario(db, current_user, scenario_id)
-        logger.debug("Syncing scenario %s from database to Supabase", scenario_id)
-    else:
-        # Handle full scenario data sync
-        scenario_data = sync_data.get("scenario")
-        if not scenario_data:
-            raise HTTPException(status_code=400, detail="scenario data required")
-
-        logger.debug("Syncing scenario data to Supabase: %s", scenario_data.get("id"))
-
-    logger.debug("Received Supabase scenario sync request: %s", sync_data)
-    return SuccessResponse(message="Scenario sync completed")
+            logger.debug("Syncing scenario data to Supabase: %s", scenario_data.get("scenarioId"))
+            
+            scenario_sync_data = {
+                "source_scenario_id": str(scenario_data.get("scenarioId")),
+                "trainer_id": str(current_user.id),
+                "title": str(scenario_data.get("title", "")),
+                "topic": str(scenario_data.get("topic", "")),
+                "description": scenario_data.get("description"),
+                "target_kpis": scenario_data.get("targetKpis", {}),
+                "script_flow": scenario_data.get("scriptFlow", []),
+                "ringer_audio_url": scenario_data.get("ringerAudioUrl"),
+                "hold_audio_url": scenario_data.get("holdAudioUrl"),
+                "difficulty": scenario_data.get("difficulty") or "intermediate",
+                "estimated_duration_seconds": scenario_data.get("estimatedDurationSeconds") or 300,
+                "passing_score": float(scenario_data.get("passingScore", 80)),
+                "is_published": bool(scenario_data.get("isPublished", True)),
+                "is_active": bool(scenario_data.get("isActive", True)),
+                "metadata": scenario_data.get("metadata", {}),
+            }
+        
+        try:
+            # Try to upsert the scenario record - Supabase will use the unique index on source_scenario_id
+            result = supabase.table("call_scenarios").upsert(
+                scenario_sync_data,
+                ignore_duplicates=False
+            ).execute()
+            
+            logger.info("Synced scenario %s to Supabase", scenario_sync_data.get("source_scenario_id"))
+        except Exception as supabase_error:
+            # If upsert fails, try insert or update separately
+            logger.warning("Upsert failed, trying insert/update approach: %s", supabase_error)
+            try:
+                # Check if record exists
+                existing = supabase.table("call_scenarios").select("id").eq(
+                    "source_scenario_id", scenario_sync_data["source_scenario_id"]
+                ).execute()
+                
+                if existing.data and len(existing.data) > 0:
+                    # Update existing
+                    result = supabase.table("call_scenarios").update(
+                        scenario_sync_data
+                    ).eq("source_scenario_id", scenario_sync_data["source_scenario_id"]).execute()
+                    logger.info("Updated scenario %s in Supabase", scenario_sync_data.get("source_scenario_id"))
+                else:
+                    # Insert new
+                    result = supabase.table("call_scenarios").insert(
+                        scenario_sync_data
+                    ).execute()
+                    logger.info("Inserted scenario %s into Supabase", scenario_sync_data.get("source_scenario_id"))
+            except Exception as fallback_error:
+                logger.error("Fallback insert/update failed: %s", fallback_error)
+                raise fallback_error
+        
+        return SuccessResponse(message="Scenario sync completed successfully")
+    except Exception as exc:
+        logger.error("Error syncing scenario to Supabase: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync scenario to Supabase: {str(exc)}"
+        ) from exc
 
 
 @router.post("/kpi/sync", response_model=SuccessResponse)
@@ -3325,12 +3403,60 @@ async def sync_kpi_to_supabase(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Sync KPI data to Supabase (placeholder endpoint)"""
+    """Sync KPI data to Supabase"""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
 
-    logger.debug("Received Supabase KPI sync request: %s", sync_data)
-    return SuccessResponse(message="KPI sync completed")
+    try:
+        supabase = get_supabase_client()
+        
+        scenario_group_ids = sync_data.get("scenarioGroupIds", [])
+        metrics = sync_data.get("metrics", [])
+        
+        if not scenario_group_ids:
+            raise HTTPException(status_code=400, detail="scenarioGroupIds required")
+        if not metrics:
+            raise HTTPException(status_code=400, detail="metrics required")
+        
+        # Build KPI configuration from metrics
+        kpi_config = {
+            "trainer_id": str(current_user.id),
+            "speech_to_text_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Script Accuracy"), 0),
+            "aht_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "AHT"), 0),
+            "rate_of_speech_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Rate of Speech"), 0),
+            "dead_air_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Dead Air"), 0),
+            "empathy_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Empathy"), 0),
+            "probing_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Probing"), 0),
+            "grammar_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Grammar"), 0),
+            "pronunciation_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Pronunciation"), 0),
+            "pacing_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Pacing"), 0),
+        }
+        
+        # Sync KPI config for each scenario group
+        for scenario_id in scenario_group_ids:
+            kpi_sync_data = {
+                **kpi_config,
+                "source_scenario_id": scenario_id,
+            }
+            
+            try:
+                supabase.table("kpi_metrics").upsert(
+                    {**kpi_sync_data, "updated_at": "now()"},
+                    on_conflict="source_scenario_id"
+                ).execute()
+                logger.info("Synced KPI metrics for scenario %s to Supabase", scenario_id)
+            except Exception as kpi_error:
+                logger.warning("Failed to sync KPI metrics for scenario %s: %s", scenario_id, kpi_error)
+        
+        return SuccessResponse(message="KPI sync completed successfully")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error syncing KPI to Supabase: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync KPI to Supabase: {str(exc)}"
+        ) from exc
 
 
 @router.post("/audio/sync", response_model=SuccessResponse)
@@ -3876,6 +4002,7 @@ async def bulk_upload_scenarios(
             id=str(uuid.uuid4()),
             title=scenario_title_text,
             created_by=current_user.id,
+            opening_prompt="Answer the call, review the member context, and deliver the expected CSR spiel.",
         )
         db.add(target_scenario)
         db.flush()
@@ -3979,6 +4106,52 @@ async def bulk_upload_scenarios(
     )
 
     _sync_call_simulation_assignments_for_scenario(db, target_scenario.id)
+
+    # After creating scenario, sync to Supabase
+    try:
+        supabase = get_supabase_client()
+        scenario_sync_data = {
+            "source_scenario_id": str(target_scenario.id),
+            "trainer_id": str(current_user.id),
+            "title": target_scenario.title,
+            "topic": target_scenario.lob or target_scenario.title,
+            "description": target_scenario.description,
+            "target_kpis": target_scenario.call_simulation_config.get("target_kpis", {}) if target_scenario.call_simulation_config else {},
+            "script_flow": target_scenario.call_simulation_config.get("script_flow", []) if target_scenario.call_simulation_config else [],
+            "ringer_audio_url": target_scenario.ringer_audio_url,
+            "hold_audio_url": target_scenario.hold_audio_url,
+            "difficulty": target_scenario.difficulty or "intermediate",
+            "estimated_duration_seconds": target_scenario.estimated_duration or 300,
+            "passing_score": float(target_scenario.call_simulation_config.get("certification_threshold", 80)) if target_scenario.call_simulation_config else 80.0,
+            "is_published": bool(target_scenario.is_published),
+            "is_active": True,
+            "metadata": target_scenario.call_simulation_config or {},
+        }
+        
+        try:
+            # Check if record exists and update or insert accordingly
+            existing = supabase.table("call_scenarios").select("id").eq(
+                "source_scenario_id", str(target_scenario.id)
+            ).execute()
+            
+            if existing.data and len(existing.data) > 0:
+                # Update existing
+                result = supabase.table("call_scenarios").update(
+                    scenario_sync_data
+                ).eq("source_scenario_id", str(target_scenario.id)).execute()
+                logger.info("Updated bulk uploaded scenario %s in Supabase", target_scenario.id)
+            else:
+                # Insert new
+                result = supabase.table("call_scenarios").insert(
+                    scenario_sync_data
+                ).execute()
+                logger.info("Inserted bulk uploaded scenario %s into Supabase", target_scenario.id)
+        except Exception as supabase_error:
+            logger.warning("Failed to sync bulk uploaded scenario to Supabase: %s", supabase_error)
+            # Don't fail the bulk upload if Supabase sync fails
+    except Exception as sync_error:
+        logger.warning("Error preparing scenario sync data: %s", sync_error)
+        # Don't fail the bulk upload if sync preparation fails
 
     db.commit()
 
@@ -4155,7 +4328,7 @@ async def upload_call_simulation_audio_asset(
         f"{step_prefix}{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{normalized_base}{safe_extension}"
     )
 
-    supabase = _require_supabase_storage("Supabase storage is required for call simulation audio assets.")
+    supabase = get_supabase_client()
     audio_url = supabase.upload_call_simulation_asset(
         file_data=file_bytes,
         trainer_id=current_user.id,
@@ -4423,7 +4596,7 @@ async def synthesize_member_speech(
         prefix = f"step-{int(step_number):02d}_" if asset_kind == "member-step" and step_number else ""
         filename = f"{prefix}{timestamp}_{safe_leaf[:48]}.{audio_extension}"
 
-        supabase = _require_supabase_storage("Supabase storage is required for Call Simulation speech generation.")
+        supabase = get_supabase_client()
         uploaded_audio_url = supabase.upload_call_simulation_asset(
             file_data=upload_bytes,
             trainer_id=current_user.id,
@@ -4434,7 +4607,7 @@ async def synthesize_member_speech(
         )
         if uploaded_audio_url:
             audio_url = uploaded_audio_url
-            storage_mode = "supabase"
+            storage_mode = "local" if uploaded_audio_url.startswith("/media/") else "supabase"
         else:
             audio_url = _build_audio_data_url(upload_bytes, audio_content_type)
             storage_mode = "embedded"
@@ -4620,7 +4793,7 @@ async def submit_session_turn(
     safe_extension = extension if extension else ".webm"
     storage_leaf = f"step-{step_number}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}{safe_extension}"
 
-    supabase = _require_supabase_storage("Supabase storage is required for call simulation session recordings.")
+    supabase = get_supabase_client()
     audio_url = supabase.upload_sim_floor_audio(
         file_data=file_bytes,
         trainee_id=current_user.id,
@@ -4864,7 +5037,7 @@ async def upload_session_recording(
     safe_extension = extension if extension else ".wav"
     storage_leaf = f"session_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}{safe_extension}"
 
-    supabase = _require_supabase_storage("Supabase storage is required for session-level call simulation recordings.")
+    supabase = get_supabase_client()
     audio_url = supabase.upload_sim_floor_audio(
         file_data=file_bytes,
         trainee_id=current_user.id,
@@ -5032,15 +5205,15 @@ async def submit_session_audio(
     original_name = file.filename or "call-simulation-recording.webm"
     _, extension = os.path.splitext(original_name)
     safe_extension = extension if extension else ".webm"
-    storage_filename = (
-        f"{current_user.id}/{session.id}_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}{safe_extension}"
-    )
-    
-    supabase = _require_supabase_storage("Supabase storage is required for submitted call simulation recordings.")
-    audio_url = supabase.upload_audio(
+    storage_leaf = f"session_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}{safe_extension}"
+
+    supabase = get_supabase_client()
+    audio_url = supabase.upload_sim_floor_audio(
         file_data=file_bytes,
-        user_id=current_user.id,
-        filename=storage_filename,
+        trainee_id=current_user.id,
+        scenario_id=scenario.id,
+        session_id=session.id,
+        filename=storage_leaf,
         content_type=file.content_type or "audio/webm",
     )
     if not audio_url:
@@ -5049,7 +5222,11 @@ async def submit_session_audio(
             detail="Supabase storage could not save the submitted call simulation recording.",
         )
 
-    logger.info(f"Audio uploaded to Supabase for session {session.id}")
+    logger.info(
+        "Audio saved for session %s via %s",
+        session.id,
+        "local media fallback" if audio_url.startswith("/media/") else "Supabase storage",
+    )
 
     reference_text = variation.script if variation and variation.script else None
     assessment = assess_audio_submission(

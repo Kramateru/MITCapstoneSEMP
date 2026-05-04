@@ -359,6 +359,10 @@ function readString(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
 function readPointValue(value: unknown, fallback = 0) {
   const numericValue =
     typeof value === 'number'
@@ -792,7 +796,9 @@ export default function TrainerSimFloorPage() {
     try {
       const response = await authedFetch('/api/call-simulation/audio-settings');
       if (!response.ok) {
-        throw new Error('Unable to load Call Simulation audio settings');
+        console.warn('Unable to load Call Simulation audio settings.');
+        applyCallToneSettings(null);
+        return;
       }
       const payload = (await response.json().catch(() => null)) as CallSimulationAudioSettings | null;
       applyCallToneSettings(payload);
@@ -875,14 +881,62 @@ export default function TrainerSimFloorPage() {
   }, [authedFetch]);
 
   const loadBatchData = useCallback(async (batchId: string) => {
-    await Promise.all([fetchScenarios(batchId), fetchKpiConfig(batchId), fetchInteractions(batchId), fetchScenarioLibrary()]);
+    const results = await Promise.allSettled([
+      fetchScenarios(batchId),
+      fetchKpiConfig(batchId),
+      fetchInteractions(batchId),
+      fetchScenarioLibrary(),
+    ]);
+
+    if (results[0].status === 'rejected') {
+      throw results[0].reason;
+    }
+
+    const nonCriticalErrors = results
+      .slice(1)
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map((result, index) => {
+        const fallbackMessages = [
+          'Unable to load KPI configuration.',
+          'Unable to load interactions.',
+          'Unable to load the scenario library.',
+        ];
+        return getErrorMessage(result.reason, fallbackMessages[index]);
+      });
+
+    if (nonCriticalErrors.length > 0) {
+      toast.error(nonCriticalErrors.join(' '));
+    }
   }, [fetchInteractions, fetchKpiConfig, fetchScenarioLibrary, fetchScenarios]);
 
   useEffect(() => {
     const load = async () => {
       try {
         setLoading(true);
-        await Promise.all([fetchBatches(), fetchScenarioLibrary(), fetchCallToneSettings()]);
+        const results = await Promise.allSettled([
+          fetchBatches(),
+          fetchScenarioLibrary(),
+          fetchCallToneSettings(),
+        ]);
+
+        if (results[0].status === 'rejected') {
+          throw results[0].reason;
+        }
+
+        const nonCriticalErrors = results
+          .slice(1)
+          .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+          .map((result, index) => {
+            const fallbackMessages = [
+              'Unable to load the scenario library.',
+              'Unable to load Call Simulation audio settings.',
+            ];
+            return getErrorMessage(result.reason, fallbackMessages[index]);
+          });
+
+        if (nonCriticalErrors.length > 0) {
+          toast.error(nonCriticalErrors.join(' '));
+        }
       } catch (error) {
         console.error(error);
         toast.error('Unable to load Call Simulation batches.');
@@ -1029,7 +1083,12 @@ export default function TrainerSimFloorPage() {
       setShowDeleteDialog(false);
       setDeleteScenarioId(null);
       setDeleteScenarioTitle('');
-      await refreshScenarioData();
+      try {
+        await refreshScenarioData();
+      } catch (refreshError) {
+        console.error(refreshError);
+        toast.error(`Scenario deleted, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to delete scenario.');
@@ -1265,8 +1324,13 @@ export default function TrainerSimFloorPage() {
       setShowScenarioDialog(false);
       setEditingScenarioId(null);
       setScenarioForm(createDefaultScenarioForm());
-      await refreshScenarioData();
       toast.success(editingScenarioId ? 'Scenario updated.' : 'Scenario created.');
+      try {
+        await refreshScenarioData();
+      } catch (refreshError) {
+        console.error(refreshError);
+        toast.error(`Scenario saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to save scenario.');
@@ -1441,8 +1505,13 @@ export default function TrainerSimFloorPage() {
       setBulkTitle('');
       if (fileInputRef.current) fileInputRef.current.value = '';
       setShowBulkDialog(false);
-      await refreshScenarioData();
       toast.success('Bulk upload completed.');
+      try {
+        await refreshScenarioData();
+      } catch (refreshError) {
+        console.error(refreshError);
+        toast.error(`Bulk upload saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to bulk upload scenarios.');
@@ -1498,9 +1567,14 @@ export default function TrainerSimFloorPage() {
           } catch (syncError) {
             console.warn('Call tone audio Supabase sync failed:', syncError);
           }
-          
-          await refreshScenarioData();
+
           toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio uploaded and applied to your Call Simulation scenarios.`);
+          try {
+            await refreshScenarioData();
+          } catch (refreshError) {
+            console.error(refreshError);
+            toast.error(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio was saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+          }
         } catch (error) {
           console.error(error);
           toast.error(error instanceof Error ? error.message : 'Unable to upload the audio asset.');
@@ -1542,9 +1616,14 @@ export default function TrainerSimFloorPage() {
       } catch (syncError) {
         console.warn('Call tone audio Supabase sync failed:', syncError);
       }
-      
-      await refreshScenarioData();
+
       toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio saved for all of your Call Simulation scenarios.`);
+      try {
+        await refreshScenarioData();
+      } catch (refreshError) {
+        console.error(refreshError);
+        toast.error(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio was saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to save the audio setting.');
@@ -1565,8 +1644,13 @@ export default function TrainerSimFloorPage() {
       }
 
       applyCallToneSettings(payload as CallSimulationAudioSettings);
-      await refreshScenarioData();
       toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio removed from your Call Simulation scenarios.`);
+      try {
+        await refreshScenarioData();
+      } catch (refreshError) {
+        console.error(refreshError);
+        toast.error(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio was removed, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+      }
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : 'Unable to remove the audio setting.');
@@ -2830,76 +2914,78 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showKpiDialog} onOpenChange={setShowKpiDialog}>
-        <DialogContent className="max-h-[90vh] max-w-[96vw] overflow-hidden p-0 sm:max-w-6xl 2xl:max-w-7xl">
+        <DialogContent className="max-h-[90vh] h-[90vh] max-w-[96vw] overflow-hidden p-0 sm:max-w-6xl 2xl:max-w-7xl">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle>KPI Management</DialogTitle>
             <DialogDescription>
               Keep the KPI Management panel wide and clean. The scoring weights below are saved to Supabase for the selected batch.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid max-h-[calc(90vh-9rem)] gap-0 lg:grid-cols-2">
-            <div className="space-y-5 overflow-y-auto border-b bg-slate-50/70 p-6 lg:border-b-0 lg:border-r">
-              <div className="rounded-3xl border bg-white p-5 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-950">Score Balance</h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  The core and behavioral weights should stay close to 100% so the trainee’s final score remains predictable.
-                </p>
-                <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
-                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Current Weight</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-950">{Math.round(totalWeight * 10) / 10}%</div>
-                  <p className="mt-2 text-sm text-slate-500">
-                    Passing score, AHT, rate of speech, and dead-air targets are also persisted with this batch configuration.
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <div className="grid flex-1 overflow-hidden gap-0 lg:grid-cols-2">
+              <div className="space-y-5 overflow-y-auto border-b bg-slate-50/70 p-6 lg:border-b-0 lg:border-r">
+                <div className="rounded-3xl border bg-white p-5 shadow-sm">
+                  <h3 className="text-base font-semibold text-slate-950">Score Balance</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    The core and behavioral weights should stay close to 100% so the trainee’s final score remains predictable.
                   </p>
-                </div>
-              </div>
-              <div className="rounded-3xl border bg-white p-5 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-950">Keyword Lists</h3>
-                <div className="mt-4 space-y-4">
-                  <div className="space-y-2">
-                    <Label>Forbidden Words</Label>
-                    <Textarea value={kpiForm.forbidden_words.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, forbidden_words: splitKeywords(event.target.value) }))} rows={4} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Empathy Keywords</Label>
-                    <Textarea value={kpiForm.empathy_keywords.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, empathy_keywords: splitKeywords(event.target.value) }))} rows={4} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Probing Keywords</Label>
-                    <Textarea value={kpiForm.probing_keywords.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, probing_keywords: splitKeywords(event.target.value) }))} rows={4} />
+                  <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Current Weight</div>
+                    <div className="mt-2 text-3xl font-semibold text-slate-950">{Math.round(totalWeight * 10) / 10}%</div>
+                    <p className="mt-2 text-sm text-slate-500">
+                      Passing score, AHT, rate of speech, and dead-air targets are also persisted with this batch configuration.
+                    </p>
                   </div>
                 </div>
-              </div>
-            </div>
-            <div className="overflow-y-auto p-6">
-              <div className="rounded-3xl border bg-white p-5 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-950">Weight Inputs</h3>
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  {[
-                    ['speech_to_text_weight', 'Speech-to-Text Weight'],
-                    ['aht_weight', 'AHT Weight'],
-                    ['rate_of_speech_weight', 'Rate of Speech Weight'],
-                    ['dead_air_weight', 'Dead Air Weight'],
-                    ['empathy_statements_weight', 'Empathy Weight'],
-                    ['probing_questions_weight', 'Probing Weight'],
-                    ['grammar_weight', 'Grammar Weight'],
-                    ['pronunciation_weight', 'Pronunciation Weight'],
-                    ['pacing_weight', 'Pacing Weight'],
-                    ['forbidden_words_penalty', 'Forbidden Word Penalty'],
-                    ['passing_score', 'Passing Score'],
-                    ['target_aht_seconds', 'Target AHT Seconds'],
-                    ['target_ros_words_per_min', 'Target ROS WPM'],
-                    ['target_dead_air_seconds', 'Target Dead Air Seconds'],
-                  ].map(([field, label]) => (
-                    <div key={field} className="space-y-2">
-                      <Label>{label}</Label>
-                      <Input type="number" value={String((kpiForm as any)[field] ?? '')} onChange={(event) => setKpiForm((previous) => ({ ...previous, [field]: Number(event.target.value) }))} />
+                <div className="rounded-3xl border bg-white p-5 shadow-sm">
+                  <h3 className="text-base font-semibold text-slate-950">Keyword Lists</h3>
+                  <div className="mt-4 space-y-4">
+                    <div className="space-y-2">
+                      <Label>Forbidden Words</Label>
+                      <Textarea value={kpiForm.forbidden_words.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, forbidden_words: splitKeywords(event.target.value) }))} rows={4} />
                     </div>
-                  ))}
+                    <div className="space-y-2">
+                      <Label>Empathy Keywords</Label>
+                      <Textarea value={kpiForm.empathy_keywords.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, empathy_keywords: splitKeywords(event.target.value) }))} rows={4} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Probing Keywords</Label>
+                      <Textarea value={kpiForm.probing_keywords.join(', ')} onChange={(event) => setKpiForm((previous) => ({ ...previous, probing_keywords: splitKeywords(event.target.value) }))} rows={4} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="overflow-y-auto p-6">
+                <div className="rounded-3xl border bg-white p-5 shadow-sm">
+                  <h3 className="text-base font-semibold text-slate-950">Weight Inputs</h3>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    {[
+                      ['speech_to_text_weight', 'Speech-to-Text Weight'],
+                      ['aht_weight', 'AHT Weight'],
+                      ['rate_of_speech_weight', 'Rate of Speech Weight'],
+                      ['dead_air_weight', 'Dead Air Weight'],
+                      ['empathy_statements_weight', 'Empathy Weight'],
+                      ['probing_questions_weight', 'Probing Weight'],
+                      ['grammar_weight', 'Grammar Weight'],
+                      ['pronunciation_weight', 'Pronunciation Weight'],
+                      ['pacing_weight', 'Pacing Weight'],
+                      ['forbidden_words_penalty', 'Forbidden Word Penalty'],
+                      ['passing_score', 'Passing Score'],
+                      ['target_aht_seconds', 'Target AHT Seconds'],
+                      ['target_ros_words_per_min', 'Target ROS WPM'],
+                      ['target_dead_air_seconds', 'Target Dead Air Seconds'],
+                    ].map(([field, label]) => (
+                      <div key={field} className="space-y-2">
+                        <Label>{label}</Label>
+                        <Input type="number" value={String((kpiForm as any)[field] ?? '')} onChange={(event) => setKpiForm((previous) => ({ ...previous, [field]: Number(event.target.value) }))} />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-          <DialogFooter className="border-t px-6 py-4">
+          <DialogFooter className="sticky bottom-0 border-t bg-white px-6 py-4">
             <Button variant="outline" onClick={() => setShowKpiDialog(false)}>Cancel</Button>
             <Button onClick={handleSaveKpi} disabled={saving}>
               <Save className="mr-2 h-4 w-4" />

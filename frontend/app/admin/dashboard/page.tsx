@@ -255,15 +255,16 @@ export default function AdminDashboardPage() {
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
-          <section className="rounded-3xl border bg-card p-6 shadow-sm">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-foreground">Admin Control Center</h3>
-              <p className="text-sm text-muted-foreground">
+          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative mb-6">
+              <h3 className="text-xl font-bold text-slate-900">Admin Control Center</h3>
+              <p className="text-sm text-slate-600 mt-2">
                 Jump straight into the core admin workflows for user management, analytics, coaching oversight, and certification setup.
               </p>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="relative grid gap-4 md:grid-cols-2">
               {ADMIN_QUICK_LINKS.map((item) => (
                 <QuickLinkCard
                   key={item.href}
@@ -276,15 +277,16 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className="rounded-3xl border bg-card p-6 shadow-sm">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-foreground">Platform Focus</h3>
-              <p className="text-sm text-muted-foreground">
+          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative mb-6">
+              <h3 className="text-xl font-bold text-slate-900">Platform Focus</h3>
+              <p className="text-sm text-slate-600 mt-2">
                 Snapshot of the admin checks that usually need a fast decision before deeper review.
               </p>
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
+            <div className="relative grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
               <FocusTile
                 label="Database"
                 value={toDisplayLabel(stats?.system_status?.database?.status || 'unknown')}
@@ -310,15 +312,16 @@ export default function AdminDashboardPage() {
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
-          <section className="rounded-3xl border bg-card p-6 shadow-sm">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-foreground">System Status</h3>
-              <p className="text-sm text-muted-foreground">
+          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative mb-6">
+              <h3 className="text-xl font-bold text-slate-900">System Status</h3>
+              <p className="text-sm text-slate-600 mt-2">
                 These checks reflect the currently configured database, ASR, NLP, and Supabase storage paths.
               </p>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="relative grid gap-4 md:grid-cols-2">
               <StatusCard
                 label="ASR Engine"
                 status={stats?.system_status?.asr_engine?.status || 'unknown'}
@@ -346,25 +349,26 @@ export default function AdminDashboardPage() {
             </div>
           </section>
 
-          <section className="rounded-3xl border bg-card p-6 shadow-sm">
-            <div className="mb-4">
-              <h3 className="text-lg font-semibold text-foreground">Recent Activity</h3>
-              <p className="text-sm text-muted-foreground">
+          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
+            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative mb-6">
+              <h3 className="text-xl font-bold text-slate-900">Recent Activity</h3>
+              <p className="text-sm text-slate-600 mt-2">
                 Admin actions below are loaded from the audit log and reflect database-backed updates only.
               </p>
             </div>
 
-            <div className="space-y-3">
+            <div className="relative space-y-4">
               {(stats?.recent_activity || []).map((activity) => (
-                <div key={activity.id} className="rounded-2xl border p-4">
-                  <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                <div key={activity.id} className="group/item rounded-3xl border bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                      <div className="font-semibold text-foreground">{activity.label}</div>
-                      <div className="mt-1 text-sm text-muted-foreground">
+                      <div className="font-bold text-slate-900">{activity.label}</div>
+                      <div className="mt-2 text-sm text-slate-600">
                         {activity.entity_type || 'System'} by {activity.actor_name || 'System'}
                       </div>
                     </div>
-                    <div className="text-xs text-muted-foreground">
+                    <div className="text-xs font-medium text-slate-500">
                       {formatTimestamp(activity.created_at)}
                     </div>
                   </div>
@@ -372,8 +376,8 @@ export default function AdminDashboardPage() {
               ))}
 
               {!stats?.recent_activity?.length && (
-                <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
-                  No admin activity has been recorded yet.
+                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-8 text-center">
+                  <div className="text-sm font-medium text-slate-500">No admin activity has been recorded yet.</div>
                 </div>
               )}
             </div>
@@ -396,14 +400,17 @@ function StatCard({
   icon: ReactNode;
 }) {
   return (
-    <div className="rounded-2xl border bg-card p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-4">
+    <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative flex items-center justify-between gap-4">
         <div>
-          <div className="text-sm text-muted-foreground">{label}</div>
-          <div className="mt-2 text-3xl font-semibold text-foreground">{value}</div>
-          {caption ? <div className="mt-2 text-xs text-muted-foreground">{caption}</div> : null}
+          <div className="text-sm font-medium text-slate-600">{label}</div>
+          <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
+          {caption ? <div className="mt-2 text-xs text-slate-500">{caption}</div> : null}
         </div>
-        <div className="rounded-full bg-muted p-3">{icon}</div>
+        <div className="rounded-2xl bg-gradient-to-br from-blue-500 to-teal-500 p-4 text-white shadow-lg transition-transform group-hover:scale-110">
+          {icon}
+        </div>
       </div>
     </div>
   );
@@ -419,10 +426,13 @@ function FocusTile({
   hint: string;
 }) {
   return (
-    <div className="rounded-2xl border p-4">
-      <div className="text-xs uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-foreground">{value}</div>
-      <div className="mt-2 text-xs text-muted-foreground">{hint}</div>
+    <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
+      <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative">
+        <div className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{label}</div>
+        <div className="mt-3 text-2xl font-bold text-slate-900">{value}</div>
+        <div className="mt-3 text-xs text-slate-600">{hint}</div>
+      </div>
     </div>
   );
 }
@@ -441,16 +451,17 @@ function QuickLinkCard({
   return (
     <Link
       href={href}
-      className="group rounded-2xl border p-4 transition hover:border-slate-300 hover:bg-slate-50"
+      className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-blue-200"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="rounded-xl bg-muted p-3 text-slate-700 transition group-hover:bg-slate-900 group-hover:text-white">
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
+      <div className="relative flex items-start justify-between gap-4">
+        <div className="rounded-2xl bg-gradient-to-br from-blue-500 to-teal-500 p-4 text-white shadow-lg transition-transform group-hover:scale-110">
           {icon}
         </div>
-        <ArrowRight className="size-4 text-muted-foreground transition group-hover:translate-x-0.5" />
+        <ArrowRight className="size-5 text-slate-400 transition-all group-hover:translate-x-1 group-hover:text-blue-500" />
       </div>
-      <div className="mt-4 font-semibold text-foreground">{label}</div>
-      <div className="mt-1 text-sm text-muted-foreground">{description}</div>
+      <div className="relative mt-4 font-bold text-slate-900">{label}</div>
+      <div className="relative mt-2 text-sm text-slate-600">{description}</div>
     </Link>
   );
 }
@@ -464,24 +475,28 @@ function StatusCard({
   status: string;
   detail: string;
 }) {
-  const tone =
-    status === 'connected' || status === 'configured' || status === 'active'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      : status === 'error'
-        ? 'border-rose-200 bg-rose-50 text-rose-700'
-      : status === 'fallback_only' || status === 'not_configured'
-        ? 'border-amber-200 bg-amber-50 text-amber-700'
-        : 'border-slate-200 bg-slate-50 text-slate-700';
+  const getStatusStyle = (status: string) => {
+    if (status === 'connected' || status === 'configured' || status === 'active') {
+      return 'border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 text-emerald-800 shadow-emerald-100';
+    }
+    if (status === 'error') {
+      return 'border-rose-200 bg-gradient-to-br from-rose-50 to-red-50 text-rose-800 shadow-rose-100';
+    }
+    if (status === 'fallback_only' || status === 'not_configured') {
+      return 'border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50 text-amber-800 shadow-amber-100';
+    }
+    return 'border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 text-slate-700 shadow-slate-100';
+  };
 
   return (
-    <div className={`rounded-2xl border p-4 ${tone}`}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="font-semibold">{label}</div>
-        <div className="rounded-full bg-white/80 px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.16em]">
+    <div className={`group relative overflow-hidden rounded-3xl border p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${getStatusStyle(status)}`}>
+      <div className="relative flex items-center justify-between gap-3">
+        <div className="font-bold">{label}</div>
+        <div className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] shadow-sm">
           {status.replace(/_/g, ' ')}
         </div>
       </div>
-      <div className="mt-3 text-sm leading-6">{detail}</div>
+      <div className="relative mt-4 text-sm leading-6">{detail}</div>
     </div>
   );
 }

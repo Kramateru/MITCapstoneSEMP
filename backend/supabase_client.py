@@ -9,6 +9,7 @@ import logging
 import os
 from typing import Optional, Dict, Any
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
 
 from .config_validation import (
@@ -134,6 +135,27 @@ class SupabaseClient:
         except Exception as e:
             logger.warning(f"Failed to check/create Supabase buckets: {e}")
 
+    def _write_local_media_copy(
+        self,
+        *,
+        relative_path: str,
+        file_data: bytes,
+    ) -> Optional[str]:
+        """Persist a media file under the backend /media mount and return its public path."""
+        normalized_relative_path = (relative_path or "").strip().replace("\\", "/").strip("/")
+        if not normalized_relative_path:
+            return None
+
+        try:
+            local_file_path = Path("media") / Path(*normalized_relative_path.split("/"))
+            local_file_path.parent.mkdir(parents=True, exist_ok=True)
+            local_file_path.write_bytes(file_data)
+            logger.info("Saved local media fallback: %s", local_file_path)
+            return f"/media/{normalized_relative_path}"
+        except Exception as exc:
+            logger.error("Failed to save local media fallback %s: %s", normalized_relative_path, exc)
+            return None
+
     def upload_audio(
         self,
         file_data: bytes,
@@ -190,9 +212,14 @@ class SupabaseClient:
         content_type: Optional[str] = None,
     ) -> Optional[str]:
         """Upload a Call Simulation recording using the recordings/{trainee}/{scenario}/... layout."""
+        local_url = self._write_local_media_copy(
+            relative_path=f"call-simulation-recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}",
+            file_data=file_data,
+        )
+
         if not self.is_available:
-            logger.warning("Supabase not available. Call Simulation audio file not uploaded to cloud.")
-            return None
+            logger.warning("Supabase not available. Using local fallback for Call Simulation audio.")
+            return local_url
 
         try:
             path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
@@ -206,7 +233,7 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload Call Simulation audio file: {e}")
-            return None
+            return local_url
 
     def upload_sim_floor_audio(
         self,
@@ -239,31 +266,17 @@ class SupabaseClient:
         content_type: Optional[str] = None,
     ) -> Optional[str]:
         """Upload trainer-managed Call Simulation audio assets such as member turns and call tones."""
-        import os
-        from pathlib import Path
-        
-        # Save locally first
-        local_dir = Path("media/practice-audio")
-        local_dir.mkdir(parents=True, exist_ok=True)
         scenario_segment = scenario_id or "draft"
-        local_path = local_dir / trainer_id / scenario_segment / asset_kind
-        local_path.mkdir(parents=True, exist_ok=True)
-        local_file_path = local_path / filename
-        
-        try:
-            with open(local_file_path, "wb") as f:
-                f.write(file_data)
-            logger.info(f"Call Simulation asset saved locally: {local_file_path}")
-        except Exception as e:
-            logger.error(f"Failed to save Call Simulation asset locally: {e}")
-            # Continue with cloud upload even if local save fails
-        
+        local_url = self._write_local_media_copy(
+            relative_path=f"practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}",
+            file_data=file_data,
+        )
+
         if not self.is_available:
-            logger.warning("Supabase not available. Call Simulation asset upload skipped.")
-            return f"/media/practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
+            logger.warning("Supabase not available. Using local fallback for Call Simulation asset upload.")
+            return local_url
 
         try:
-            scenario_segment = scenario_id or "draft"
             path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
             self.client.storage.from_(self.call_simulation_bucket_name).upload(
                 path=path,
@@ -275,8 +288,7 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload Call Simulation asset: {e}")
-            # Return local path if cloud upload fails
-            return f"/media/practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
+            return local_url
 
     def upload_document(
         self,
