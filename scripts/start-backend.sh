@@ -22,7 +22,6 @@ HOST="${HOST:-0.0.0.0}"
 
 echo "Starting backend in Supabase/Postgres mode on $HOST:$PORT ..."
 
-apt-get update && apt-get install -y espeak-ng && pip install -r requirements.txt
 
 exec uvicorn backend.main:app \
   --host "$HOST" \
