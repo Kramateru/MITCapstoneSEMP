@@ -8,7 +8,11 @@ APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BACKEND_DIR="$APP_ROOT/backend"
 
 export USE_LOCAL_SQLITE=0
-export PYTHONPATH="$APP_ROOT:$BACKEND_DIR:${PYTHONPATH:-}"
+if [ -z "${PYTHONPATH:-}" ]; then
+    export PYTHONPATH="$APP_ROOT:$BACKEND_DIR"
+else
+    export PYTHONPATH="$APP_ROOT:$BACKEND_DIR:$PYTHONPATH"
+fi
 
 cd "$APP_ROOT"
 
