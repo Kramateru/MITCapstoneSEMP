@@ -3,7 +3,7 @@ services:
   # --- Backend FastAPI API ---
   - type: web
     name: speech-bpo-backend
-    runtime: python
+    runtime: Docker
     plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: ./scripts/start-backend.sh
