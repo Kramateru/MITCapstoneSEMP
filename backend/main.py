@@ -14,8 +14,9 @@ def initialize_tts():
         engine = pyttsx3.init()
         return engine
     except Exception as e:
-        print(f"TTS initialization failed: {e}. Running without local TTS.")
+        print(f"TTS Error: {e}. Backend will run without local audio generation.")
         return None
+
 
 
     # Set BPO-friendly properties
