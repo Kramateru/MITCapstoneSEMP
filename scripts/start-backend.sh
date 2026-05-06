@@ -20,9 +20,13 @@ cd "$APP_ROOT"
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
 
+
+# Inside ./scripts/start-backend.sh
+python -m uvicorn main:app --host 0.0.0.0 --port 10000
+
 echo "Starting backend in Supabase/Postgres mode on $HOST:$PORT ..."
 
-exec python -m uvicorn main:app --host 0.0.0.0 --port 10000
+
 
 exec uvicorn backend.main:app \
   --host "$HOST" \
