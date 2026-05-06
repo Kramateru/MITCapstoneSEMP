@@ -65,8 +65,3 @@ Start the frontend:
 | Admin | `admin@stpetervelle.edu.ph` | `SPVAdmin2026` |
 | Trainer | `trainer@stpetervelle.edu.ph` | `SPVTrainer2026` |
 | Trainee | `mcureta@fatima.edu.ph` | `SPVTrainee2026` |
-
-## Supporting Docs
-
-- [QUICKSTART.md](QUICKSTART.md)
-- [INPUT_GUIDE.md](INPUT_GUIDE.md)

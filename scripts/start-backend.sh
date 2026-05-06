@@ -22,6 +22,7 @@ HOST="${HOST:-0.0.0.0}"
 
 echo "Starting backend in Supabase/Postgres mode on $HOST:$PORT ..."
 
+exec python -m uvicorn main:app --host 0.0.0.0 --port 10000
 
 exec uvicorn backend.main:app \
   --host "$HOST" \
