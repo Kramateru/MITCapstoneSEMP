@@ -3,25 +3,20 @@ import json
 import logging
 import os
 import sys
+import pyttsx3
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
-import pyttsx3
 
 def initialize_tts():
-    """
-    Initializes the pyttsx3 engine specifically for this BPO Platform.
-    Tries to use eSpeak-ng first, then falls back to Windows SAPI5.
-    """
     try:
-        # Attempts to use the driver you've been setting up
-        engine = pyttsx3.init(driverName='espeak')
-        print("Success: Using eSpeak-NG engine.")
+        engine = pyttsx3.init()
+        return engine
     except Exception as e:
-        print(f"eSpeak failed: {e}. Falling back to default Windows SAPI5.")
-        # Default initialization (no driverName needed)
-        engine = pyttsx3.init() 
+        print(f"TTS initialization failed: {e}. Running without local TTS.")
+        return None
+
 
     # Set BPO-friendly properties
     engine.setProperty('rate', 150)    # Speed of speech
