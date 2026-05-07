@@ -21,6 +21,17 @@ from .config_validation import (
 
 logger = logging.getLogger(__name__)
 
+MICROLEARNING_STORAGE_ROOT = "microlearning"
+MICROLEARNING_BUCKET_FILE_SIZE_LIMIT = 50 * 1024 * 1024
+MICROLEARNING_ALLOWED_MIME_TYPES = [
+    "audio/*",
+    "video/*",
+    "image/*",
+    "text/*",
+    "application/pdf",
+    "application/octet-stream",
+]
+
 try:
     from supabase import create_client, Client
     SUPABASE_AVAILABLE = True
@@ -105,35 +116,57 @@ class SupabaseClient:
         """Ensure required storage buckets exist in Supabase."""
         if not self.client:
             return
-            
-        buckets_to_check = [
-            self.bucket_name,
-            self.call_simulation_bucket_name,
-            self.microlearning_bucket_name,
-        ]
-        
+
+        bucket_options = {
+            self.bucket_name: {
+                "public": True,
+                "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
+                "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
+            },
+            self.call_simulation_bucket_name: {
+                "public": True,
+                "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
+                "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
+            },
+            self.microlearning_bucket_name: {
+                "public": True,
+                "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
+                "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
+            },
+        }
+
         try:
             # Get existing buckets
             existing_buckets = self.client.storage.list_buckets()
             existing_bucket_names = {bucket.name for bucket in existing_buckets}
-            
-            # Create missing buckets
-            for bucket_name in buckets_to_check:
+
+            # Create missing buckets and keep existing bucket rules aligned with the app.
+            for bucket_name, options in bucket_options.items():
                 if bucket_name not in existing_bucket_names:
                     try:
                         self.client.storage.create_bucket(
                             bucket_name,
-                            options={
-                                "public": True,
-                                "file_size_limit": 50 * 1024 * 1024,  # 50MB limit
-                                "allowed_mime_types": ["audio/*", "application/pdf", "text/*"]
-                            }
+                            options=options,
                         )
                         logger.info(f"Created Supabase storage bucket: {bucket_name}")
                     except Exception as e:
                         logger.warning(f"Failed to create bucket {bucket_name}: {e}")
+                    continue
+
+                try:
+                    self.client.storage.update_bucket(bucket_name, options)
+                except Exception as e:
+                    logger.warning(f"Failed to update bucket {bucket_name}: {e}")
         except Exception as e:
             logger.warning(f"Failed to check/create Supabase buckets: {e}")
+
+    def _normalize_microlearning_folder(self, folder: Optional[str]) -> str:
+        normalized_folder = (folder or "assets").strip().replace("\\", "/").strip("/")
+        if not normalized_folder:
+            normalized_folder = "assets"
+        if not normalized_folder.startswith(f"{MICROLEARNING_STORAGE_ROOT}/"):
+            normalized_folder = f"{MICROLEARNING_STORAGE_ROOT}/{normalized_folder}"
+        return normalized_folder
 
     def _write_local_media_copy(
         self,
@@ -401,7 +434,7 @@ class SupabaseClient:
                 filename = f"{module_id}/{timestamp}.{ext}"
 
             # Upload to microlearning-audio bucket
-            path = f"audio/{trainer_id}/{filename}"
+            path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{trainer_id}/{filename}"
             self.client.storage.from_(self.microlearning_bucket_name).upload(
                 path=path,
                 file=file_data,
@@ -442,7 +475,7 @@ class SupabaseClient:
                 timestamp = datetime.utcnow().isoformat().replace(":", "-")
                 filename = f"{module_id}/tts_{timestamp}.wav"
 
-            path = f"tts/{filename}"
+            path = f"{MICROLEARNING_STORAGE_ROOT}/tts/{filename}"
             self.client.storage.from_(self.microlearning_bucket_name).upload(
                 path=path,
                 file=audio_data,
@@ -473,7 +506,7 @@ class SupabaseClient:
             return None
 
         try:
-            sanitized_folder = (folder or "assets").strip("/ ") or "assets"
+            sanitized_folder = self._normalize_microlearning_folder(folder)
             path = f"{sanitized_folder}/{trainer_id}/{module_id}/{filename}"
             self.client.storage.from_(self.microlearning_bucket_name).upload(
                 path=path,
@@ -525,6 +558,29 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Failed to upload binary file: {e}")
             return None
+
+    def delete_storage_object(
+        self,
+        *,
+        bucket_name: str,
+        path: str,
+    ) -> bool:
+        """Delete a specific object from a Supabase storage bucket."""
+        if not self.is_available or not self.client:
+            return False
+
+        normalized_bucket = (bucket_name or "").strip()
+        normalized_path = (path or "").strip().lstrip("/")
+        if not normalized_bucket or not normalized_path:
+            return False
+
+        try:
+            self.client.storage.from_(normalized_bucket).remove([normalized_path])
+            logger.info(f"File deleted from {normalized_bucket}: {normalized_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete storage object {normalized_bucket}/{normalized_path}: {e}")
+            return False
 
     def delete_file(self, file_path: str) -> bool:
         """

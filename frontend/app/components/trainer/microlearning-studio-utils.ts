@@ -31,6 +31,9 @@ export interface MicrolearningModule {
   audio_tts_url?: string | null;
   audio_duration_seconds?: number | null;
   audio_language?: string | null;
+  media_requirement?: 'video' | 'audio' | 'none' | string | null;
+  media_ready?: boolean;
+  media_status?: string | null;
 }
 
 export interface Batch {

@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..models import (
     CallSimulationAssignment,
@@ -24,6 +24,7 @@ from ..models import (
     User,
     UserRole,
 )
+from .microlearning import filter_current_assignments
 
 SUPPORTED_ACTIVITY_CERTIFICATE_SOURCES = {
     "sim_floor_session",
@@ -577,10 +578,16 @@ def sync_trainee_completion_certificates(db: Session, trainee_id: str) -> list[C
 
     microlearning_assignments = (
         db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module),
+            selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
+        )
         .filter(MicrolearningAssignment.trainee_id == trainee_id)
         .order_by(MicrolearningAssignment.updated_at.desc())
         .all()
     )
+    microlearning_assignments = filter_current_assignments(microlearning_assignments)
     did_update_microlearning_assignments = False
     for assignment in microlearning_assignments:
         if not _microlearning_assignment_has_active_source(assignment):

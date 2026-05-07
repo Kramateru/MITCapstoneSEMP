@@ -37,8 +37,10 @@ from ..services.certificate_awards import (
     sync_trainee_completion_certificates,
 )
 from ..services.microlearning import (
+    assignment_is_current,
     ensure_module_exercises,
     evaluate_exercise_submission,
+    filter_current_assignments,
     reset_assignment_for_retake,
     refresh_assignment_progress,
     serialize_assignment_detail,
@@ -151,7 +153,7 @@ def _get_trainee_microlearning_assignment(
         .options(
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
-            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainee).joinedload(User.batches),
             joinedload(MicrolearningAssignment.trainer),
             joinedload(MicrolearningAssignment.batch),
             joinedload(MicrolearningAssignment.certificate),
@@ -162,6 +164,8 @@ def _get_trainee_microlearning_assignment(
         .first()
     )
     if not assignment:
+        raise HTTPException(status_code=404, detail="Microlearning assignment not found")
+    if not assignment_is_current(assignment):
         raise HTTPException(status_code=404, detail="Microlearning assignment not found")
     return assignment
 
@@ -254,7 +258,7 @@ def _build_trainee_microlearning_report(
         .options(
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
-            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainee).joinedload(User.batches),
             joinedload(MicrolearningAssignment.trainer),
             joinedload(MicrolearningAssignment.batch),
             joinedload(MicrolearningAssignment.certificate),
@@ -262,6 +266,7 @@ def _build_trainee_microlearning_report(
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
+    assignments = filter_current_assignments(assignments)
 
     did_update = False
     rows: list[dict[str, Any]] = []
@@ -359,17 +364,6 @@ def _build_trainee_microlearning_report(
         reverse=True,
     )
 
-    recent_certificates = (
-        db.query(CertificateRecord)
-        .filter(
-            CertificateRecord.trainee_id == trainee_id,
-            CertificateRecord.source_type == "microlearning_assignment",
-        )
-        .order_by(CertificateRecord.issued_at.desc())
-        .limit(8)
-        .all()
-    )
-
     return {
         "summary": {
             "assignment_count": len(rows),
@@ -386,12 +380,16 @@ def _build_trainee_microlearning_report(
         "topic_progress": topic_rows,
         "recent_certificates": [
             {
-                "certificate_id": certificate.id,
-                "certificate_no": certificate.certificate_no,
-                "achievement_title": certificate.unit_of_competency,
-                "issued_at": certificate.issued_at,
+                "certificate_id": row.get("certificate_id"),
+                "certificate_no": row.get("certificate_no"),
+                "achievement_title": row.get("module_title") or row.get("title"),
+                "issued_at": row.get("certificate_issued_at") or row.get("completed_at"),
             }
-            for certificate in recent_certificates
+            for row in sorted(
+                [row for row in rows if row.get("certificate_id")],
+                key=lambda entry: str(entry.get("certificate_issued_at") or entry.get("completed_at") or ""),
+                reverse=True,
+            )[:8]
         ],
         "assignments": rows,
     }
@@ -1245,10 +1243,13 @@ async def get_microlearning_modules(
         .options(
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
+            joinedload(MicrolearningAssignment.trainee).joinedload(User.batches),
+            joinedload(MicrolearningAssignment.batch),
         )
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
+    assignments = filter_current_assignments(assignments)
     modules: list[MicrolearningModule] = []
     seen_module_ids: set[str] = set()
     for assignment in assignments:
@@ -1280,7 +1281,7 @@ async def list_microlearning_assignments(
         .options(
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.assessment_method),
             joinedload(MicrolearningAssignment.module).joinedload(MicrolearningModule.topic_category),
-            joinedload(MicrolearningAssignment.trainee),
+            joinedload(MicrolearningAssignment.trainee).joinedload(User.batches),
             joinedload(MicrolearningAssignment.trainer),
             joinedload(MicrolearningAssignment.batch),
             joinedload(MicrolearningAssignment.certificate),
@@ -1288,6 +1289,7 @@ async def list_microlearning_assignments(
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
+    assignments = filter_current_assignments(assignments)
 
     did_update = False
     serialized = []
@@ -1526,21 +1528,24 @@ async def trainee_stats(
         or 0
     )
 
-    microlearning_assignments, certified_microlearning_assignments = (
+    microlearning_assignment_rows = (
         _active_trainee_microlearning_assignments_query(
             db,
             trainee_id=current_user.id,
         )
-        .with_entities(
-            func.count(MicrolearningAssignment.id),
-            func.sum(
-                case(
-                    (MicrolearningAssignment.certificate_id.isnot(None), 1),
-                    else_=0,
-                )
-            ),
+        .options(
+            joinedload(MicrolearningAssignment.module),
+            joinedload(MicrolearningAssignment.batch),
+            joinedload(MicrolearningAssignment.trainee).joinedload(User.batches),
         )
-        .one()
+        .all()
+    )
+    current_microlearning_assignments = filter_current_assignments(microlearning_assignment_rows)
+    microlearning_assignments = len(current_microlearning_assignments)
+    certified_microlearning_assignments = sum(
+        1
+        for assignment in current_microlearning_assignments
+        if assignment.certificate_id is not None
     )
 
     return {

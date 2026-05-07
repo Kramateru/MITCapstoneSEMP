@@ -34,6 +34,7 @@ from ..schemas import SuccessResponse
 from ..supabase_client import get_supabase_client
 from ..services.audio_transcription import speech_to_text_service
 from ..services.audio_tts import text_to_speech_service
+from ..services.microlearning import assignment_is_current
 
 router = APIRouter(prefix="/api/microlearning", tags=["microlearning"])
 logger = logging.getLogger(__name__)
@@ -167,13 +168,13 @@ def _get_accessible_microlearning_module(
         raise HTTPException(status_code=404, detail="Module not found")
 
     if current_user.role == UserRole.TRAINEE:
-        assignment = db.query(MicrolearningAssignment).filter(
+        assignments = db.query(MicrolearningAssignment).filter(
             and_(
                 MicrolearningAssignment.module_id == module_id,
                 MicrolearningAssignment.trainee_id == current_user.id,
             )
-        ).first()
-        if not assignment:
+        ).all()
+        if not any(assignment_is_current(assignment) for assignment in assignments):
             raise HTTPException(status_code=403, detail="Not assigned to this module")
         return module
 
@@ -185,6 +186,7 @@ def _get_accessible_microlearning_module(
 
 def _resolve_module_asset_metadata(module: MicrolearningModule) -> dict[str, Any]:
     content_data = dict(module.content_data or {})
+    asset_record_id = str(content_data.get("asset_record_id") or "").strip() or None
     asset_url = ""
     for candidate in (
         module.content_url,
@@ -196,6 +198,8 @@ def _resolve_module_asset_metadata(module: MicrolearningModule) -> dict[str, Any
         if normalized:
             asset_url = normalized
             break
+    if not asset_url and asset_record_id:
+        asset_url = f"/api/microlearning/assets/{asset_record_id}/stream"
 
     storage_path = (
         str(content_data.get("asset_storage_path") or "").strip()
@@ -206,12 +210,18 @@ def _resolve_module_asset_metadata(module: MicrolearningModule) -> dict[str, Any
         or str(content_data.get("audio_bucket") or "").strip()
     )
 
-    if not storage_path and asset_url:
-        inferred_bucket, inferred_path = _resolve_supabase_public_asset(asset_url)
-        if inferred_path:
-            storage_path = inferred_path
-        if inferred_bucket and not bucket_name:
-            bucket_name = inferred_bucket
+    inferred_bucket, inferred_path = _resolve_supabase_public_asset(asset_url) if asset_url else (None, None)
+    if inferred_path and (
+        not storage_path
+        or storage_path != inferred_path
+        or not storage_path.startswith("microlearning/")
+    ):
+        storage_path = inferred_path
+    if inferred_bucket and (
+        not bucket_name
+        or (storage_path == inferred_path and bucket_name != inferred_bucket)
+    ):
+        bucket_name = inferred_bucket
 
     if storage_path and not bucket_name:
         bucket_name = get_supabase_client().microlearning_bucket_name
@@ -221,7 +231,6 @@ def _resolve_module_asset_metadata(module: MicrolearningModule) -> dict[str, Any
         or str(content_data.get("audio_content_type") or "").strip()
         or None
     )
-    asset_record_id = str(content_data.get("asset_record_id") or "").strip() or None
     signed_url_required = bool(storage_path) and bool(content_data.get("signed_url_required", True))
 
     return {
@@ -1056,13 +1065,13 @@ async def stream_module_audio(
 
     # Check access
     if current_user.role == UserRole.TRAINEE:
-        assignment = db.query(MicrolearningAssignment).filter(
+        assignments = db.query(MicrolearningAssignment).filter(
             and_(
                 MicrolearningAssignment.module_id == module_id,
                 MicrolearningAssignment.trainee_id == current_user.id
             )
-        ).first()
-        if not assignment:
+        ).all()
+        if not any(assignment_is_current(assignment) for assignment in assignments):
             raise HTTPException(status_code=403, detail="Not assigned to this module")
 
     # Get audio URL

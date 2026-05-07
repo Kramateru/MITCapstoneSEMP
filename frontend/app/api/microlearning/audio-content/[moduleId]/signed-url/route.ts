@@ -27,7 +27,10 @@ export async function GET(request: Request, context: RouteContext) {
 
     const { moduleId } = await context.params
     const audioContent = await getAuthorizedAudioContent(authorization, sessionUser, moduleId)
-    const signedUrl = await createAudioModuleSignedUrl(audioContent.storage_path)
+    const signedUrl = await createAudioModuleSignedUrl(
+      audioContent.storage_path,
+      audioContent.bucket_name || undefined,
+    )
     const fallbackMetadata =
       !(audioContent.transcript_text?.trim() || audioContent.transcript?.trim()) || !audioContent.duration_seconds
         ? await getAuthorizedAudioPlaybackMetadata(authorization, moduleId)
@@ -47,6 +50,7 @@ export async function GET(request: Request, context: RouteContext) {
       transcript_text: transcriptText,
       summary_text: summaryText,
       storage_path: audioContent.storage_path,
+      bucket_name: audioContent.bucket_name || null,
       mime_type: audioContent.mime_type,
       duration_seconds: audioContent.duration_seconds ?? fallbackMetadata?.durationSeconds ?? null,
       captions_url: fallbackMetadata?.captionsUrl || null,

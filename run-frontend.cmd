@@ -17,6 +17,7 @@ if not defined BACKEND_URL set "BACKEND_URL=http://127.0.0.1:8000"
 if not defined NODE_OPTIONS set "NODE_OPTIONS=--no-deprecation"
 if not defined SKIP_FRONTEND_BUILD set "SKIP_FRONTEND_BUILD=0"
 if not defined NEXT_TELEMETRY_DISABLED set "NEXT_TELEMETRY_DISABLED=1"
+if not defined WAIT_FOR_BACKEND set "WAIT_FOR_BACKEND=1"
 
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%SUPABASE_URL%"
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined REACT_APP_SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%REACT_APP_SUPABASE_URL%"
@@ -48,6 +49,12 @@ if not exist "node_modules" (
   echo Run "cd frontend" then "npm install" from PowerShell before starting the frontend.
   exit /b 1
 )
+
+if /I not "%WAIT_FOR_BACKEND%"=="0" (
+  call :wait_for_backend "%BACKEND_URL%"
+  if errorlevel 1 exit /b 1
+)
+
 if /I not "%SKIP_FRONTEND_BUILD%"=="1" (
   if exist ".next" (
     echo Clearing stale frontend build artifacts...
@@ -70,6 +77,29 @@ if /I "%SKIP_FRONTEND_BUILD%"=="1" if /I not "%FRONTEND_BUILD_READY%"=="1" (
 echo Starting frontend in production mode against %BACKEND_URL%...
 call npm.cmd run start -- --hostname %FRONTEND_HOST% --port %FRONTEND_PORT%
 exit /b %errorlevel%
+
+:wait_for_backend
+if "%~1"=="" exit /b 0
+echo Waiting for backend health at %~1/health...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$baseUrl = '%~1'.TrimEnd('/');" ^
+  "$healthUrl = $baseUrl + '/health';" ^
+  "$deadline = (Get-Date).AddSeconds(60);" ^
+  "while ((Get-Date) -lt $deadline) {" ^
+  "  try {" ^
+  "    $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 5;" ^
+  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 }" ^
+  "  } catch {}" ^
+  "  Start-Sleep -Milliseconds 750;" ^
+  "}" ^
+  "Write-Host 'Backend health check timed out.';" ^
+  "exit 1"
+if errorlevel 1 (
+  echo Backend did not become reachable at %~1/health.
+  echo Start the backend first or update BACKEND_URL / NEXT_PUBLIC_BACKEND_URL.
+  exit /b 1
+)
+exit /b 0
 
 :derive_ws_url
 set "WS_SOURCE=%~1"

@@ -740,7 +740,10 @@ function buildFallbackReport(input: DialerFeedbackInput): DialerFeedbackReport {
   if ((input.softSkillSignals.rateOfSpeech || 0) > 175) {
     pacingNotes.push('Rate of speech is fast. Reduce pace to improve control and pronunciation clarity.')
   }
-  if (input.ahtSeconds > Number(input.targetKpis.aht_seconds || 240)) {
+  const targetAhtSeconds = Number(
+    input.targetKpis.target_aht_seconds ?? input.targetKpis.aht_seconds ?? 240,
+  )
+  if (input.ahtSeconds > targetAhtSeconds) {
     pacingNotes.push('Average handle time exceeded the scenario target.')
   }
 

@@ -5,6 +5,7 @@ import re
 import uuid
 from datetime import datetime
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -48,6 +49,207 @@ def _format_batch_label(batch: Any) -> Optional[str]:
     if wave_number is not None:
         return f"Wave {wave_number}"
     return None
+
+
+_SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
+_DIRECT_AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm")
+_DIRECT_VIDEO_EXTENSIONS = (".mp4", ".webm", ".ogg", ".mov", ".m4v")
+
+
+def _normalize_text_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _normalize_media_url(value: Any) -> str:
+    return _normalize_text_value(value).split("#", 1)[0]
+
+
+def _module_content_payload(module: Optional[MicrolearningModule]) -> dict[str, Any]:
+    return dict(getattr(module, "content_data", None) or {})
+
+
+def _has_known_media_extension(url: str, extensions: tuple[str, ...]) -> bool:
+    normalized_url = _normalize_media_url(url)
+    if not normalized_url:
+        return False
+
+    try:
+        path = urlparse(normalized_url).path
+    except Exception:
+        path = normalized_url
+
+    return path.lower().endswith(extensions)
+
+
+def _looks_like_youtube_url(url: str) -> bool:
+    normalized_url = _normalize_media_url(url).lower()
+    if not normalized_url:
+        return False
+
+    return any(
+        marker in normalized_url
+        for marker in ("youtu.be/", "youtube.com/watch", "youtube.com/embed/", "youtube.com/shorts/")
+    )
+
+
+def _looks_like_supabase_storage_url(url: str) -> bool:
+    return _SUPABASE_PUBLIC_OBJECT_MARKER in _normalize_media_url(url)
+
+
+def _module_asset_url(module: Optional[MicrolearningModule]) -> str:
+    content_data = _module_content_payload(module)
+    for candidate in (
+        getattr(module, "content_url", None),
+        getattr(module, "audio_url", None),
+        content_data.get("asset_url"),
+        content_data.get("audio_url"),
+    ):
+        normalized = _normalize_media_url(candidate)
+        if normalized:
+            return normalized
+    return ""
+
+
+def get_module_media_state(module: Optional[MicrolearningModule]) -> dict[str, Any]:
+    module_type = normalize_module_type(getattr(module, "type", None))
+    content_data = _module_content_payload(module)
+    asset_url = _module_asset_url(module)
+    asset_storage_path = _normalize_text_value(content_data.get("asset_storage_path"))
+    audio_storage_path = _normalize_text_value(content_data.get("audio_storage_path"))
+    audio_content_id = _normalize_text_value(content_data.get("audio_content_id"))
+
+    if module_type == "video":
+        is_ready = bool(
+            asset_storage_path
+            or _looks_like_youtube_url(asset_url)
+            or _looks_like_supabase_storage_url(asset_url)
+            or _has_known_media_extension(asset_url, _DIRECT_VIDEO_EXTENSIONS)
+        )
+        return {
+            "media_requirement": "video",
+            "media_ready": is_ready,
+            "media_status": (
+                "Ready for assignment and trainee playback."
+                if is_ready
+                else "Upload or link a playable video before assigning this module."
+            ),
+            "asset_url": asset_url or None,
+        }
+
+    if module_type == "audio":
+        is_ready = bool(
+            audio_storage_path
+            or audio_content_id
+            or _looks_like_supabase_storage_url(asset_url)
+            or _has_known_media_extension(asset_url, _DIRECT_AUDIO_EXTENSIONS)
+        )
+        return {
+            "media_requirement": "audio",
+            "media_ready": is_ready,
+            "media_status": (
+                "Ready for assignment and trainee playback."
+                if is_ready
+                else "Upload the lesson audio before assigning this module."
+            ),
+            "asset_url": asset_url or None,
+        }
+
+    return {
+        "media_requirement": "none",
+        "media_ready": True,
+        "media_status": "No required media gate for this module type.",
+        "asset_url": asset_url or None,
+    }
+
+
+def module_requires_media(module: Optional[MicrolearningModule]) -> bool:
+    return get_module_media_state(module).get("media_requirement") in {"video", "audio"}
+
+
+def module_has_required_media(module: Optional[MicrolearningModule]) -> bool:
+    media_state = get_module_media_state(module)
+    return bool(media_state.get("media_ready")) or media_state.get("media_requirement") == "none"
+
+
+def assignment_is_current(assignment: Optional[MicrolearningAssignment]) -> bool:
+    if not assignment:
+        return False
+
+    module = getattr(assignment, "module", None)
+    if not module or not getattr(module, "is_active", False):
+        return False
+
+    assigned_by = _normalize_text_value(getattr(assignment, "assigned_by", None))
+    module_owner = _normalize_text_value(getattr(module, "created_by", None))
+    if assigned_by and module_owner and assigned_by != module_owner:
+        return False
+
+    batch = getattr(assignment, "batch", None)
+    batch_owner = _normalize_text_value(getattr(batch, "created_by", None)) if batch else ""
+    if batch and batch_owner and assigned_by and batch_owner != assigned_by:
+        return False
+    if batch and not bool(getattr(batch, "is_active", True)):
+        return False
+
+    trainee = getattr(assignment, "trainee", None)
+    if trainee and not bool(getattr(trainee, "is_active", True)):
+        return False
+    if batch and trainee:
+        active_trainee_batch_ids = {
+            _normalize_text_value(getattr(trainee_batch, "id", None))
+            for trainee_batch in (getattr(trainee, "batches", None) or [])
+            if bool(getattr(trainee_batch, "is_active", True))
+        }
+        if _normalize_text_value(getattr(batch, "id", None)) not in active_trainee_batch_ids:
+            return False
+
+    if not module_has_required_media(module):
+        return False
+
+    return True
+
+
+def _assignment_recency_key(assignment: Optional[MicrolearningAssignment]) -> tuple[datetime, datetime, datetime, datetime, str]:
+    if not assignment:
+        minimum = datetime.min
+        return minimum, minimum, minimum, minimum, ""
+
+    minimum = datetime.min
+    return (
+        getattr(assignment, "assigned_at", None) or minimum,
+        getattr(assignment, "updated_at", None) or minimum,
+        getattr(assignment, "completed_at", None) or minimum,
+        getattr(assignment, "started_at", None) or minimum,
+        str(getattr(assignment, "id", None) or ""),
+    )
+
+
+def filter_current_assignments(
+    assignments: list[MicrolearningAssignment],
+) -> list[MicrolearningAssignment]:
+    """Keep only visible trainer-owned assignments and collapse stale duplicates."""
+    visible_assignments = sorted(
+        [assignment for assignment in assignments if assignment_is_current(assignment)],
+        key=_assignment_recency_key,
+        reverse=True,
+    )
+    latest_by_scope: set[tuple[str, str, str]] = set()
+    filtered: list[MicrolearningAssignment] = []
+
+    for assignment in visible_assignments:
+        scope_key = (
+            _normalize_text_value(getattr(assignment, "module_id", None)),
+            _normalize_text_value(getattr(assignment, "trainee_id", None)),
+            _normalize_text_value(getattr(assignment, "assigned_by", None)),
+        )
+        if not all(scope_key):
+            continue
+        if scope_key in latest_by_scope:
+            continue
+        latest_by_scope.add(scope_key)
+        filtered.append(assignment)
+
+    return filtered
 
 
 _SPECIAL_RESPONSE_KEYS = {"__meta__"}
@@ -944,6 +1146,7 @@ def serialize_microlearning_module(
 ) -> dict[str, Any]:
     assessment_method = getattr(module, "assessment_method", None)
     topic_category = getattr(module, "topic_category", None)
+    media_state = get_module_media_state(module)
     return {
         "id": module.id,
         "title": module.title,
@@ -973,6 +1176,9 @@ def serialize_microlearning_module(
         "exercise_count": len(module.exercises or []),
         "exercises": module.exercises or [],
         "assignment_count": int(assignment_count or 0),
+        "media_requirement": media_state.get("media_requirement"),
+        "media_ready": bool(media_state.get("media_ready")),
+        "media_status": media_state.get("media_status"),
         "created_at": module.created_at,
     }
 
@@ -1091,6 +1297,7 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
 
 def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str, Any]:
     module = assignment.module
+    media_state = get_module_media_state(module)
     exercises = []
     responses = dict(assignment.responses or {})
 
@@ -1139,6 +1346,9 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
             "captions_url": (
                 ((module.content_data or {}).get("captions_url")) if module else None
             ),
+            "media_requirement": media_state.get("media_requirement"),
+            "media_ready": bool(media_state.get("media_ready")),
+            "media_status": media_state.get("media_status"),
         },
         "exercises": exercises,
     }

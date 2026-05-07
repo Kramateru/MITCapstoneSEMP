@@ -35,6 +35,7 @@ import { Textarea } from '../ui/textarea';
 type FeedbackCategory = 'pronunciation' | 'fluency' | 'grammar' | 'empathy' | 'clarity';
 type ModuleDifficulty = 'basic' | 'intermediate' | 'advanced';
 type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio';
+type MediaRequirement = 'video' | 'audio' | 'none';
 type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'certified';
 type FlashcardSide = 'front' | 'back';
 type ModuleQueueFilter = 'all' | 'audio' | 'pending' | 'in_progress' | 'completed' | 'certified';
@@ -125,6 +126,9 @@ interface AssignmentDetailResponse {
     audio_duration_seconds?: number | null;
     audio_language?: string | null;
     captions_url?: string | null;
+    media_requirement?: MediaRequirement | string | null;
+    media_ready?: boolean;
+    media_status?: string | null;
   };
   exercises: AssignmentExercise[];
 }
@@ -520,6 +524,109 @@ function getInputModeLabel(inputMode?: string | null) {
   return 'Typed Response';
 }
 
+interface ModuleMediaGateState {
+  mediaRequirement: MediaRequirement;
+  mediaReady: boolean;
+  mediaStatus: string;
+  rawAssetUrl: string;
+  assetUrl: string;
+  assetKind: 'none' | 'file' | 'youtube' | 'external';
+  youtubeEmbedUrl: string | null;
+  hasPlayableAudio: boolean;
+  hasPlayableVideo: boolean;
+  assessmentUnavailable: boolean;
+  videoReviewLocked: boolean;
+  isAssessmentLocked: boolean;
+  lockMessage: string;
+}
+
+function normalizeMediaText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function getModuleMediaGateState(
+  moduleDetail: AssignmentDetailResponse['module'],
+  assignment?: AssignmentSummary | null,
+  storedAssetPlaybackUrl?: string,
+  videoReviewed?: boolean,
+): ModuleMediaGateState {
+  const content = moduleDetail.content_data || {};
+  const rawAssetUrl = normalizeMediaText(
+    moduleDetail.audio_url ||
+      moduleDetail.content_url ||
+      content.audio_url ||
+      content.asset_url ||
+      assignment?.content_url,
+  );
+  const mediaRequirement =
+    moduleDetail.media_requirement === 'video' || moduleDetail.media_requirement === 'audio'
+      ? moduleDetail.media_requirement
+      : 'none';
+  const mediaReady = moduleDetail.media_ready !== false;
+  const mediaStatus = normalizeMediaText(moduleDetail.media_status);
+  const assetKind = getVideoAssetKind(rawAssetUrl);
+  const youtubeEmbedUrl = getYouTubeEmbedUrl(rawAssetUrl);
+  const hasProtectedAssetPath = normalizeMediaText(content.asset_storage_path).length > 0;
+  const useProtectedSupabaseAsset =
+    moduleDetail.module_type === 'infographic'
+      ? Boolean(rawAssetUrl) && (hasProtectedAssetPath || isSupabaseStoragePublicUrl(rawAssetUrl))
+      : moduleDetail.module_type === 'video'
+        ? assetKind === 'file' && (hasProtectedAssetPath || isSupabaseStoragePublicUrl(rawAssetUrl))
+        : false;
+  const assetUrl =
+    useProtectedSupabaseAsset && normalizeMediaText(storedAssetPlaybackUrl)
+      ? normalizeMediaText(storedAssetPlaybackUrl)
+      : rawAssetUrl;
+  const hasPlayableVideo = assetKind === 'file' || assetKind === 'youtube';
+  const hasPlayableAudio = Boolean(
+    normalizeMediaText(moduleDetail.audio_url) ||
+      normalizeMediaText(content.audio_url) ||
+      normalizeMediaText(content.audio_storage_path) ||
+      normalizeMediaText(content.audio_content_id) ||
+      (rawAssetUrl && (isDirectAudioFile(rawAssetUrl) || isSupabaseStoragePublicUrl(rawAssetUrl))),
+  );
+  const assessmentUnavailable =
+    mediaRequirement === 'video'
+      ? !mediaReady || !hasPlayableVideo
+      : mediaRequirement === 'audio'
+        ? !mediaReady || !hasPlayableAudio
+        : false;
+  const videoReviewLocked =
+    mediaRequirement === 'video'
+      && !assessmentUnavailable
+      && hasPlayableVideo
+      && !videoReviewed;
+  const fallbackUnavailableMessage =
+    mediaRequirement === 'audio'
+      ? 'This module needs a working uploaded audio file before the assessment can be opened.'
+      : mediaRequirement === 'video'
+        ? 'This module needs a working uploaded video before the assessment can be opened.'
+        : '';
+  const lockMessage = assessmentUnavailable
+    ? mediaStatus || fallbackUnavailableMessage
+    : videoReviewLocked
+      ? assetKind === 'file'
+        ? 'Complete the video first to unlock this practice prompt.'
+        : 'Review the lesson reference and confirm it first to unlock this practice prompt.'
+      : '';
+
+  return {
+    mediaRequirement,
+    mediaReady,
+    mediaStatus,
+    rawAssetUrl,
+    assetUrl,
+    assetKind,
+    youtubeEmbedUrl,
+    hasPlayableAudio,
+    hasPlayableVideo,
+    assessmentUnavailable,
+    videoReviewLocked,
+    isAssessmentLocked: assessmentUnavailable || videoReviewLocked,
+    lockMessage,
+  };
+}
+
 async function readApiPayload<T>(response: Response): Promise<T | string | null> {
   const contentType = response.headers.get('content-type') || '';
 
@@ -551,6 +658,7 @@ function getApiErrorMessage(payload: unknown, fallback: string) {
 interface AudioPlaybackCardProps {
   moduleId: string;
   audioUrl?: string | null;
+  hasPrimaryAudio?: boolean;
   captionsUrl?: string | null;
   transcriptText?: string | null;
   summaryText?: string | null;
@@ -598,6 +706,7 @@ interface AuthorizedModuleAssetPlaybackPayload {
 function AudioPlaybackCard({
   moduleId,
   audioUrl,
+  hasPrimaryAudio,
   captionsUrl,
   transcriptText,
   summaryText,
@@ -891,6 +1000,15 @@ function AudioPlaybackCard({
   }, [audioUrl, cancelBrowserSpeech, captionsUrl, moduleId, revokeTtsPlaybackUrl, summaryText, transcriptText, ttsUrl]);
 
   useEffect(() => {
+    if (!(hasPrimaryAudio ?? Boolean(audioUrl))) {
+      return;
+    }
+
+    void hydrateModuleAudioMetadata().catch(() => undefined);
+    void ensureProtectedPlaybackSource('primary').catch(() => undefined);
+  }, [audioUrl, ensureProtectedPlaybackSource, hasPrimaryAudio, hydrateModuleAudioMetadata]);
+
+  useEffect(() => {
     const primaryAudio = primaryAudioRef.current;
     const ttsAudio = ttsAudioRef.current;
 
@@ -909,7 +1027,8 @@ function AudioPlaybackCard({
   const transcriptBody =
     resolvedTranscriptText || captionCues.map((cue) => cue.text).join('\n').trim() || '';
   const lessonSummary = resolvedSummaryText || '';
-  const shouldShowBrowserTtsFallback = !audioUrl && !ttsUrl && Boolean(transcriptBody);
+  const canPlayPrimaryAudio = hasPrimaryAudio ?? Boolean(audioUrl);
+  const shouldShowBrowserTtsFallback = false;
   const resolvedCaptionCues = captionCues.length
     ? captionCues
     : buildSimulatedCaptionCues(transcriptBody, resolvedDuration || durationSeconds);
@@ -928,13 +1047,41 @@ function AudioPlaybackCard({
     ? 'Fetching signed lesson audio URL...'
     : isPrimaryPlaying
       ? 'Now Playing'
-      : audioUrl
-        ? 'Ready to Play'
-        : 'Audio unavailable';
+        : currentTime > 0
+          ? 'Paused'
+        : canPlayPrimaryAudio || primaryPlaybackUrl
+          ? 'Ready to Play'
+          : 'Audio unavailable';
+
+  async function restartPrimaryPlayback() {
+    const target = primaryAudioRef.current;
+    if (!target || loadingMode === 'primary' || !canPlayPrimaryAudio) {
+      return;
+    }
+
+    try {
+      await hydrateModuleAudioMetadata().catch(() => undefined);
+      await ensureProtectedPlaybackSource('primary');
+      target.currentTime = 0;
+      setCurrentTime(0);
+      await target.play();
+    } catch {
+      try {
+        await ensureProtectedPlaybackSource('primary', true);
+        target.currentTime = 0;
+        setCurrentTime(0);
+        await target.play();
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : 'Unable to replay this audio on the current device.',
+        );
+      }
+    }
+  }
 
   async function togglePrimaryPlayback() {
     const target = primaryAudioRef.current;
-    if (!target || loadingMode === 'primary' || !audioUrl) {
+    if (!target || loadingMode === 'primary' || !canPlayPrimaryAudio) {
       return;
     }
 
@@ -1054,7 +1201,7 @@ function AudioPlaybackCard({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {audioUrl ? (
+          {canPlayPrimaryAudio ? (
             <Button type="button" size="sm" disabled={loadingMode === 'primary'} onClick={() => void togglePrimaryPlayback()}>
               {loadingMode === 'primary' ? (
                 <CircleDashed className="mr-2 size-4 animate-spin" />
@@ -1063,7 +1210,19 @@ function AudioPlaybackCard({
               ) : (
                 <Play className="mr-2 size-4" />
               )}
-              {loadingMode === 'primary' ? 'Loading Audio...' : isPrimaryPlaying ? 'Pause Audio' : 'Play Audio'}
+              {loadingMode === 'primary'
+                ? 'Loading Audio...'
+                : isPrimaryPlaying
+                  ? 'Pause Audio'
+                  : currentTime > 0
+                    ? 'Resume Audio'
+                    : 'Play Audio'}
+            </Button>
+          ) : null}
+          {canPlayPrimaryAudio ? (
+            <Button type="button" size="sm" variant="outline" disabled={loadingMode === 'primary'} onClick={() => void restartPrimaryPlayback()}>
+              <RotateCcw className="mr-2 size-4" />
+              Replay Audio
             </Button>
           ) : null}
           {ttsUrl || shouldShowBrowserTtsFallback ? (
@@ -1109,7 +1268,7 @@ function AudioPlaybackCard({
         </div>
       ) : null}
 
-      {audioUrl ? (
+      {canPlayPrimaryAudio ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
           <div className="flex items-start gap-3">
             <div
@@ -1159,7 +1318,8 @@ function AudioPlaybackCard({
       <audio
         ref={primaryAudioRef}
         preload="metadata"
-        className="hidden"
+        controls
+        className="mt-4 w-full"
         src={primaryPlaybackUrl || undefined}
         onLoadedMetadata={(event) => {
           const nextDuration = Number(event.currentTarget.duration);
@@ -1229,6 +1389,155 @@ function AudioPlaybackCard({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+interface VideoPlaybackCardProps {
+  src: string;
+  title: string;
+  description: string;
+  onCompleted?: () => void;
+}
+
+function VideoPlaybackCard({
+  src,
+  title,
+  description,
+  onCompleted,
+}: VideoPlaybackCardProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  useEffect(() => {
+    setIsPlaying(false);
+    setCurrentTime(0);
+    setDuration(0);
+
+    if (videoRef.current) {
+      videoRef.current.pause();
+      videoRef.current.currentTime = 0;
+      videoRef.current.load();
+    }
+  }, [src]);
+
+  async function togglePlayback() {
+    const target = videoRef.current;
+    if (!target) {
+      return;
+    }
+
+    if (!target.paused) {
+      target.pause();
+      return;
+    }
+
+    try {
+      await target.play();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Unable to start video playback on this device.',
+      );
+    }
+  }
+
+  async function replayVideo() {
+    const target = videoRef.current;
+    if (!target) {
+      return;
+    }
+
+    target.currentTime = 0;
+    setCurrentTime(0);
+
+    try {
+      await target.play();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : 'Unable to replay this video on the current device.',
+      );
+    }
+  }
+
+  function seekTo(nextTime: number) {
+    const target = videoRef.current;
+    if (!target) {
+      return;
+    }
+
+    target.currentTime = nextTime;
+    setCurrentTime(nextTime);
+  }
+
+  const safeDuration = Number.isFinite(duration) && duration > 0 ? duration : 0;
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 bg-white p-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-slate-800">{title}</p>
+          <p className="mt-1 text-sm text-slate-600">{description}</p>
+        </div>
+        <Badge variant="outline" className="w-fit">
+          {isPlaying ? 'Playing' : currentTime > 0 ? 'Paused' : 'Ready'}
+        </Badge>
+      </div>
+
+      <video
+        ref={videoRef}
+        className="mt-4 w-full rounded-lg border bg-slate-950"
+        src={src}
+        preload="metadata"
+        onLoadedMetadata={(event) => {
+          const nextDuration = Number(event.currentTarget.duration);
+          setDuration(Number.isFinite(nextDuration) && nextDuration > 0 ? nextDuration : 0);
+        }}
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
+        onEnded={() => {
+          setIsPlaying(false);
+          setCurrentTime(safeDuration);
+          onCompleted?.();
+        }}
+        onTimeUpdate={(event) => setCurrentTime(event.currentTarget.currentTime)}
+      />
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button type="button" size="sm" onClick={() => void togglePlayback()}>
+          {isPlaying ? (
+            <Pause className="mr-2 size-4" />
+          ) : (
+            <Play className="mr-2 size-4" />
+          )}
+          {isPlaying ? 'Pause Video' : currentTime > 0 ? 'Resume Video' : 'Play Video'}
+        </Button>
+        <Button type="button" size="sm" variant="outline" onClick={() => void replayVideo()}>
+          <RotateCcw className="mr-2 size-4" />
+          Replay Video
+        </Button>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <input
+          type="range"
+          min={0}
+          max={safeDuration || 0}
+          step="0.1"
+          value={Math.min(currentTime, safeDuration || 0)}
+          onChange={(event) => seekTo(Number(event.target.value))}
+          disabled={!safeDuration}
+          className="w-full accent-sky-600"
+        />
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <span>{formatTimestamp(currentTime)}</span>
+          <span>{formatTimestamp(safeDuration)}</span>
+        </div>
+        <p className="text-xs text-slate-500">
+          Use the slider to seek to any timestamp before replaying or continuing the lesson.
+        </p>
+      </div>
     </div>
   );
 }
@@ -2061,6 +2370,14 @@ export default function MicrolearningHub() {
       toast.error('Start the module first before submitting the assessment.');
       return;
     }
+    if (activeModuleGateState?.assessmentUnavailable) {
+      toast.error(activeModuleGateState.lockMessage);
+      return;
+    }
+    if (activeModuleGateState?.videoReviewLocked && !exercise.attempt) {
+      toast.error(activeModuleGateState.lockMessage);
+      return;
+    }
 
     const response = exerciseResponses[exercise.id] || {
       responseText: '',
@@ -2120,6 +2437,15 @@ export default function MicrolearningHub() {
   const activeAssignment = assignments.find((assignment) => assignment.id === activeAssignmentId) || assignmentDetail?.assignment || null;
   const hasDetailForActiveAssignment = assignmentDetail?.assignment?.id === activeAssignmentId;
   const moduleStarted = hasStartedAssignment(activeAssignment);
+  const activeModuleGateState =
+    assignmentDetail && activeAssignment
+      ? getModuleMediaGateState(
+          assignmentDetail.module,
+          activeAssignment,
+          moduleAssetPlaybackUrls[assignmentDetail.module.id] || '',
+          Boolean(videoCompleted[activeAssignment.id] || activeAssignment.completed_exercises),
+        )
+      : null;
   const notStartedAssignments = assignments.filter((assignment) => assignment.status === 'assigned').length;
   const completedAssignments = assignments.filter((assignment) => ['completed', 'certified'].includes(assignment.status)).length;
   const certifiedAssignments = assignments.filter((assignment) => assignment.status === 'certified' || assignment.certificate_id).length;
@@ -2167,32 +2493,15 @@ export default function MicrolearningHub() {
   }, [activeAssignmentId, filteredAssignments, loadAssignmentDetail]);
 
   function renderModuleContent() {
-    if (!assignmentDetail || !activeAssignment) {
+    if (!assignmentDetail || !activeAssignment || !activeModuleGateState) {
       return null;
     }
 
     const moduleDetail = assignmentDetail.module;
     const content = moduleDetail.content_data || {};
     const moduleType = moduleDetail.module_type;
-    const rawAssetUrl =
-      moduleDetail.audio_url ||
-      moduleDetail.content_url ||
-      content.audio_url ||
-      content.asset_url ||
-      activeAssignment.content_url;
-    const storedAssetPlaybackUrl = moduleAssetPlaybackUrls[moduleDetail.id] || '';
-    const hasProtectedAssetPath =
-      typeof content.asset_storage_path === 'string' && content.asset_storage_path.trim().length > 0;
-    const useProtectedSupabaseAsset =
-      moduleType === 'infographic'
-        ? Boolean(rawAssetUrl) && (hasProtectedAssetPath || isSupabaseStoragePublicUrl(rawAssetUrl))
-        : moduleType === 'video'
-          ? getVideoAssetKind(rawAssetUrl) === 'file' && (hasProtectedAssetPath || isSupabaseStoragePublicUrl(rawAssetUrl))
-          : false;
-    const assetUrl =
-      useProtectedSupabaseAsset && storedAssetPlaybackUrl
-        ? storedAssetPlaybackUrl
-        : rawAssetUrl;
+    const rawAssetUrl = activeModuleGateState.rawAssetUrl;
+    const assetUrl = activeModuleGateState.assetUrl;
     const transcriptText =
       moduleDetail.audio_transcript ||
       content.transcript_text ||
@@ -2203,22 +2512,27 @@ export default function MicrolearningHub() {
     const summaryText = content.summary_text || content.audio_summary || content.summary || '';
     const ttsUrl = moduleDetail.audio_tts_url || content.tts_url || '';
     const captionsUrl = moduleDetail.captions_url || content.captions_url || '';
-    const youtubeEmbedUrl = getYouTubeEmbedUrl(rawAssetUrl);
-    const assetKind = getVideoAssetKind(rawAssetUrl);
+    const youtubeEmbedUrl = activeModuleGateState.youtubeEmbedUrl;
+    const assetKind = activeModuleGateState.assetKind;
 
     if (moduleType === 'video') {
       const lessonQuestions = getFirstContentArray(content, ['video_timestamp_questions', 'questions', 'video_questions']);
-      const unlocked = !assetUrl || videoCompleted[activeAssignment.id] || Boolean(activeAssignment.completed_exercises);
+      const unlocked = !activeModuleGateState.isAssessmentLocked;
 
       return (
         <div className="rounded-xl border bg-white p-4">
           <p className="text-sm font-medium text-slate-700">Video Module</p>
+          {activeModuleGateState.assessmentUnavailable ? (
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              {activeModuleGateState.lockMessage}
+            </div>
+          ) : null}
           {assetKind === 'file' && assetUrl ? (
-            <video
-              controls
-              className="mt-3 w-full rounded-lg border"
+            <VideoPlaybackCard
               src={assetUrl}
-              onEnded={() => setVideoCompleted((current) => ({ ...current, [activeAssignment.id]: true }))}
+              title="Lesson Video"
+              description="Use play, pause, resume, replay, and the timeline slider below to review the uploaded lesson before answering the practice prompt."
+              onCompleted={() => setVideoCompleted((current) => ({ ...current, [activeAssignment.id]: true }))}
             />
           ) : null}
           {assetKind === 'youtube' && youtubeEmbedUrl ? (
@@ -2234,7 +2548,7 @@ export default function MicrolearningHub() {
               </div>
             </div>
           ) : null}
-          {assetKind === 'external' && assetUrl ? (
+          {assetKind === 'external' && assetUrl && !activeModuleGateState.assessmentUnavailable ? (
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm text-slate-600">
                 This lesson uses an external media reference. Open it in a new tab, review it, then confirm below to unlock the practice prompt.
@@ -2246,13 +2560,13 @@ export default function MicrolearningHub() {
               </Button>
             </div>
           ) : (
-            assetKind === 'none' ? (
+            assetKind === 'none' && !activeModuleGateState.assessmentUnavailable ? (
               <p className="mt-3 text-sm text-slate-500">
                 No video file is attached yet, so the practice prompt is available immediately.
               </p>
             ) : null
           )}
-          {assetKind !== 'none' && assetKind !== 'file' && !videoCompleted[activeAssignment.id] ? (
+          {assetKind !== 'none' && assetKind !== 'file' && !activeModuleGateState.assessmentUnavailable && !videoCompleted[activeAssignment.id] ? (
             <div className="mt-3 flex flex-col gap-3 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-sky-800">
                 Review the lesson reference, then confirm so your practice activity unlocks.
@@ -2267,7 +2581,9 @@ export default function MicrolearningHub() {
             </div>
           ) : null}
           <p className="mt-3 text-sm text-slate-600">
-            {unlocked
+            {activeModuleGateState.assessmentUnavailable
+              ? activeModuleGateState.lockMessage
+              : unlocked
               ? 'The practice prompt is unlocked. Submit your response below.'
               : assetKind === 'file'
                 ? 'Finish the video first to unlock the practice prompt and complete the activity.'
@@ -2532,12 +2848,13 @@ export default function MicrolearningHub() {
       return (
         <div className="rounded-xl border bg-white p-4">
           <p className="text-sm font-medium text-slate-700">Audio Lesson</p>
-          {(assetUrl || ttsUrl || transcriptText || summaryText) ? (
+          {activeModuleGateState.hasPlayableAudio ? (
             <AudioPlaybackCard
               moduleId={moduleDetail.id}
               title="Listening Playback"
               description="Start the lesson only when you are ready. The transcript opens automatically while the audio or TTS narration is playing."
               audioUrl={assetUrl}
+              hasPrimaryAudio={activeModuleGateState.hasPlayableAudio}
               captionsUrl={captionsUrl}
               transcriptText={transcriptText}
               summaryText={summaryText}
@@ -2547,7 +2864,9 @@ export default function MicrolearningHub() {
               transcriptPlaceholder="Transcript will appear here after the trainer uploads and processes the audio."
             />
           ) : (
-            <p className="mt-3 text-sm text-slate-500">No uploaded audio is attached yet.</p>
+            <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+              {activeModuleGateState.lockMessage || 'The uploaded lesson audio is not available right now, so the assessment remains locked.'}
+            </div>
           )}
         </div>
       );
@@ -2976,25 +3295,10 @@ export default function MicrolearningHub() {
                       revealedSide: '',
                     };
                     const isSaving = submittingExerciseId === exercise.id;
-                    const hasVideoAsset = Boolean(
-                      assignmentDetail.module.content_url ||
-                      assignmentDetail.module.content_data?.asset_url ||
-                      activeAssignment.content_url,
-                    );
-                    const videoAssetUrl =
-                      assignmentDetail.module.content_url ||
-                      assignmentDetail.module.content_data?.asset_url ||
-                      activeAssignment.content_url;
-                    const videoAssetKind = getVideoAssetKind(videoAssetUrl);
-                    const videoUnlocked =
-                      assignmentDetail.module.module_type !== 'video' ||
-                      !hasVideoAsset ||
-                      videoCompleted[activeAssignment.id] ||
-                      Boolean(exercise.attempt);
-                    const isVideoLocked =
-                      assignmentDetail.module.module_type === 'video' &&
-                      !videoUnlocked &&
-                      !exercise.attempt;
+                    const videoAssetKind = activeModuleGateState?.assetKind || 'none';
+                    const isVideoLocked = Boolean(activeModuleGateState?.videoReviewLocked && !exercise.attempt);
+                    const isMediaUnavailable = Boolean(activeModuleGateState?.assessmentUnavailable);
+                    const isExerciseLocked = isMediaUnavailable || isVideoLocked;
                     const keywordCoverage = getKeywordCoverage(response.responseText, exercise.required_keywords);
                     const speechEnabled = exercise.enable_stt || false;
 
@@ -3098,7 +3402,7 @@ export default function MicrolearningHub() {
                                     type="button"
                                     variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
                                     onClick={() => handleSpeechCapture(exercise.id)}
-                                    disabled={isVideoLocked}
+                                    disabled={isExerciseLocked}
                                   >
                                     {activeSpeechExerciseId === exercise.id ? (
                                       <>
@@ -3175,7 +3479,7 @@ export default function MicrolearningHub() {
                                     type="button"
                                     variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
                                     onClick={() => handleSpeechCapture(exercise.id)}
-                                    disabled={isVideoLocked}
+                                    disabled={isExerciseLocked}
                                   >
                                     {activeSpeechExerciseId === exercise.id ? (
                                       <>
@@ -3260,16 +3564,18 @@ export default function MicrolearningHub() {
                             </div>
                           ) : null}
 
-                          {isVideoLocked ? (
+                          {isExerciseLocked ? (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                              {videoAssetKind === 'file'
-                                ? 'Complete the video first to unlock this practice prompt.'
-                                : 'Review the lesson reference and confirm it first to unlock this practice prompt.'}
+                              {isMediaUnavailable
+                                ? activeModuleGateState?.lockMessage || 'The required module media is not available yet.'
+                                : videoAssetKind === 'file'
+                                  ? 'Complete the video first to unlock this practice prompt.'
+                                  : 'Review the lesson reference and confirm it first to unlock this practice prompt.'}
                             </div>
                           ) : null}
 
                           {exercise.type !== 'flashcard_recall' ? (
-                          <Button type="button" onClick={() => void handleSubmitExercise(exercise)} disabled={isSaving || isVideoLocked}>
+                          <Button type="button" onClick={() => void handleSubmitExercise(exercise)} disabled={isSaving || isExerciseLocked}>
                             {isSaving
                               ? 'Saving Exercise...'
                               : getExerciseActionLabel(assignmentDetail.module.module_type, exercise)}

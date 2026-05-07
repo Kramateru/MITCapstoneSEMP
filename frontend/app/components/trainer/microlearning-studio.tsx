@@ -642,6 +642,14 @@ export default function TrainerMicrolearningStudio() {
       toast.error('Select at least one saved topic to assign.');
       return;
     }
+    const invalidSelectedModules = modules.filter(
+      (module) => selectedModuleIds.includes(module.id) && module.media_ready === false,
+    );
+    if (invalidSelectedModules.length) {
+      const blockedTitles = invalidSelectedModules.map((module) => module.title).join(', ');
+      toast.error(`These topics still need working media before assignment: ${blockedTitles}`);
+      return;
+    }
     if (!assignmentBatchId) {
       toast.error('Select one trainer batch or wave to assign to.');
       return;
@@ -771,6 +779,18 @@ export default function TrainerMicrolearningStudio() {
     () => modules.filter((module) => selectedModuleIds.includes(module.id)),
     [modules, selectedModuleIds],
   );
+  const readyAssignmentModules = useMemo(
+    () => selectedAssignmentModules.filter((module) => module.media_ready !== false),
+    [selectedAssignmentModules],
+  );
+  const invalidSelectedAssignmentModules = useMemo(
+    () => selectedAssignmentModules.filter((module) => module.media_ready === false),
+    [selectedAssignmentModules],
+  );
+  const assignableModuleCount = useMemo(
+    () => modules.filter((module) => module.media_ready !== false).length,
+    [modules],
+  );
   const audioModuleCount = useMemo(
     () => modules.filter((module) => module.module_type === 'audio').length,
     [modules],
@@ -788,7 +808,7 @@ export default function TrainerMicrolearningStudio() {
       ).length,
     [modules],
   );
-  const assignmentRowEstimate = (selectedBatch?.users_count || 0) * selectedAssignmentModules.length;
+  const assignmentRowEstimate = (selectedBatch?.users_count || 0) * readyAssignmentModules.length;
 
   if (isAuthLoading || loading) {
     return <div className="flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />Loading microlearning studio...</div>;
@@ -817,9 +837,9 @@ export default function TrainerMicrolearningStudio() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Categories</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.topic_category_count || categories.length}</div></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Modules</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.module_count || modules.length}</div></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Assignments</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.assignment_count || 0}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Categories</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.topic_category_count ?? categories.length}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Modules</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.module_count ?? modules.length}</div><p className="mt-1 text-xs text-muted-foreground">{assignableModuleCount} ready to assign</p></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Assignments</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{report?.summary.assignment_count ?? 0}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm">Audio Modules</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{audioModuleCount}</div><p className="mt-1 text-xs text-muted-foreground">{transcribedAudioModuleCount} with transcript + summary</p></CardContent></Card>
       </div>
 
@@ -891,24 +911,25 @@ export default function TrainerMicrolearningStudio() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {modules.map((module) => (
+                {sortedModules.map((module) => (
                   <TableRow key={module.id}>
                     <TableCell>
                       <div className="font-medium">{module.title}</div>
                       <div className="mt-1 flex flex-wrap gap-2">
                         <Badge className={CATEGORY_STYLES[module.category]}>{formatLabel(module.category)}</Badge>
                         <Badge variant="outline">{formatLabel(module.module_type)}</Badge>
+                        <Badge variant="outline" className={module.media_ready === false ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
+                          {module.media_ready === false ? 'Needs media' : 'Ready to assign'}
+                        </Badge>
                       </div>
                     </TableCell>
                     <TableCell>{module.topic_category_name || 'Uncategorized'}</TableCell>
                     <TableCell>{module.passing_score}%</TableCell>
                     <TableCell>
                       <div>{module.assignment_count}</div>
-                      {module.module_type === 'audio' ? (
+                      {module.media_status ? (
                         <div className="mt-1 text-xs text-muted-foreground">
-                          {module.audio_transcript || module.content_data?.transcript_text || module.content_data?.transcript
-                            ? 'Transcript ready'
-                            : 'Awaiting MP3 processing'}
+                          {module.media_status}
                         </div>
                       ) : null}
                     </TableCell>
@@ -919,7 +940,7 @@ export default function TrainerMicrolearningStudio() {
                       <Button variant="ghost" size="sm" onClick={() => void removeItem(module.id, module.title)}>
                         <Trash2 className="size-4 text-rose-600" />
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => openAssignmentCenter([module.id])}>
+                      <Button variant="outline" size="sm" onClick={() => openAssignmentCenter([module.id])} disabled={module.media_ready === false}>
                         Assign to Batch
                       </Button>
                     </TableCell>
@@ -1020,18 +1041,24 @@ export default function TrainerMicrolearningStudio() {
               <div className="max-h-[440px] space-y-3 overflow-y-auto rounded-2xl border p-3">
                 {sortedModules.length ? sortedModules.map((module) => {
                   const isSelected = selectedModuleIds.includes(module.id);
+                  const isAssignable = module.media_ready !== false;
 
                   return (
                     <label
                       key={module.id}
-                      className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors ${
-                        isSelected ? 'border-primary bg-primary/5' : 'hover:border-slate-300'
+                      className={`flex items-start gap-3 rounded-xl border p-4 transition-colors ${
+                        isSelected
+                          ? 'border-primary bg-primary/5'
+                          : isAssignable
+                            ? 'cursor-pointer hover:border-slate-300'
+                            : 'cursor-not-allowed border-dashed bg-slate-50 opacity-75'
                       }`}
                     >
                       <input
                         type="checkbox"
                         className="mt-1 size-4"
                         checked={isSelected}
+                        disabled={!isAssignable}
                         onChange={(event) =>
                           setSelectedModuleIds((current) =>
                             event.target.checked
@@ -1046,6 +1073,9 @@ export default function TrainerMicrolearningStudio() {
                           <Badge className={CATEGORY_STYLES[module.category]}>{formatLabel(module.category)}</Badge>
                           <Badge variant="outline">{formatLabel(module.module_type)}</Badge>
                           <Badge variant="outline">{module.passing_score}% passing</Badge>
+                          <Badge variant="outline" className={isAssignable ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
+                            {isAssignable ? 'Ready' : 'Blocked'}
+                          </Badge>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
                           {module.topic_category_name || 'Uncategorized'} | {module.duration_minutes} minutes |{' '}
@@ -1053,6 +1083,9 @@ export default function TrainerMicrolearningStudio() {
                         </div>
                         {module.description ? (
                           <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{module.description}</p>
+                        ) : null}
+                        {module.media_status ? (
+                          <p className={`mt-2 text-xs ${isAssignable ? 'text-muted-foreground' : 'text-amber-700'}`}>{module.media_status}</p>
                         ) : null}
                       </div>
                     </label>
@@ -1067,9 +1100,18 @@ export default function TrainerMicrolearningStudio() {
               {selectedAssignmentModules.length ? (
                 <div className="rounded-2xl border border-dashed p-4">
                   <div className="text-sm font-medium text-foreground">Selected Topic Summary</div>
+                  {invalidSelectedAssignmentModules.length ? (
+                    <p className="mt-2 text-xs text-amber-700">
+                      Remove blocked topics before saving delivery. Only modules with working uploaded media can be assigned.
+                    </p>
+                  ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
                     {selectedAssignmentModules.map((module) => (
-                      <Badge key={module.id} variant="outline">
+                      <Badge
+                        key={module.id}
+                        variant="outline"
+                        className={module.media_ready === false ? 'border-amber-200 bg-amber-50 text-amber-700' : undefined}
+                      >
                         {module.title}
                       </Badge>
                     ))}

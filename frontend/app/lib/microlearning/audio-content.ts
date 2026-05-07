@@ -14,6 +14,7 @@ const GEMINI_READY_ATTEMPTS = 20
 const GEMINI_READY_DELAY_MS = 1500
 const SIGNED_URL_TTL_SECONDS = 60 * 60
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+const SUPABASE_PUBLIC_OBJECT_MARKER = '/storage/v1/object/public/'
 
 type AudioContentRow = {
   id: string
@@ -33,6 +34,10 @@ type AudioContentRow = {
   updated_at: string
 }
 
+type AuthorizedAudioContent = AudioContentRow & {
+  bucket_name?: string | null
+}
+
 type BackendModuleDetail = {
   content_data?: Record<string, unknown> | null
   audio_language?: string | null
@@ -46,6 +51,16 @@ type BackendModuleAudioMetadata = {
   audio_language?: string | null
   captions_url?: string | null
   content_type?: string | null
+}
+
+type BackendModuleAssetPayload = {
+  module_id?: string | null
+  module_type?: string | null
+  asset_url?: string | null
+  storage_path?: string | null
+  bucket_name?: string | null
+  content_type?: string | null
+  signed_url_required?: boolean | null
 }
 
 type TrainerModuleListResponse = {
@@ -137,7 +152,61 @@ function assertMp3Upload(fileName: string, mimeType: string) {
 
 function buildStoragePath(trainerId: string, moduleId: string, fileName: string) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `${trainerId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
+  return `microlearning/audio/${trainerId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
+}
+
+function resolveSupabasePublicObject(assetUrl?: string | null) {
+  const normalized = (assetUrl || '').trim()
+  if (!normalized) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(normalized)
+    const markerIndex = parsed.pathname.indexOf(SUPABASE_PUBLIC_OBJECT_MARKER)
+    if (markerIndex < 0) {
+      return null
+    }
+
+    const suffix = decodeURIComponent(parsed.pathname.slice(markerIndex + SUPABASE_PUBLIC_OBJECT_MARKER.length))
+    const slashIndex = suffix.indexOf('/')
+    if (slashIndex < 0) {
+      return null
+    }
+
+    const bucketName = suffix.slice(0, slashIndex).trim()
+    const storagePath = suffix.slice(slashIndex + 1).trim().replace(/^\/+/, '')
+    if (!bucketName || !storagePath) {
+      return null
+    }
+
+    return {
+      bucketName,
+      storagePath,
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolvePreferredStoragePath(
+  storedPath?: string | null,
+  inferredObject?: { bucketName: string; storagePath: string } | null,
+) {
+  const normalizedStoredPath = (storedPath || '').trim().replace(/^\/+/, '')
+  const inferredPath = inferredObject?.storagePath?.trim().replace(/^\/+/, '') || ''
+  if (
+    inferredPath
+    && (
+      !normalizedStoredPath
+      || normalizedStoredPath !== inferredPath
+      || !normalizedStoredPath.startsWith('microlearning/')
+    )
+  ) {
+    return inferredPath
+  }
+
+  return normalizedStoredPath
 }
 
 function sleep(ms: number) {
@@ -417,6 +486,31 @@ async function getBackendMicrolearningModule(
   )
 }
 
+async function getAuthorizedModuleAssetMetadata(
+  authorization: string,
+  moduleId: string,
+) {
+  const payload = await fetchBackendJson<BackendModuleAssetPayload>(
+    `/api/microlearning/modules/${moduleId}/asset`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'Unable to load the microlearning media metadata.',
+  )
+
+  const inferredObject = resolveSupabasePublicObject(payload?.asset_url)
+  return {
+    assetUrl: payload?.asset_url?.trim() || '',
+    storagePath: resolvePreferredStoragePath(payload?.storage_path, inferredObject),
+    bucketName: payload?.bucket_name?.trim() || inferredObject?.bucketName || getAudioBucketName(),
+    contentType: payload?.content_type?.trim() || '',
+    signedUrlRequired: payload?.signed_url_required !== false,
+  }
+}
+
 async function syncBackendMicrolearningAudio(
   authorization: string,
   {
@@ -589,30 +683,80 @@ export async function getAuthorizedAudioContent(
   moduleId: string,
 ) {
   const row = await fetchAudioContentRow(moduleId)
-  if (!row) {
-    throw new AssessmentHttpError(404, 'No uploaded audio module was found for this lesson.')
-  }
 
-  if (sessionUser.role === 'admin') {
-    return row
+  if (row) {
+    const inferredObject = resolveSupabasePublicObject(row.url)
+    const normalizedStoragePath = resolvePreferredStoragePath(row.storage_path, inferredObject)
+    const normalizedBucketName = inferredObject?.bucketName || getAudioBucketName()
+    const normalizedRow = {
+      ...row,
+      storage_path: normalizedStoragePath || row.storage_path,
+    }
+
+    if (sessionUser.role === 'admin') {
+      return {
+        ...normalizedRow,
+        bucket_name: normalizedBucketName,
+      } satisfies AuthorizedAudioContent
+    }
+
+    if (sessionUser.role === 'trainer') {
+      if (row.trainer_id !== sessionUser.userId) {
+        throw new AssessmentHttpError(403, 'You do not have access to this trainer-owned audio module.')
+      }
+      return {
+        ...normalizedRow,
+        bucket_name: normalizedBucketName,
+      } satisfies AuthorizedAudioContent
+    }
+
+    await assertTraineeHasAudioModuleAccess(authorization, moduleId)
+    return {
+      ...normalizedRow,
+      bucket_name: normalizedBucketName,
+    } satisfies AuthorizedAudioContent
   }
 
   if (sessionUser.role === 'trainer') {
-    if (row.trainer_id !== sessionUser.userId) {
-      throw new AssessmentHttpError(403, 'You do not have access to this trainer-owned audio module.')
-    }
-    return row
+    await assertTrainerOwnsMicrolearningModule(authorization, moduleId)
+  } else if (sessionUser.role === 'trainee') {
+    await assertTraineeHasAudioModuleAccess(authorization, moduleId)
   }
 
-  await assertTraineeHasAudioModuleAccess(authorization, moduleId)
-  return row
+  const playbackMetadata = await getAuthorizedAudioPlaybackMetadata(authorization, moduleId)
+  const assetMetadata = await getAuthorizedModuleAssetMetadata(authorization, moduleId)
+  const storagePath = assetMetadata.storagePath.trim()
+  const audioUrl = playbackMetadata.audioUrl || assetMetadata.assetUrl
+
+  if (!storagePath || !audioUrl) {
+    throw new AssessmentHttpError(404, 'No uploaded audio module was found for this lesson.')
+  }
+
+  return {
+    id: `fallback-${moduleId}`,
+    module_id: moduleId,
+    title: playbackMetadata.title || `Microlearning audio ${moduleId}`,
+    trainer_id: sessionUser.role === 'trainer' ? sessionUser.userId : '',
+    url: audioUrl,
+    storage_path: storagePath,
+    mime_type: playbackMetadata.contentType || assetMetadata.contentType || inferAudioMimeType(audioUrl),
+    transcript: playbackMetadata.transcriptText || null,
+    transcript_text: playbackMetadata.transcriptText || null,
+    summary_text: null,
+    duration_seconds: playbackMetadata.durationSeconds,
+    gemini_model: null,
+    gemini_file_uri: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    bucket_name: assetMetadata.bucketName || getAudioBucketName(),
+  } satisfies AuthorizedAudioContent
 }
 
-export async function createAudioModuleSignedUrl(storagePath: string) {
+export async function createAudioModuleSignedUrl(storagePath: string, bucketName?: string) {
   const supabase = createSupabaseAdminClient()
   const { data, error } = await supabase
     .storage
-    .from(getAudioBucketName())
+    .from(bucketName || getAudioBucketName())
     .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
 
   if (error || !data?.signedUrl) {

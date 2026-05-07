@@ -106,6 +106,26 @@ function resolveSupabasePublicObject(assetUrl?: string | null) {
   }
 }
 
+function resolvePreferredStoragePath(
+  storedPath?: string | null,
+  inferredObject?: { bucketName: string; storagePath: string } | null,
+) {
+  const normalizedStoredPath = (storedPath || '').trim().replace(/^\/+/, '')
+  const inferredPath = inferredObject?.storagePath?.trim().replace(/^\/+/, '') || ''
+  if (
+    inferredPath
+    && (
+      !normalizedStoredPath
+      || normalizedStoredPath !== inferredPath
+      || !normalizedStoredPath.startsWith('microlearning/')
+    )
+  ) {
+    return inferredPath
+  }
+
+  return normalizedStoredPath
+}
+
 async function getAuthorizedModuleAsset(
   authorization: string,
   moduleId: string,
@@ -156,7 +176,7 @@ export async function GET(request: Request, context: RouteContext) {
     const { moduleId } = await context.params
     const asset = await getAuthorizedModuleAsset(authorization, moduleId)
     const inferredObject = resolveSupabasePublicObject(asset.asset_url)
-    const storagePath = (asset.storage_path || inferredObject?.storagePath || '').trim()
+    const storagePath = resolvePreferredStoragePath(asset.storage_path, inferredObject)
     const bucketName = (
       asset.bucket_name
       || inferredObject?.bucketName

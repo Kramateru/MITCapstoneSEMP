@@ -294,16 +294,7 @@ const createDefaultScenarioForm = (): ScenarioFormState => ({
   opening_prompt: 'Answer the call, review the member context, and deliver the expected CSR spiel.',
   expected_keywords: 'thank you for calling, member id, verification',
   estimated_duration: '180',
-  target_kpis_json: JSON.stringify(
-    {
-      passing_score: 80,
-      aht_seconds: 240,
-      soft_skills: ['empathy', 'ownership', 'clear pacing'],
-      focus: ['script_accuracy', 'grammar', 'pronunciation'],
-    },
-    null,
-    2,
-  ),
+  target_kpis_json: JSON.stringify(buildTargetKpisFromConfig(defaultKpiForm), null, 2),
   member_name: 'Calvin Smith',
   member_id: 'HBP-100245',
   plan_type: 'Healthy Benefits Plus',
@@ -378,22 +369,6 @@ function parseScenarioConfig(scenario: Scenario) {
   return scenario.call_simulation_config && typeof scenario.call_simulation_config === 'object'
     ? scenario.call_simulation_config
     : {};
-}
-
-function parseTargetKpisJson(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return {
-      passing_score: 80,
-    };
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    return typeof parsed === 'object' && parsed ? parsed : { passing_score: 80 };
-  } catch {
-    throw new Error('Target KPIs must be valid JSON.');
-  }
 }
 
 function normalizeActorRole(value: string) {
@@ -522,7 +497,7 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
     expected_keywords: (scenario.expected_keywords || []).join(', '),
     estimated_duration: String(scenario.estimated_duration || 120),
     target_kpis_json: JSON.stringify(
-      typeof targetKpis === 'object' && targetKpis ? targetKpis : { passing_score: 80 },
+      typeof targetKpis === 'object' && targetKpis ? targetKpis : buildTargetKpisFromConfig(defaultKpiForm),
       null,
       2,
     ),
@@ -599,6 +574,7 @@ function buildTargetKpisFromConfig(config: KPIConfig) {
     forbidden_words_penalty: config.forbidden_words_penalty,
     passing_score: config.passing_score,
     target_aht_seconds: config.target_aht_seconds,
+    aht_seconds: config.target_aht_seconds,
     target_ros_words_per_min: config.target_ros_words_per_min,
     target_dead_air_seconds: config.target_dead_air_seconds,
     forbidden_words: config.forbidden_words,
@@ -647,8 +623,9 @@ function buildSupabaseScenarioSyncBody(scenario: Scenario) {
   const scenarioConfig = parseScenarioConfig(scenario);
   const targetKpis = typeof scenarioConfig.target_kpis === 'object' && scenarioConfig.target_kpis
     ? scenarioConfig.target_kpis as Record<string, unknown>
-    : { passing_score: 80 };
-  const passingScoreCandidate = targetKpis.passing_score ?? scenarioConfig.certification_threshold ?? 80;
+    : buildTargetKpisFromConfig(defaultKpiForm);
+  const passingScoreCandidate =
+    targetKpis.passing_score ?? scenarioConfig.certification_threshold ?? defaultKpiForm.passing_score;
   const passingScore = typeof passingScoreCandidate === 'number'
     ? passingScoreCandidate
     : Number(passingScoreCandidate || 80);
@@ -729,7 +706,8 @@ export default function TrainerSimFloorPage() {
   const syncScenarioRecordToSupabase = useCallback(async (scenarioInput: Scenario | string) => {
     const scenario = typeof scenarioInput === 'string'
       ? await (async () => {
-          const response = await authedFetch(`/api/call-simulation/scenarios/${scenarioInput}`);
+          const query = selectedBatch ? `?batch_id=${encodeURIComponent(selectedBatch)}` : '';
+          const response = await authedFetch(`/api/call-simulation/scenarios/${scenarioInput}${query}`);
           if (!response.ok) {
             const error = await response.json().catch(() => null);
             throw new Error(error?.detail || 'Unable to load the saved scenario for Supabase sync.');
@@ -749,7 +727,7 @@ export default function TrainerSimFloorPage() {
     }
 
     return payload;
-  }, [authedFetch]);
+  }, [authedFetch, selectedBatch]);
 
   const syncScenarioKpiMetrics = useCallback(async (scenarioGroupIds: string[], config: KPIConfig) => {
     const response = await authedFetch('/api/call-simulation/kpi/sync', {
@@ -973,6 +951,17 @@ export default function TrainerSimFloorPage() {
   }, [fetchInteractions, fetchScenarioLibrary, fetchScenarios, selectedBatch]);
 
   useEffect(() => {
+    if (!showScenarioDialog) {
+      return;
+    }
+
+    setScenarioForm((previous) => ({
+      ...previous,
+      target_kpis_json: JSON.stringify(buildTargetKpisFromConfig(kpiForm), null, 2),
+    }));
+  }, [kpiForm, showScenarioDialog]);
+
+  useEffect(() => {
     if (!selectedBatch) {
       return undefined;
     }
@@ -1036,7 +1025,8 @@ export default function TrainerSimFloorPage() {
 
   const openEditScenario = async (scenarioId: string) => {
     try {
-      const response = await authedFetch(`/api/call-simulation/scenarios/${scenarioId}`);
+      const query = selectedBatch ? `?batch_id=${encodeURIComponent(selectedBatch)}` : '';
+      const response = await authedFetch(`/api/call-simulation/scenarios/${scenarioId}${query}`);
       if (!response.ok) throw new Error('Unable to load scenario details');
       const scenario: Scenario = await response.json();
       setEditingScenarioId(scenarioId);
@@ -1107,13 +1097,7 @@ export default function TrainerSimFloorPage() {
       return;
     }
 
-    let targetKpis: Record<string, unknown>;
-    try {
-      targetKpis = parseTargetKpisJson(scenarioForm.target_kpis_json);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Target KPIs must be valid JSON.');
-      return;
-    }
+    const targetKpis = buildTargetKpisFromConfig(kpiForm);
 
     const rows = buildScenarioRowsPayload(scenarioForm.rows).map((row) =>
       isCsrActor(row.actor_name)
@@ -1273,7 +1257,7 @@ export default function TrainerSimFloorPage() {
           target_kpis: targetKpis,
           script_flow: scriptFlow,
           script_rows: rows,
-          certification_threshold: Number(targetKpis.passing_score || 80),
+          certification_threshold: Number(targetKpis.passing_score || defaultKpiForm.passing_score),
           interface: 'nice-cxone',
           trainee_talk_icon: true,
           member_talk_icon: true,
@@ -1483,7 +1467,7 @@ export default function TrainerSimFloorPage() {
           const syncResponse = await authedFetch('/api/call-simulation/scenarios/sync', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ scenarioId, syncFromDatabase: true }),
+            body: JSON.stringify({ scenarioId, syncFromDatabase: true, batchId: selectedBatch }),
           });
           if (!syncResponse.ok) {
             throw new Error('Supabase scenario sync failed');
@@ -2724,11 +2708,12 @@ export default function TrainerSimFloorPage() {
                     <Label>Target KPIs JSON</Label>
                     <Textarea
                       value={scenarioForm.target_kpis_json}
-                      onChange={(event) => setScenarioForm((previous) => ({ ...previous, target_kpis_json: event.target.value }))}
+                      readOnly
                       rows={7}
+                      className="bg-slate-50 text-slate-600"
                     />
                     <p className="text-xs text-slate-500">
-                      Stored in Supabase-linked scenario metadata and reused by the dialer feedback sync route.
+                      Mirrored from KPI Management for the selected batch. Update KPI Management to change scenario scoring.
                     </p>
                   </div>
                   <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 text-sm text-sky-950">

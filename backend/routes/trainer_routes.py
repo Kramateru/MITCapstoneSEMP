@@ -51,7 +51,10 @@ from ..models import (
 from ..services.certificate_awards import sync_trainee_completion_certificates
 from ..services.live_updates import live_update_manager
 from ..services.microlearning import (
+    assignment_is_current,
     ensure_module_exercises,
+    filter_current_assignments,
+    get_module_media_state,
     refresh_assignment_progress,
     serialize_microlearning_module,
     serialize_assignment_summary,
@@ -70,6 +73,7 @@ from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
+SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
 
 
 def Depends(dependency=None):
@@ -190,18 +194,22 @@ def _get_microlearning_assignment_counts(
     if not normalized_ids:
         return {}
 
-    return {
-        module_id: int(count)
-        for module_id, count in (
-            db.query(
-                MicrolearningAssignment.module_id,
-                func.count(MicrolearningAssignment.id),
-            )
-            .filter(MicrolearningAssignment.module_id.in_(normalized_ids))
-            .group_by(MicrolearningAssignment.module_id)
-            .all()
+    assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module),
+            selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
         )
-    }
+        .filter(MicrolearningAssignment.module_id.in_(normalized_ids))
+        .all()
+    )
+
+    counts: Dict[str, int] = {}
+    for assignment in filter_current_assignments(assignments):
+        counts[assignment.module_id] = counts.get(assignment.module_id, 0) + 1
+
+    return counts
 
 
 def _get_trainer_trainee(
@@ -359,6 +367,48 @@ def _sanitize_asset_name(filename: str) -> str:
     return cleaned.strip("-") or "asset.bin"
 
 
+def _resolve_supabase_public_storage_target(value: Any) -> tuple[Optional[str], Optional[str]]:
+    normalized_value = _normalize_text_value(value)
+    if not normalized_value or SUPABASE_PUBLIC_OBJECT_MARKER not in normalized_value:
+        return None, None
+
+    suffix = normalized_value.split(SUPABASE_PUBLIC_OBJECT_MARKER, 1)[1].strip().lstrip("/")
+    if "/" not in suffix:
+        return None, None
+
+    bucket_name, storage_path = suffix.split("/", 1)
+    normalized_bucket = _normalize_text_value(bucket_name)
+    normalized_path = _normalize_text_value(storage_path).lstrip("/")
+    if not normalized_bucket or not normalized_path:
+        return None, None
+
+    return normalized_bucket, normalized_path
+
+
+def _normalize_supabase_asset_reference(content_data: dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    stored_bucket = _normalize_text_value(content_data.get("asset_bucket"))
+    stored_path = _normalize_text_value(content_data.get("asset_storage_path")).lstrip("/")
+    inferred_bucket = None
+    inferred_path = None
+
+    for candidate in (
+        content_data.get("asset_url"),
+        content_data.get("audio_url"),
+    ):
+        inferred_bucket, inferred_path = _resolve_supabase_public_storage_target(candidate)
+        if inferred_path:
+            break
+
+    if inferred_path and (
+        not stored_path
+        or stored_path != inferred_path
+        or not stored_path.startswith("microlearning/")
+    ):
+        return inferred_bucket or stored_bucket or None, inferred_path
+
+    return stored_bucket or inferred_bucket or None, stored_path or inferred_path or None
+
+
 def _resolve_microlearning_asset_folder(
     *,
     module_type: Optional[str],
@@ -372,7 +422,7 @@ def _resolve_microlearning_asset_folder(
     if normalized_type == "infographic" or normalized_content_type.startswith("image/"):
         return "images"
     if normalized_type in {"audio", "case_study"} or normalized_content_type.startswith("audio/"):
-        return "audio-assets"
+        return "audio"
     return "assets"
 
 
@@ -406,7 +456,7 @@ def _upload_microlearning_asset(
         )
 
     bucket_name = supabase_client.microlearning_bucket_name
-    storage_path = f"{storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
+    storage_path = f"microlearning/{storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
     asset_url = supabase_client.upload_microlearning_binary(
         module_id=module_storage_segment,
         trainer_id=trainer_id,
@@ -444,6 +494,33 @@ def _upload_microlearning_asset(
     }
 
 
+def _prepare_replaced_module_asset_cleanup(
+    *,
+    previous_content_data: dict[str, Any],
+    next_content_data: dict[str, Any],
+) -> tuple[Optional[tuple[str, str]], Optional[str]]:
+    previous_bucket_name, previous_storage_path = _normalize_supabase_asset_reference(previous_content_data)
+    next_bucket_name, next_storage_path = _normalize_supabase_asset_reference(next_content_data)
+    previous_bucket_name = previous_bucket_name or get_supabase_client().microlearning_bucket_name
+    next_bucket_name = next_bucket_name or get_supabase_client().microlearning_bucket_name
+    cleanup_storage_target = None
+    if previous_storage_path and (
+        previous_storage_path != next_storage_path
+        or previous_bucket_name != next_bucket_name
+    ):
+        cleanup_storage_target = (previous_bucket_name, previous_storage_path)
+
+    previous_asset_record_id = _normalize_text_value(previous_content_data.get("asset_record_id"))
+    next_asset_record_id = _normalize_text_value(next_content_data.get("asset_record_id"))
+    cleanup_asset_record_id = (
+        previous_asset_record_id
+        if previous_asset_record_id and previous_asset_record_id != next_asset_record_id
+        else None
+    )
+
+    return cleanup_storage_target, cleanup_asset_record_id
+
+
 def _feedback_category_db_label(category: FeedbackType | str | None) -> str:
     if isinstance(category, FeedbackType):
         return category.name
@@ -476,7 +553,7 @@ def _build_microlearning_report_overview(
         db.query(MicrolearningAssignment)
         .options(
             selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
-            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
             selectinload(MicrolearningAssignment.batch),
             selectinload(MicrolearningAssignment.certificate),
         )
@@ -484,6 +561,7 @@ def _build_microlearning_report_overview(
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
+    assignments = filter_current_assignments(assignments)
 
     did_update = False
     serialized_assignments: list[dict[str, Any]] = []
@@ -1904,8 +1982,10 @@ async def create_microlearning_module(
         content_data["asset_url"] = payload.content_url
     if content_data.get("asset_record_id"):
         content_data["storage_backend"] = content_data.get("storage_backend") or "supabase_postgres"
-    if content_data.get("asset_storage_path") and not content_data.get("asset_bucket"):
-        content_data["asset_bucket"] = get_supabase_client().microlearning_bucket_name
+    normalized_asset_bucket, normalized_asset_path = _normalize_supabase_asset_reference(content_data)
+    if normalized_asset_path:
+        content_data["asset_storage_path"] = normalized_asset_path
+        content_data["asset_bucket"] = normalized_asset_bucket or get_supabase_client().microlearning_bucket_name
     if content_data.get("asset_storage_path"):
         content_data["signed_url_required"] = bool(content_data.get("signed_url_required", True))
 
@@ -1971,6 +2051,7 @@ async def update_microlearning_module(
     next_skill_focus = (payload.skill_focus or "").strip() or None
     next_description = (payload.description or "").strip() or None
     next_content_url = (payload.content_url or "").strip() or None
+    previous_content_data = dict(module.content_data or {})
     module_type = normalize_module_type(payload.module_type)
     if module_type == "case_study" and normalize_module_type(module.type) != "case_study":
         raise HTTPException(
@@ -1993,10 +2074,16 @@ async def update_microlearning_module(
         next_content_data["asset_url"] = next_content_url
     if next_content_data.get("asset_record_id"):
         next_content_data["storage_backend"] = next_content_data.get("storage_backend") or "supabase_postgres"
-    if next_content_data.get("asset_storage_path") and not next_content_data.get("asset_bucket"):
-        next_content_data["asset_bucket"] = get_supabase_client().microlearning_bucket_name
+    normalized_asset_bucket, normalized_asset_path = _normalize_supabase_asset_reference(next_content_data)
+    if normalized_asset_path:
+        next_content_data["asset_storage_path"] = normalized_asset_path
+        next_content_data["asset_bucket"] = normalized_asset_bucket or get_supabase_client().microlearning_bucket_name
     if next_content_data.get("asset_storage_path"):
         next_content_data["signed_url_required"] = bool(next_content_data.get("signed_url_required", True))
+    cleanup_storage_target, cleanup_asset_record_id = _prepare_replaced_module_asset_cleanup(
+        previous_content_data=previous_content_data,
+        next_content_data=next_content_data,
+    )
 
     should_regenerate_exercises = any(
         [
@@ -2045,10 +2132,23 @@ async def update_microlearning_module(
             )
             exercises_regenerated = True
 
+    if cleanup_asset_record_id:
+        (
+            db.query(MicrolearningUploadedAsset)
+            .filter(MicrolearningUploadedAsset.id == cleanup_asset_record_id)
+            .delete(synchronize_session=False)
+        )
+
     db.commit()
     db.refresh(module)
     module.topic_category = topic_category
     assignment_count = _get_microlearning_assignment_counts(db, module_ids=[module.id]).get(module.id, 0)
+    if cleanup_storage_target:
+        bucket_name, storage_path = cleanup_storage_target
+        get_supabase_client().delete_storage_object(
+            bucket_name=bucket_name,
+            path=storage_path,
+        )
 
     return {
         "status": "updated",
@@ -2114,7 +2214,7 @@ async def list_microlearning_assignments(
         db.query(MicrolearningAssignment)
         .options(
             selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.assessment_method),
-            selectinload(MicrolearningAssignment.trainee),
+            selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
             selectinload(MicrolearningAssignment.trainer),
             selectinload(MicrolearningAssignment.batch),
             selectinload(MicrolearningAssignment.certificate),
@@ -2123,6 +2223,7 @@ async def list_microlearning_assignments(
         .order_by(MicrolearningAssignment.assigned_at.desc())
         .all()
     )
+    assignments = filter_current_assignments(assignments)
 
     did_update = False
     serialized = []
@@ -2183,9 +2284,25 @@ async def assign_microlearning_modules(
     if missing_modules:
         raise HTTPException(status_code=404, detail="One or more modules were not found")
 
+    modules_missing_media = [
+        f"{module.title}: {get_module_media_state(module).get('media_status')}"
+        for module in modules
+        if not get_module_media_state(module).get("media_ready")
+    ]
+    if modules_missing_media:
+        raise HTTPException(
+            status_code=400,
+            detail="Complete the required media before assigning these modules: "
+            + "; ".join(modules_missing_media),
+        )
+
     if payload.batch_id:
         batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=payload.batch_id)
-        trainees = [user for user in batch.users if user.role == UserRole.TRAINEE]
+        trainees = [
+            user
+            for user in batch.users
+            if user.role == UserRole.TRAINEE and bool(getattr(user, "is_active", True))
+        ]
         if not trainees:
             raise HTTPException(status_code=400, detail="Selected batch has no trainees")
         batch_id = batch.id
@@ -2204,16 +2321,21 @@ async def assign_microlearning_modules(
             module = module_lookup[module_id]
             did_backfill = ensure_module_exercises(module) or did_backfill
 
-            existing = (
+            existing_assignments = (
                 db.query(MicrolearningAssignment)
+                .options(
+                    selectinload(MicrolearningAssignment.module),
+                    selectinload(MicrolearningAssignment.batch),
+                    selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
+                )
                 .filter(
                     MicrolearningAssignment.trainee_id == trainee.id,
                     MicrolearningAssignment.module_id == module.id,
                     MicrolearningAssignment.status.in_(["assigned", "in_progress"]),
                 )
-                .first()
+                .all()
             )
-            if existing:
+            if any(assignment_is_current(existing) for existing in existing_assignments):
                 skipped_count += 1
                 continue
 

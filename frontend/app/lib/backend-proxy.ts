@@ -3,8 +3,21 @@ import 'server-only'
 import { getConfigValue } from '@/app/lib/assessment/env'
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
+const DEFAULT_LOOPBACK_BACKEND_URLS = [
+  'http://127.0.0.1:8000',
+  'http://localhost:8000',
+  'http://127.0.0.1:8001',
+  'http://localhost:8001',
+]
 const DEFAULT_BACKEND_UNAVAILABLE_MESSAGE =
   'Unable to reach the backend service. Start the backend server and try again.'
+const BACKEND_URL_CONFIG_KEYS = [
+  'BACKEND_URL',
+  'NEXT_PUBLIC_BACKEND_URL',
+  'REACT_APP_BACKEND_URL',
+]
+const LOOPBACK_PORTS = ['8000', '8001']
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '0.0.0.0'])
 
 const hopByHopHeaders = new Set([
   'connection',
@@ -19,6 +32,8 @@ const hopByHopHeaders = new Set([
   'transfer-encoding',
   'upgrade',
 ])
+
+let preferredBackendBaseUrl = ''
 
 function normalizeConfigValue(value: string | null | undefined) {
   const trimmed = (value || '').trim()
@@ -40,10 +55,10 @@ function pushLoopbackVariants(
   parsed: URL,
 ) {
   const protocol = parsed.protocol
-  const portSegment = parsed.port ? `:${parsed.port}` : ''
   const hostname = parsed.hostname.toLowerCase()
 
-  const pushVariant = (variantHostname: string) => {
+  const pushVariant = (variantHostname: string, port = parsed.port) => {
+    const portSegment = port ? `:${port}` : ''
     const baseUrl = `${protocol}//${variantHostname}${portSegment}`
     if (seen.has(baseUrl)) {
       return
@@ -53,19 +68,36 @@ function pushLoopbackVariants(
     candidates.push(baseUrl)
   }
 
+  const pushLoopbackPorts = (variantHostname: string) => {
+    for (const port of LOOPBACK_PORTS) {
+      pushVariant(variantHostname, port)
+    }
+  }
+
   if (hostname === '127.0.0.1') {
     pushVariant('localhost')
+    pushLoopbackPorts('127.0.0.1')
+    pushLoopbackPorts('localhost')
     return
   }
 
   if (hostname === 'localhost') {
     pushVariant('127.0.0.1')
+    pushLoopbackPorts('localhost')
+    pushLoopbackPorts('127.0.0.1')
     return
   }
 
   if (hostname === '0.0.0.0') {
     pushVariant('127.0.0.1')
     pushVariant('localhost')
+    pushLoopbackPorts('127.0.0.1')
+    pushLoopbackPorts('localhost')
+    return
+  }
+
+  if (LOOPBACK_HOSTNAMES.has(hostname)) {
+    pushLoopbackPorts(hostname)
   }
 }
 
@@ -95,13 +127,26 @@ function pushBaseUrl(candidates: string[], seen: Set<string>, value?: string | n
 }
 
 function getBackendBaseUrlCandidates() {
-  const configuredUrl = normalizeConfigValue(getConfigValue(['BACKEND_URL'], DEFAULT_BACKEND_URL))
   const candidates: string[] = []
   const seen = new Set<string>()
-  pushBaseUrl(candidates, seen, configuredUrl)
+
+  for (const key of BACKEND_URL_CONFIG_KEYS) {
+    pushBaseUrl(candidates, seen, getConfigValue([key], ''))
+  }
 
   if (candidates.length === 0) {
-    pushBaseUrl(candidates, seen, DEFAULT_BACKEND_URL)
+    for (const fallbackUrl of DEFAULT_LOOPBACK_BACKEND_URLS) {
+      pushBaseUrl(candidates, seen, fallbackUrl)
+    }
+  }
+
+  pushBaseUrl(candidates, seen, DEFAULT_BACKEND_URL)
+
+  if (preferredBackendBaseUrl && seen.has(preferredBackendBaseUrl)) {
+    return [
+      preferredBackendBaseUrl,
+      ...candidates.filter((candidate) => candidate !== preferredBackendBaseUrl),
+    ]
   }
 
   return candidates
@@ -113,6 +158,15 @@ function buildTargetUrl(baseUrl: string, request: Request, pathnameOverride?: st
   targetUrl.pathname = pathnameOverride || requestUrl.pathname
   targetUrl.search = requestUrl.search
   return targetUrl.toString()
+}
+
+function canRetryBackendRequest(init: RequestInit) {
+  const method = (init.method || 'GET').toUpperCase()
+  return method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
+}
+
+function waitFor(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export function buildForwardHeaders(request: Request) {
@@ -153,16 +207,23 @@ async function fetchAcrossBackendCandidates(
 ) {
   const candidates = getBackendBaseUrlCandidates()
   let lastError: unknown = null
+  const maxAttemptsPerCandidate = canRetryBackendRequest(init) ? 2 : 1
 
   for (const baseUrl of candidates) {
-    try {
-      const response = await fetch(requestBuilder(baseUrl), {
-        ...init,
-        cache: 'no-store',
-      })
-      return response
-    } catch (error) {
-      lastError = error
+    for (let attempt = 1; attempt <= maxAttemptsPerCandidate; attempt += 1) {
+      try {
+        const response = await fetch(requestBuilder(baseUrl), {
+          ...init,
+          cache: 'no-store',
+        })
+        preferredBackendBaseUrl = baseUrl
+        return response
+      } catch (error) {
+        lastError = error
+        if (attempt < maxAttemptsPerCandidate) {
+          await waitFor(250 * attempt)
+        }
+      }
     }
   }
 

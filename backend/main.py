@@ -3,13 +3,24 @@ import json
 import logging
 import os
 import sys
-import pyttsx3
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+try:
+    import pyttsx3
+except ImportError:
+    pyttsx3 = None
+
 def initialize_tts():
+    if pyttsx3 is None:
+        logger.warning("pyttsx3 is not installed. Local TTS generation is disabled.")
+        return None
+
     try:
         engine = pyttsx3.init()
         return engine
@@ -30,6 +41,9 @@ tts_engine = initialize_tts()
 
 def speak_text(text):
     """Call this function whenever the BPO system needs to talk"""
+    if tts_engine is None:
+        logger.warning("Ignoring local TTS request because pyttsx3 is unavailable.")
+        return
     tts_engine.say(text)
     tts_engine.runAndWait()
 
@@ -37,10 +51,6 @@ def speak_text(text):
 if __name__ == "__main__":
     speak_text("Welcome to the Speech Enabled BPO Platform.")
 
-
-# Configure logging early for import error handling
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 try:
     import azure.cognitiveservices.speech as speechsdk

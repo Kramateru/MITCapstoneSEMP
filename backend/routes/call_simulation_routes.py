@@ -1174,6 +1174,74 @@ def _get_effective_kpi_config(db: Session, batch_id: Optional[str]) -> BatchKPIC
     return _build_default_kpi_config(batch_id=batch_id)
 
 
+def _build_batch_target_kpis_payload(
+    kpi_config: BatchKPIConfig,
+    *,
+    batch_id: Optional[str] = None,
+) -> dict[str, Any]:
+    resolved_batch_id = batch_id or getattr(kpi_config, "batch_id", None)
+    target_aht_seconds = int(kpi_config.target_aht_seconds or 120)
+    return {
+        "speech_to_text_weight": float(kpi_config.speech_to_text_weight or 0.0),
+        "aht_weight": float(kpi_config.aht_weight or 0.0),
+        "rate_of_speech_weight": float(kpi_config.rate_of_speech_weight or 0.0),
+        "dead_air_weight": float(kpi_config.dead_air_weight or 0.0),
+        "empathy_statements_weight": float(kpi_config.empathy_statements_weight or 0.0),
+        "probing_questions_weight": float(kpi_config.probing_questions_weight or 0.0),
+        "grammar_weight": float(kpi_config.grammar_weight or 0.0),
+        "pronunciation_weight": float(kpi_config.pronunciation_weight or 0.0),
+        "pacing_weight": float(kpi_config.pacing_weight or 0.0),
+        "forbidden_words_penalty": float(kpi_config.forbidden_words_penalty or 0.0),
+        "passing_score": float(kpi_config.passing_score or DEFAULT_PASSING_SCORE),
+        "target_aht_seconds": target_aht_seconds,
+        "aht_seconds": target_aht_seconds,
+        "target_ros_words_per_min": float(kpi_config.target_ros_words_per_min or 150.0),
+        "target_dead_air_seconds": float(kpi_config.target_dead_air_seconds or 3.0),
+        "forbidden_words": _normalize_keyword_list(kpi_config.forbidden_words),
+        "empathy_keywords": _normalize_keyword_list(kpi_config.empathy_keywords),
+        "probing_keywords": _normalize_keyword_list(kpi_config.probing_keywords),
+        "batch_id": resolved_batch_id,
+        "kpi_source": "batch_kpi_config",
+    }
+
+
+def _apply_batch_kpi_to_call_simulation_config(
+    config: Optional[dict[str, Any]],
+    *,
+    kpi_config: BatchKPIConfig,
+    batch_id: Optional[str] = None,
+) -> dict[str, Any]:
+    resolved_config = _normalize_json_object(config)
+    passing_score = float(kpi_config.passing_score or DEFAULT_PASSING_SCORE)
+    return {
+        **resolved_config,
+        "target_kpis": _build_batch_target_kpis_payload(
+            kpi_config,
+            batch_id=batch_id,
+        ),
+        "passing_score": passing_score,
+        "certification_threshold": passing_score,
+    }
+
+
+def _resolve_call_simulation_config_for_batch(
+    db: Session,
+    scenario: Optional[Scenario],
+    *,
+    batch_id: Optional[str] = None,
+) -> dict[str, Any]:
+    config = _resolve_call_simulation_config(scenario)
+    if not batch_id:
+        return config
+
+    effective_kpi = _get_effective_kpi_config(db, batch_id)
+    return _apply_batch_kpi_to_call_simulation_config(
+        config,
+        kpi_config=effective_kpi,
+        batch_id=batch_id,
+    )
+
+
 def _calculate_weighted_score(
     *,
     speech_to_text_accuracy: float,
@@ -1734,14 +1802,7 @@ def _resolve_call_scenario_passing_score(
     scenario: Optional[Scenario],
     fallback: float,
 ) -> float:
-    config = _resolve_call_simulation_config(scenario)
-    target_kpis = _normalize_json_object(config.get("target_kpis"))
-    candidate_values = (
-        target_kpis.get("passing_score"),
-        config.get("passing_score"),
-        config.get("certification_threshold"),
-    )
-    for candidate in candidate_values:
+    for candidate in (fallback,):
         try:
             if candidate is None:
                 continue
@@ -1750,7 +1811,23 @@ def _resolve_call_scenario_passing_score(
             continue
         if 0.0 <= resolved <= 100.0:
             return round(resolved, 2)
-    return round(fallback, 2)
+
+    config = _resolve_call_simulation_config(scenario)
+    legacy_target_kpis = _normalize_json_object(config.get("target_kpis"))
+    for candidate in (
+        legacy_target_kpis.get("passing_score"),
+        config.get("passing_score"),
+        config.get("certification_threshold"),
+        DEFAULT_PASSING_SCORE,
+    ):
+        try:
+            resolved = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= resolved <= 100.0:
+            return round(resolved, 2)
+
+    return DEFAULT_PASSING_SCORE
 
 
 def _apply_call_scenario_passing_score(
@@ -1891,6 +1968,22 @@ def _serialize_scenario(
     if summary_source is None and assignment_summaries:
         summary_source = assignment_summaries[0]
 
+    resolved_batch_id = None
+    if summary_source is not None:
+        resolved_batch_id = summary_source.batch_id
+    elif highlighted_batch_id:
+        resolved_batch_id = highlighted_batch_id
+    elif batch is not None:
+        resolved_batch_id = batch.id
+    elif mapping is not None:
+        resolved_batch_id = mapping.batch_id
+
+    effective_call_simulation_config = _resolve_call_simulation_config_for_batch(
+        db,
+        scenario,
+        batch_id=resolved_batch_id,
+    )
+
     return CallSimulationScenarioResponse(
         id=scenario.id,
         title=scenario.title,
@@ -1902,7 +1995,7 @@ def _serialize_scenario(
         estimated_duration=scenario.estimated_duration,
         member_profile=_normalize_json_object(scenario.member_profile),
         cxone_metadata=_normalize_json_object(scenario.cxone_metadata),
-        call_simulation_config=_normalize_json_object(scenario.call_simulation_config),
+        call_simulation_config=effective_call_simulation_config,
         ringer_audio_url=scenario.ringer_audio_url,
         hold_audio_url=scenario.hold_audio_url,
         batch_id=(summary_source.batch_id if summary_source else batch.id if batch else None),
@@ -2761,6 +2854,12 @@ async def create_call_simulation_scenario(
             "require_hold_before_member_response": True,
         }
 
+    call_simulation_config = _apply_batch_kpi_to_call_simulation_config(
+        call_simulation_config,
+        kpi_config=_get_effective_kpi_config(db, batch.id),
+        batch_id=batch.id,
+    )
+
     new_scenario = Scenario(
         id=str(uuid.uuid4()),
         title=scenario_data.title.strip(),
@@ -2976,6 +3075,7 @@ async def get_batch_scenarios(
 @router.get("/scenarios/{scenario_id}", response_model=CallSimulationScenarioResponse)
 async def get_call_simulation_scenario(
     scenario_id: str,
+    batch_id: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
@@ -2983,16 +3083,34 @@ async def get_call_simulation_scenario(
     _require_trainer(current_user)
     scenario = _get_accessible_scenario(db, current_user, scenario_id)
 
-    mapping = (
-        db.query(BatchScenarioMapping)
-        .filter(
-            BatchScenarioMapping.scenario_id == scenario.id,
-            BatchScenarioMapping.is_active == True,
+    batch = _get_accessible_batch(db, current_user, batch_id) if batch_id else None
+    mapping = None
+    if batch is not None:
+        mapping = (
+            db.query(BatchScenarioMapping)
+            .filter(
+                BatchScenarioMapping.scenario_id == scenario.id,
+                BatchScenarioMapping.batch_id == batch.id,
+                BatchScenarioMapping.is_active == True,
+            )
+            .order_by(BatchScenarioMapping.assigned_at.desc())
+            .first()
         )
-        .order_by(BatchScenarioMapping.assigned_at.desc())
-        .first()
-    )
-    batch = db.query(Batch).filter(Batch.id == mapping.batch_id).first() if mapping else None
+
+    if mapping is None:
+        if batch is not None:
+            batch = None
+        mapping = (
+            db.query(BatchScenarioMapping)
+            .filter(
+                BatchScenarioMapping.scenario_id == scenario.id,
+                BatchScenarioMapping.is_active == True,
+            )
+            .order_by(BatchScenarioMapping.assigned_at.desc())
+            .first()
+        )
+        if batch is None and mapping is not None:
+            batch = db.query(Batch).filter(Batch.id == mapping.batch_id).first()
     variations = (
         db.query(ScenarioVariation)
         .filter(
@@ -3167,6 +3285,14 @@ async def update_call_simulation_scenario(
 
         scenario.lob = batch.lob
 
+    resolved_batch_id = batch.id if batch else active_mapping.batch_id if active_mapping else None
+    if resolved_batch_id:
+        scenario.call_simulation_config = _apply_batch_kpi_to_call_simulation_config(
+            scenario.call_simulation_config,
+            kpi_config=_get_effective_kpi_config(db, resolved_batch_id),
+            batch_id=resolved_batch_id,
+        )
+
     if scenario_update.variations is not None:
         existing_variations = (
             db.query(ScenarioVariation)
@@ -3310,24 +3436,54 @@ async def sync_scenario_to_supabase(
             # Validate scenario exists and belongs to trainer
             scenario = _get_accessible_scenario(db, current_user, scenario_id)
             logger.debug("Syncing scenario %s from database to Supabase", scenario_id)
+            sync_batch_id = sync_data.get("batchId")
+            if sync_batch_id:
+                _get_accessible_batch(db, current_user, str(sync_batch_id))
+            elif sync_data.get("batch_id"):
+                sync_batch_id = sync_data.get("batch_id")
+                _get_accessible_batch(db, current_user, str(sync_batch_id))
+            else:
+                latest_mapping = (
+                    db.query(BatchScenarioMapping)
+                    .filter(
+                        BatchScenarioMapping.scenario_id == scenario.id,
+                        BatchScenarioMapping.is_active == True,
+                    )
+                    .order_by(BatchScenarioMapping.assigned_at.desc())
+                    .first()
+                )
+                sync_batch_id = latest_mapping.batch_id if latest_mapping else None
+
+            scenario_config = _resolve_call_simulation_config_for_batch(
+                db,
+                scenario,
+                batch_id=str(sync_batch_id) if sync_batch_id else None,
+            )
+            passing_score = _resolve_call_scenario_passing_score(
+                scenario,
+                float(
+                    _get_effective_kpi_config(db, str(sync_batch_id) if sync_batch_id else None).passing_score
+                    or DEFAULT_PASSING_SCORE
+                ),
+            )
             
             # Build scenario data from database scenario
             scenario_sync_data = {
                 "source_scenario_id": str(scenario.id),
                 "trainer_id": str(current_user.id),
                 "title": scenario.title,
-                "topic": scenario.lob or scenario.title,
+                "topic": str(scenario_config.get("topic") or scenario.lob or scenario.title),
                 "description": scenario.description,
-                "target_kpis": scenario.call_simulation_config.get("target_kpis", {}) if scenario.call_simulation_config else {},
-                "script_flow": scenario.call_simulation_config.get("script_flow", []) if scenario.call_simulation_config else [],
+                "target_kpis": scenario_config.get("target_kpis", {}),
+                "script_flow": scenario_config.get("script_flow", []),
                 "ringer_audio_url": scenario.ringer_audio_url,
                 "hold_audio_url": scenario.hold_audio_url,
                 "difficulty": scenario.difficulty or "intermediate",
                 "estimated_duration_seconds": scenario.estimated_duration or 300,
-                "passing_score": float(scenario.call_simulation_config.get("certification_threshold", 80)) if scenario.call_simulation_config else 80.0,
+                "passing_score": passing_score,
                 "is_published": bool(scenario.is_published),
                 "is_active": True,
-                "metadata": scenario.call_simulation_config or {},
+                "metadata": scenario_config,
             }
         else:
             # Handle full scenario data sync from frontend
@@ -4037,23 +4193,26 @@ async def bulk_upload_scenarios(
         "member_name": first_member_row["actor"] if first_member_row else "Member",
         "problem_statement": first_member_row["script"] if first_member_row else first_csr_row["script"],
     }
-    target_scenario.call_simulation_config = {
-        "source": "bulk_upload",
-        "source_file_name": filename,
-        "source_document_title": document_title,
-        "source_document_topic": document_topic,
-        "source_document_description": document_description or description_override,
-        "use_google_asr": True,
-        "template_columns": template_columns,
-        "topic": document_topic or scenario_title_text,
-        "script_rows": row_assets["script_rows"],
-        "scenario_groups": grouped_rows,
-        "script_flow": row_assets["script_flow"],
-        "certification_threshold": DEFAULT_PASSING_SCORE,
-        "interface": "nice-cxone",
-        "show_actor_script_overlay": True,
-        "require_hold_before_member_response": True,
-    }
+    target_scenario.call_simulation_config = _apply_batch_kpi_to_call_simulation_config(
+        {
+            "source": "bulk_upload",
+            "source_file_name": filename,
+            "source_document_title": document_title,
+            "source_document_topic": document_topic,
+            "source_document_description": document_description or description_override,
+            "use_google_asr": True,
+            "template_columns": template_columns,
+            "topic": document_topic or scenario_title_text,
+            "script_rows": row_assets["script_rows"],
+            "scenario_groups": grouped_rows,
+            "script_flow": row_assets["script_flow"],
+            "interface": "nice-cxone",
+            "show_actor_script_overlay": True,
+            "require_hold_before_member_response": True,
+        },
+        kpi_config=_get_effective_kpi_config(db, batch.id),
+        batch_id=batch.id,
+    )
     target_scenario.ringer_audio_url = trainer_audio_settings.get("ringer_audio_url")
     target_scenario.hold_audio_url = trainer_audio_settings.get("hold_audio_url")
     target_scenario.is_published = True
@@ -4723,6 +4882,11 @@ async def start_simulation(
     db.refresh(new_session)
 
     effective_kpi = kpi_config or _build_default_kpi_config(batch_id=batch_id)
+    effective_call_simulation_config = _resolve_call_simulation_config_for_batch(
+        db,
+        scenario,
+        batch_id=batch_id,
+    )
     passing_score = _resolve_call_scenario_passing_score(
         scenario,
         float(effective_kpi.passing_score or DEFAULT_PASSING_SCORE),
@@ -4738,7 +4902,7 @@ async def start_simulation(
         passing_score=passing_score,
         member_profile=_normalize_json_object(scenario.member_profile),
         cxone_metadata=_normalize_json_object(scenario.cxone_metadata),
-        call_simulation_config=_normalize_json_object(scenario.call_simulation_config),
+        call_simulation_config=effective_call_simulation_config,
         ringer_audio_url=scenario.ringer_audio_url,
         hold_audio_url=scenario.hold_audio_url,
         steps=_build_scenario_steps(scenario),
