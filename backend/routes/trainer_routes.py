@@ -8,6 +8,7 @@ import io
 import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlparse
 
 from fastapi import (
     APIRouter,
@@ -74,6 +75,21 @@ from ..supabase_client import get_supabase_client
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
 SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
+SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".ogg", ".m4v")
+SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".webm")
+SUPPORTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
+SUPPORTED_AUDIO_MIME_TYPES = {
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/ogg",
+    "audio/webm",
+    "audio/flac",
+}
 
 
 def Depends(dependency=None):
@@ -367,6 +383,212 @@ def _sanitize_asset_name(filename: str) -> str:
     return cleaned.strip("-") or "asset.bin"
 
 
+def _normalize_media_url(value: Any) -> str:
+    return _normalize_text_value(value).split("#", 1)[0]
+
+
+def _path_has_extension(value: str, extensions: tuple[str, ...]) -> bool:
+    normalized_value = _normalize_media_url(value).lower()
+    if not normalized_value:
+        return False
+    try:
+        path = urlparse(normalized_value).path
+    except Exception:
+        path = normalized_value
+    return path.endswith(extensions)
+
+
+def _extract_youtube_video_id(url: str) -> Optional[str]:
+    normalized_url = _normalize_media_url(url)
+    if not normalized_url:
+        return None
+
+    try:
+        parsed = urlparse(normalized_url if "://" in normalized_url else f"https://{normalized_url}")
+    except Exception:
+        return None
+
+    hostname = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+
+    candidate: Optional[str] = None
+    if hostname == "youtu.be":
+        candidate = path.lstrip("/").split("/", 1)[0]
+    elif "youtube.com" in hostname or "youtube-nocookie.com" in hostname:
+        if path == "/watch":
+            candidate = parse_qs(parsed.query).get("v", [""])[0]
+        elif path.startswith("/embed/"):
+            candidate = path.split("/embed/", 1)[1].split("/", 1)[0]
+        elif path.startswith("/shorts/"):
+            candidate = path.split("/shorts/", 1)[1].split("/", 1)[0]
+
+    if candidate and re.fullmatch(r"[A-Za-z0-9_-]{11}", candidate):
+        return candidate
+    return None
+
+
+def _build_youtube_embed_url(url: str) -> Optional[str]:
+    video_id = _extract_youtube_video_id(url)
+    if not video_id:
+        return None
+    return f"https://www.youtube-nocookie.com/embed/{video_id}?rel=0"
+
+
+def _validate_uploadable_media_asset(
+    *,
+    module_type: Optional[str],
+    filename: str,
+    content_type: Optional[str],
+) -> None:
+    normalized_module_type = normalize_module_type(module_type) if module_type else ""
+    normalized_filename = (filename or "").strip().lower()
+    normalized_content_type = _normalize_text_value(content_type).lower()
+
+    if normalized_module_type == "video":
+        if normalized_content_type.startswith("video/") or normalized_filename.endswith(SUPPORTED_VIDEO_EXTENSIONS):
+            return
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported video format. Upload MP4, MOV, WEBM, OGG, or M4V.",
+        )
+
+    if normalized_module_type in {"audio", "case_study"}:
+        if normalized_content_type in SUPPORTED_AUDIO_MIME_TYPES or normalized_filename.endswith(SUPPORTED_AUDIO_EXTENSIONS):
+            return
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.",
+        )
+
+    if normalized_module_type == "infographic":
+        if normalized_content_type.startswith("image/") or normalized_filename.endswith(SUPPORTED_IMAGE_EXTENSIONS):
+            return
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported infographic format. Upload PNG, JPG, WEBP, GIF, or SVG.",
+        )
+
+
+def _prepare_module_media_payload(
+    *,
+    module_type: str,
+    content_url: Optional[str],
+    content_data: dict[str, Any],
+) -> tuple[Optional[str], dict[str, Any]]:
+    normalized_content_url = _normalize_media_url(content_url) or None
+    prepared_content_data = dict(content_data or {})
+    normalized_module_type = normalize_module_type(module_type)
+
+    if normalized_module_type == "video":
+        resolved_video_url = (
+            normalized_content_url
+            or _normalize_media_url(prepared_content_data.get("asset_url"))
+            or _normalize_media_url(prepared_content_data.get("video_url"))
+            or _normalize_media_url(prepared_content_data.get("youtube_url"))
+        )
+        if not resolved_video_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Upload a video file or paste a valid YouTube link before saving this video module.",
+            )
+
+        youtube_embed_url = _build_youtube_embed_url(resolved_video_url)
+        has_uploaded_video = bool(
+            _normalize_text_value(prepared_content_data.get("asset_storage_path"))
+            or _normalize_text_value(prepared_content_data.get("asset_record_id"))
+        )
+        has_direct_video_reference = _path_has_extension(resolved_video_url, SUPPORTED_VIDEO_EXTENSIONS)
+        declared_video_mime = _normalize_text_value(prepared_content_data.get("asset_content_type")).lower()
+        if not (
+            youtube_embed_url
+            or has_uploaded_video
+            or has_direct_video_reference
+            or declared_video_mime.startswith("video/")
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Invalid video reference. Paste a valid YouTube link "
+                    "(youtube.com/watch?v=, youtu.be/, or youtube.com/embed/) or upload MP4, MOV, WEBM, OGG, or M4V."
+                ),
+            )
+
+        prepared_content_data["asset_url"] = resolved_video_url
+        prepared_content_data["video_url"] = resolved_video_url
+        if youtube_embed_url:
+            prepared_content_data["youtube_url"] = resolved_video_url
+            prepared_content_data["youtube_embed_url"] = youtube_embed_url
+            prepared_content_data["video_source_type"] = "youtube"
+            prepared_content_data["video_type"] = "youtube"
+        else:
+            prepared_content_data.pop("youtube_url", None)
+            prepared_content_data.pop("youtube_embed_url", None)
+            prepared_content_data["video_source_type"] = (
+                "supabase_upload" if has_uploaded_video else "direct_url"
+            )
+            prepared_content_data["video_type"] = (
+                _normalize_text_value(prepared_content_data.get("asset_content_type"))
+                or "uploaded_video"
+            )
+        if _normalize_text_value(prepared_content_data.get("asset_storage_path")):
+            prepared_content_data["signed_url_required"] = bool(
+                prepared_content_data.get("signed_url_required", True)
+            )
+        return resolved_video_url, prepared_content_data
+
+    if normalized_module_type in {"audio", "case_study"}:
+        resolved_audio_url = (
+            _normalize_media_url(prepared_content_data.get("audio_url"))
+            or normalized_content_url
+            or _normalize_media_url(prepared_content_data.get("asset_url"))
+        )
+        if resolved_audio_url:
+            prepared_content_data["asset_url"] = resolved_audio_url
+            prepared_content_data["audio_url"] = resolved_audio_url
+
+        transcript_text = (
+            _normalize_text_value(prepared_content_data.get("transcript_text"))
+            or _normalize_text_value(prepared_content_data.get("captions_text"))
+            or _normalize_text_value(prepared_content_data.get("transcript"))
+            or _normalize_text_value(prepared_content_data.get("content"))
+        )
+        if transcript_text:
+            prepared_content_data["content"] = transcript_text
+            prepared_content_data["transcript"] = transcript_text
+            prepared_content_data["transcript_text"] = transcript_text
+            prepared_content_data["captions_text"] = transcript_text
+
+        summary_text = (
+            _normalize_text_value(prepared_content_data.get("summary_text"))
+            or _normalize_text_value(prepared_content_data.get("audio_summary"))
+            or _normalize_text_value(prepared_content_data.get("summary"))
+        )
+        if summary_text:
+            prepared_content_data["summary"] = summary_text
+            prepared_content_data["summary_text"] = summary_text
+            prepared_content_data["audio_summary"] = summary_text
+
+        has_uploaded_audio = bool(
+            _normalize_text_value(prepared_content_data.get("audio_storage_path"))
+            or _normalize_text_value(prepared_content_data.get("audio_content_id"))
+        )
+        if has_uploaded_audio:
+            prepared_content_data["audio_source_type"] = "supabase_upload"
+            prepared_content_data["signed_url_required"] = True
+        elif resolved_audio_url:
+            prepared_content_data["audio_source_type"] = "direct_url"
+
+        if transcript_text:
+            prepared_content_data["live_caption_mode"] = (
+                _normalize_text_value(prepared_content_data.get("live_caption_mode"))
+                or "speech_to_text_playback"
+            )
+
+        return resolved_audio_url or normalized_content_url, prepared_content_data
+
+    return normalized_content_url, prepared_content_data
+
+
 def _resolve_supabase_public_storage_target(value: Any) -> tuple[Optional[str], Optional[str]]:
     normalized_value = _normalize_text_value(value)
     if not normalized_value or SUPABASE_PUBLIC_OBJECT_MARKER not in normalized_value:
@@ -439,6 +661,11 @@ def _upload_microlearning_asset(
     sanitized = _sanitize_asset_name(filename)
     normalized_module_id = _normalize_text_value(module_id)
     normalized_module_type = normalize_module_type(module_type) if module_type else ""
+    _validate_uploadable_media_asset(
+        module_type=normalized_module_type,
+        filename=sanitized,
+        content_type=content_type,
+    )
     module_storage_segment = (
         normalized_module_id
         or f"draft-{normalized_module_type or 'asset'}"
@@ -1988,6 +2215,21 @@ async def create_microlearning_module(
         content_data["asset_bucket"] = normalized_asset_bucket or get_supabase_client().microlearning_bucket_name
     if content_data.get("asset_storage_path"):
         content_data["signed_url_required"] = bool(content_data.get("signed_url_required", True))
+    resolved_content_url, content_data = _prepare_module_media_payload(
+        module_type=module_type,
+        content_url=payload.content_url,
+        content_data=content_data,
+    )
+    resolved_audio_url = _normalize_text_value(content_data.get("audio_url")) or None
+    resolved_audio_transcript = _normalize_text_value(content_data.get("transcript_text")) or None
+    resolved_audio_duration = content_data.get("audio_duration_seconds")
+    resolved_audio_duration = (
+        int(resolved_audio_duration)
+        if isinstance(resolved_audio_duration, (int, float)) and float(resolved_audio_duration) > 0
+        else None
+    )
+    resolved_audio_language = _normalize_text_value(content_data.get("audio_language")) or "en-US"
+    resolved_audio_tts_url = _normalize_text_value(content_data.get("tts_url")) or None
 
     exercises = build_type_specific_exercises(
         module_type,
@@ -2005,7 +2247,12 @@ async def create_microlearning_module(
         content_data=content_data,
         passing_score=payload.passing_score,
         skill_focus=(payload.skill_focus or "").strip() or None,
-        content_url=(payload.content_url or "").strip() or None,
+        content_url=resolved_content_url,
+        audio_url=resolved_audio_url if module_type in {"audio", "case_study"} else None,
+        audio_transcript=resolved_audio_transcript if module_type in {"audio", "case_study"} else None,
+        audio_tts_url=resolved_audio_tts_url if module_type in {"audio", "case_study"} else None,
+        audio_duration_seconds=resolved_audio_duration if module_type in {"audio", "case_study"} else None,
+        audio_language=resolved_audio_language if module_type in {"audio", "case_study"} else "en-US",
         difficulty=payload.difficulty,
         exercises=exercises,
         assessment_method_id=None,
@@ -2080,6 +2327,11 @@ async def update_microlearning_module(
         next_content_data["asset_bucket"] = normalized_asset_bucket or get_supabase_client().microlearning_bucket_name
     if next_content_data.get("asset_storage_path"):
         next_content_data["signed_url_required"] = bool(next_content_data.get("signed_url_required", True))
+    next_content_url, next_content_data = _prepare_module_media_payload(
+        module_type=module_type,
+        content_url=next_content_url,
+        content_data=next_content_data,
+    )
     cleanup_storage_target, cleanup_asset_record_id = _prepare_replaced_module_asset_cleanup(
         previous_content_data=previous_content_data,
         next_content_data=next_content_data,
@@ -2112,6 +2364,23 @@ async def update_microlearning_module(
     module.passing_score = payload.passing_score
     module.skill_focus = next_skill_focus
     module.content_url = next_content_url
+    if module_type in {"audio", "case_study"}:
+        module.audio_url = _normalize_text_value(next_content_data.get("audio_url")) or None
+        module.audio_transcript = _normalize_text_value(next_content_data.get("transcript_text")) or None
+        module.audio_tts_url = _normalize_text_value(next_content_data.get("tts_url")) or None
+        next_audio_duration = next_content_data.get("audio_duration_seconds")
+        module.audio_duration_seconds = (
+            int(next_audio_duration)
+            if isinstance(next_audio_duration, (int, float)) and float(next_audio_duration) > 0
+            else None
+        )
+        module.audio_language = _normalize_text_value(next_content_data.get("audio_language")) or "en-US"
+    else:
+        module.audio_url = None
+        module.audio_transcript = None
+        module.audio_tts_url = None
+        module.audio_duration_seconds = None
+        module.audio_language = "en-US"
     module.difficulty = payload.difficulty
     module.assessment_method_id = None
     module.assessment_method = None

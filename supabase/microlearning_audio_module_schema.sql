@@ -1,6 +1,6 @@
--- Supabase schema for the Microlearning Audio Module.
--- Creates the private storage bucket used for uploaded MP3 lessons and the
--- metadata table that stores the transcript returned by Gemini.
+-- Supabase schema for the Microlearning media pipeline.
+-- Creates the lesson-media bucket used for uploaded audio/video/image assets
+-- plus the metadata table that stores transcript and caption data returned by Gemini.
 
 create extension if not exists pgcrypto;
 
@@ -10,7 +10,14 @@ values (
   'audio-modules',
   false,
   52428800,
-  array['audio/mpeg']
+  array[
+    'audio/*',
+    'video/*',
+    'image/*',
+    'text/*',
+    'application/pdf',
+    'application/octet-stream'
+  ]
 )
 on conflict (id) do update
 set
@@ -30,6 +37,9 @@ create table if not exists public.audio_content (
   transcript_text text,
   summary_text text,
   duration_seconds integer,
+  bucket_name text,
+  original_filename text,
+  caption_data jsonb,
   gemini_model text,
   gemini_file_uri text,
   created_at timestamptz not null default timezone('utc', now()),
@@ -41,6 +51,15 @@ alter table public.audio_content
 
 alter table public.audio_content
   add column if not exists summary_text text;
+
+alter table public.audio_content
+  add column if not exists bucket_name text;
+
+alter table public.audio_content
+  add column if not exists original_filename text;
+
+alter table public.audio_content
+  add column if not exists caption_data jsonb;
 
 create index if not exists idx_audio_content_trainer_id
   on public.audio_content (trainer_id);

@@ -85,6 +85,7 @@ export type UploadMicrolearningAudioResult = {
   audio_url: string
   signed_url: string
   storage_path: string
+  bucket_name: string
   transcript: string
   transcript_text: string
   summary_text: string
@@ -92,11 +93,21 @@ export type UploadMicrolearningAudioResult = {
   transcript_model: string
   duration_seconds: number | null
   mime_type: string
+  audio_language: string
+  original_filename: string
+  captions_url?: string | null
+  caption_data: CaptionCue[]
 }
 
 type GeminiAudioAnalysis = {
   transcript_text: string
   summary_text: string
+}
+
+type CaptionCue = {
+  start: number
+  end: number
+  text: string
 }
 
 function normalizeConfigValue(value: string | null | undefined) {
@@ -138,15 +149,36 @@ function sanitizeAudioFileName(fileName: string) {
   return cleaned.replace(/^-+|-+$/g, '') || 'audio-module.mp3'
 }
 
-function isMp3Upload(fileName: string, mimeType: string) {
+function isSupportedAudioUpload(fileName: string, mimeType: string) {
   const normalizedName = fileName.trim().toLowerCase()
   const normalizedMimeType = mimeType.trim().toLowerCase()
-  return normalizedName.endsWith('.mp3') || normalizedMimeType === 'audio/mpeg' || normalizedMimeType === 'audio/mp3'
+  return (
+    normalizedName.endsWith('.mp3')
+    || normalizedName.endsWith('.wav')
+    || normalizedName.endsWith('.m4a')
+    || normalizedName.endsWith('.ogg')
+    || normalizedName.endsWith('.aac')
+    || normalizedName.endsWith('.flac')
+    || normalizedName.endsWith('.webm')
+    || normalizedMimeType === 'audio/mpeg'
+    || normalizedMimeType === 'audio/mp3'
+    || normalizedMimeType === 'audio/wav'
+    || normalizedMimeType === 'audio/x-wav'
+    || normalizedMimeType === 'audio/mp4'
+    || normalizedMimeType === 'audio/x-m4a'
+    || normalizedMimeType === 'audio/ogg'
+    || normalizedMimeType === 'audio/aac'
+    || normalizedMimeType === 'audio/flac'
+    || normalizedMimeType === 'audio/webm'
+  )
 }
 
-function assertMp3Upload(fileName: string, mimeType: string) {
-  if (!isMp3Upload(fileName, mimeType)) {
-    throw new AssessmentHttpError(400, 'Only .mp3 uploads are supported for the Microlearning Audio Module.')
+function assertSupportedAudioUpload(fileName: string, mimeType: string) {
+  if (!isSupportedAudioUpload(fileName, mimeType)) {
+    throw new AssessmentHttpError(
+      400,
+      'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.',
+    )
   }
 }
 
@@ -236,6 +268,52 @@ function inferAudioMimeType(assetUrl: string, contentType?: string | null) {
   }
 
   return 'audio/mpeg'
+}
+
+function buildCaptionCues(transcript: string, durationSeconds?: number | null) {
+  const normalizedTranscript = transcript.replace(/\s+/g, ' ').trim()
+  if (!normalizedTranscript) {
+    return [] as CaptionCue[]
+  }
+
+  const words = normalizedTranscript.split(' ').filter(Boolean)
+  if (!words.length) {
+    return [] as CaptionCue[]
+  }
+
+  const chunks: string[] = []
+  let buffer: string[] = []
+
+  for (const word of words) {
+    buffer.push(word)
+    const sentenceBoundary = /[.!?]$/.test(word)
+    if (buffer.length >= 8 || sentenceBoundary) {
+      chunks.push(buffer.join(' '))
+      buffer = []
+    }
+  }
+
+  if (buffer.length) {
+    chunks.push(buffer.join(' '))
+  }
+
+  const safeDuration =
+    Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0
+      ? Number(durationSeconds)
+      : Math.max(chunks.length * 2.8, words.length * 0.45)
+  const secondsPerChunk = safeDuration / chunks.length
+
+  return chunks.map((text, index) => ({
+    start: Number((index * secondsPerChunk).toFixed(3)),
+    end: Number(
+      (
+        index === chunks.length - 1
+          ? safeDuration
+          : (index + 1) * secondsPerChunk
+      ).toFixed(3),
+    ),
+    text,
+  }))
 }
 
 async function loadAudioAssetBytes(assetUrl: string) {
@@ -520,10 +598,13 @@ async function syncBackendMicrolearningAudio(
     summaryText,
     audioContentId,
     storagePath,
+    bucketName,
     mimeType,
     audioLanguage,
     transcriptModel,
     durationSeconds,
+    originalFilename,
+    captionData,
   }: {
     moduleId: string
     audioUrl: string
@@ -531,10 +612,13 @@ async function syncBackendMicrolearningAudio(
     summaryText: string
     audioContentId: string
     storagePath: string
+    bucketName: string
     mimeType: string
     audioLanguage: string
     transcriptModel: string
     durationSeconds: number | null
+    originalFilename: string
+    captionData: CaptionCue[]
   },
 ) {
   const currentModule = await getBackendMicrolearningModule(authorization, moduleId)
@@ -551,13 +635,16 @@ async function syncBackendMicrolearningAudio(
     audio_summary: summaryText,
     audio_content_id: audioContentId,
     audio_storage_path: storagePath,
-    audio_bucket: getAudioBucketName(),
+    audio_bucket: bucketName,
     audio_content_type: mimeType,
     audio_language: audioLanguage,
+    audio_original_filename: originalFilename,
     transcript_provider: 'gemini',
     transcript_model: transcriptModel,
     signed_url_required: true,
-    live_caption_mode: 'simulated',
+    live_caption_mode: 'speech_to_text_playback',
+    audio_source_type: 'supabase_upload',
+    caption_data: captionData,
   } satisfies Record<string, unknown>
 
   await fetchBackendJson(
@@ -846,7 +933,7 @@ export async function uploadMicrolearningAudioContent({
   fileBytes,
   audioLanguage,
 }: UploadMicrolearningAudioParams): Promise<UploadMicrolearningAudioResult> {
-  assertMp3Upload(fileName, mimeType)
+  assertSupportedAudioUpload(fileName, mimeType)
 
   const supabase = createSupabaseAdminClient()
   const existingRow = await fetchAudioContentRow(moduleId)
@@ -870,6 +957,7 @@ export async function uploadMicrolearningAudioContent({
     mimeType,
     title,
   })
+  const captionData = buildCaptionCues(transcript_text || transcript)
 
   const persistedRow = await persistAudioContentRow(supabase, existingRow, {
     moduleId,
@@ -897,10 +985,13 @@ export async function uploadMicrolearningAudioContent({
     summaryText: summary_text,
     audioContentId: persistedRow.id,
     storagePath,
+    bucketName,
     mimeType,
     audioLanguage: audioLanguage || 'en-US',
     transcriptModel: geminiModel,
     durationSeconds: persistedRow.duration_seconds,
+    originalFilename: fileName,
+    captionData,
   })
 
   return {
@@ -910,6 +1001,7 @@ export async function uploadMicrolearningAudioContent({
     audio_url: canonicalAudioUrl,
     signed_url: signedUrl,
     storage_path: storagePath,
+    bucket_name: bucketName,
     transcript: transcript_text || transcript,
     transcript_text: transcript_text || transcript,
     summary_text,
@@ -917,5 +1009,8 @@ export async function uploadMicrolearningAudioContent({
     transcript_model: geminiModel,
     duration_seconds: persistedRow.duration_seconds,
     mime_type: mimeType,
+    audio_language: audioLanguage || 'en-US',
+    original_filename: fileName,
+    caption_data: captionData,
   }
 }

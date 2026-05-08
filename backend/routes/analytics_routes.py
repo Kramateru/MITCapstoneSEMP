@@ -3,8 +3,8 @@ Analytics Routes
 Handles reporting, dashboards, and performance tracking
 """
 
-from datetime import datetime, timedelta
-from typing import List, Optional
+from datetime import date, datetime, timedelta
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import func
@@ -26,6 +26,8 @@ from ..models import (
     MicrolearningAssignment,
 )
 from ..services.supabase_auth_service import filter_to_supabase_active_users
+from ..services.admin_learning_analytics import build_admin_learning_insights
+from ..services.trainer_learning_analytics import build_trainer_learning_insights
 from ..schemas import (
     BatchAnalyticsResponse,
     PerformanceMetricsResponse,
@@ -856,6 +858,51 @@ async def get_admin_performance_hub(
     }
 
 
+@router.get("/admin/learning-insights")
+async def get_admin_learning_insights(
+    trainer_id: Optional[str] = Query(None),
+    batch_id: Optional[str] = Query(None),
+    trainee_id: Optional[str] = Query(None),
+    module_id: Optional[str] = Query(None),
+    assessment_id: Optional[str] = Query(None),
+    exercise_id: Optional[str] = Query(None),
+    completion_status: Optional[str] = Query(None),
+    performance_level: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return admin-scoped learning analytics backed only by saved database records."""
+    current_user = await auth_utils.get_current_user(authorization, db)
+
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    try:
+        return build_admin_learning_insights(
+            db,
+            trainer_id=trainer_id,
+            batch_id=batch_id,
+            trainee_id=trainee_id,
+            module_id=module_id,
+            assessment_id=assessment_id,
+            exercise_id=exercise_id,
+            completion_status=completion_status,
+            performance_level=performance_level,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+
 @router.get("/trainer/performance-hub")
 async def get_trainer_performance_hub(
     authorization: Optional[str] = Header(None),
@@ -1044,6 +1091,46 @@ async def get_trainer_performance_hub(
         "top_performers": trainee_rows[:5],
         "needs_attention": sorted(trainee_rows, key=lambda row: (row["avg_score"], row["session_count"]))[:5],
     }
+
+
+@router.get("/trainer/learning-insights")
+async def get_trainer_learning_insights(
+    batch_id: Optional[str] = Query(None),
+    trainee_id: Optional[str] = Query(None),
+    module_id: Optional[str] = Query(None),
+    assessment_id: Optional[str] = Query(None),
+    exercise_id: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return trainer-owned learning analytics backed by real module assignments and assessment results."""
+    current_user = await auth_utils.get_current_user(authorization, db)
+
+    if current_user.role != UserRole.TRAINER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trainer access required",
+        )
+
+    try:
+        return build_trainer_learning_insights(
+            db,
+            trainer=current_user,
+            batch_id=batch_id,
+            trainee_id=trainee_id,
+            module_id=module_id,
+            assessment_id=assessment_id,
+            exercise_id=exercise_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
 
 
 @router.get("/trainee/performance-hub")

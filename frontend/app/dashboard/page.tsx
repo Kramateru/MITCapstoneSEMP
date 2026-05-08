@@ -4,18 +4,17 @@ import AdminDashboard from '@/app/components/AdminDashboard'
 import TraineeDashboard from '@/app/components/TraineeDashboard'
 import TrainerDashboard from '@/app/components/TrainerDashboard'
 import { useAuth } from '@/app/context/AuthContext'
-import { useRouter } from 'next/navigation'
+import { navigateToPath } from '@/app/utils/auth-navigation'
 import { useEffect } from 'react'
 
 export default function DashboardPage() {
-  const router = useRouter()
   const { user, isLoading, isAuthenticated } = useAuth()
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
-      router.push('/login')
+      navigateToPath('/login')
     }
-  }, [isLoading, isAuthenticated, router])
+  }, [isLoading, isAuthenticated])
 
   if (isLoading) {
     return (

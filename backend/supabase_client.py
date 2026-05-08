@@ -411,14 +411,14 @@ class SupabaseClient:
         content_type: Optional[str] = None,
     ) -> Optional[str]:
         """
-        Upload microlearning audio file (MP3/WAV) to Supabase storage.
+        Upload microlearning lesson audio to Supabase storage.
         
         Args:
             file_data: Audio file bytes
             module_id: Microlearning module ID for organization
             trainer_id: Trainer ID for ownership tracking
             filename: Optional custom filename. If not provided, generates one with timestamp
-            content_type: MIME type (defaults to audio/mpeg for MP3)
+            content_type: MIME type for the uploaded lesson audio
         
         Returns:
             Public URL of uploaded file, or None if upload fails

@@ -51,6 +51,7 @@ from ..models import (
     SystemLog,
     User,
     UserRole,
+    batch_user_association,
 )
 from ..services.microlearning import (
     ensure_module_exercises,
@@ -2104,25 +2105,35 @@ async def admin_dashboard(
     current_user: Any = Depends(verify_admin), db: Session = Depends(get_db)
 ):
     """Admin dashboard with system overview"""
-    total_users = db.query(User).filter(User.is_active == True).count()
-    total_scenarios = db.query(Scenario).filter(Scenario.is_published == True).count()
-    total_sessions = db.query(PracticeSession).count()
+    total_users = db.query(User).filter(User.is_active.is_(True)).count()
+    total_scenarios = db.query(Scenario).filter(Scenario.is_published.is_(True)).count()
 
     trainee_count = db.query(User).filter(User.role == UserRole.TRAINEE).count()
     trainer_count = db.query(User).filter(User.role == UserRole.TRAINER).count()
-    active_batches = sum(
-        1
-        for batch in db.query(Batch).all()
-        if any(user.role == UserRole.TRAINEE for user in batch.users)
+    # Count batches with at least one trainee directly in SQL to avoid loading every
+    # batch and relationship collection into Python on each dashboard refresh.
+    active_batches = (
+        db.query(func.count(func.distinct(Batch.id)))
+        .select_from(Batch)
+        .join(batch_user_association, batch_user_association.c.batch_id == Batch.id)
+        .join(User, User.id == batch_user_association.c.user_id)
+        .filter(User.role == UserRole.TRAINEE)
+        .scalar()
+        or 0
     )
     average_completion = db.query(func.avg(CourseAssignment.completion_percentage)).scalar() or 0
 
-    avg_score = db.query(func.avg(PracticeSession.overall_score)).scalar() or 0
-    audio_sessions = (
-        db.query(PracticeSession)
-        .filter(PracticeSession.audio_file_url.isnot(None))
-        .count()
+    session_metrics = (
+        db.query(
+            func.count(PracticeSession.id).label("total_sessions"),
+            func.avg(PracticeSession.overall_score).label("average_score"),
+            func.count(PracticeSession.audio_file_url).label("sessions_with_audio"),
+        )
+        .one()
     )
+    total_sessions = int(session_metrics.total_sessions or 0)
+    avg_score = float(session_metrics.average_score or 0)
+    audio_sessions = int(session_metrics.sessions_with_audio or 0)
     audio_coverage = round((audio_sessions / total_sessions * 100) if total_sessions else 0.0, 2)
 
     database_status = {
@@ -2139,12 +2150,13 @@ async def admin_dashboard(
 
     supabase = get_supabase_client()
     openai_key_configured = bool(os.getenv("OPENAI_API_KEY"))
-    recent_logs = db.query(SystemLog).order_by(SystemLog.created_at.desc()).limit(8).all()
-    actor_ids = [log.admin_id for log in recent_logs if log.admin_id]
-    actor_lookup = {
-        user.id: user.full_name
-        for user in db.query(User).filter(User.id.in_(actor_ids)).all()
-    } if actor_ids else {}
+    recent_logs = (
+        db.query(SystemLog, User.full_name.label("actor_name"))
+        .outerjoin(User, User.id == SystemLog.admin_id)
+        .order_by(SystemLog.created_at.desc())
+        .limit(8)
+        .all()
+    )
 
     return {
         "total_users": total_users,
@@ -2194,11 +2206,11 @@ async def admin_dashboard(
                 "label": _format_system_log_action(log.action),
                 "entity_type": log.entity_type,
                 "entity_id": log.entity_id,
-                "actor_name": actor_lookup.get(log.admin_id, "System"),
+                "actor_name": actor_name or "System",
                 "created_at": log.created_at,
                 "changes": log.changes or {},
             }
-            for log in recent_logs
+            for log, actor_name in recent_logs
         ],
         "timestamp": datetime.utcnow(),
     }

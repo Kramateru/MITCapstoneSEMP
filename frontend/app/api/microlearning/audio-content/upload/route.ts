@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     const audioLanguage = String(formData.get('audioLanguage') || 'en-US').trim()
 
     if (!(file instanceof File)) {
-      return NextResponse.json({ error: 'An .mp3 file is required.' }, { status: 400 })
+      return NextResponse.json({ error: 'An audio file is required.' }, { status: 400 })
     }
     if (!moduleId) {
       return NextResponse.json({ error: 'moduleId is required.' }, { status: 400 })
@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       authorization,
       moduleId,
       trainerId: sessionUser.userId,
-      title: title || file.name.replace(/\.mp3$/i, ''),
+      title: title || file.name.replace(/\.[A-Za-z0-9]+$/i, ''),
       fileName: file.name,
       mimeType: file.type || 'audio/mpeg',
       fileBytes: Buffer.from(await file.arrayBuffer()),

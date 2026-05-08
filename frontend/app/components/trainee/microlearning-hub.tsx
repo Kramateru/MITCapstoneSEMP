@@ -460,6 +460,34 @@ function buildSimulatedCaptionCues(transcript: string, durationSeconds?: number 
   }));
 }
 
+function normalizeCaptionCueList(value: unknown) {
+  if (!Array.isArray(value)) {
+    return [] as CaptionCue[];
+  }
+
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+
+      const cue = entry as { start?: unknown; end?: unknown; text?: unknown };
+      const start = Number(cue.start);
+      const end = Number(cue.end);
+      const text = typeof cue.text === 'string' ? cue.text.trim() : '';
+      if (!text || !Number.isFinite(start) || !Number.isFinite(end) || end < start) {
+        return null;
+      }
+
+      return {
+        start,
+        end,
+        text,
+      } satisfies CaptionCue;
+    })
+    .filter((cue): cue is CaptionCue => Boolean(cue));
+}
+
 function collectSpeechTranscript(event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) {
   let transcript = '';
 
@@ -660,6 +688,7 @@ interface AudioPlaybackCardProps {
   audioUrl?: string | null;
   hasPrimaryAudio?: boolean;
   captionsUrl?: string | null;
+  captionData?: unknown;
   transcriptText?: string | null;
   summaryText?: string | null;
   ttsUrl?: string | null;
@@ -708,13 +737,14 @@ function AudioPlaybackCard({
   audioUrl,
   hasPrimaryAudio,
   captionsUrl,
+  captionData,
   transcriptText,
   summaryText,
   ttsUrl,
   languageLabel,
   durationSeconds,
   title,
-  transcriptHeading = 'Transcript / TTS Text',
+  transcriptHeading = 'Speech-to-Text Caption',
   transcriptPlaceholder,
   description,
 }: AudioPlaybackCardProps) {
@@ -723,7 +753,7 @@ function AudioPlaybackCard({
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsObjectUrlRef = useRef<string | null>(null);
   const browserSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const [captionCues, setCaptionCues] = useState<CaptionCue[]>([]);
+  const [captionCues, setCaptionCues] = useState<CaptionCue[]>(() => normalizeCaptionCueList(captionData));
   const [currentTime, setCurrentTime] = useState(0);
   const [resolvedDuration, setResolvedDuration] = useState(0);
   const [isPrimaryPlaying, setIsPrimaryPlaying] = useState(false);
@@ -947,6 +977,12 @@ function AudioPlaybackCard({
   );
 
   useEffect(() => {
+    const embeddedCaptionCues = normalizeCaptionCueList(captionData);
+    if (embeddedCaptionCues.length) {
+      setCaptionCues(embeddedCaptionCues);
+      return;
+    }
+
     const controller = new AbortController();
 
     if (!resolvedCaptionsUrl) {
@@ -970,7 +1006,7 @@ function AudioPlaybackCard({
       });
 
     return () => controller.abort();
-  }, [resolvedCaptionsUrl]);
+  }, [captionData, resolvedCaptionsUrl]);
 
   useEffect(() => {
     setShowTranscript(false);
@@ -983,6 +1019,7 @@ function AudioPlaybackCard({
     setResolvedTranscriptText(transcriptText?.trim() || '');
     setResolvedSummaryText(summaryText?.trim() || '');
     setResolvedCaptionsUrl(captionsUrl || '');
+    setCaptionCues(normalizeCaptionCueList(captionData));
     revokeTtsPlaybackUrl();
     cancelBrowserSpeech();
 
@@ -997,7 +1034,7 @@ function AudioPlaybackCard({
       ttsAudioRef.current.pause();
       ttsAudioRef.current.currentTime = 0;
     }
-  }, [audioUrl, cancelBrowserSpeech, captionsUrl, moduleId, revokeTtsPlaybackUrl, summaryText, transcriptText, ttsUrl]);
+  }, [audioUrl, cancelBrowserSpeech, captionData, captionsUrl, moduleId, revokeTtsPlaybackUrl, summaryText, transcriptText, ttsUrl]);
 
   useEffect(() => {
     if (!(hasPrimaryAudio ?? Boolean(audioUrl))) {
@@ -1376,13 +1413,18 @@ function AudioPlaybackCard({
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{transcriptHeading}</p>
             <Badge variant="outline" className="text-xs">
-              {isPrimaryPlaying ? 'Live Caption Mode' : isTtsPlaying ? 'Visible During TTS' : 'Reference Text'}
+              {isPrimaryPlaying ? 'Live Caption' : isTtsPlaying ? 'Caption During TTS' : 'Speech-to-Text Reference'}
             </Badge>
           </div>
           {activeCue ? (
             <div className="mt-3 rounded-lg border border-sky-200 bg-white px-3 py-2 text-base font-medium text-slate-900">
               {activeCue.text}
             </div>
+          ) : null}
+          {!activeCue && resolvedCaptionCues.length ? (
+            <p className="mt-3 text-xs uppercase tracking-[0.18em] text-slate-500">
+              Speech-to-Text Caption timeline loaded
+            </p>
           ) : null}
           <div className="mt-3 whitespace-pre-wrap text-sm text-slate-700">
             {transcriptBody || transcriptPlaceholder}
@@ -2512,6 +2554,7 @@ export default function MicrolearningHub() {
     const summaryText = content.summary_text || content.audio_summary || content.summary || '';
     const ttsUrl = moduleDetail.audio_tts_url || content.tts_url || '';
     const captionsUrl = moduleDetail.captions_url || content.captions_url || '';
+    const captionData = content.caption_data;
     const youtubeEmbedUrl = activeModuleGateState.youtubeEmbedUrl;
     const assetKind = activeModuleGateState.assetKind;
 
@@ -2856,6 +2899,7 @@ export default function MicrolearningHub() {
               audioUrl={assetUrl}
               hasPrimaryAudio={activeModuleGateState.hasPlayableAudio}
               captionsUrl={captionsUrl}
+              captionData={captionData}
               transcriptText={transcriptText}
               summaryText={summaryText}
               ttsUrl={ttsUrl}
@@ -2890,6 +2934,7 @@ export default function MicrolearningHub() {
               description="Use the play button when you want to review the case audio. The written text stays visible while playback is active."
               audioUrl={caseStudyAudioUrl}
               captionsUrl={captionsUrl}
+              captionData={captionData}
               transcriptText={caseStudyNarrative}
               summaryText={caseStudySummary}
               ttsUrl={ttsUrl}

@@ -6,6 +6,7 @@ import { Badge } from '@/app/components/ui/badge';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
+import { getRoleHomePath, navigateToPath } from '@/app/utils/auth-navigation';
 import {
     applyUserSettingsToDocument,
     buildDefaultUserSettings,
@@ -25,12 +26,6 @@ interface SidebarItem {
   href: string;
   badge?: number;
 }
-
-const ROLE_HOME = {
-  admin: '/admin/dashboard',
-  trainer: '/trainer/dashboard',
-  trainee: '/trainee/dashboard',
-} as const;
 
 export function DashboardLayout({
   children,
@@ -132,14 +127,14 @@ export function DashboardLayout({
     }
 
     if (!user) {
-      router.replace('/login');
+      navigateToPath('/login');
       return;
     }
 
     if (user.user_role !== resolvedUserRole) {
-      router.replace(ROLE_HOME[user.user_role] ?? '/dashboard');
+      navigateToPath(getRoleHomePath(user.user_role));
     }
-  }, [isLoading, resolvedUserRole, router, user]);
+  }, [isLoading, resolvedUserRole, user]);
 
   useEffect(() => {
     sidebarItems.forEach((item) => {
@@ -234,7 +229,7 @@ export function DashboardLayout({
 
   const handleLogout = () => {
     logout();
-    router.replace('/login');
+    navigateToPath('/login');
   };
 
   const handleSidebarLinkClick = () => {

@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 
 import {
   attemptRecoverFromRuntimeAssetError,
+  markRuntimeAssetLoadSuccessful,
   normalizeConnectivityError,
 } from '@/app/utils/runtime-errors'
 
@@ -28,8 +29,19 @@ export function RuntimeResilience() {
       }
     }) as typeof window.fetch
 
+    const getRuntimeAssetErrorSource = (event: ErrorEvent) => {
+      const resourceTarget = event.target
+      if (resourceTarget instanceof HTMLScriptElement && resourceTarget.src) {
+        return resourceTarget.src
+      }
+      if (resourceTarget instanceof HTMLLinkElement && resourceTarget.href) {
+        return resourceTarget.href
+      }
+      return event.error || event.message || event.filename
+    }
+
     const handleError = (event: ErrorEvent) => {
-      if (attemptRecoverFromRuntimeAssetError(event.error || event.message || event.filename)) {
+      if (attemptRecoverFromRuntimeAssetError(getRuntimeAssetErrorSource(event))) {
         event.preventDefault()
       }
     }
@@ -40,12 +52,23 @@ export function RuntimeResilience() {
       }
     }
 
-    window.addEventListener('error', handleError)
+    const handleLoad = () => {
+      markRuntimeAssetLoadSuccessful()
+    }
+
+    if (document.readyState === 'complete') {
+      window.setTimeout(handleLoad, 0)
+    } else {
+      window.addEventListener('load', handleLoad, { once: true })
+    }
+
+    window.addEventListener('error', handleError, true)
     window.addEventListener('unhandledrejection', handleUnhandledRejection)
 
     return () => {
-      window.removeEventListener('error', handleError)
+      window.removeEventListener('error', handleError, true)
       window.removeEventListener('unhandledrejection', handleUnhandledRejection)
+      window.removeEventListener('load', handleLoad)
 
       runtimeWindow.__speechEnablerFetchConsumers = Math.max(
         0,

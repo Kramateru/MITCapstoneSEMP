@@ -180,9 +180,13 @@ export interface ModuleFormState {
   // Audio specific metadata
   audio_content_id: string;
   audio_storage_path: string;
+  audio_bucket_name: string;
+  audio_content_type: string;
+  audio_original_filename: string;
   audio_transcript_provider: string;
   audio_tts_url: string;
   audio_captions_url: string;
+  audio_caption_data_json: string;
   audio_duration_seconds: number;
   audio_language: string;
   audio_summary_text: string;
@@ -230,9 +234,13 @@ export function emptyModuleForm(): ModuleFormState {
     case_study_questions: [],
     audio_content_id: '',
     audio_storage_path: '',
+    audio_bucket_name: '',
+    audio_content_type: '',
+    audio_original_filename: '',
     audio_transcript_provider: '',
     audio_tts_url: '',
     audio_captions_url: '',
+    audio_caption_data_json: '',
     audio_duration_seconds: 0,
     audio_language: 'en-US',
     audio_summary_text: '',
@@ -246,11 +254,42 @@ export function splitToList(value: string) {
     .filter(Boolean);
 }
 
-export function buildContentData(form: ModuleFormState) {
+function parseCaptionDataJson(value: string) {
+  if (!value.trim()) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as Array<{ start?: number; end?: number; text?: string }>;
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    return parsed
+      .map((cue) => ({
+        start: Number(cue.start || 0),
+        end: Number(cue.end || 0),
+        text: typeof cue.text === 'string' ? cue.text.trim() : '',
+      }))
+      .filter((cue) => cue.text && cue.end >= cue.start);
+  } catch {
+    return undefined;
+  }
+}
+
+export function buildContentData(form: ModuleFormState, previousContentData?: Record<string, any>) {
+  const preserved = previousContentData ? { ...previousContentData } : {};
+
   switch (form.module_type) {
     case 'video':
       return {
+        ...preserved,
         asset_url: form.content_url || undefined,
+        video_url: form.content_url || undefined,
+        youtube_url: getYouTubeUrl(form.content_url) || undefined,
+        youtube_embed_url: getYouTubeEmbedUrl(form.content_url) || undefined,
+        video_source_type: getVideoSourceType(form),
+        video_type: getVideoType(form),
         asset_record_id: form.asset_record_id || undefined,
         asset_storage_path: form.asset_storage_path || undefined,
         asset_bucket: form.asset_bucket_name || undefined,
@@ -275,6 +314,7 @@ export function buildContentData(form: ModuleFormState) {
       };
     case 'quiz':
       return {
+        ...preserved,
         questions: form.quiz_questions.map(q => ({
           question: q.question,
           options: q.options,
@@ -283,6 +323,7 @@ export function buildContentData(form: ModuleFormState) {
       };
     case 'flashcard':
       return {
+        ...preserved,
         cards: form.flashcards.map(card => ({
           front: card.front,
           back: card.back,
@@ -290,6 +331,7 @@ export function buildContentData(form: ModuleFormState) {
       };
     case 'infographic':
       return {
+        ...preserved,
         asset_url: form.content_url || undefined,
         asset_record_id: form.asset_record_id || undefined,
         asset_storage_path: form.asset_storage_path || undefined,
@@ -312,6 +354,7 @@ export function buildContentData(form: ModuleFormState) {
       };
     case 'case_study':
       return {
+        ...preserved,
         content: form.case_study_content,
         questions: form.case_study_questions.map(q => ({
           question: q.question,
@@ -325,6 +368,7 @@ export function buildContentData(form: ModuleFormState) {
       };
     case 'audio':
       return {
+        ...preserved,
         asset_url: form.content_url || undefined,
         audio_url: form.content_url || undefined,
         content: form.case_study_content,
@@ -336,12 +380,18 @@ export function buildContentData(form: ModuleFormState) {
         audio_summary: form.audio_summary_text || undefined,
         audio_content_id: form.audio_content_id || undefined,
         audio_storage_path: form.audio_storage_path || undefined,
+        audio_bucket: form.audio_bucket_name || undefined,
+        audio_content_type: form.audio_content_type || undefined,
+        audio_original_filename: form.audio_original_filename || undefined,
         transcript_provider: form.audio_transcript_provider || undefined,
         signed_url_required: true,
         tts_url: form.audio_tts_url || undefined,
         captions_url: form.audio_captions_url || undefined,
+        caption_data: parseCaptionDataJson(form.audio_caption_data_json),
         audio_duration_seconds: form.audio_duration_seconds || undefined,
         audio_language: form.audio_language || 'en-US',
+        audio_source_type: form.audio_storage_path ? 'supabase_upload' : undefined,
+        live_caption_mode: form.case_study_content.trim() ? 'speech_to_text_playback' : undefined,
         questions: form.case_study_questions.map(q => ({
           question: q.question,
           type: q.type,
@@ -382,9 +432,13 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
     topic_category_id: module.topic_category_id || '',
     audio_content_id: content.audio_content_id || '',
     audio_storage_path: content.audio_storage_path || '',
+    audio_bucket_name: content.audio_bucket || '',
+    audio_content_type: content.audio_content_type || '',
+    audio_original_filename: content.audio_original_filename || '',
     audio_transcript_provider: content.transcript_provider || '',
     audio_tts_url: module.audio_tts_url || content.tts_url || '',
     audio_captions_url: content.captions_url || '',
+    audio_caption_data_json: Array.isArray(content.caption_data) ? JSON.stringify(content.caption_data) : '',
     audio_duration_seconds: module.audio_duration_seconds || content.audio_duration_seconds || 0,
     audio_language: module.audio_language || content.audio_language || 'en-US',
     audio_summary_text: content.summary_text || content.audio_summary || content.summary || '',
@@ -493,4 +547,56 @@ export function formatDate(value?: string | null) {
   if (!value) return 'No date';
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function getYouTubeUrl(value?: string | null) {
+  const normalized = (value || '').trim();
+  return getYouTubeEmbedUrl(normalized) ? normalized : '';
+}
+
+function getYouTubeEmbedUrl(url?: string | null) {
+  if (!url) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(url, 'http://localhost');
+    const hostname = parsed.hostname.toLowerCase();
+    let videoId = '';
+
+    if (hostname === 'youtu.be') {
+      videoId = parsed.pathname.replace(/^\/+/, '').split('/')[0] || '';
+    } else if (hostname.includes('youtube.com') || hostname.includes('youtube-nocookie.com')) {
+      if (parsed.pathname === '/watch') {
+        videoId = parsed.searchParams.get('v') || '';
+      } else if (parsed.pathname.startsWith('/embed/')) {
+        videoId = parsed.pathname.split('/embed/')[1]?.split('/')[0] || '';
+      } else if (parsed.pathname.startsWith('/shorts/')) {
+        videoId = parsed.pathname.split('/shorts/')[1]?.split('/')[0] || '';
+      }
+    }
+
+    return /^[A-Za-z0-9_-]{11}$/.test(videoId)
+      ? `https://www.youtube-nocookie.com/embed/${videoId}?rel=0`
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function getVideoSourceType(form: ModuleFormState) {
+  if (getYouTubeEmbedUrl(form.content_url)) {
+    return 'youtube';
+  }
+  if (form.asset_storage_path || form.asset_record_id) {
+    return 'supabase_upload';
+  }
+  return form.content_url.trim() ? 'direct_url' : undefined;
+}
+
+function getVideoType(form: ModuleFormState) {
+  if (getYouTubeEmbedUrl(form.content_url)) {
+    return 'youtube';
+  }
+  return form.asset_content_type || undefined;
 }

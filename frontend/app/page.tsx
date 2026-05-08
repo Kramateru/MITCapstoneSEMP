@@ -1,22 +1,21 @@
 'use client'
 
 import { useAuth } from '@/app/context/AuthContext'
-import { useRouter } from 'next/navigation'
+import { navigateToPath } from '@/app/utils/auth-navigation'
 import { useEffect } from 'react'
 
 export default function Home() {
-  const router = useRouter()
   const { isAuthenticated, isLoading } = useAuth()
 
   useEffect(() => {
     if (!isLoading) {
       if (isAuthenticated) {
-        router.push('/dashboard')
+        navigateToPath('/dashboard')
       } else {
-        router.push('/login')
+        navigateToPath('/login')
       }
     }
-  }, [isLoading, isAuthenticated, router])
+  }, [isLoading, isAuthenticated])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-950 via-blue-800 to-blue-200 flex items-center justify-center p-6">

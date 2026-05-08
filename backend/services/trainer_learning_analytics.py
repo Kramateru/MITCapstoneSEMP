@@ -1,0 +1,1198 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import date, datetime, time
+from typing import Any, Optional
+
+from sqlalchemy.orm import Session, selectinload
+
+from ..models import (
+    Batch,
+    CertificateRecord,
+    MCQAssessment,
+    MCQCategory,
+    MCQSubmission,
+    MicrolearningAssignment,
+    MicrolearningModule,
+    User,
+    UserRole,
+)
+from .microlearning import (
+    filter_current_assignments,
+    refresh_assignment_progress,
+    serialize_assignment_summary,
+)
+
+
+def _average(values: list[float]) -> float:
+    cleaned = [float(value) for value in values if value is not None]
+    return round(sum(cleaned) / len(cleaned), 2) if cleaned else 0.0
+
+
+def _to_iso(value: Optional[datetime]) -> Optional[str]:
+    if not value:
+        return None
+    return value.isoformat()
+
+
+def _bounds_from_dates(
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    start_at = datetime.combine(start_date, time.min) if start_date else None
+    end_at = datetime.combine(end_date, time.max) if end_date else None
+    return start_at, end_at
+
+
+def _in_range(
+    value: Optional[datetime],
+    start_at: Optional[datetime],
+    end_at: Optional[datetime],
+) -> bool:
+    if not value:
+        return start_at is None and end_at is None
+    if start_at and value < start_at:
+        return False
+    if end_at and value > end_at:
+        return False
+    return True
+
+
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _feedback_label(value: Any) -> str:
+    normalized = _normalize_text(value).replace("_", " ")
+    return normalized.title() if normalized else "Uncategorized"
+
+
+def _format_batch_label(batch: Optional[Batch]) -> str:
+    if not batch:
+        return "Direct Assignment"
+    if batch.wave_number is not None:
+        return f"{batch.name} | Wave {batch.wave_number}"
+    return batch.name
+
+
+def _exercise_filter_key(module_id: str, exercise_id: str) -> str:
+    return f"{module_id}:{exercise_id}"
+
+
+def _module_activity_at(assignment: MicrolearningAssignment) -> Optional[datetime]:
+    return (
+        assignment.completed_at
+        or assignment.updated_at
+        or assignment.started_at
+        or assignment.assigned_at
+    )
+
+
+def _assessment_activity_at(
+    assessment: MCQAssessment,
+    submission: Optional[MCQSubmission],
+) -> Optional[datetime]:
+    return (
+        getattr(submission, "submitted_at", None)
+        or assessment.updated_at
+        or assessment.created_at
+    )
+
+
+def _build_score_distribution(values: list[float]) -> list[dict[str, Any]]:
+    buckets = [
+        ("0-59", 0, 60),
+        ("60-69", 60, 70),
+        ("70-79", 70, 80),
+        ("80-89", 80, 90),
+        ("90-100", 90, 101),
+    ]
+    distribution = []
+    for label, lower, upper in buckets:
+        count = sum(1 for value in values if lower <= float(value) < upper)
+        distribution.append(
+            {
+                "range_label": label,
+                "count": count,
+            }
+        )
+    return distribution
+
+
+def _trainer_scope(
+    db: Session,
+    *,
+    trainer: User,
+) -> dict[str, Any]:
+    batches = (
+        db.query(Batch)
+        .filter(Batch.created_by == trainer.id, Batch.is_active == True)
+        .order_by(Batch.wave_number.is_(None), Batch.wave_number.asc(), Batch.name.asc())
+        .all()
+    )
+    batch_lookup = {batch.id: batch for batch in batches}
+    trainee_lookup: dict[str, User] = {}
+    trainee_batch_memberships: dict[str, list[Batch]] = defaultdict(list)
+
+    for batch in batches:
+        for trainee in batch.users:
+            if trainee.role != UserRole.TRAINEE or not bool(getattr(trainee, "is_active", True)):
+                continue
+            trainee_lookup[trainee.id] = trainee
+            trainee_batch_memberships[trainee.id].append(batch)
+
+    return {
+        "batches": batches,
+        "batch_lookup": batch_lookup,
+        "trainee_lookup": trainee_lookup,
+        "trainee_batch_memberships": trainee_batch_memberships,
+    }
+
+
+def _resolve_primary_batch(
+    trainee_id: str,
+    memberships: dict[str, list[Batch]],
+    preferred_batch_id: Optional[str] = None,
+) -> Optional[Batch]:
+    batches = memberships.get(trainee_id, [])
+    if preferred_batch_id:
+        for batch in batches:
+            if batch.id == preferred_batch_id:
+                return batch
+    return batches[0] if batches else None
+
+
+def _trainee_matches_batch(
+    trainee_id: str,
+    batch_id: str,
+    memberships: dict[str, list[Batch]],
+) -> bool:
+    return any(batch.id == batch_id for batch in memberships.get(trainee_id, []))
+
+
+def _build_ai_analysis(
+    *,
+    scope_label: str,
+    summary: dict[str, Any],
+    weakest_modules: list[dict[str, Any]],
+    weakest_areas: list[dict[str, Any]],
+    trainee_ranking: list[dict[str, Any]],
+    improvement_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    completion_rate = float(summary.get("completion_rate") or 0.0)
+    pass_rate = float(summary.get("pass_rate") or 0.0)
+    average_assessment_score = float(summary.get("average_assessment_score") or 0.0)
+    average_exercise_score = float(summary.get("average_exercise_score") or 0.0)
+
+    strongest_signal = "module follow-through"
+    if average_assessment_score >= average_exercise_score and average_assessment_score >= 80:
+        strongest_signal = "assessment accuracy"
+    elif average_exercise_score >= 80:
+        strongest_signal = "exercise execution"
+
+    weakest_module = weakest_modules[0] if weakest_modules else None
+    weakest_area = weakest_areas[0] if weakest_areas else None
+    improvement_focus = improvement_rows[0] if improvement_rows else None
+    top_trainee = trainee_ranking[0] if trainee_ranking else None
+
+    headline = (
+        f"AI Analysis: {scope_label} is showing {strongest_signal} as the clearest strength, "
+        f"with a completion rate of {completion_rate:.1f}% and a pass rate of {pass_rate:.1f}%."
+    )
+
+    strengths: list[str] = []
+    if top_trainee:
+        strengths.append(
+            f"{top_trainee['trainee_name']} is currently setting the pace with an overall learning score of "
+            f"{float(top_trainee['overall_score'] or 0.0):.1f}%."
+        )
+    if average_assessment_score >= 80:
+        strengths.append(
+            f"Assessment accuracy is healthy at {average_assessment_score:.1f}%, which suggests knowledge checks are being retained."
+        )
+    if average_exercise_score >= 80:
+        strengths.append(
+            f"Exercise performance is stable at {average_exercise_score:.1f}%, indicating trainees can apply the trainer-authored practice tasks."
+        )
+    if not strengths:
+        strengths.append(
+            "Participation is beginning to build, but the strongest performance pattern is still emerging from the current assignment set."
+        )
+
+    weak_areas: list[str] = []
+    if weakest_module:
+        weak_areas.append(
+            f'The weakest module is "{weakest_module["module_title"]}" with a completion rate of '
+            f'{float(weakest_module.get("completion_rate") or 0.0):.1f}% and an average exercise score of '
+            f'{float(weakest_module.get("average_score") or 0.0):.1f}%.'
+        )
+    if weakest_area:
+        weak_areas.append(
+            f'The lowest assessment area is "{weakest_area["category_name"]}" with an average score of '
+            f'{float(weakest_area.get("average_score") or 0.0):.1f}% and a pass rate of '
+            f'{float(weakest_area.get("pass_rate") or 0.0):.1f}%.'
+        )
+    if improvement_focus:
+        weak_areas.append(
+            f'{improvement_focus["trainee_name"]} needs focused support because the current completion rate is '
+            f'{float(improvement_focus.get("completion_rate") or 0.0):.1f}% and the pass rate is '
+            f'{float(improvement_focus.get("pass_rate") or 0.0):.1f}%.'
+        )
+    if not weak_areas:
+        weak_areas.append(
+            "There are no major risk clusters yet, but keeping assignment completion moving upward will protect the current pass rate."
+        )
+
+    actions: list[str] = []
+    if weakest_module:
+        actions.append(
+            f'Recommended action: re-open "{weakest_module["module_title"]}", reinforce the lowest-scoring exercise, '
+            "and require a short retake cycle before assigning the next module."
+        )
+    if weakest_area:
+        actions.append(
+            f'Recommended action: review the question bank and coaching coverage for "{weakest_area["category_name"]}" '
+            "before issuing another assessment wave."
+        )
+    if completion_rate < 70:
+        actions.append(
+            "Recommended action: follow up with pending trainees first, because completion volume is now a larger risk than scoring quality."
+        )
+    if pass_rate < 75:
+        actions.append(
+            "Recommended action: keep the next assignments tightly targeted to the weakest module and lowest assessment category instead of broad reassignment."
+        )
+    if not actions:
+        actions.append(
+            "Recommended action: maintain the current pacing, then challenge the strongest trainees with a fresh assessment or higher-difficulty module."
+        )
+
+    return {
+        "headline": headline,
+        "strengths": strengths[:3],
+        "weak_areas": weak_areas[:3],
+        "recommended_actions": actions[:4],
+    }
+
+
+def build_trainer_learning_insights(
+    db: Session,
+    *,
+    trainer: User,
+    batch_id: Optional[str] = None,
+    trainee_id: Optional[str] = None,
+    module_id: Optional[str] = None,
+    assessment_id: Optional[str] = None,
+    exercise_id: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+) -> dict[str, Any]:
+    scope = _trainer_scope(db, trainer=trainer)
+    batches: list[Batch] = scope["batches"]
+    batch_lookup: dict[str, Batch] = scope["batch_lookup"]
+    trainee_lookup: dict[str, User] = scope["trainee_lookup"]
+    trainee_batch_memberships: dict[str, list[Batch]] = scope["trainee_batch_memberships"]
+
+    if batch_id and batch_id not in batch_lookup:
+        raise ValueError("Batch not found")
+    if trainee_id and trainee_id not in trainee_lookup:
+        raise ValueError("Trainee not found")
+
+    modules = (
+        db.query(MicrolearningModule)
+        .options(selectinload(MicrolearningModule.topic_category))
+        .filter(
+            MicrolearningModule.created_by == trainer.id,
+            MicrolearningModule.is_active == True,
+        )
+        .order_by(MicrolearningModule.title.asc())
+        .all()
+    )
+    module_lookup = {module.id: module for module in modules}
+    if module_id and module_id not in module_lookup:
+        raise ValueError("Module not found")
+
+    exercise_options: list[dict[str, Any]] = []
+    exercise_option_lookup: dict[str, dict[str, Any]] = {}
+    for module in modules:
+        for exercise in module.exercises or []:
+            exercise_row_id = _normalize_text(exercise.get("id"))
+            if not exercise_row_id:
+                continue
+            filter_key = _exercise_filter_key(module.id, exercise_row_id)
+            option = {
+                "id": filter_key,
+                "exercise_id": exercise_row_id,
+                "title": _normalize_text(exercise.get("title")) or _normalize_text(exercise.get("prompt")) or "Exercise",
+                "type": _normalize_text(exercise.get("type")) or "exercise",
+                "module_id": module.id,
+                "module_title": module.title,
+            }
+            exercise_options.append(option)
+            exercise_option_lookup[filter_key] = option
+    exercise_options.sort(key=lambda row: (row["module_title"].lower(), row["title"].lower()))
+    if exercise_id and exercise_id not in exercise_option_lookup:
+        raise ValueError("Exercise not found")
+
+    trainer_trainee_ids = set(trainee_lookup.keys())
+    trainer_batch_ids = set(batch_lookup.keys())
+
+    assessments = (
+        db.query(MCQAssessment)
+        .filter(
+            MCQAssessment.assigned_by == trainer.id,
+            MCQAssessment.is_active == True,
+        )
+        .order_by(MCQAssessment.updated_at.desc(), MCQAssessment.created_at.desc())
+        .all()
+    )
+    filtered_assessments: list[MCQAssessment] = []
+    for assessment in assessments:
+        if assessment.assigned_batch_id and assessment.assigned_batch_id in trainer_batch_ids:
+            filtered_assessments.append(assessment)
+            continue
+        if assessment.assigned_user_id and assessment.assigned_user_id in trainer_trainee_ids:
+            filtered_assessments.append(assessment)
+    assessments = filtered_assessments
+    assessment_lookup = {assessment.id: assessment for assessment in assessments}
+    if assessment_id and assessment_id not in assessment_lookup:
+        raise ValueError("Assessment not found")
+
+    category_ids = list({assessment.category_id for assessment in assessments if assessment.category_id})
+    categories = (
+        db.query(MCQCategory)
+        .filter(MCQCategory.id.in_(category_ids))
+        .all()
+        if category_ids
+        else []
+    )
+    category_lookup = {category.id: category for category in categories}
+
+    assessment_ids = [assessment.id for assessment in assessments]
+    submissions = (
+        db.query(MCQSubmission)
+        .filter(MCQSubmission.assessment_id.in_(assessment_ids or ["__none__"]))
+        .all()
+        if assessment_ids
+        else []
+    )
+    submissions_by_assessment: dict[str, dict[str, MCQSubmission]] = defaultdict(dict)
+    for submission in submissions:
+        submissions_by_assessment[submission.assessment_id][submission.trainee_id] = submission
+
+    mcq_certificates = (
+        db.query(CertificateRecord)
+        .filter(
+            CertificateRecord.source_type == "mcq_assessment",
+            CertificateRecord.source_id.in_(assessment_ids or ["__none__"]),
+        )
+        .all()
+        if assessment_ids
+        else []
+    )
+    mcq_certificates_by_assessment: dict[str, dict[str, CertificateRecord]] = defaultdict(dict)
+    for certificate in mcq_certificates:
+        mcq_certificates_by_assessment[certificate.source_id][certificate.trainee_id] = certificate
+
+    module_domain_enabled = not assessment_id or bool(module_id or exercise_id)
+    assessment_domain_enabled = not (module_id or exercise_id) or bool(assessment_id)
+    start_at, end_at = _bounds_from_dates(start_date, end_date)
+
+    microlearning_assignments = (
+        db.query(MicrolearningAssignment)
+        .options(
+            selectinload(MicrolearningAssignment.module).selectinload(MicrolearningModule.topic_category),
+            selectinload(MicrolearningAssignment.batch),
+            selectinload(MicrolearningAssignment.trainee).selectinload(User.batches),
+            selectinload(MicrolearningAssignment.trainer),
+            selectinload(MicrolearningAssignment.certificate),
+        )
+        .filter(MicrolearningAssignment.assigned_by == trainer.id)
+        .all()
+    )
+    microlearning_assignments = filter_current_assignments(microlearning_assignments)
+
+    module_assignment_rows: list[dict[str, Any]] = []
+    exercise_attempt_rows: list[dict[str, Any]] = []
+    recent_activity: list[dict[str, Any]] = []
+
+    for assignment in microlearning_assignments:
+        refresh_assignment_progress(assignment)
+        summary = serialize_assignment_summary(assignment)
+        summary_module_id = _normalize_text(summary.get("module_id"))
+        summary_trainee_id = _normalize_text(summary.get("user_id"))
+        if not module_domain_enabled:
+            continue
+        if batch_id and not _trainee_matches_batch(summary_trainee_id, batch_id, trainee_batch_memberships):
+            continue
+        if trainee_id and summary_trainee_id != trainee_id:
+            continue
+        if module_id and summary_module_id != module_id:
+            continue
+
+        module = assignment.module
+        module_exercises = list(module.exercises or []) if module else []
+        exercise_keys = {
+            _exercise_filter_key(summary_module_id, _normalize_text(exercise.get("id")))
+            for exercise in module_exercises
+            if _normalize_text(exercise.get("id"))
+        }
+        if exercise_id and exercise_id not in exercise_keys:
+            continue
+
+        activity_at = _module_activity_at(assignment)
+        if (start_at or end_at) and not _in_range(activity_at, start_at, end_at):
+            continue
+
+        scope_batch = _resolve_primary_batch(
+            summary_trainee_id,
+            trainee_batch_memberships,
+            preferred_batch_id=batch_id or _normalize_text(summary.get("batch_id")) or None,
+        )
+        row = {
+            "id": summary["id"],
+            "module_id": summary_module_id,
+            "module_title": summary.get("module_title") or summary.get("title"),
+            "module_type": summary.get("module_type"),
+            "topic_category_name": summary.get("topic_category_name"),
+            "trainee_id": summary_trainee_id,
+            "trainee_name": summary.get("trainee_name"),
+            "batch_id": scope_batch.id if scope_batch else summary.get("batch_id"),
+            "batch_label": _format_batch_label(scope_batch) if scope_batch else (summary.get("batch_label") or "Direct Assignment"),
+            "status": summary.get("status"),
+            "completion_percentage": float(summary.get("completion_percentage") or 0.0),
+            "average_score": float(summary.get("average_score") or 0.0),
+            "is_passed": bool(summary.get("is_passed")),
+            "attempt_number": int(summary.get("attempt_number") or 0),
+            "retake_count": int(summary.get("retake_count") or 0),
+            "exercise_count": int(summary.get("exercise_count") or 0),
+            "completed_exercises": int(summary.get("completed_exercises") or 0),
+            "assigned_at": _to_iso(assignment.assigned_at),
+            "started_at": _to_iso(assignment.started_at),
+            "completed_at": _to_iso(assignment.completed_at),
+            "activity_at": _to_iso(activity_at),
+            "certificate_id": summary.get("certificate_id"),
+            "certificate_no": summary.get("certificate_no"),
+        }
+        module_assignment_rows.append(row)
+
+        if assignment.completed_at:
+            recent_activity.append(
+                {
+                    "id": f"module-completed-{assignment.id}",
+                    "activity_type": "module_completed",
+                    "title": row["module_title"],
+                    "detail": f'{row["trainee_name"] or "Trainee"} completed a trainer-assigned microlearning module.',
+                    "trainee_id": row["trainee_id"],
+                    "trainee_name": row["trainee_name"],
+                    "batch_id": row["batch_id"],
+                    "batch_label": row["batch_label"],
+                    "score": row["average_score"],
+                    "status": row["status"],
+                    "activity_at": row["completed_at"],
+                }
+            )
+        elif assignment.started_at:
+            recent_activity.append(
+                {
+                    "id": f"module-started-{assignment.id}",
+                    "activity_type": "module_started",
+                    "title": row["module_title"],
+                    "detail": f'{row["trainee_name"] or "Trainee"} started a trainer-assigned microlearning module.',
+                    "trainee_id": row["trainee_id"],
+                    "trainee_name": row["trainee_name"],
+                    "batch_id": row["batch_id"],
+                    "batch_label": row["batch_label"],
+                    "score": row["average_score"],
+                    "status": row["status"],
+                    "activity_at": row["started_at"],
+                }
+            )
+
+        responses = dict(assignment.responses or {})
+        for exercise in module_exercises:
+            exercise_row_id = _normalize_text(exercise.get("id"))
+            if not exercise_row_id:
+                continue
+            filter_key = _exercise_filter_key(summary_module_id, exercise_row_id)
+            if exercise_id and filter_key != exercise_id:
+                continue
+            attempt = responses.get(exercise_row_id)
+            if not isinstance(attempt, dict):
+                continue
+            submitted_at_value = _normalize_text(attempt.get("submitted_at"))
+            submitted_at = None
+            if submitted_at_value:
+                try:
+                    submitted_at = datetime.fromisoformat(submitted_at_value.replace("Z", "+00:00"))
+                except ValueError:
+                    submitted_at = None
+            if (start_at or end_at) and submitted_at and not _in_range(submitted_at, start_at, end_at):
+                continue
+            exercise_attempt_rows.append(
+                {
+                    "exercise_filter_id": filter_key,
+                    "exercise_id": exercise_row_id,
+                    "exercise_title": _normalize_text(exercise.get("title")) or _normalize_text(exercise.get("prompt")) or "Exercise",
+                    "exercise_type": _normalize_text(exercise.get("type")) or "exercise",
+                    "module_id": summary_module_id,
+                    "module_title": row["module_title"],
+                    "trainee_id": row["trainee_id"],
+                    "trainee_name": row["trainee_name"],
+                    "batch_id": row["batch_id"],
+                    "batch_label": row["batch_label"],
+                    "score": float(attempt.get("score") or 0.0),
+                    "is_completed": bool(attempt.get("is_completed")),
+                    "submitted_at": submitted_at_value or None,
+                    "attempt_number": int(row["attempt_number"] or 0),
+                }
+            )
+
+    assessment_rows: list[dict[str, Any]] = []
+    for assessment in assessments:
+        if not assessment_domain_enabled:
+            continue
+        if assessment_id and assessment.id != assessment_id:
+            continue
+
+        if assessment.assigned_batch_id:
+            target_batch = batch_lookup.get(assessment.assigned_batch_id)
+            if not target_batch:
+                continue
+            target_trainees = [
+                trainee
+                for trainee in target_batch.users
+                if trainee.role == UserRole.TRAINEE
+                and bool(getattr(trainee, "is_active", True))
+                and trainee.id in trainee_lookup
+            ]
+        elif assessment.assigned_user_id and assessment.assigned_user_id in trainee_lookup:
+            target_batch = _resolve_primary_batch(
+                assessment.assigned_user_id,
+                trainee_batch_memberships,
+                preferred_batch_id=batch_id,
+            )
+            target_trainees = [trainee_lookup[assessment.assigned_user_id]]
+        else:
+            continue
+
+        category = category_lookup.get(assessment.category_id)
+        question_count = len(list(dict.fromkeys(assessment.question_ids or [])))
+        for assessment_trainee in target_trainees:
+            if batch_id and not _trainee_matches_batch(assessment_trainee.id, batch_id, trainee_batch_memberships):
+                continue
+            if trainee_id and assessment_trainee.id != trainee_id:
+                continue
+
+            submission = submissions_by_assessment.get(assessment.id, {}).get(assessment_trainee.id)
+            activity_at = _assessment_activity_at(assessment, submission)
+            if (start_at or end_at) and not _in_range(activity_at, start_at, end_at):
+                continue
+
+            scope_batch = _resolve_primary_batch(
+                assessment_trainee.id,
+                trainee_batch_memberships,
+                preferred_batch_id=batch_id or assessment.assigned_batch_id,
+            )
+            certificate = mcq_certificates_by_assessment.get(assessment.id, {}).get(assessment_trainee.id)
+            score_percentage = float(submission.score_percentage or 0.0) if submission else 0.0
+            row = {
+                "id": f"{assessment.id}:{assessment_trainee.id}",
+                "assessment_id": assessment.id,
+                "assessment_title": assessment.title,
+                "category_id": assessment.category_id,
+                "category_name": category.name if category else "Assessment",
+                "trainee_id": assessment_trainee.id,
+                "trainee_name": assessment_trainee.full_name,
+                "batch_id": scope_batch.id if scope_batch else assessment.assigned_batch_id,
+                "batch_label": _format_batch_label(scope_batch) if scope_batch else "Direct Assignment",
+                "assigned_at": _to_iso(assessment.created_at),
+                "submitted_at": _to_iso(submission.submitted_at) if submission else None,
+                "activity_at": _to_iso(activity_at),
+                "status": "completed" if submission else "pending",
+                "is_passed": bool(submission.is_passed) if submission else False,
+                "score_percentage": score_percentage if submission else None,
+                "attempt_count": int(submission.attempt_count or 0) if submission else 0,
+                "question_count": question_count,
+                "passing_threshold": float(category.passing_threshold or 90.0) if category else 90.0,
+                "certificate_id": certificate.id if certificate else None,
+                "certificate_no": certificate.certificate_no if certificate else None,
+                "due_date": _to_iso(assessment.due_date),
+            }
+            assessment_rows.append(row)
+            if submission:
+                recent_activity.append(
+                    {
+                        "id": f"assessment-submitted-{assessment.id}-{assessment_trainee.id}",
+                        "activity_type": "assessment_submitted",
+                        "title": assessment.title,
+                        "detail": f'{assessment_trainee.full_name} submitted a trainer-assigned assessment.',
+                        "trainee_id": assessment_trainee.id,
+                        "trainee_name": assessment_trainee.full_name,
+                        "batch_id": row["batch_id"],
+                        "batch_label": row["batch_label"],
+                        "score": score_percentage,
+                        "status": "passed" if row["is_passed"] else "failed",
+                        "activity_at": row["submitted_at"],
+                    }
+                )
+
+    batch_options = [
+        {
+            "id": batch.id,
+            "label": _format_batch_label(batch),
+            "trainee_count": sum(
+                1
+                for trainee in batch.users
+                if trainee.role == UserRole.TRAINEE and bool(getattr(trainee, "is_active", True))
+            ),
+        }
+        for batch in batches
+    ]
+    trainee_options = []
+    for current_trainee in trainee_lookup.values():
+        memberships = trainee_batch_memberships.get(current_trainee.id, [])
+        trainee_options.append(
+            {
+                "id": current_trainee.id,
+                "name": current_trainee.full_name,
+                "email": current_trainee.email,
+                "batch_ids": [batch.id for batch in memberships],
+                "batch_labels": [_format_batch_label(batch) for batch in memberships],
+            }
+        )
+    trainee_options.sort(key=lambda row: row["name"].lower())
+
+    module_options = [
+        {
+            "id": module.id,
+            "title": module.title,
+            "module_type": module.type,
+            "topic_category_name": getattr(module.topic_category, "name", None),
+        }
+        for module in modules
+    ]
+    assessment_options = []
+    for assessment in assessments:
+        category = category_lookup.get(assessment.category_id)
+        assessment_options.append(
+            {
+                "id": assessment.id,
+                "title": assessment.title,
+                "category_name": category.name if category else "Assessment",
+                "assigned_batch_id": assessment.assigned_batch_id,
+                "assigned_user_id": assessment.assigned_user_id,
+            }
+        )
+
+    all_scores = [
+        float(row["average_score"])
+        for row in module_assignment_rows
+        if int(row["completed_exercises"] or 0) > 0
+    ] + [
+        float(row["score_percentage"])
+        for row in assessment_rows
+        if row["score_percentage"] is not None
+    ]
+
+    trainee_metric_map: dict[str, dict[str, Any]] = {}
+    for current_trainee in trainee_lookup.values():
+        current_batch = _resolve_primary_batch(
+            current_trainee.id,
+            trainee_batch_memberships,
+            preferred_batch_id=batch_id,
+        )
+        trainee_metric_map[current_trainee.id] = {
+            "trainee_id": current_trainee.id,
+            "trainee_name": current_trainee.full_name,
+            "batch_id": current_batch.id if current_batch else None,
+            "batch_label": _format_batch_label(current_batch) if current_batch else "Direct Assignment",
+            "module_scores": [],
+            "assessment_scores": [],
+            "module_assigned": 0,
+            "module_completed": 0,
+            "module_passed": 0,
+            "assessment_assigned": 0,
+            "assessment_completed": 0,
+            "assessment_passed": 0,
+            "total_attempts": 0,
+            "latest_activity_at": None,
+        }
+
+    for row in module_assignment_rows:
+        metrics = trainee_metric_map.get(row["trainee_id"])
+        if not metrics:
+            continue
+        metrics["module_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_number"] or 0), 0)
+        if row["activity_at"] and (
+            metrics["latest_activity_at"] is None or str(row["activity_at"]) > str(metrics["latest_activity_at"])
+        ):
+            metrics["latest_activity_at"] = row["activity_at"]
+        if row["completed_exercises"] > 0:
+            metrics["module_scores"].append(float(row["average_score"] or 0.0))
+        if row["status"] in {"completed", "certified"}:
+            metrics["module_completed"] += 1
+        if row["is_passed"]:
+            metrics["module_passed"] += 1
+
+    for row in assessment_rows:
+        metrics = trainee_metric_map.get(row["trainee_id"])
+        if not metrics:
+            continue
+        metrics["assessment_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_count"] or 0), 0)
+        if row["activity_at"] and (
+            metrics["latest_activity_at"] is None or str(row["activity_at"]) > str(metrics["latest_activity_at"])
+        ):
+            metrics["latest_activity_at"] = row["activity_at"]
+        if row["score_percentage"] is not None:
+            metrics["assessment_completed"] += 1
+            metrics["assessment_scores"].append(float(row["score_percentage"] or 0.0))
+            if row["is_passed"]:
+                metrics["assessment_passed"] += 1
+
+    trainee_ranking = []
+    for metrics in trainee_metric_map.values():
+        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"]
+        total_completed = metrics["module_completed"] + metrics["assessment_completed"]
+        total_passed = metrics["module_passed"] + metrics["assessment_passed"]
+        overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"])
+        completion_rate = round((total_completed / total_assigned) * 100.0, 2) if total_assigned else 0.0
+        pass_rate = round((total_passed / total_completed) * 100.0, 2) if total_completed else 0.0
+        trainee_ranking.append(
+            {
+                "trainee_id": metrics["trainee_id"],
+                "trainee_name": metrics["trainee_name"],
+                "batch_id": metrics["batch_id"],
+                "batch_label": metrics["batch_label"],
+                "overall_score": overall_score,
+                "average_exercise_score": _average(metrics["module_scores"]),
+                "average_assessment_score": _average(metrics["assessment_scores"]),
+                "module_completion_rate": round(
+                    (metrics["module_completed"] / metrics["module_assigned"]) * 100.0,
+                    2,
+                )
+                if metrics["module_assigned"]
+                else 0.0,
+                "completion_rate": completion_rate,
+                "pass_rate": pass_rate,
+                "module_assigned": metrics["module_assigned"],
+                "module_completed": metrics["module_completed"],
+                "assessment_assigned": metrics["assessment_assigned"],
+                "assessment_completed": metrics["assessment_completed"],
+                "total_attempts": metrics["total_attempts"],
+                "latest_activity_at": metrics["latest_activity_at"],
+            }
+        )
+
+    trainee_ranking = [
+        row
+        for row in trainee_ranking
+        if (not batch_id or row["batch_id"] == batch_id)
+        and (not trainee_id or row["trainee_id"] == trainee_id)
+        and (
+            row["module_assigned"] > 0
+            or row["assessment_assigned"] > 0
+            or row["latest_activity_at"] is not None
+        )
+    ]
+    trainee_ranking.sort(
+        key=lambda row: (
+            float(row["overall_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["trainee_name"].lower(),
+        ),
+        reverse=True,
+    )
+
+    batch_metric_map: dict[str, dict[str, Any]] = {}
+    for batch in batches:
+        if batch_id and batch.id != batch_id:
+            continue
+        batch_metric_map[batch.id] = {
+            "batch_id": batch.id,
+            "batch_label": _format_batch_label(batch),
+            "trainee_ids": {
+                trainee.id
+                for trainee in batch.users
+                if trainee.role == UserRole.TRAINEE and bool(getattr(trainee, "is_active", True))
+            },
+            "module_scores": [],
+            "assessment_scores": [],
+            "module_assigned": 0,
+            "module_completed": 0,
+            "module_passed": 0,
+            "assessment_assigned": 0,
+            "assessment_completed": 0,
+            "assessment_passed": 0,
+            "total_attempts": 0,
+        }
+
+    for row in module_assignment_rows:
+        current_batch_id = _normalize_text(row.get("batch_id"))
+        if current_batch_id not in batch_metric_map:
+            continue
+        metrics = batch_metric_map[current_batch_id]
+        metrics["module_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_number"] or 0), 0)
+        if row["completed_exercises"] > 0:
+            metrics["module_scores"].append(float(row["average_score"] or 0.0))
+        if row["status"] in {"completed", "certified"}:
+            metrics["module_completed"] += 1
+        if row["is_passed"]:
+            metrics["module_passed"] += 1
+
+    for row in assessment_rows:
+        current_batch_id = _normalize_text(row.get("batch_id"))
+        if current_batch_id not in batch_metric_map:
+            continue
+        metrics = batch_metric_map[current_batch_id]
+        metrics["assessment_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_count"] or 0), 0)
+        if row["score_percentage"] is not None:
+            metrics["assessment_completed"] += 1
+            metrics["assessment_scores"].append(float(row["score_percentage"] or 0.0))
+            if row["is_passed"]:
+                metrics["assessment_passed"] += 1
+
+    batch_comparison = []
+    for metrics in batch_metric_map.values():
+        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"]
+        total_completed = metrics["module_completed"] + metrics["assessment_completed"]
+        total_passed = metrics["module_passed"] + metrics["assessment_passed"]
+        batch_comparison.append(
+            {
+                "batch_id": metrics["batch_id"],
+                "batch_label": metrics["batch_label"],
+                "trainee_count": len(metrics["trainee_ids"]),
+                "assigned_items": total_assigned,
+                "completed_items": total_completed,
+                "completion_rate": round((total_completed / total_assigned) * 100.0, 2)
+                if total_assigned
+                else 0.0,
+                "pass_rate": round((total_passed / total_completed) * 100.0, 2)
+                if total_completed
+                else 0.0,
+                "average_exercise_score": _average(metrics["module_scores"]),
+                "average_assessment_score": _average(metrics["assessment_scores"]),
+                "overall_score": _average(metrics["module_scores"] + metrics["assessment_scores"]),
+                "total_attempts": metrics["total_attempts"],
+            }
+        )
+    batch_comparison.sort(
+        key=lambda row: (
+            float(row["overall_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["batch_label"].lower(),
+        ),
+        reverse=True,
+    )
+
+    module_progress_lookup: dict[str, dict[str, Any]] = {}
+    for row in module_assignment_rows:
+        module_bucket = module_progress_lookup.setdefault(
+            row["module_id"],
+            {
+                "module_id": row["module_id"],
+                "module_title": row["module_title"],
+                "module_type": row["module_type"],
+                "topic_category_name": row["topic_category_name"],
+                "assigned_count": 0,
+                "completed_count": 0,
+                "pending_count": 0,
+                "passed_count": 0,
+                "scores": [],
+                "latest_activity_at": None,
+            },
+        )
+        module_bucket["assigned_count"] += 1
+        if row["status"] in {"completed", "certified"}:
+            module_bucket["completed_count"] += 1
+        else:
+            module_bucket["pending_count"] += 1
+        if row["is_passed"]:
+            module_bucket["passed_count"] += 1
+        if row["completed_exercises"] > 0:
+            module_bucket["scores"].append(float(row["average_score"] or 0.0))
+        if row["activity_at"] and (
+            module_bucket["latest_activity_at"] is None
+            or str(row["activity_at"]) > str(module_bucket["latest_activity_at"])
+        ):
+            module_bucket["latest_activity_at"] = row["activity_at"]
+
+    module_progress = []
+    for module_bucket in module_progress_lookup.values():
+        assigned_count = int(module_bucket["assigned_count"] or 0)
+        completed_count = int(module_bucket["completed_count"] or 0)
+        passed_count = int(module_bucket["passed_count"] or 0)
+        module_progress.append(
+            {
+                "module_id": module_bucket["module_id"],
+                "module_title": module_bucket["module_title"],
+                "module_type": module_bucket["module_type"],
+                "topic_category_name": module_bucket["topic_category_name"],
+                "assigned_count": assigned_count,
+                "completed_count": completed_count,
+                "pending_count": int(module_bucket["pending_count"] or 0),
+                "completion_rate": round((completed_count / assigned_count) * 100.0, 2)
+                if assigned_count
+                else 0.0,
+                "pass_rate": round((passed_count / completed_count) * 100.0, 2)
+                if completed_count
+                else 0.0,
+                "average_score": _average(module_bucket["scores"]),
+                "latest_activity_at": module_bucket["latest_activity_at"],
+            }
+        )
+    module_progress.sort(
+        key=lambda row: (
+            float(row["completion_rate"] or 0.0),
+            float(row["average_score"] or 0.0),
+            row["module_title"].lower(),
+        ),
+    )
+    weakest_modules = module_progress[:5]
+
+    assessment_area_lookup: dict[str, dict[str, Any]] = {}
+    for row in assessment_rows:
+        category_key = _normalize_text(row.get("category_id")) or _normalize_text(row.get("category_name"))
+        bucket = assessment_area_lookup.setdefault(
+            category_key,
+            {
+                "category_id": row.get("category_id"),
+                "category_name": row.get("category_name"),
+                "assigned_count": 0,
+                "completed_count": 0,
+                "passed_count": 0,
+                "scores": [],
+            },
+        )
+        bucket["assigned_count"] += 1
+        if row["score_percentage"] is not None:
+            bucket["completed_count"] += 1
+            bucket["scores"].append(float(row["score_percentage"] or 0.0))
+            if row["is_passed"]:
+                bucket["passed_count"] += 1
+
+    weakest_assessment_areas = []
+    for bucket in assessment_area_lookup.values():
+        completed_count = int(bucket["completed_count"] or 0)
+        weakest_assessment_areas.append(
+            {
+                "category_id": bucket["category_id"],
+                "category_name": bucket["category_name"],
+                "assigned_count": int(bucket["assigned_count"] or 0),
+                "completed_count": completed_count,
+                "average_score": _average(bucket["scores"]),
+                "pass_rate": round((int(bucket["passed_count"] or 0) / completed_count) * 100.0, 2)
+                if completed_count
+                else 0.0,
+            }
+        )
+    weakest_assessment_areas.sort(
+        key=lambda row: (
+            float(row["average_score"] or 0.0),
+            float(row["pass_rate"] or 0.0),
+            row["category_name"].lower(),
+        )
+    )
+
+    exercise_totals: dict[str, dict[str, Any]] = {}
+    for row in module_assignment_rows:
+        module = module_lookup.get(row["module_id"])
+        if not module:
+            continue
+        for exercise in module.exercises or []:
+            exercise_row_id = _normalize_text(exercise.get("id"))
+            if not exercise_row_id:
+                continue
+            filter_key = _exercise_filter_key(row["module_id"], exercise_row_id)
+            if exercise_id and filter_key != exercise_id:
+                continue
+            bucket = exercise_totals.setdefault(
+                filter_key,
+                {
+                    "exercise_filter_id": filter_key,
+                    "exercise_id": exercise_row_id,
+                    "exercise_title": _normalize_text(exercise.get("title")) or _normalize_text(exercise.get("prompt")) or "Exercise",
+                    "exercise_type": _normalize_text(exercise.get("type")) or "exercise",
+                    "module_id": row["module_id"],
+                    "module_title": row["module_title"],
+                    "assigned_count": 0,
+                    "attempt_count": 0,
+                    "completed_attempts": 0,
+                    "scores": [],
+                },
+            )
+            bucket["assigned_count"] += 1
+
+    for attempt_row in exercise_attempt_rows:
+        bucket = exercise_totals.get(attempt_row["exercise_filter_id"])
+        if not bucket:
+            continue
+        bucket["attempt_count"] += 1
+        if attempt_row["is_completed"]:
+            bucket["completed_attempts"] += 1
+        bucket["scores"].append(float(attempt_row["score"] or 0.0))
+
+    exercise_performance = []
+    for bucket in exercise_totals.values():
+        assigned_count = int(bucket["assigned_count"] or 0)
+        attempt_count = int(bucket["attempt_count"] or 0)
+        exercise_performance.append(
+            {
+                "exercise_filter_id": bucket["exercise_filter_id"],
+                "exercise_id": bucket["exercise_id"],
+                "exercise_title": bucket["exercise_title"],
+                "exercise_type": bucket["exercise_type"],
+                "module_id": bucket["module_id"],
+                "module_title": bucket["module_title"],
+                "assigned_count": assigned_count,
+                "attempt_count": attempt_count,
+                "completion_rate": round((int(bucket["completed_attempts"] or 0) / assigned_count) * 100.0, 2)
+                if assigned_count
+                else 0.0,
+                "average_score": _average(bucket["scores"]),
+            }
+        )
+    exercise_performance.sort(
+        key=lambda row: (
+            float(row["average_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["module_title"].lower(),
+            row["exercise_title"].lower(),
+        )
+    )
+
+    trainees_needing_improvement = [
+        row
+        for row in trainee_ranking
+        if float(row["overall_score"] or 0.0) < 75.0
+        or float(row["completion_rate"] or 0.0) < 65.0
+        or float(row["pass_rate"] or 0.0) < 70.0
+    ]
+    trainees_needing_improvement.sort(
+        key=lambda row: (
+            float(row["overall_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["trainee_name"].lower(),
+        )
+    )
+
+    module_completed_count = sum(
+        1 for row in module_assignment_rows if row["status"] in {"completed", "certified"}
+    )
+    module_passed_count = sum(1 for row in module_assignment_rows if row["is_passed"])
+    module_pending_count = len(module_assignment_rows) - module_completed_count
+    assessment_completed_count = sum(1 for row in assessment_rows if row["score_percentage"] is not None)
+    assessment_passed_count = sum(1 for row in assessment_rows if row["is_passed"])
+
+    total_assigned_items = len(module_assignment_rows) + len(assessment_rows)
+    total_completed_items = module_completed_count + assessment_completed_count
+    total_passed_items = module_passed_count + assessment_passed_count
+
+    summary = {
+        "trainer_created_modules": len(modules),
+        "trainer_assigned_modules": len({row["module_id"] for row in module_assignment_rows}),
+        "total_trainees": len(
+            {
+                row["trainee_id"]
+                for row in [*module_assignment_rows, *assessment_rows]
+                if row.get("trainee_id")
+            }
+        ),
+        "assigned_module_records": len(module_assignment_rows),
+        "assigned_assessment_records": len(assessment_rows),
+        "completed_modules": module_completed_count,
+        "pending_modules": module_pending_count,
+        "completion_rate": round((total_completed_items / total_assigned_items) * 100.0, 2)
+        if total_assigned_items
+        else 0.0,
+        "average_assessment_score": _average(
+            [float(row["score_percentage"]) for row in assessment_rows if row["score_percentage"] is not None]
+        ),
+        "average_exercise_score": _average(
+            [
+                float(row["average_score"])
+                for row in module_assignment_rows
+                if int(row["completed_exercises"] or 0) > 0
+            ]
+        ),
+        "pass_rate": round((total_passed_items / total_completed_items) * 100.0, 2)
+        if total_completed_items
+        else 0.0,
+        "total_attempts": sum(
+            max(int(row["attempt_number"] or 0), 0) for row in module_assignment_rows
+        )
+        + sum(max(int(row["attempt_count"] or 0), 0) for row in assessment_rows),
+        "passed_modules": module_passed_count,
+        "passed_assessments": assessment_passed_count,
+        "completed_assessments": assessment_completed_count,
+    }
+
+    recent_activity.sort(
+        key=lambda row: _normalize_text(row.get("activity_at")),
+        reverse=True,
+    )
+
+    scope_parts = []
+    if batch_id:
+        scope_parts.append(_format_batch_label(batch_lookup.get(batch_id)))
+    if trainee_id:
+        scope_parts.append(trainee_lookup[trainee_id].full_name)
+    if module_id:
+        scope_parts.append(module_lookup[module_id].title)
+    if assessment_id:
+        scope_parts.append(assessment_lookup[assessment_id].title)
+    if exercise_id:
+        scope_parts.append(exercise_option_lookup[exercise_id]["title"])
+    scope_label = " / ".join(scope_parts) if scope_parts else "Trainer scope"
+
+    return {
+        "scope": {
+            "batch_id": batch_id,
+            "trainee_id": trainee_id,
+            "module_id": module_id,
+            "assessment_id": assessment_id,
+            "exercise_id": exercise_id,
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "label": scope_label,
+        },
+        "filters": {
+            "batches": batch_options,
+            "trainees": trainee_options,
+            "modules": module_options,
+            "assessments": assessment_options,
+            "exercises": exercise_options,
+        },
+        "summary": summary,
+        "batch_comparison": batch_comparison,
+        "trainee_ranking": trainee_ranking[:12],
+        "score_distribution": _build_score_distribution(all_scores),
+        "module_progress": module_progress[:12],
+        "weakest_modules": weakest_modules,
+        "weakest_assessment_areas": weakest_assessment_areas[:5],
+        "exercise_performance": exercise_performance[:12],
+        "trainees_needing_improvement": trainees_needing_improvement[:10],
+        "recent_activity": recent_activity[:12],
+        "module_assignments": sorted(
+            module_assignment_rows,
+            key=lambda row: _normalize_text(row.get("activity_at")),
+            reverse=True,
+        )[:50],
+        "assessment_results": sorted(
+            assessment_rows,
+            key=lambda row: _normalize_text(row.get("activity_at")),
+            reverse=True,
+        )[:50],
+        "ai_analysis": _build_ai_analysis(
+            scope_label=scope_label,
+            summary=summary,
+            weakest_modules=weakest_modules,
+            weakest_areas=weakest_assessment_areas,
+            trainee_ranking=trainee_ranking,
+            improvement_rows=trainees_needing_improvement,
+        ),
+    }

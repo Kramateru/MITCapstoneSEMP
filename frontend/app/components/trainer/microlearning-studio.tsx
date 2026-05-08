@@ -13,7 +13,6 @@ import { Label } from '@/app/components/ui/label';
 import { Progress } from '@/app/components/ui/progress';
 import { RadioGroup, RadioGroupItem } from '@/app/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/app/components/ui/select';
-import { Switch } from '@/app/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/app/components/ui/table';
 import { Textarea } from '@/app/components/ui/textarea';
 import { useAuth } from '@/app/context/AuthContext';
@@ -111,6 +110,64 @@ function isTrainerDirectVideoFile(url?: string | null) {
   return /(^\/|\.mp4($|[?#])|\.webm($|[?#])|\.ogg($|[?#])|\.mov($|[?#])|\.m4v($|[?#]))/i.test(url);
 }
 
+function isTrainerDirectAudioFile(url?: string | null) {
+  if (!url) {
+    return false;
+  }
+
+  return /(^\/|\.mp3($|[?#])|\.wav($|[?#])|\.m4a($|[?#])|\.ogg($|[?#])|\.aac($|[?#])|\.flac($|[?#])|\.webm($|[?#]))/i.test(url);
+}
+
+function hasTrainerPlayableVideoReference(form: ModuleFormState) {
+  const normalizedUrl = form.content_url.trim();
+  return Boolean(
+    getTrainerYouTubeEmbedUrl(normalizedUrl)
+    || isTrainerDirectVideoFile(normalizedUrl)
+    || form.asset_storage_path
+    || form.asset_record_id
+    || form.asset_content_type.toLowerCase().startsWith('video/'),
+  );
+}
+
+function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['module_type']) {
+  const normalizedName = file.name.trim().toLowerCase();
+  const normalizedMimeType = file.type.trim().toLowerCase();
+
+  if (moduleType === 'video') {
+    const isSupported =
+      normalizedMimeType.startsWith('video/')
+      || /\.(mp4|mov|webm|ogg|m4v)$/i.test(normalizedName);
+    return isSupported ? null : 'Unsupported video format. Upload MP4, MOV, WEBM, OGG, or M4V.';
+  }
+
+  if (moduleType === 'audio' || moduleType === 'case_study') {
+    const isSupported =
+      [
+        'audio/mpeg',
+        'audio/mp3',
+        'audio/wav',
+        'audio/x-wav',
+        'audio/mp4',
+        'audio/x-m4a',
+        'audio/ogg',
+        'audio/aac',
+        'audio/flac',
+        'audio/webm',
+      ].includes(normalizedMimeType)
+      || /\.(mp3|wav|m4a|ogg|aac|flac|webm)$/i.test(normalizedName);
+    return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.';
+  }
+
+  if (moduleType === 'infographic') {
+    const isSupported =
+      normalizedMimeType.startsWith('image/')
+      || /\.(png|jpe?g|webp|gif|svg)$/i.test(normalizedName);
+    return isSupported ? null : 'Unsupported image format. Upload PNG, JPG, WEBP, GIF, or SVG.';
+  }
+
+  return null;
+}
+
 function validateModuleForm(form: ModuleFormState) {
   if (!form.title.trim()) {
     return 'Module title is required.';
@@ -127,6 +184,9 @@ function validateModuleForm(form: ModuleFormState) {
   if (form.module_type === 'video') {
     if (!form.content_url.trim()) {
       return 'Upload a trainer video to Supabase or paste a YouTube link before saving this video module.';
+    }
+    if (!hasTrainerPlayableVideoReference(form)) {
+      return 'Provide a valid YouTube link or upload MP4, MOV, WEBM, OGG, or M4V before saving this video module.';
     }
     if (!form.video_questions.length) {
       return 'Add at least one video question for the module.';
@@ -348,6 +408,11 @@ export default function TrainerMicrolearningStudio() {
       toast.error('Your session has expired. Please sign in again.');
       return;
     }
+    const validationError = getTrainerMediaUploadError(file, moduleForm.module_type);
+    if (validationError) {
+      toast.error(validationError);
+      return;
+    }
     setUploading(true);
     try {
       const formData = new FormData();
@@ -372,7 +437,7 @@ export default function TrainerMicrolearningStudio() {
       }));
       toast.success(
         moduleForm.module_type === 'video'
-          ? 'Video uploaded to Supabase. Trainees will be able to watch it after the module is saved and assigned.'
+          ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
           : 'Asset uploaded to Supabase.',
       );
     } catch (error) {
@@ -439,13 +504,18 @@ export default function TrainerMicrolearningStudio() {
       toast.error('Your session has expired. Please sign in again.');
       return null;
     }
+    const validationError = getTrainerMediaUploadError(file, moduleForm.module_type);
+    if (validationError) {
+      toast.error(validationError);
+      return null;
+    }
     setAudioUploading(true);
     setAudioProcessing(true);
     try {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('moduleId', moduleId);
-      formData.append('title', moduleForm.title.trim() || file.name.replace(/\.mp3$/i, ''));
+      formData.append('title', moduleForm.title.trim() || file.name.replace(/\.[A-Za-z0-9]+$/i, ''));
       formData.append('audioLanguage', moduleForm.audio_language || 'en-US');
 
       const response = await authedFetch('/api/microlearning/audio-content/upload', {
@@ -462,14 +532,50 @@ export default function TrainerMicrolearningStudio() {
         case_study_content: result.transcript_text || result.transcript || current.case_study_content,
         audio_content_id: result.audio_content_id || current.audio_content_id,
         audio_storage_path: result.storage_path || current.audio_storage_path,
+        audio_bucket_name: result.bucket_name || current.audio_bucket_name,
+        audio_content_type: result.mime_type || current.audio_content_type,
+        audio_original_filename: result.original_filename || file.name || current.audio_original_filename,
         audio_transcript_provider: result.transcript_provider || current.audio_transcript_provider,
+        audio_captions_url: result.captions_url || current.audio_captions_url,
+        audio_caption_data_json: Array.isArray(result.caption_data)
+          ? JSON.stringify(result.caption_data)
+          : current.audio_caption_data_json,
         audio_duration_seconds: result.duration_seconds || current.audio_duration_seconds,
+        audio_language: result.audio_language || current.audio_language,
         audio_summary_text: result.summary_text || current.audio_summary_text,
       }));
 
-      toast.success('MP3 uploaded to Supabase and processed with Gemini.');
+      setEditingModule((current) => current ? ({
+        ...current,
+        content_url: result.audio_url || current.content_url,
+        audio_url: result.audio_url || current.audio_url,
+        audio_transcript: result.transcript_text || result.transcript || current.audio_transcript,
+        audio_duration_seconds: result.duration_seconds || current.audio_duration_seconds,
+        audio_language: result.audio_language || current.audio_language,
+        content_data: {
+          ...(current.content_data || {}),
+          asset_url: result.audio_url || current.content_data?.asset_url,
+          audio_url: result.audio_url || current.content_data?.audio_url,
+          transcript: result.transcript_text || result.transcript || current.content_data?.transcript,
+          transcript_text: result.transcript_text || result.transcript || current.content_data?.transcript_text,
+          captions_text: result.transcript_text || result.transcript || current.content_data?.captions_text,
+          summary: result.summary_text || current.content_data?.summary,
+          summary_text: result.summary_text || current.content_data?.summary_text,
+          audio_summary: result.summary_text || current.content_data?.audio_summary,
+          audio_content_id: result.audio_content_id || current.content_data?.audio_content_id,
+          audio_storage_path: result.storage_path || current.content_data?.audio_storage_path,
+          audio_bucket: result.bucket_name || current.content_data?.audio_bucket,
+          audio_content_type: result.mime_type || current.content_data?.audio_content_type,
+          audio_original_filename: result.original_filename || current.content_data?.audio_original_filename,
+          transcript_provider: result.transcript_provider || current.content_data?.transcript_provider,
+          caption_data: Array.isArray(result.caption_data) ? result.caption_data : current.content_data?.caption_data,
+          live_caption_mode: 'speech_to_text_playback',
+        },
+      }) : current);
+
+      toast.success('Audio uploaded successfully.');
       if (result.transcript_text || result.transcript) {
-        toast.info('Transcript stored for live captions.');
+        toast.info('Speech-to-text caption data saved for trainee playback.');
       }
       if (result.summary_text) {
         toast.info('Lesson summary saved for trainee navigation.');
@@ -526,6 +632,10 @@ export default function TrainerMicrolearningStudio() {
   }
 
   async function saveModule() {
+    if (uploading || audioUploading || audioProcessing) {
+      toast.error('Please wait for the current media upload to finish before saving the module.');
+      return;
+    }
     const validationError = validateModuleForm(moduleForm);
     if (validationError) {
       toast.error(validationError);
@@ -546,7 +656,12 @@ export default function TrainerMicrolearningStudio() {
           content_url: moduleForm.content_url.trim() || null,
           difficulty: moduleForm.difficulty,
           topic_category_id: moduleForm.topic_category_id || null,
-          content_data: buildContentData(moduleForm),
+          content_data: buildContentData(
+            moduleForm,
+            editingModule && editingModule.module_type === moduleForm.module_type
+              ? editingModule.content_data
+              : undefined,
+          ),
         }),
       });
       const result = await response.json();
@@ -713,7 +828,7 @@ export default function TrainerMicrolearningStudio() {
         : moduleForm.module_type === 'case_study'
           ? 'Audio Upload'
           : moduleForm.module_type === 'audio'
-            ? 'Audio File (MP3)'
+            ? 'Audio File'
             : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
@@ -723,7 +838,7 @@ export default function TrainerMicrolearningStudio() {
         : moduleForm.module_type === 'case_study'
           ? 'Upload the audio file trainees should analyze with the transcript.'
           : moduleForm.module_type === 'audio'
-            ? 'Upload the audio file with automatic transcription and TTS generation for accessibility.'
+            ? 'Upload the audio file with automatic transcription, reusable caption data, and learner summary support.'
             : 'Upload a supporting media asset.';
   const mediaAssetAccept =
     moduleForm.module_type === 'video'
@@ -762,6 +877,11 @@ export default function TrainerMicrolearningStudio() {
   const trainerYouTubePreviewUrl = getTrainerYouTubeEmbedUrl(trainerVideoPreviewUrl);
   const trainerShowsDirectVideoPreview =
     Boolean(trainerVideoPreviewUrl) && !trainerYouTubePreviewUrl && isTrainerDirectVideoFile(trainerVideoPreviewUrl);
+  const trainerHasInvalidVideoReference =
+    moduleForm.module_type === 'video'
+    && Boolean(trainerVideoPreviewUrl)
+    && !hasTrainerPlayableVideoReference(moduleForm);
+  const canSaveModule = !(saving || uploading || audioUploading || audioProcessing);
   const selectedBatch = useMemo(
     () => batches.find((batch) => batch.id === assignmentBatchId) || null,
     [assignmentBatchId, batches],
@@ -1366,8 +1486,12 @@ export default function TrainerMicrolearningStudio() {
                     </div>
                     <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border bg-white px-3 py-2 text-sm font-medium">
                       <Upload className="size-4" />
-                      {uploading ? 'Uploading...' : 'Upload'}
-                      <input type="file" accept={mediaAssetAccept} className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAsset(file); event.currentTarget.value = ''; }} />
+                      {uploading
+                        ? moduleForm.module_type === 'video'
+                          ? 'Uploading video...'
+                          : 'Uploading...'
+                        : 'Upload'}
+                      <input type="file" accept={mediaAssetAccept} className="hidden" disabled={uploading || saving || audioUploading || audioProcessing} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAsset(file); event.currentTarget.value = ''; }} />
                     </label>
                   </div>
                   <div className="mt-4 space-y-2">
@@ -1392,6 +1516,11 @@ export default function TrainerMicrolearningStudio() {
                       }
                       placeholder="https://youtube.com/... or a Supabase-hosted asset URL"
                     />
+                    {moduleForm.module_type === 'video' && trainerHasInvalidVideoReference ? (
+                      <p className="mt-2 text-sm text-amber-700">
+                        Invalid video reference. Paste a supported YouTube link or upload MP4, MOV, WEBM, OGG, or M4V.
+                      </p>
+                    ) : null}
                   </div>
                   {moduleForm.module_type === 'video' && trainerVideoPreviewUrl ? (
                     <div className="mt-4 rounded-xl border bg-white p-4">
@@ -1429,22 +1558,22 @@ export default function TrainerMicrolearningStudio() {
                         {moduleForm.module_type === 'audio' ? 'Microlearning Audio Module' : 'Audio Case Study'}
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Upload an `.mp3` lesson. The system will automatically:
+                        Upload MP3, WAV, M4A, or OGG lesson audio. The system will automatically:
                         <ul className="mt-2 list-inside list-disc space-y-1">
                           <li>Upload the file to the private Supabase `audio-modules` bucket</li>
-                          <li>Send the audio to Gemini for a live-caption transcript and concise summary</li>
-                          <li>Store the transcript, summary, and file metadata in `audio_content`</li>
+                          <li>Send the audio to Gemini for speech-to-text captions and a concise summary</li>
+                          <li>Store the transcript, caption data, summary, and file metadata in `audio_content` plus the module record</li>
                         </ul>
                       </div>
                     </div>
                     <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border bg-white px-3 py-2 text-sm font-medium">
                       <Upload className="size-4" />
-                      {audioUploading ? 'Uploading & Transcribing...' : audioProcessing ? 'Processing...' : 'Upload MP3'}
+                      {audioUploading ? 'Uploading audio...' : audioProcessing ? 'Generating captions...' : 'Upload Audio'}
                       <input 
                         type="file" 
-                        accept=".mp3,audio/mpeg" 
+                        accept=".mp3,.wav,.m4a,.ogg,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg" 
                         className="hidden" 
-                        disabled={audioUploading || audioProcessing}
+                        disabled={audioUploading || audioProcessing || saving || uploading}
                         onChange={async (event) => { 
                           const file = event.target.files?.[0]; 
                           if (file) {
@@ -1466,7 +1595,7 @@ export default function TrainerMicrolearningStudio() {
                   {(audioUploading || audioProcessing) && (
                     <div className="mt-4 flex items-center gap-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
                       <Loader2 className="size-4 animate-spin" />
-                      <span>Processing audio: uploading to Supabase and generating the Gemini transcript + summary...</span>
+                      <span>{audioUploading ? 'Uploading audio to Supabase...' : 'Generating speech-to-text captions and learner summary...'}</span>
                     </div>
                   )}
                   
@@ -1511,7 +1640,7 @@ export default function TrainerMicrolearningStudio() {
                         <div className="rounded-lg border bg-white p-3">
                           <div className="text-xs uppercase tracking-wide text-muted-foreground">AI Lesson Summary</div>
                           <div className="mt-2 text-sm text-slate-600 whitespace-pre-wrap">
-                            {moduleForm.audio_summary_text || 'Gemini will save a concise learner summary after the MP3 finishes processing.'}
+                            {moduleForm.audio_summary_text || 'Gemini will save a concise learner summary after the audio finishes processing.'}
                           </div>
                         </div>
                         <div className="rounded-lg border bg-white p-3">
@@ -1519,6 +1648,8 @@ export default function TrainerMicrolearningStudio() {
                           <div className="mt-2 space-y-1 text-sm text-slate-600">
                             <div>Audio Content ID: {moduleForm.audio_content_id || 'Pending'}</div>
                             <div>Storage Path: {moduleForm.audio_storage_path || 'Pending'}</div>
+                            <div>Bucket: {moduleForm.audio_bucket_name || 'audio-modules'}</div>
+                            <div>Format: {moduleForm.audio_content_type || 'Pending'}</div>
                             <div>Language: {moduleForm.audio_language || 'en-US'}</div>
                             <div>Duration: {moduleForm.audio_duration_seconds ? `${moduleForm.audio_duration_seconds}s` : 'Pending'}</div>
                             <div>Transcript Provider: {moduleForm.audio_transcript_provider || 'Gemini (pending)'}</div>
@@ -1527,7 +1658,7 @@ export default function TrainerMicrolearningStudio() {
                       </div>
                       
                       <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
-                        <strong>Note:</strong> After saving the module, upload the MP3 once. Trainee playback will request a signed Supabase URL on demand and use the stored transcript for simulated live captions plus the saved summary for lesson navigation.
+                        <strong>Note:</strong> After saving the module, upload the audio once. Trainee playback will request a signed Supabase URL on demand and use the stored speech-to-text caption data plus the saved summary for lesson navigation.
                       </div>
                     </div>
                   )}
@@ -1545,7 +1676,7 @@ export default function TrainerMicrolearningStudio() {
                 <div className="space-y-4">
                   {moduleForm.video_questions.map((question, index) => (
                     <div key={index} className="rounded-lg border p-4">
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div>
                         <div>
                           <Label>Question Type</Label>
                           <Select
@@ -1562,17 +1693,6 @@ export default function TrainerMicrolearningStudio() {
                               <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
                             </SelectContent>
                           </Select>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Switch
-                            checked={question.stt_enabled}
-                            onCheckedChange={(checked) => {
-                              const newQuestions = [...moduleForm.video_questions];
-                              newQuestions[index].stt_enabled = checked;
-                              setModuleForm(current => ({ ...current, video_questions: newQuestions }));
-                            }}
-                          />
-                          <Label>Enable STT</Label>
                         </div>
                       </div>
                       <div className="mt-4">
@@ -2011,7 +2131,7 @@ export default function TrainerMicrolearningStudio() {
                 <div className="space-y-4">
                   {moduleForm.case_study_questions.map((question, index) => (
                     <div key={index} className="rounded-lg border p-4">
-                      <div className="grid gap-4 md:grid-cols-2">
+                      <div>
                         <div>
                           <Label>Question Type</Label>
                           <Select
@@ -2028,17 +2148,6 @@ export default function TrainerMicrolearningStudio() {
                               <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
                             </SelectContent>
                           </Select>
-                        </div>
-                        <div className="flex items-center space-x-2">
-                          <Switch
-                            checked={question.stt_enabled}
-                            onCheckedChange={(checked) => {
-                              const newQuestions = [...moduleForm.case_study_questions];
-                              newQuestions[index].stt_enabled = checked;
-                              setModuleForm(current => ({ ...current, case_study_questions: newQuestions }));
-                            }}
-                          />
-                          <Label>Enable Speech-to-Text</Label>
                         </div>
                       </div>
                       <div className="mt-4">
@@ -2212,7 +2321,7 @@ export default function TrainerMicrolearningStudio() {
           </div>
           <DialogFooter className="shrink-0 border-t bg-background px-4 py-4 sm:px-6">
             <Button variant="outline" onClick={() => setShowModuleDialog(false)}>Cancel</Button>
-            <Button onClick={() => void saveModule()} disabled={saving}>{saving ? 'Saving...' : 'Save Module'}</Button>
+            <Button onClick={() => void saveModule()} disabled={!canSaveModule}>{saving ? 'Saving...' : uploading || audioUploading || audioProcessing ? 'Finish Upload First' : 'Save Module'}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -574,7 +574,7 @@ class MicrolearningModule(Base):
     content_url = Column(String(500), nullable=True)  # Link to video/audio/image
     
     # Audio-specific fields for speech-enabled content
-    audio_url = Column(String(500), nullable=True)  # Original uploaded audio file URL (MP3)
+    audio_url = Column(String(500), nullable=True)  # Original uploaded lesson audio file URL
     audio_transcript = Column(Text, nullable=True)  # Speech-to-text transcription of the audio
     audio_tts_url = Column(String(500), nullable=True)  # Text-to-speech generated audio (for accessibility)
     audio_duration_seconds = Column(Integer, nullable=True)  # Duration of the audio in seconds

@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
 
-interface User {
+export interface User {
   user_id: string
   user_role: 'admin' | 'trainer' | 'trainee'
   user_name: string
@@ -16,7 +16,7 @@ interface AuthContextType {
   token: string | null
   isLoading: boolean
   isAuthenticated: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<User>
   logout: () => void
   refreshToken: () => Promise<string | null>
   updateUser: (updates: Partial<User>) => void
@@ -206,7 +206,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(false)
   }, [])
 
-  const login = async (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<User> => {
     try {
       const trimmedEmail = email.trim().toLowerCase()
       const response = await fetch('/api/auth/login', {
@@ -247,6 +247,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (storageError) {
         console.warn('Unable to cache auth state:', storageError)
       }
+
+      return userData
     } catch (error) {
       console.error('Login error:', error)
       if (error instanceof TypeError) {

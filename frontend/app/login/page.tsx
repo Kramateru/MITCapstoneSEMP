@@ -1,7 +1,6 @@
 'use client'
 
 import Image from 'next/image'
-import { useRouter } from 'next/navigation'
 import { useEffect, useState, type FormEvent } from 'react'
 import {
   AlertTriangle,
@@ -17,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/app/context/AuthContext'
+import { getPostLoginPath, navigateToPath } from '@/app/utils/auth-navigation'
 
 type AuthProviderStatus = {
   provider: 'supabase' | 'local'
@@ -30,7 +30,6 @@ const fieldBaseClassName =
   'h-14 w-full rounded-[20px] border border-slate-200 bg-slate-50/92 px-14 py-3.5 text-[0.98rem] text-slate-900 shadow-[0_18px_40px_-30px_rgba(15,23,42,0.16)] transition placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-300/40 disabled:cursor-not-allowed disabled:opacity-70 sm:h-15 sm:text-[1.02rem]'
 
 export default function LoginPage() {
-  const router = useRouter()
   const { login, user, isAuthenticated, isLoading: isAuthLoading } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -46,20 +45,9 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isAuthLoading && isAuthenticated && user) {
-      if (user.must_change_password) {
-        router.replace('/trainee/settings')
-        return
-      }
-
-      const dashboardMap: Record<string, string> = {
-        admin: '/admin/dashboard',
-        trainer: '/trainer/dashboard',
-        trainee: '/trainee/dashboard',
-      }
-      const path = dashboardMap[user.user_role || 'trainee'] || '/dashboard'
-      router.replace(path)
+      navigateToPath(getPostLoginPath(user))
     }
-  }, [isAuthLoading, isAuthenticated, router, user])
+  }, [isAuthLoading, isAuthenticated, user])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -119,7 +107,10 @@ export default function LoginPage() {
     setIsSubmitting(true)
 
     try {
-      await login(normalizedEmail, password)
+      const signedInUser = await login(normalizedEmail, password)
+      if (!navigateToPath(getPostLoginPath(signedInUser))) {
+        setIsSubmitting(false)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed'
       setError(message)

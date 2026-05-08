@@ -34,7 +34,7 @@ from ..schemas import SuccessResponse
 from ..supabase_client import get_supabase_client
 from ..services.audio_transcription import speech_to_text_service
 from ..services.audio_tts import text_to_speech_service
-from ..services.microlearning import assignment_is_current
+from ..services.microlearning import assignment_is_current, filter_current_assignments
 
 router = APIRouter(prefix="/api/microlearning", tags=["microlearning"])
 logger = logging.getLogger(__name__)
@@ -1037,6 +1037,8 @@ async def get_module_audio(
         "audio_language": module.audio_language,
         "transcript": resolved_transcript,
         "captions_url": content_data.get("captions_url"),
+        "caption_data": content_data.get("caption_data"),
+        "live_caption_mode": content_data.get("live_caption_mode"),
         "content_type": content_data.get("audio_content_type"),
     }
 
@@ -1198,6 +1200,7 @@ async def trainee_assigned(authorization: Optional[str] = Header(None), db: Sess
         raise HTTPException(status_code=403, detail="Trainees only")
 
     assignments = db.query(MicrolearningAssignment).filter(MicrolearningAssignment.trainee_id == current_user.id).all()
+    assignments = filter_current_assignments(assignments)
     result = []
     for a in assignments:
         module = db.query(MicrolearningModule).filter(MicrolearningModule.id == a.module_id).first()

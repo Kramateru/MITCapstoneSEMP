@@ -78,6 +78,10 @@ const ADMIN_QUICK_LINKS = [
   },
 ] as const;
 
+const DASHBOARD_REQUEST_TIMEOUT_MS = 20000;
+const DASHBOARD_REQUEST_RETRIES = 0;
+const DASHBOARD_RETRY_DELAY_MS = 400;
+
 function toDisplayLabel(value: string) {
   return value
     .replace(/_/g, ' ')
@@ -112,36 +116,51 @@ function getLoadErrorMessage(error: unknown, fallback: string) {
 async function fetchJsonWithTimeout<T>(
   input: RequestInfo | URL,
   init: RequestInit = {},
-  timeoutMs = 12000,
+  timeoutMs = DASHBOARD_REQUEST_TIMEOUT_MS,
+  retries = DASHBOARD_REQUEST_RETRIES,
 ): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  let lastError: unknown = new Error('Request failed.');
 
-  try {
-    const response = await fetch(input, {
-      ...init,
-      cache: 'no-store',
-      signal: controller.signal,
-    });
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(
-        (payload as { detail?: string; message?: string } | null)?.detail ||
-          (payload as { detail?: string; message?: string } | null)?.message ||
-          'Request failed.',
+    try {
+      const response = await fetch(input, {
+        ...init,
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(
+          (payload as { detail?: string; message?: string } | null)?.detail ||
+            (payload as { detail?: string; message?: string } | null)?.message ||
+            'Request failed.',
+        );
+      }
+
+      return payload as T;
+    } catch (error) {
+      lastError =
+        error instanceof DOMException && error.name === 'AbortError'
+          ? new Error('The request took too long to load.')
+          : error;
+
+      if (attempt === retries) {
+        throw lastError;
+      }
+
+      await new Promise((resolve) =>
+        window.setTimeout(resolve, DASHBOARD_RETRY_DELAY_MS * (attempt + 1)),
       );
+    } finally {
+      window.clearTimeout(timeoutId);
     }
-
-    return payload as T;
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      throw new Error('The request took too long to load.');
-    }
-    throw error;
-  } finally {
-    window.clearTimeout(timeoutId);
   }
+
+  throw lastError instanceof Error ? lastError : new Error('Request failed.');
 }
 
 export default function AdminDashboardPage() {
@@ -163,7 +182,7 @@ export default function AdminDashboardPage() {
     }
 
     try {
-      const data = await fetchJsonWithTimeout<DashboardStats>('/api/admin/dashboard', { headers: authHeaders() }, 10000);
+      const data = await fetchJsonWithTimeout<DashboardStats>('/api/admin/dashboard', { headers: authHeaders() });
       setStats(data);
       setLoadMessage('');
     } catch (error) {

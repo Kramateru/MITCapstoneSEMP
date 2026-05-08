@@ -80,9 +80,9 @@ export default function Error({
               onClick={() => {
                 if (requiresHardReload) {
                   console.info('User clicked "Reload app" - forcing a full page refresh');
-                  const didTriggerReload = attemptRecoverFromRuntimeAssetError(error);
+                  const didTriggerReload = attemptRecoverFromRuntimeAssetError(error, { force: true });
                   if (!didTriggerReload) {
-                    window.location.reload();
+                    window.location.replace(window.location.href);
                   }
                   return;
                 }
@@ -100,7 +100,7 @@ export default function Error({
               onClick={() => {
                 console.info('User clicked "Return to Login" - clearing session');
                 clearBrowserSession();
-                window.location.href = '/login';
+                window.location.replace('/login');
               }}
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-400/30 bg-slate-900/50 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800/50 focus:outline-none focus:ring-2 focus:ring-slate-400/50"
             >
