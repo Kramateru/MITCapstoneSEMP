@@ -3,6 +3,7 @@
 import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
 import type {
+  BulkUploadQuestionsResponse,
   CoachAttemptPayload,
   CreateAssessmentPayload,
   CreateAssignmentPayload,
@@ -10,9 +11,11 @@ import type {
   CreateQuestionPayload,
   SubmitAssessmentPayload,
   SubmitAssessmentResponse,
+  TraineeAssessmentSession,
   TraineeDashboardResponse,
   TrainerBootstrapResponse,
   UpdateAssessmentPayload,
+  UpdateAssignmentPayload,
   UpdateCategoryPayload,
   UpdateQuestionPayload,
 } from './types'
@@ -28,15 +31,22 @@ function getJsonErrorMessage(payload: unknown) {
 
 async function request<T>(input: string, init?: RequestInit): Promise<T> {
   const token = getToken()
+  const headers = new Headers(init?.headers || undefined)
+
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const isFormDataBody = typeof FormData !== 'undefined' && init?.body instanceof FormData
+  if (!isFormDataBody && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json')
+  }
+
   let response: Response
   try {
     response = await fetch(input, {
       ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        ...(init?.headers || {}),
-      },
+      headers,
       cache: 'no-store',
     })
   } catch (error) {
@@ -51,12 +61,48 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
   return payload as T
 }
 
+async function downloadBlob(input: string, fallbackFileName: string) {
+  const token = getToken()
+  const headers = new Headers()
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  const response = await fetch(input, {
+    headers,
+    cache: 'no-store',
+  })
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(getJsonErrorMessage(payload))
+  }
+
+  const blob = await response.blob()
+  const downloadUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  const disposition = response.headers.get('content-disposition') || ''
+  const fileNameMatch = disposition.match(/filename="?([^"]+)"?$/i)
+  const fileName = fileNameMatch?.[1] || fallbackFileName
+
+  anchor.href = downloadUrl
+  anchor.download = fileName
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(downloadUrl)
+}
+
 export function fetchTrainerAssessmentBootstrap() {
   return request<TrainerBootstrapResponse>('/api/assessment-module/trainer/bootstrap')
 }
 
 export function fetchTraineeAssessmentDashboard() {
   return request<TraineeDashboardResponse>('/api/assessment-module/trainee/dashboard')
+}
+
+export function fetchTraineeAssessmentSession(assignmentId: string) {
+  return request<TraineeAssessmentSession>(`/api/assessment-module/trainee/assignments/${assignmentId}`)
 }
 
 export function createAssessmentCategory(payload: CreateCategoryPayload) {
@@ -126,6 +172,19 @@ export function createAssessmentAssignment(payload: CreateAssignmentPayload) {
   })
 }
 
+export function updateAssessmentAssignment(assignmentId: string, payload: UpdateAssignmentPayload) {
+  return request(`/api/assessment-module/trainer/assignments/${assignmentId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  })
+}
+
+export function deleteAssessmentAssignment(assignmentId: string) {
+  return request(`/api/assessment-module/trainer/assignments/${assignmentId}`, {
+    method: 'DELETE',
+  })
+}
+
 export function submitAssessmentAttemptRequest(payload: SubmitAssessmentPayload) {
   return request<SubmitAssessmentResponse>('/api/assessment-module/trainee/attempts', {
     method: 'POST',
@@ -140,33 +199,22 @@ export function coachAssessmentAttemptRequest(payload: CoachAttemptPayload) {
   })
 }
 
-export async function downloadTrainerAssessmentCsv() {
-  const token = getToken()
-  const response = await fetch('/api/assessment-module/trainer/export/csv', {
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    cache: 'no-store',
+export function bulkUploadAssessmentQuestions(file: File) {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  return request<BulkUploadQuestionsResponse>('/api/assessment-module/trainer/questions/bulk-upload', {
+    method: 'POST',
+    body: formData,
   })
+}
 
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null)
-    throw new Error(getJsonErrorMessage(payload))
-  }
+export function downloadAssessmentCsvTemplate() {
+  return downloadBlob('/api/assessment-module/trainer/questions/template', 'assessment-question-template.csv')
+}
 
-  const blob = await response.blob()
-  const downloadUrl = window.URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  const disposition = response.headers.get('content-disposition') || ''
-  const fileNameMatch = disposition.match(/filename="?([^"]+)"?$/i)
-  const fileName = fileNameMatch?.[1] || 'training-assessment-report.csv'
-
-  anchor.href = downloadUrl
-  anchor.download = fileName
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  window.URL.revokeObjectURL(downloadUrl)
+export function downloadTrainerAssessmentCsv() {
+  return downloadBlob('/api/assessment-module/trainer/export/csv', 'assessment-module-report.csv')
 }
 
 export function openTrainerAssessmentStream() {

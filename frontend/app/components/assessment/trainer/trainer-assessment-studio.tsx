@@ -1,25 +1,436 @@
 'use client'
 
-import { Activity, BookOpenCheck, ClipboardList, Loader2, RefreshCw, Trophy } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
-import Link from 'next/link'
+import {
+  Award,
+  BarChart3,
+  BookOpenCheck,
+  CheckCircle2,
+  ClipboardList,
+  Download,
+  FileSpreadsheet,
+  Filter,
+  Loader2,
+  MessageSquarePlus,
+  Plus,
+  RefreshCw,
+  Save,
+  Sparkles,
+  Target,
+  Trash2,
+  Upload,
+  Users,
+} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts'
+import { toast } from 'sonner'
 
-import { Card, CardContent, CardHeader, CardTitle } from '@/app/components/ui/card'
+import {
+  AssessmentSectionNav,
+  EmptyState,
+  MetricCard,
+  PaginationBar,
+  formatDateLabel,
+  formatDateTimeLabel,
+  formatDurationLabel,
+  getAttemptTone,
+} from '@/app/components/assessment/shared/assessment-ui'
+import { Badge } from '@/app/components/ui/badge'
 import { Button } from '@/app/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs'
-import { fetchTrainerAssessmentBootstrap, openTrainerAssessmentStream } from '@/app/lib/assessment/client'
-import type { TrainerBootstrapResponse } from '@/app/lib/assessment/types'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
+import { Checkbox } from '@/app/components/ui/checkbox'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/app/components/ui/dialog'
+import { Input } from '@/app/components/ui/input'
+import { Label } from '@/app/components/ui/label'
+import { Progress } from '@/app/components/ui/progress'
+import { ScrollArea } from '@/app/components/ui/scroll-area'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/app/components/ui/select'
+import { Switch } from '@/app/components/ui/switch'
+import { Textarea } from '@/app/components/ui/textarea'
+import {
+  archiveAssessmentCategory,
+  bulkUploadAssessmentQuestions,
+  coachAssessmentAttemptRequest,
+  createAssessmentAssignment,
+  createAssessmentCategory,
+  createAssessmentQuestion,
+  deleteAssessmentAssignment,
+  deleteAssessmentQuestion,
+  downloadAssessmentCsvTemplate,
+  downloadTrainerAssessmentCsv,
+  fetchTrainerAssessmentBootstrap,
+  openTrainerAssessmentStream,
+  updateAssessmentAssignment,
+  updateAssessmentCategory,
+  updateAssessmentQuestion,
+} from '@/app/lib/assessment/client'
+import { normalizeAssessmentAnswer } from '@/app/lib/assessment/scoring'
+import type {
+  AssessmentQuestionRecord,
+  AttemptRecord,
+  AssignmentRecord,
+  BulkUploadQuestionsResponse,
+  CategoryRecord,
+  TrainerBootstrapResponse,
+} from '@/app/lib/assessment/types'
 
-import { TrainerAssignmentPanel } from './trainer-assignment-panel'
-import { TrainerBuilderPanel } from './trainer-builder-panel'
-import { TrainerLiveAnalyticsPanel } from './trainer-live-analytics-panel'
+type ManagementRole = 'trainer' | 'admin'
+type ManagementSection =
+  | 'dashboard'
+  | 'categories'
+  | 'question-bank'
+  | 'bulk-upload'
+  | 'assignments'
+  | 'results'
+  | 'certificates'
+  | 'analytics'
+  | 'reports'
 
-export function TrainerAssessmentStudio() {
+type CategoryDraft = {
+  id?: string | null
+  title: string
+  description: string
+  passingScore: string
+}
+
+type QuestionDraft = {
+  id?: string | null
+  categoryId: string
+  questionNumber: string
+  questionText: string
+  choices: [string, string, string, string]
+  correctAnswer: string
+  difficulty: '' | 'easy' | 'medium' | 'hard'
+  explanation: string
+}
+
+type AssignmentDraft = {
+  id?: string | null
+  categoryId: string
+  title: string
+  description: string
+  targetType: 'batch' | 'trainee'
+  targetId: string
+  dueAt: string
+  assignmentMode: 'selected_questions' | 'entire_category' | 'random_subset'
+  questionIds: string[]
+  randomQuestionCount: string
+  passingScore: string
+  maximumAttempts: string
+  timeLimitMinutes: string
+  shuffleChoices: boolean
+  shuffleQuestions: boolean
+}
+
+type CoachingDraft = {
+  feedback: string
+  trainerNote: string
+  actionItems: string
+}
+
+const DEFAULT_PASSING_SCORE = '90'
+
+function getSections(role: ManagementRole) {
+  if (role === 'admin') {
+    return [
+      {
+        id: 'categories' as const,
+        label: 'All Categories',
+        description: 'Audit and manage every assessment category across trainers.',
+        icon: <ClipboardList className="size-4" />,
+      },
+      {
+        id: 'question-bank' as const,
+        label: 'All Question Banks',
+        description: 'Search the shared multiple-choice question inventory.',
+        icon: <BookOpenCheck className="size-4" />,
+      },
+      {
+        id: 'assignments' as const,
+        label: 'Assignments',
+        description: 'Review active batch, wave, and trainee assessment assignments.',
+        icon: <Users className="size-4" />,
+      },
+      {
+        id: 'results' as const,
+        label: 'Results',
+        description: 'Inspect attempt outcomes, coaching notes, and completion status.',
+        icon: <CheckCircle2 className="size-4" />,
+      },
+      {
+        id: 'analytics' as const,
+        label: 'Analytics',
+        description: 'Track category performance, weak questions, and batch comparisons.',
+        icon: <BarChart3 className="size-4" />,
+      },
+      {
+        id: 'reports' as const,
+        label: 'Reports',
+        description: 'Export and review consolidated assessment reporting views.',
+        icon: <FileSpreadsheet className="size-4" />,
+      },
+    ]
+  }
+
+  return [
+    {
+      id: 'dashboard' as const,
+      label: 'Assessment Dashboard',
+      description: 'Monitor overall progress, active assignments, and quick actions.',
+      icon: <Target className="size-4" />,
+    },
+    {
+      id: 'categories' as const,
+      label: 'Assessment Categories',
+      description: 'Create trainer-owned categories and define the passing score.',
+      icon: <ClipboardList className="size-4" />,
+    },
+    {
+      id: 'question-bank' as const,
+      label: 'Question Bank',
+      description: 'Manually add, edit, search, and filter multiple-choice questions.',
+      icon: <BookOpenCheck className="size-4" />,
+    },
+    {
+      id: 'bulk-upload' as const,
+      label: 'Bulk Upload Questions',
+      description: 'Import questions by CSV and review validation results instantly.',
+      icon: <Upload className="size-4" />,
+    },
+    {
+      id: 'assignments' as const,
+      label: 'Assign Assessment',
+      description: 'Publish assessments to a batch, wave, or individual trainee.',
+      icon: <Users className="size-4" />,
+    },
+    {
+      id: 'results' as const,
+      label: 'Results and Evaluations',
+      description: 'Review attempt history, pass/fail results, and coaching notes.',
+      icon: <CheckCircle2 className="size-4" />,
+    },
+    {
+      id: 'certificates' as const,
+      label: 'Certificates',
+      description: 'Track completion certificates earned from passing assessments.',
+      icon: <Award className="size-4" />,
+    },
+    {
+      id: 'analytics' as const,
+      label: 'Analytics',
+      description: 'Compare performance across categories, questions, and batches.',
+      icon: <BarChart3 className="size-4" />,
+    },
+    {
+      id: 'reports' as const,
+      label: 'Reports',
+      description: 'Download CSV exports and review detailed report summaries.',
+      icon: <FileSpreadsheet className="size-4" />,
+    },
+  ]
+}
+
+function normalizeSection(role: ManagementRole, value: string | null): ManagementSection {
+  const availableSections = getSections(role).map((section) => section.id)
+  return availableSections.includes(value as ManagementSection)
+    ? (value as ManagementSection)
+    : role === 'trainer'
+      ? 'dashboard'
+      : 'categories'
+}
+
+function createEmptyCategoryDraft(): CategoryDraft {
+  return {
+    title: '',
+    description: '',
+    passingScore: DEFAULT_PASSING_SCORE,
+  }
+}
+
+function createQuestionDraft(categoryId = ''): QuestionDraft {
+  return {
+    categoryId,
+    questionNumber: '',
+    questionText: '',
+    choices: ['', '', '', ''],
+    correctAnswer: '',
+    difficulty: '',
+    explanation: '',
+  }
+}
+
+function createAssignmentDraft(categoryId = '', passingScore = DEFAULT_PASSING_SCORE): AssignmentDraft {
+  return {
+    categoryId,
+    title: '',
+    description: '',
+    targetType: 'batch',
+    targetId: '',
+    dueAt: '',
+    assignmentMode: 'entire_category',
+    questionIds: [],
+    randomQuestionCount: '',
+    passingScore,
+    maximumAttempts: '',
+    timeLimitMinutes: '',
+    shuffleChoices: true,
+    shuffleQuestions: false,
+  }
+}
+
+function toQuestionDraft(question: AssessmentQuestionRecord): QuestionDraft {
+  return {
+    id: question.id,
+    categoryId: question.categoryId || '',
+    questionNumber: String(question.questionNumber || question.orderIndex + 1),
+    questionText: question.questionText,
+    choices: [
+      question.options[0] || '',
+      question.options[1] || '',
+      question.options[2] || '',
+      question.options[3] || '',
+    ],
+    correctAnswer: question.correctAnswer,
+    difficulty: question.difficulty || '',
+    explanation: question.explanation || '',
+  }
+}
+
+function toAssignmentDraft(record: AssignmentRecord): AssignmentDraft {
+  return {
+    id: record.id,
+    categoryId: record.categoryId,
+    title: record.title || record.categoryTitle,
+    description: record.description || '',
+    targetType: record.targetType,
+    targetId: record.batchId || record.traineeId || '',
+    dueAt: record.dueAt ? record.dueAt.slice(0, 10) : '',
+    assignmentMode: record.assignmentMode || 'entire_category',
+    questionIds: record.selectedQuestionIds || [],
+    randomQuestionCount: record.randomQuestionCount ? String(record.randomQuestionCount) : '',
+    passingScore: String(record.passingScore || 90),
+    maximumAttempts: record.maximumAttempts ? String(record.maximumAttempts) : '',
+    timeLimitMinutes: record.timeLimitMinutes ? String(record.timeLimitMinutes) : '',
+    shuffleChoices: record.shuffleChoices ?? true,
+    shuffleQuestions: record.shuffleQuestions ?? false,
+  }
+}
+
+function toCategoryDraft(record: CategoryRecord): CategoryDraft {
+  return {
+    id: record.id,
+    title: record.title,
+    description: record.description || '',
+    passingScore: String(record.passingScore),
+  }
+}
+
+function downloadTextFile(content: string, filename: string, mimeType = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type: mimeType })
+  const objectUrl = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = objectUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+function getQuestionBankForCategory(workspace: TrainerBootstrapResponse | null, categoryId: string) {
+  return (workspace?.questions || []).filter((question) => question.categoryId === categoryId)
+}
+
+function formatTargetLabel(assignment: AssignmentRecord) {
+  return `${assignment.targetType === 'batch' ? 'Batch / Wave' : 'Trainee'}: ${assignment.targetLabel}`
+}
+
+export function TrainerAssessmentStudio({
+  role = 'trainer',
+}: {
+  role?: ManagementRole
+}) {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const sections = useMemo(() => getSections(role), [role])
+
   const [workspace, setWorkspace] = useState<TrainerBootstrapResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
-  const [liveStatus, setLiveStatus] = useState('Connecting trainer analytics...')
+  const [liveStatus, setLiveStatus] = useState('Connecting live assessment updates...')
+  const [activeSection, setActiveSection] = useState<ManagementSection>(normalizeSection(role, searchParams.get('section')))
+  const [selectedCategoryId, setSelectedCategoryId] = useState('')
+  const [categorySearch, setCategorySearch] = useState('')
+  const [questionSearch, setQuestionSearch] = useState('')
+  const [questionCategoryFilter, setQuestionCategoryFilter] = useState('all')
+  const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState<'all' | 'easy' | 'medium' | 'hard'>('all')
+  const [questionPage, setQuestionPage] = useState(1)
+  const [assignmentSearch, setAssignmentSearch] = useState('')
+  const [assignmentTargetFilter, setAssignmentTargetFilter] = useState<'all' | 'batch' | 'trainee'>('all')
+  const [assignmentStatusFilter, setAssignmentStatusFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
+  const [assignmentPage, setAssignmentPage] = useState(1)
+  const [resultsSearch, setResultsSearch] = useState('')
+  const [resultsCategoryFilter, setResultsCategoryFilter] = useState('all')
+  const [resultsBatchFilter, setResultsBatchFilter] = useState('all')
+  const [resultsStatusFilter, setResultsStatusFilter] = useState<'all' | 'pass' | 'fail'>('all')
+  const [resultsDateFrom, setResultsDateFrom] = useState('')
+  const [resultsDateTo, setResultsDateTo] = useState('')
+  const [resultsPage, setResultsPage] = useState(1)
+  const [certificateSearch, setCertificateSearch] = useState('')
+  const [certificatePage, setCertificatePage] = useState(1)
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
+  const [categoryDraft, setCategoryDraft] = useState<CategoryDraft>(createEmptyCategoryDraft)
+  const [questionDialogOpen, setQuestionDialogOpen] = useState(false)
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft>(createQuestionDraft())
+  const [assignmentDialogOpen, setAssignmentDialogOpen] = useState(false)
+  const [assignmentDraft, setAssignmentDraft] = useState<AssignmentDraft>(createAssignmentDraft())
+  const [assignmentQuestionSearch, setAssignmentQuestionSearch] = useState('')
+  const [bulkUploadFile, setBulkUploadFile] = useState<File | null>(null)
+  const [bulkUploadState, setBulkUploadState] = useState<{
+    uploading: boolean
+    summary: BulkUploadQuestionsResponse | null
+    fileName: string
+  }>({
+    uploading: false,
+    summary: null,
+    fileName: '',
+  })
+  const [coachingTarget, setCoachingTarget] = useState<AttemptRecord | null>(null)
+  const [coachingDraft, setCoachingDraft] = useState<CoachingDraft>({
+    feedback: '',
+    trainerNote: '',
+    actionItems: '',
+  })
+  const [saving, setSaving] = useState(false)
+
+  const syncSection = useCallback((nextSection: ManagementSection) => {
+    setActiveSection(nextSection)
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.set('section', nextSection)
+    router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false })
+  }, [pathname, router, searchParams])
 
   const refreshWorkspace = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     try {
@@ -28,12 +439,13 @@ export function TrainerAssessmentStudio() {
       } else {
         setRefreshing(true)
       }
+
       setError('')
       const payload = await fetchTrainerAssessmentBootstrap()
       setWorkspace(payload)
     } catch (loadError) {
       console.error(loadError)
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load the assessment workspace.')
+      setError(loadError instanceof Error ? loadError.message : 'Unable to load the assessment studio.')
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -43,6 +455,23 @@ export function TrainerAssessmentStudio() {
   useEffect(() => {
     void refreshWorkspace()
   }, [refreshWorkspace])
+
+  useEffect(() => {
+    setActiveSection(normalizeSection(role, searchParams.get('section')))
+  }, [role, searchParams])
+
+  useEffect(() => {
+    if (!workspace?.categories.length) {
+      setSelectedCategoryId('')
+      return
+    }
+
+    setSelectedCategoryId((current) =>
+      workspace.categories.some((category) => category.id === current)
+        ? current
+        : workspace.categories[0].id,
+    )
+  }, [workspace?.categories])
 
   useEffect(() => {
     if (!workspace) {
@@ -59,12 +488,13 @@ export function TrainerAssessmentStudio() {
             setLiveStatus(`Supabase realtime: ${payload.status.toLowerCase().replace(/_/g, ' ')}`)
             return
           }
+
           if (payload.type === 'attempt_changed' || payload.type === 'coaching_changed') {
-            setLiveStatus('Supabase realtime update received. Refreshing analytics...')
+            setLiveStatus('Live update received. Refreshing the assessment studio...')
             void refreshWorkspace('refresh')
           }
         } catch {
-          setLiveStatus('Live analytics event received.')
+          setLiveStatus('Assessment update received.')
         }
       }
       stream.onerror = () => {
@@ -80,6 +510,541 @@ export function TrainerAssessmentStudio() {
     }
   }, [refreshWorkspace, workspace])
 
+  const categories = workspace?.categories || []
+  const questions = workspace?.questions || []
+  const assignments = workspace?.assignments || []
+  const attempts = workspace?.attempts || []
+  const certificates = workspace?.certificates || []
+  const reports = workspace?.reports
+  const analytics = workspace?.analytics
+
+  const selectedCategory = categories.find((category) => category.id === selectedCategoryId) || null
+  const selectedCategoryQuestions = getQuestionBankForCategory(workspace, selectedCategoryId)
+  const batchMap = new Map((workspace?.batches || []).map((batch) => [batch.id, batch]))
+  const traineeMap = new Map((workspace?.trainees || []).map((trainee) => [trainee.id, trainee]))
+  const attemptById = new Map(attempts.map((attempt) => [attempt.id, attempt]))
+
+  const filteredCategories = useMemo(() => {
+    const normalizedSearch = categorySearch.trim().toLowerCase()
+    if (!normalizedSearch) {
+      return categories
+    }
+
+    return categories.filter((category) => {
+      const haystack = [
+        category.title,
+        category.description || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(normalizedSearch)
+    })
+  }, [categories, categorySearch])
+
+  const filteredQuestions = useMemo(() => {
+    const normalizedSearch = questionSearch.trim().toLowerCase()
+
+    return questions.filter((question) => {
+      if (questionCategoryFilter !== 'all' && question.categoryId !== questionCategoryFilter) {
+        return false
+      }
+
+      if (questionDifficultyFilter !== 'all' && question.difficulty !== questionDifficultyFilter) {
+        return false
+      }
+
+      if (!normalizedSearch) {
+        return true
+      }
+
+      const haystack = [
+        question.categoryName || '',
+        question.questionText,
+        ...question.options,
+        question.correctAnswer,
+        question.explanation || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(normalizedSearch)
+    })
+  }, [questionCategoryFilter, questionDifficultyFilter, questionSearch, questions])
+
+  const questionPageCount = Math.max(1, Math.ceil(filteredQuestions.length / 6))
+  const paginatedQuestions = useMemo(() => {
+    const currentPage = Math.min(questionPage, questionPageCount)
+    const startIndex = (currentPage - 1) * 6
+    return filteredQuestions.slice(startIndex, startIndex + 6)
+  }, [filteredQuestions, questionPage, questionPageCount])
+
+  const filteredAssignments = useMemo(() => {
+    const normalizedSearch = assignmentSearch.trim().toLowerCase()
+
+    return assignments.filter((assignment) => {
+      if (assignmentTargetFilter !== 'all' && assignment.targetType !== assignmentTargetFilter) {
+        return false
+      }
+
+      const progressStatus =
+        assignment.statusLabel === 'Completed'
+          ? 'completed'
+          : assignment.statusLabel === 'In Progress'
+            ? 'in_progress'
+            : 'pending'
+
+      if (assignmentStatusFilter !== 'all' && progressStatus !== assignmentStatusFilter) {
+        return false
+      }
+
+      if (!normalizedSearch) {
+        return true
+      }
+
+      const haystack = [
+        assignment.title || '',
+        assignment.categoryTitle,
+        assignment.targetLabel,
+        assignment.description || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(normalizedSearch)
+    })
+  }, [assignmentSearch, assignmentStatusFilter, assignmentTargetFilter, assignments])
+
+  const assignmentPageCount = Math.max(1, Math.ceil(filteredAssignments.length / 5))
+  const paginatedAssignments = useMemo(() => {
+    const currentPage = Math.min(assignmentPage, assignmentPageCount)
+    const startIndex = (currentPage - 1) * 5
+    return filteredAssignments.slice(startIndex, startIndex + 5)
+  }, [assignmentPage, assignmentPageCount, filteredAssignments])
+
+  const filteredAttempts = useMemo(() => {
+    const normalizedSearch = resultsSearch.trim().toLowerCase()
+
+    return attempts.filter((attempt) => {
+      if (resultsCategoryFilter !== 'all' && attempt.categoryId !== resultsCategoryFilter) {
+        return false
+      }
+
+      if (resultsBatchFilter !== 'all' && attempt.batchId !== resultsBatchFilter) {
+        return false
+      }
+
+      if (resultsStatusFilter !== 'all' && attempt.status !== resultsStatusFilter) {
+        return false
+      }
+
+      const attemptDate = new Date(attempt.completedAt || attempt.submittedAt)
+      if (resultsDateFrom) {
+        const minDate = new Date(resultsDateFrom)
+        if (attemptDate < minDate) {
+          return false
+        }
+      }
+      if (resultsDateTo) {
+        const maxDate = new Date(resultsDateTo)
+        maxDate.setHours(23, 59, 59, 999)
+        if (attemptDate > maxDate) {
+          return false
+        }
+      }
+
+      if (!normalizedSearch) {
+        return true
+      }
+
+      const haystack = [
+        attempt.traineeName,
+        attempt.traineeEmail || '',
+        attempt.categoryTitle,
+        attempt.assessmentTitle,
+        attempt.batchName || '',
+        attempt.certificateCode || '',
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(normalizedSearch)
+    })
+  }, [
+    attempts,
+    resultsBatchFilter,
+    resultsCategoryFilter,
+    resultsDateFrom,
+    resultsDateTo,
+    resultsSearch,
+    resultsStatusFilter,
+  ])
+
+  const resultsPageCount = Math.max(1, Math.ceil(filteredAttempts.length / 6))
+  const paginatedAttempts = useMemo(() => {
+    const currentPage = Math.min(resultsPage, resultsPageCount)
+    const startIndex = (currentPage - 1) * 6
+    return filteredAttempts.slice(startIndex, startIndex + 6)
+  }, [filteredAttempts, resultsPage, resultsPageCount])
+
+  const filteredCertificates = useMemo(() => {
+    const normalizedSearch = certificateSearch.trim().toLowerCase()
+
+    return certificates.filter((certificate) => {
+      const sourceAttempt = attemptById.get(certificate.attemptId)
+      const traineeName = sourceAttempt?.traineeName || ''
+
+      if (!normalizedSearch) {
+        return true
+      }
+
+      const haystack = [
+        certificate.categoryTitle,
+        certificate.assessmentTitle,
+        certificate.certificateCode,
+        traineeName,
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      return haystack.includes(normalizedSearch)
+    })
+  }, [attemptById, certificateSearch, certificates])
+
+  const certificatePageCount = Math.max(1, Math.ceil(filteredCertificates.length / 6))
+  const paginatedCertificates = useMemo(() => {
+    const currentPage = Math.min(certificatePage, certificatePageCount)
+    const startIndex = (currentPage - 1) * 6
+    return filteredCertificates.slice(startIndex, startIndex + 6)
+  }, [certificatePage, certificatePageCount, filteredCertificates])
+
+  const assignmentPoolQuestions = getQuestionBankForCategory(workspace, assignmentDraft.categoryId)
+  const filteredAssignmentPoolQuestions = useMemo(() => {
+    const normalizedSearch = assignmentQuestionSearch.trim().toLowerCase()
+    if (!normalizedSearch) {
+      return assignmentPoolQuestions
+    }
+
+    return assignmentPoolQuestions.filter((question) => {
+      const haystack = [question.questionText, ...question.options].join(' ').toLowerCase()
+      return haystack.includes(normalizedSearch)
+    })
+  }, [assignmentPoolQuestions, assignmentQuestionSearch])
+
+  const categoryChartData = (reports?.categories || []).map((report) => ({
+    label: report.categoryTitle,
+    averageScore: Number(report.averageScore.toFixed(2)),
+    passRate: Number(report.passRate.toFixed(2)),
+    completionRate: Number((report.completionRate || 0).toFixed(2)),
+  }))
+
+  const batchChartData = (reports?.batches || []).map((report) => ({
+    label: `${report.batchName}${report.waveNumber ? ` W${report.waveNumber}` : ''}`,
+    averageScore: Number(report.averageScore.toFixed(2)),
+    passRate: Number(report.passRate.toFixed(2)),
+  }))
+
+  const weakQuestions = (reports?.questions || []).slice(0, 5)
+
+  const openCategoryDialog = (category?: CategoryRecord) => {
+    setCategoryDraft(category ? toCategoryDraft(category) : createEmptyCategoryDraft())
+    setCategoryDialogOpen(true)
+  }
+
+  const openQuestionDialog = (question?: AssessmentQuestionRecord) => {
+    setQuestionDraft(question ? toQuestionDraft(question) : createQuestionDraft(selectedCategoryId || categories[0]?.id || ''))
+    setQuestionDialogOpen(true)
+  }
+
+  const openAssignmentDialog = (assignment?: AssignmentRecord) => {
+    const baseDraft = assignment
+      ? toAssignmentDraft(assignment)
+      : createAssignmentDraft(selectedCategoryId || categories[0]?.id || '', String(selectedCategory?.passingScore || 90))
+    setAssignmentDraft(baseDraft)
+    setAssignmentQuestionSearch('')
+    setAssignmentDialogOpen(true)
+  }
+
+  const handleSaveCategory = async () => {
+    if (!categoryDraft.title.trim()) {
+      toast.error('Category title is required.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      if (categoryDraft.id) {
+        await updateAssessmentCategory(categoryDraft.id, {
+          title: categoryDraft.title.trim(),
+          description: categoryDraft.description.trim(),
+          passingScore: Number(categoryDraft.passingScore) || 90,
+        })
+        toast.success('Category updated.')
+      } else {
+        await createAssessmentCategory({
+          title: categoryDraft.title.trim(),
+          description: categoryDraft.description.trim(),
+          passingScore: Number(categoryDraft.passingScore) || 90,
+        })
+        toast.success('Category created.')
+      }
+      setCategoryDialogOpen(false)
+      await refreshWorkspace('refresh')
+    } catch (saveError) {
+      console.error(saveError)
+      toast.error(saveError instanceof Error ? saveError.message : 'Unable to save the category.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleArchiveCategory = async (category: CategoryRecord) => {
+    if (!window.confirm(`Archive "${category.title}"?`)) {
+      return
+    }
+
+    try {
+      await archiveAssessmentCategory(category.id)
+      toast.success('Category archived.')
+      await refreshWorkspace('refresh')
+    } catch (archiveError) {
+      console.error(archiveError)
+      toast.error(archiveError instanceof Error ? archiveError.message : 'Unable to archive the category.')
+    }
+  }
+
+  const handleSaveQuestion = async () => {
+    if (!questionDraft.categoryId || !questionDraft.questionText.trim()) {
+      toast.error('Category and question text are required.')
+      return
+    }
+
+    const sanitizedChoices = questionDraft.choices.map((choice) => choice.trim())
+    if (sanitizedChoices.filter(Boolean).length < 2) {
+      toast.error('Please provide at least two answer choices.')
+      return
+    }
+
+    if (!sanitizedChoices.some((choice) => normalizeAssessmentAnswer(choice) === normalizeAssessmentAnswer(questionDraft.correctAnswer))) {
+      toast.error('Correct answer must match one of the provided choices.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      const payload = {
+        categoryId: questionDraft.categoryId,
+        questionNumber: Number(questionDraft.questionNumber) || 0,
+        questionText: questionDraft.questionText.trim(),
+        questionType: 'multiple_choice' as const,
+        options: sanitizedChoices,
+        correctAnswer: questionDraft.correctAnswer.trim(),
+        difficulty: questionDraft.difficulty || null,
+        explanation: questionDraft.explanation.trim(),
+        orderIndex: Math.max((Number(questionDraft.questionNumber) || 1) - 1, 0),
+      }
+
+      if (questionDraft.id) {
+        await updateAssessmentQuestion(questionDraft.id, payload)
+        toast.success('Question updated.')
+      } else {
+        await createAssessmentQuestion(payload)
+        toast.success('Question created.')
+      }
+
+      setQuestionDialogOpen(false)
+      await refreshWorkspace('refresh')
+    } catch (saveError) {
+      console.error(saveError)
+      toast.error(saveError instanceof Error ? saveError.message : 'Unable to save the question.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteQuestion = async (question: AssessmentQuestionRecord) => {
+    if (!window.confirm(`Delete question ${question.questionNumber || question.orderIndex + 1}?`)) {
+      return
+    }
+
+    try {
+      await deleteAssessmentQuestion(question.id)
+      toast.success('Question deleted.')
+      await refreshWorkspace('refresh')
+    } catch (deleteError) {
+      console.error(deleteError)
+      toast.error(deleteError instanceof Error ? deleteError.message : 'Unable to delete the question.')
+    }
+  }
+
+  const handleSaveAssignment = async () => {
+    if (!assignmentDraft.categoryId || !assignmentDraft.title.trim()) {
+      toast.error('Category and assignment title are required.')
+      return
+    }
+
+    if (!assignmentDraft.targetId) {
+      toast.error('Select a batch, wave, or trainee target.')
+      return
+    }
+
+    if (assignmentDraft.assignmentMode === 'selected_questions' && !assignmentDraft.questionIds.length) {
+      toast.error('Select at least one question for selected-question mode.')
+      return
+    }
+
+    if (assignmentDraft.assignmentMode === 'random_subset' && !(Number(assignmentDraft.randomQuestionCount) > 0)) {
+      toast.error('Provide how many questions should be drawn in random-subset mode.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      const payload = {
+        categoryId: assignmentDraft.categoryId,
+        title: assignmentDraft.title.trim(),
+        description: assignmentDraft.description.trim(),
+        batchId: assignmentDraft.targetType === 'batch' ? assignmentDraft.targetId : null,
+        traineeId: assignmentDraft.targetType === 'trainee' ? assignmentDraft.targetId : null,
+        dueAt: assignmentDraft.dueAt ? new Date(`${assignmentDraft.dueAt}T00:00:00`).toISOString() : null,
+        assignmentMode: assignmentDraft.assignmentMode,
+        questionIds: assignmentDraft.questionIds,
+        randomQuestionCount: assignmentDraft.assignmentMode === 'random_subset'
+          ? Number(assignmentDraft.randomQuestionCount) || null
+          : null,
+        passingScore: Number(assignmentDraft.passingScore) || 90,
+        maximumAttempts: assignmentDraft.maximumAttempts ? Number(assignmentDraft.maximumAttempts) : null,
+        timeLimitMinutes: assignmentDraft.timeLimitMinutes ? Number(assignmentDraft.timeLimitMinutes) : null,
+        shuffleChoices: assignmentDraft.shuffleChoices,
+        shuffleQuestions: assignmentDraft.shuffleQuestions,
+      }
+
+      if (assignmentDraft.id) {
+        await updateAssessmentAssignment(assignmentDraft.id, payload)
+        toast.success('Assignment updated.')
+      } else {
+        await createAssessmentAssignment(payload)
+        toast.success('Assignment created.')
+      }
+
+      setAssignmentDialogOpen(false)
+      await refreshWorkspace('refresh')
+    } catch (saveError) {
+      console.error(saveError)
+      toast.error(saveError instanceof Error ? saveError.message : 'Unable to save the assignment.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteAssignment = async (assignment: AssignmentRecord) => {
+    if (!window.confirm(`Delete assignment "${assignment.title || assignment.categoryTitle}"?`)) {
+      return
+    }
+
+    try {
+      await deleteAssessmentAssignment(assignment.id)
+      toast.success('Assignment deleted.')
+      await refreshWorkspace('refresh')
+    } catch (deleteError) {
+      console.error(deleteError)
+      toast.error(deleteError instanceof Error ? deleteError.message : 'Unable to delete the assignment.')
+    }
+  }
+
+  const handleBulkUpload = async () => {
+    if (!bulkUploadFile) {
+      toast.error('Choose a CSV file before uploading.')
+      return
+    }
+
+    setBulkUploadState({
+      uploading: true,
+      summary: null,
+      fileName: bulkUploadFile.name,
+    })
+
+    try {
+      const summary = await bulkUploadAssessmentQuestions(bulkUploadFile)
+      setBulkUploadState({
+        uploading: false,
+        summary,
+        fileName: bulkUploadFile.name,
+      })
+      toast.success(`Processed ${summary.totalRows} row(s).`)
+      await refreshWorkspace('refresh')
+    } catch (uploadError) {
+      console.error(uploadError)
+      setBulkUploadState({
+        uploading: false,
+        summary: null,
+        fileName: bulkUploadFile.name,
+      })
+      toast.error(uploadError instanceof Error ? uploadError.message : 'Unable to upload the CSV file.')
+    }
+  }
+
+  const openCoachingDialog = (attempt: AttemptRecord) => {
+    setCoachingTarget(attempt)
+    setCoachingDraft({
+      feedback: attempt.feedback || '',
+      trainerNote: attempt.trainerNote || '',
+      actionItems: '',
+    })
+  }
+
+  const handleSaveCoaching = async () => {
+    if (!coachingTarget || !coachingDraft.feedback.trim()) {
+      toast.error('Coaching feedback is required.')
+      return
+    }
+
+    setSaving(true)
+    try {
+      await coachAssessmentAttemptRequest({
+        attemptId: coachingTarget.id,
+        feedback: coachingDraft.feedback.trim(),
+        trainerNote: coachingDraft.trainerNote.trim(),
+        actionItems: coachingDraft.actionItems.trim(),
+        visibility: 'shared',
+      })
+      setCoachingTarget(null)
+      toast.success('Coaching note saved.')
+      await refreshWorkspace('refresh')
+    } catch (saveError) {
+      console.error(saveError)
+      toast.error(saveError instanceof Error ? saveError.message : 'Unable to save coaching feedback.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleExportCsv = async () => {
+    try {
+      await downloadTrainerAssessmentCsv()
+      toast.success('Assessment report exported.')
+    } catch (downloadError) {
+      console.error(downloadError)
+      toast.error(downloadError instanceof Error ? downloadError.message : 'Unable to export the CSV report.')
+    }
+  }
+
+  useEffect(() => {
+    setQuestionPage(1)
+  }, [questionSearch, questionCategoryFilter, questionDifficultyFilter])
+
+  useEffect(() => {
+    setAssignmentPage(1)
+  }, [assignmentSearch, assignmentStatusFilter, assignmentTargetFilter])
+
+  useEffect(() => {
+    setResultsPage(1)
+  }, [resultsSearch, resultsCategoryFilter, resultsBatchFilter, resultsStatusFilter, resultsDateFrom, resultsDateTo])
+
+  useEffect(() => {
+    setCertificatePage(1)
+  }, [certificateSearch])
+
   if (loading) {
     return (
       <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
@@ -91,32 +1056,18 @@ export function TrainerAssessmentStudio() {
 
   if (!workspace) {
     return (
-      <Card className="border-amber-200 bg-amber-50/70">
-        <CardHeader className="space-y-3">
-          <CardTitle className="text-slate-950">Assessment studio is temporarily unavailable</CardTitle>
-          <p className="text-sm text-slate-700">
-            The advanced assessment workspace could not load right now. Trainer assessment work can still continue
-            from the working tools below while the shared data service is unavailable.
-          </p>
-          {error ? (
-            <div className="rounded-2xl border border-amber-200 bg-white/90 px-4 py-3 text-sm text-amber-900">
-              {error}
-            </div>
-          ) : null}
+      <Card className="border-amber-200 bg-amber-50/80">
+        <CardHeader>
+          <CardTitle>Assessment studio unavailable</CardTitle>
+          <CardDescription>
+            The assessment workspace could not be loaded right now.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <Button type="button" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
+        <CardContent>
+          {error ? <div className="text-sm text-amber-900">{error}</div> : null}
+          <Button type="button" className="mt-4" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
             {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             Retry
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/trainer/mcq">Open MCQ Workspace</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/trainer/microlearning">Open Microlearning</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/trainer/grading">Open Grading Review</Link>
           </Button>
         </CardContent>
       </Card>
@@ -127,16 +1078,25 @@ export function TrainerAssessmentStudio() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-slate-950">Assessment Studio</h1>
+          <h1 className="text-3xl font-bold text-slate-950">
+            {role === 'trainer' ? 'Assessment Studio' : 'Assessment Administration'}
+          </h1>
           <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Create categories, build mixed assessments, assign them to batches, and review trainee results from the
-            Supabase-backed assessment records.
+            {role === 'trainer'
+              ? 'Manage categories, question banks, assignments, results, certificates, analytics, and reports from one connected workspace.'
+              : 'Oversee categories, question banks, assignments, results, analytics, and reports across the assessment module.'}
           </p>
         </div>
-        <Button type="button" variant="outline" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
-          {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-          Refresh
-        </Button>
+        <div className="flex flex-wrap gap-3">
+          <Button type="button" variant="outline" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
+            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            Refresh
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void handleExportCsv()}>
+            <Download className="size-4" />
+            Export CSV
+          </Button>
+        </div>
       </div>
 
       {error ? (
@@ -145,60 +1105,1407 @@ export function TrainerAssessmentStudio() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Categories" value={String(workspace.categories.length)} icon={<ClipboardList className="size-4 text-blue-600" />} />
-        <MetricCard label="Assessments" value={String(workspace.categories.reduce((sum, category) => sum + category.assessments.length, 0))} icon={<BookOpenCheck className="size-4 text-sky-600" />} />
-        <MetricCard label="Live Attempts" value={String(workspace.attempts.length)} icon={<Activity className="size-4 text-amber-600" />} />
-        <MetricCard label="Certified Passes" value={String(workspace.attempts.filter((attempt) => attempt.certificateCode).length)} icon={<Trophy className="size-4 text-emerald-600" />} />
+      <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+        {liveStatus}
       </div>
 
-      <Tabs defaultValue="builder" className="space-y-6">
-        <TabsList className="grid w-full max-w-3xl grid-cols-3">
-          <TabsTrigger value="builder">Builder</TabsTrigger>
-          <TabsTrigger value="assignments">Assignments</TabsTrigger>
-          <TabsTrigger value="analytics">Live Analytics</TabsTrigger>
-        </TabsList>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <MetricCard
+          label="Categories"
+          value={String(categories.length)}
+          hint={`${analytics?.totalQuestions || 0} questions`}
+          icon={<ClipboardList className="size-4 text-sky-600" />}
+        />
+        <MetricCard
+          label="Assignments"
+          value={String(analytics?.totalAssignments || assignments.length)}
+          hint={`${analytics?.activeAssignments || 0} active`}
+          icon={<Users className="size-4 text-amber-600" />}
+        />
+        <MetricCard
+          label="Attempts"
+          value={String(analytics?.totalAttempts || attempts.length)}
+          hint={`${(analytics?.averageScore || 0).toFixed(2)}% average`}
+          icon={<CheckCircle2 className="size-4 text-emerald-600" />}
+        />
+        <MetricCard
+          label="Pass Rate"
+          value={`${(analytics?.passRate || 0).toFixed(2)}%`}
+          hint="Overall module"
+          icon={<BarChart3 className="size-4 text-violet-600" />}
+        />
+        <MetricCard
+          label="Certificates"
+          value={String(analytics?.certificatesIssued || certificates.length)}
+          hint="Completion unlocks"
+          icon={<Award className="size-4 text-amber-600" />}
+        />
+      </div>
 
-        <TabsContent value="builder">
-          <TrainerBuilderPanel workspace={workspace} onRefresh={() => refreshWorkspace('refresh')} />
-        </TabsContent>
+      <AssessmentSectionNav
+        activeSection={activeSection}
+        sections={sections}
+        onSelect={syncSection}
+      />
 
-        <TabsContent value="assignments">
-          <TrainerAssignmentPanel workspace={workspace} onRefresh={() => refreshWorkspace('refresh')} />
-        </TabsContent>
+      {activeSection === 'dashboard' ? (
+        <div className="grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Category Progress</CardTitle>
+              <CardDescription>Use the highest-level metrics to identify where coaching effort should go next.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(reports?.categories || []).slice(0, 6).map((report) => (
+                <div key={report.categoryId} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="font-semibold text-slate-950">{report.categoryTitle}</div>
+                      <div className="text-sm text-slate-600">
+                        {report.passCount} pass | {report.failCount} fail | Avg {report.averageScore.toFixed(2)}%
+                      </div>
+                    </div>
+                    <Badge variant="outline">{report.passRate.toFixed(2)}% pass rate</Badge>
+                  </div>
+                  <Progress value={report.completionRate || 0} className="mt-3 h-2" />
+                  <div className="mt-2 text-xs text-slate-500">
+                    Completion rate {(report.completionRate || 0).toFixed(2)}%
+                  </div>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
 
-        <TabsContent value="analytics">
-          <TrainerLiveAnalyticsPanel
-            workspace={workspace}
-            liveStatus={liveStatus}
-            onRefresh={() => refreshWorkspace('refresh')}
-          />
-        </TabsContent>
-      </Tabs>
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Quick Actions</CardTitle>
+              </CardHeader>
+              <CardContent className="grid gap-3">
+                <Button type="button" onClick={() => openCategoryDialog()}>
+                  <Plus className="size-4" />
+                  Create Category
+                </Button>
+                <Button type="button" variant="outline" onClick={() => openQuestionDialog()}>
+                  <BookOpenCheck className="size-4" />
+                  Add Question
+                </Button>
+                <Button type="button" variant="outline" onClick={() => syncSection('bulk-upload')}>
+                  <Upload className="size-4" />
+                  Open Bulk Upload
+                </Button>
+                <Button type="button" variant="outline" onClick={() => openAssignmentDialog()}>
+                  <Users className="size-4" />
+                  Create Assignment
+                </Button>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Weakest Questions</CardTitle>
+                <CardDescription>The highest miss-rate items are surfaced here for immediate coaching.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {weakQuestions.map((question) => (
+                  <div key={question.questionId} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="font-medium text-slate-950">{question.questionText}</div>
+                    <div className="mt-2 text-sm text-slate-600">
+                      {question.incorrectCount} misses from {question.answerCount} answers
+                    </div>
+                    <Badge variant="outline" className="mt-3">
+                      {question.missRate.toFixed(2)}% miss rate
+                    </Badge>
+                  </div>
+                ))}
+                {!weakQuestions.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                    Question analytics will appear after trainees submit attempts.
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'categories' ? (
+        <div className="grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <Card className="h-fit">
+            <CardHeader>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <CardTitle>{role === 'trainer' ? 'Category List' : 'All Categories'}</CardTitle>
+                  <CardDescription>Search and select a category to review its details.</CardDescription>
+                </div>
+                <Button type="button" size="sm" onClick={() => openCategoryDialog()}>
+                  <Plus className="size-4" />
+                  Add
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Input
+                value={categorySearch}
+                onChange={(event) => setCategorySearch(event.target.value)}
+                placeholder="Search categories"
+              />
+
+              {filteredCategories.map((category) => (
+                <button
+                  key={category.id}
+                  type="button"
+                  onClick={() => setSelectedCategoryId(category.id)}
+                  className={`w-full rounded-2xl border p-4 text-left transition ${
+                    selectedCategoryId === category.id
+                      ? 'border-sky-400 bg-sky-50 shadow-sm'
+                      : 'border-slate-200 bg-white hover:border-slate-300'
+                  }`}
+                >
+                  <div className="font-semibold text-slate-950">{category.title}</div>
+                  <div className="mt-1 text-sm text-slate-600">{category.description || 'No description yet.'}</div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                    <span>{category.questionCount || 0} questions</span>
+                    <span>{category.assignmentCount} assignments</span>
+                    <span>Pass at {category.passingScore}%</span>
+                  </div>
+                </button>
+              ))}
+
+              {!filteredCategories.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No categories match the current search.
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          {selectedCategory ? (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div>
+                    <CardTitle>{selectedCategory.title}</CardTitle>
+                    <CardDescription>{selectedCategory.description || 'No category description provided yet.'}</CardDescription>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" onClick={() => openCategoryDialog(selectedCategory)}>
+                      <Save className="size-4" />
+                      Edit
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                      onClick={() => void handleArchiveCategory(selectedCategory)}
+                    >
+                      <Trash2 className="size-4" />
+                      Archive
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-4">
+                  <MetricCard label="Passing Score" value={`${selectedCategory.passingScore}%`} hint="Default threshold" icon={<Target className="size-4 text-sky-600" />} />
+                  <MetricCard label="Question Bank" value={String(selectedCategory.questionCount || 0)} hint="Category inventory" icon={<BookOpenCheck className="size-4 text-emerald-600" />} />
+                  <MetricCard label="Assignments" value={String(selectedCategory.assignmentCount)} hint={`${selectedCategory.activeAssignmentCount || 0} active`} icon={<Users className="size-4 text-amber-600" />} />
+                  <MetricCard label="Average Score" value={`${selectedCategory.averageScore.toFixed(2)}%`} hint={`${selectedCategory.passRate.toFixed(2)}% pass rate`} icon={<BarChart3 className="size-4 text-violet-600" />} />
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <InfoLine label="Category ID" value={selectedCategory.id} />
+                    <InfoLine label="Created" value={formatDateTimeLabel(selectedCategory.createdAt)} />
+                    <InfoLine label="Updated" value={formatDateTimeLabel(selectedCategory.updatedAt)} />
+                    <InfoLine label="Completion Rate" value={`${(selectedCategory.completionRate || 0).toFixed(2)}%`} />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-3 text-sm font-semibold text-slate-900">Recent Questions</div>
+                  <div className="grid gap-3">
+                    {selectedCategoryQuestions.slice(0, 4).map((question) => (
+                      <div key={question.id} className="rounded-2xl border border-slate-200 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="font-semibold text-slate-950">
+                            Q{question.questionNumber || question.orderIndex + 1}. {question.questionText}
+                          </div>
+                          {question.difficulty ? <Badge variant="outline">{question.difficulty}</Badge> : null}
+                        </div>
+                        <div className="mt-2 text-sm text-slate-600">Correct answer: {question.correctAnswer}</div>
+                      </div>
+                    ))}
+                    {!selectedCategoryQuestions.length ? (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                        No questions have been added to this category yet.
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            <EmptyState
+              title="Select a category"
+              description="Choose a category from the list to review its metrics and recent questions."
+            />
+          )}
+        </div>
+      ) : null}
+
+      {activeSection === 'question-bank' ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <CardTitle>{role === 'trainer' ? 'Question Bank' : 'All Question Banks'}</CardTitle>
+                <CardDescription>Search, filter, edit, and review the category-based multiple-choice inventory.</CardDescription>
+              </div>
+              <Button type="button" onClick={() => openQuestionDialog()}>
+                <Plus className="size-4" />
+                Add Question
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px]">
+              <Input
+                value={questionSearch}
+                onChange={(event) => setQuestionSearch(event.target.value)}
+                placeholder="Search category, question, choice, or answer"
+              />
+              <Select value={questionCategoryFilter} onValueChange={setQuestionCategoryFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={questionDifficultyFilter} onValueChange={(value: 'all' | 'easy' | 'medium' | 'hard') => setQuestionDifficultyFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Difficulty" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All difficulty</SelectItem>
+                  <SelectItem value="easy">Easy</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="hard">Hard</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-4">
+              {paginatedQuestions.map((question) => (
+                <div key={question.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold text-slate-950">
+                          Q{question.questionNumber || question.orderIndex + 1}. {question.questionText}
+                        </div>
+                        <Badge variant="outline">{question.categoryName || 'Category'}</Badge>
+                        {question.difficulty ? <Badge variant="outline">{question.difficulty}</Badge> : null}
+                        <Badge variant="outline">{question.answerCount || 0} answers</Badge>
+                      </div>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        {question.options.map((option, index) => (
+                          <div key={`${question.id}-${index}`} className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                            <span className="font-semibold text-slate-900">{String.fromCharCode(65 + index)}.</span> {option}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex flex-wrap gap-4 text-xs text-slate-500">
+                        <span>Correct: {question.correctAnswer}</span>
+                        <span>Accuracy: {(question.accuracyRate || 0).toFixed(2)}%</span>
+                        <span>Miss rate: {(question.missRate || 0).toFixed(2)}%</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => openQuestionDialog(question)}>
+                        <Save className="size-4" />
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                        onClick={() => void handleDeleteQuestion(question)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+
+              {!paginatedQuestions.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No question bank records match the current filters.
+                </div>
+              ) : null}
+            </div>
+
+            <PaginationBar
+              currentPage={Math.min(questionPage, questionPageCount)}
+              totalPages={questionPageCount}
+              itemCountLabel={`Showing ${paginatedQuestions.length} of ${filteredQuestions.length} questions`}
+              onPrevious={() => setQuestionPage((current) => Math.max(current - 1, 1))}
+              onNext={() => setQuestionPage((current) => Math.min(current + 1, questionPageCount))}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeSection === 'bulk-upload' ? (
+        <div className="grid gap-6 xl:grid-cols-[0.95fr,1.05fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Bulk Upload Questions</CardTitle>
+              <CardDescription>
+                Download the template, map each row to an existing category name, and import the CSV in one pass.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-6">
+                <div className="text-sm text-slate-700">
+                  Template columns: Question Number, Category, Question, Choice 1, Choice 2, Choice 3, Choice 4, Correct Answer, Difficulty, Explanation.
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <Button type="button" variant="outline" onClick={() => void downloadAssessmentCsvTemplate()}>
+                    <Download className="size-4" />
+                    Download CSV Template
+                  </Button>
+                  <Label className="inline-flex cursor-pointer items-center rounded-2xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700">
+                    <Upload className="mr-2 size-4" />
+                    Choose File
+                    <input
+                      type="file"
+                      accept=".csv,text/csv"
+                      className="hidden"
+                      onChange={(event) => setBulkUploadFile(event.target.files?.[0] || null)}
+                    />
+                  </Label>
+                </div>
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                  {bulkUploadFile ? `Selected file: ${bulkUploadFile.name}` : 'No file selected yet.'}
+                </div>
+                <Button type="button" className="mt-4" onClick={() => void handleBulkUpload()} disabled={bulkUploadState.uploading}>
+                  {bulkUploadState.uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  Upload CSV
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Upload Summary</CardTitle>
+              <CardDescription>Review processed rows, validation failures, and imported questions.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {bulkUploadState.summary ? (
+                <>
+                  <div className="grid gap-4 md:grid-cols-4">
+                    <MetricCard label="Rows Processed" value={String(bulkUploadState.summary.totalRows)} hint={bulkUploadState.fileName || 'Uploaded file'} icon={<FileSpreadsheet className="size-4 text-sky-600" />} />
+                    <MetricCard label="Successful" value={String(bulkUploadState.summary.successfulImports)} hint="Imported questions" icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
+                    <MetricCard label="Failed" value={String(bulkUploadState.summary.failedRows)} hint="Validation issues" icon={<Filter className="size-4 text-amber-600" />} />
+                    <MetricCard label="Categories" value={String(new Set(bulkUploadState.summary.importedQuestions.map((question) => question.categoryId)).size)} hint="Matched categories" icon={<ClipboardList className="size-4 text-violet-600" />} />
+                  </div>
+
+                  {bulkUploadState.summary.errors.length ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="text-sm font-semibold text-slate-900">Validation Errors</div>
+                        {bulkUploadState.summary.errorCsv ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => downloadTextFile(bulkUploadState.summary?.errorCsv || '', 'assessment-upload-errors.csv', 'text/csv;charset=utf-8')}
+                          >
+                            <Download className="size-4" />
+                            Download Error Log
+                          </Button>
+                        ) : null}
+                      </div>
+                      <ScrollArea className="h-[320px] pr-4">
+                        <div className="space-y-3">
+                          {bulkUploadState.summary.errors.map((entry) => (
+                            <div key={`${entry.rowNumber}-${entry.error}`} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                              <div className="font-semibold">Row {entry.rowNumber}</div>
+                              <div className="mt-1">{entry.question || 'Question text missing'}</div>
+                              <div className="mt-2 text-xs">{entry.error}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </ScrollArea>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-sm text-emerald-800">
+                      All uploaded rows passed validation and were imported successfully.
+                    </div>
+                  )}
+                </>
+              ) : (
+                <EmptyState
+                  title="No upload processed yet"
+                  description="Your row summary, imported questions, and validation errors will appear here after a CSV upload."
+                />
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      {activeSection === 'assignments' ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <CardTitle>Assignment Center</CardTitle>
+                <CardDescription>Create or edit batch, wave, and trainee assignments with question pool controls.</CardDescription>
+              </div>
+              <Button type="button" onClick={() => openAssignmentDialog()}>
+                <Plus className="size-4" />
+                New Assignment
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px]">
+              <Input
+                value={assignmentSearch}
+                onChange={(event) => setAssignmentSearch(event.target.value)}
+                placeholder="Search category, title, or target"
+              />
+              <Select value={assignmentTargetFilter} onValueChange={(value: 'all' | 'batch' | 'trainee') => setAssignmentTargetFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All targets</SelectItem>
+                  <SelectItem value="batch">Batch / Wave</SelectItem>
+                  <SelectItem value="trainee">Trainee</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={assignmentStatusFilter} onValueChange={(value: 'all' | 'pending' | 'in_progress' | 'completed') => setAssignmentStatusFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All progress</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-4">
+              {paginatedAssignments.map((assignment) => (
+                <div key={assignment.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold text-slate-950">{assignment.title || assignment.categoryTitle}</div>
+                        <Badge variant="outline">{assignment.categoryTitle}</Badge>
+                        <Badge variant="outline">{assignment.assignmentMode?.replace(/_/g, ' ') || 'entire category'}</Badge>
+                        <Badge variant="outline">{assignment.questionCount || 0} questions</Badge>
+                        <Badge className={
+                          assignment.statusLabel === 'Completed'
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : assignment.statusLabel === 'In Progress'
+                              ? 'border-amber-200 bg-amber-50 text-amber-700'
+                              : 'border-slate-200 bg-slate-50 text-slate-700'
+                        }>
+                          {assignment.statusLabel || 'Pending'}
+                        </Badge>
+                      </div>
+                      <div className="text-sm text-slate-600">{assignment.description || 'No assignment notes provided.'}</div>
+                      <div className="flex flex-wrap gap-4 text-xs text-slate-500">
+                        <span>{formatTargetLabel(assignment)}</span>
+                        <span>Due {formatDateLabel(assignment.dueAt)}</span>
+                        <span>Pass at {assignment.passingScore || 90}%</span>
+                        <span>{assignment.timeLimitMinutes ? `${assignment.timeLimitMinutes} min timer` : 'Untimed'}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => openAssignmentDialog(assignment)}>
+                        <Save className="size-4" />
+                        Edit
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                        onClick={() => void handleDeleteAssignment(assignment)}
+                      >
+                        <Trash2 className="size-4" />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    <MetricCard label="Assigned" value={String(assignment.assignedTrainees || 0)} hint="Target trainees" icon={<Users className="size-4 text-sky-600" />} />
+                    <MetricCard label="Completed" value={String(assignment.completedTrainees || 0)} hint="Submitted attempts" icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
+                    <MetricCard label="Passed" value={String(assignment.passedTrainees || 0)} hint={`${(assignment.averageScore || 0).toFixed(2)}% average`} icon={<Award className="size-4 text-violet-600" />} />
+                    <MetricCard label="Certificates" value={String(assignment.certificateCount || 0)} hint={`${(assignment.retakeRate || 0).toFixed(2)}% retake rate`} icon={<Sparkles className="size-4 text-amber-600" />} />
+                  </div>
+                  <div className="mt-4">
+                    <div className="mb-2 flex items-center justify-between text-xs text-slate-500">
+                      <span>Completion</span>
+                      <span>
+                        {assignment.assignedTrainees
+                          ? Math.round(((assignment.completedTrainees || 0) / Math.max(assignment.assignedTrainees, 1)) * 100)
+                          : 0}
+                        %
+                      </span>
+                    </div>
+                    <Progress
+                      value={assignment.assignedTrainees
+                        ? Number((((assignment.completedTrainees || 0) / Math.max(assignment.assignedTrainees, 1)) * 100).toFixed(2))
+                        : 0}
+                      className="h-2"
+                    />
+                  </div>
+                </div>
+              ))}
+
+              {!paginatedAssignments.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No assignments match the current filters.
+                </div>
+              ) : null}
+            </div>
+
+            <PaginationBar
+              currentPage={Math.min(assignmentPage, assignmentPageCount)}
+              totalPages={assignmentPageCount}
+              itemCountLabel={`Showing ${paginatedAssignments.length} of ${filteredAssignments.length} assignments`}
+              onPrevious={() => setAssignmentPage((current) => Math.max(current - 1, 1))}
+              onNext={() => setAssignmentPage((current) => Math.min(current + 1, assignmentPageCount))}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeSection === 'results' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Results and Evaluations</CardTitle>
+            <CardDescription>Filter by batch, wave, category, trainee, status, and date range.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_170px_170px]">
+              <Input
+                value={resultsSearch}
+                onChange={(event) => setResultsSearch(event.target.value)}
+                placeholder="Search trainee, assessment, category, or certificate"
+              />
+              <Select value={resultsCategoryFilter} onValueChange={setResultsCategoryFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All categories</SelectItem>
+                  {categories.map((category) => (
+                    <SelectItem key={category.id} value={category.id}>
+                      {category.title}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={resultsBatchFilter} onValueChange={setResultsBatchFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Batch / Wave" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All batches</SelectItem>
+                  {(workspace.batches || []).map((batch) => (
+                    <SelectItem key={batch.id} value={batch.id}>
+                      {batch.waveNumber ? `${batch.name} | Wave ${batch.waveNumber}` : batch.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={resultsStatusFilter} onValueChange={(value: 'all' | 'pass' | 'fail') => setResultsStatusFilter(value)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All status</SelectItem>
+                  <SelectItem value="pass">Pass</SelectItem>
+                  <SelectItem value="fail">Fail</SelectItem>
+                </SelectContent>
+              </Select>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input type="date" value={resultsDateFrom} onChange={(event) => setResultsDateFrom(event.target.value)} />
+                <Input type="date" value={resultsDateTo} onChange={(event) => setResultsDateTo(event.target.value)} />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {paginatedAttempts.map((attempt) => (
+                <div key={attempt.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="font-semibold text-slate-950">{attempt.traineeName}</div>
+                        <Badge className={getAttemptTone(attempt.status)}>
+                          {attempt.status === 'pass' ? 'Pass' : 'Fail'}
+                        </Badge>
+                        {attempt.certificateCode ? <Badge variant="outline">{attempt.certificateCode}</Badge> : null}
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        {attempt.categoryTitle} | {attempt.assessmentTitle} | Attempt #{attempt.attemptNo}
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {attempt.batchName || 'Direct assignment'} | {formatDateTimeLabel(attempt.completedAt || attempt.submittedAt)}
+                      </div>
+                      <div className="text-sm text-slate-700">
+                        {attempt.analysis?.summary || attempt.feedback || 'Assessment result saved.'}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" size="sm" onClick={() => openCoachingDialog(attempt)}>
+                        <MessageSquarePlus className="size-4" />
+                        Coach
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    <MetricCard label="Score" value={`${attempt.score.toFixed(2)}%`} hint={`Target ${attempt.passingScore || 90}%`} icon={<BarChart3 className="size-4 text-sky-600" />} />
+                    <MetricCard label="Correct" value={String(attempt.correctAnswers ?? attempt.questionResults.filter((result) => result.isCorrect).length)} hint={`${attempt.totalQuestions || attempt.questionResults.length} total`} icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
+                    <MetricCard label="Time Spent" value={formatDurationLabel(attempt.timeSpentSeconds)} hint="Attempt duration" icon={<Target className="size-4 text-amber-600" />} />
+                    <MetricCard label="Analysis Source" value={attempt.analysis?.source === 'ai' ? 'AI' : 'Rules'} hint="Narrative feedback" icon={<Sparkles className="size-4 text-violet-600" />} />
+                  </div>
+
+                  {(attempt.analysis?.strengths?.length || attempt.analysis?.improvements?.length || attempt.analysis?.recommendations?.length) ? (
+                    <div className="mt-4 grid gap-4 xl:grid-cols-3">
+                      <MiniAnalysisBlock title="Strengths" items={attempt.analysis?.strengths || []} tone="emerald" />
+                      <MiniAnalysisBlock title="Improvements" items={attempt.analysis?.improvements || []} tone="amber" />
+                      <MiniAnalysisBlock title="Recommendations" items={attempt.analysis?.recommendations || []} tone="sky" />
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+
+              {!paginatedAttempts.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No results match the selected filters.
+                </div>
+              ) : null}
+            </div>
+
+            <PaginationBar
+              currentPage={Math.min(resultsPage, resultsPageCount)}
+              totalPages={resultsPageCount}
+              itemCountLabel={`Showing ${paginatedAttempts.length} of ${filteredAttempts.length} attempts`}
+              onPrevious={() => setResultsPage((current) => Math.max(current - 1, 1))}
+              onNext={() => setResultsPage((current) => Math.min(current + 1, resultsPageCount))}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeSection === 'certificates' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Certificates</CardTitle>
+            <CardDescription>Passing attempts automatically unlock certificates for the completed category.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Input
+              value={certificateSearch}
+              onChange={(event) => setCertificateSearch(event.target.value)}
+              placeholder="Search category, certificate code, or trainee"
+            />
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {paginatedCertificates.map((certificate) => {
+                const sourceAttempt = attemptById.get(certificate.attemptId)
+                return (
+                  <div key={certificate.id} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-950">{certificate.categoryTitle}</div>
+                        <div className="text-sm text-slate-600">{certificate.assessmentTitle}</div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          {sourceAttempt?.traineeName || 'Trainee'} | Earned {formatDateTimeLabel(certificate.earnedAt)}
+                        </div>
+                      </div>
+                      <Award className="size-6 text-amber-600" />
+                    </div>
+                    <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
+                      {certificate.certificateCode}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {!paginatedCertificates.length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No certificates match the current search.
+                </div>
+              ) : null}
+            </div>
+
+            <PaginationBar
+              currentPage={Math.min(certificatePage, certificatePageCount)}
+              totalPages={certificatePageCount}
+              itemCountLabel={`Showing ${paginatedCertificates.length} of ${filteredCertificates.length} certificates`}
+              onPrevious={() => setCertificatePage((current) => Math.max(current - 1, 1))}
+              onNext={() => setCertificatePage((current) => Math.min(current + 1, certificatePageCount))}
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {activeSection === 'analytics' ? (
+        <div className="space-y-6">
+          <div className="grid gap-6 xl:grid-cols-2">
+            <Card>
+              <CardHeader>
+                <CardTitle>Category Performance</CardTitle>
+                <CardDescription>Average score, pass rate, and completion rate by category.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={categoryChartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="label" interval={0} angle={-12} textAnchor="end" height={70} />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Bar dataKey="averageScore" fill="#0f766e" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Batch Performance Comparison</CardTitle>
+                <CardDescription>See how each batch or wave is performing across assigned categories.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={320}>
+                  <BarChart data={batchChartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="label" interval={0} angle={-12} textAnchor="end" height={70} />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip />
+                    <Bar dataKey="passRate" fill="#0284c7" radius={[8, 8, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
+            <Card>
+              <CardHeader>
+                <CardTitle>Weakest Questions</CardTitle>
+                <CardDescription>These items have the highest miss rates across submitted attempts.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {weakQuestions.map((question) => (
+                  <div key={question.questionId} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="font-medium text-slate-950">{question.questionText}</div>
+                    <div className="mt-2 text-sm text-slate-600">
+                      {question.incorrectCount} misses from {question.answerCount} answers
+                    </div>
+                    <Badge variant="outline" className="mt-3">
+                      {question.missRate.toFixed(2)}% miss rate
+                    </Badge>
+                  </div>
+                ))}
+                {!weakQuestions.length ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                    Question analytics will populate after enough attempts are recorded.
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Category Analytics Snapshot</CardTitle>
+                <CardDescription>Use this list for fast operational review without leaving the module.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {(reports?.categories || []).map((report) => (
+                  <div key={report.categoryId} className="rounded-2xl border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-950">{report.categoryTitle}</div>
+                        <div className="text-sm text-slate-600">
+                          Avg {report.averageScore.toFixed(2)}% | Pass {report.passRate.toFixed(2)}% | Completion {(report.completionRate || 0).toFixed(2)}%
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant="outline">{report.attemptCount} attempts</Badge>
+                        <Badge variant="outline">{report.passCount} pass</Badge>
+                        <Badge variant="outline">{report.failCount} fail</Badge>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      ) : null}
+
+      {activeSection === 'reports' ? (
+        <div className="space-y-6">
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                  <CardTitle>Reports</CardTitle>
+                  <CardDescription>Export CSV data and review category, batch, and question-level summaries.</CardDescription>
+                </div>
+                <Button type="button" onClick={() => void handleExportCsv()}>
+                  <Download className="size-4" />
+                  Download CSV Report
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="grid gap-6 xl:grid-cols-[1fr,1fr]">
+              <Card className="border-slate-200">
+                <CardHeader>
+                  <CardTitle className="text-lg">Category Report</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(reports?.categories || []).map((report) => (
+                    <div key={report.categoryId} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="font-semibold text-slate-950">{report.categoryTitle}</div>
+                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                        <div>Attempts: {report.attemptCount}</div>
+                        <div>Assignments: {report.assignmentCount || 0}</div>
+                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
+                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
+                        <div>Retake rate: {(report.retakeRate || 0).toFixed(2)}%</div>
+                        <div>Completion rate: {(report.completionRate || 0).toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-200">
+                <CardHeader>
+                  <CardTitle className="text-lg">Batch / Wave Report</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(reports?.batches || []).map((report) => (
+                    <div key={`${report.batchId}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="font-semibold text-slate-950">
+                        {report.batchName}{report.waveNumber ? ` | Wave ${report.waveNumber}` : ''}
+                      </div>
+                      <div className="text-sm text-slate-600">{report.categoryTitle}</div>
+                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                        <div>Assignments: {report.assignmentCount}</div>
+                        <div>Attempts: {report.attemptCount}</div>
+                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
+                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
+                        <div>Completion rate: {report.completionRate.toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!(reports?.batches || []).length ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                      Batch reporting will appear after assignments and attempts are recorded.
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Question Difficulty Analysis</CardTitle>
+              <CardDescription>Compare answer counts, correctness, and miss rate across the question bank.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {(reports?.questions || []).map((question) => (
+                <div key={question.questionId} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                    <div>
+                      <div className="font-semibold text-slate-950">
+                        Q{question.questionNumber || 0}. {question.questionText}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-600">
+                        {question.categoryTitle || 'Category'} | {question.difficulty || 'unspecified'} difficulty
+                      </div>
+                    </div>
+                    <div className="grid gap-2 sm:grid-cols-4">
+                      <MetricCard label="Answers" value={String(question.answerCount)} icon={<Users className="size-4 text-sky-600" />} />
+                      <MetricCard label="Correct" value={String(question.correctCount)} icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
+                      <MetricCard label="Incorrect" value={String(question.incorrectCount)} icon={<Filter className="size-4 text-amber-600" />} />
+                      <MetricCard label="Miss Rate" value={`${question.missRate.toFixed(2)}%`} icon={<BarChart3 className="size-4 text-violet-600" />} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!(reports?.questions || []).length ? (
+                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  Question-level reporting will appear after attempts are saved.
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </div>
+      ) : null}
+
+      <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{categoryDraft.id ? 'Edit Category' : 'Create Category'}</DialogTitle>
+            <DialogDescription>Define the category name, description, and passing score requirement.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Category Name</Label>
+              <Input className="mt-2" value={categoryDraft.title} onChange={(event) => setCategoryDraft((current) => ({ ...current, title: event.target.value }))} />
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Textarea className="mt-2" rows={4} value={categoryDraft.description} onChange={(event) => setCategoryDraft((current) => ({ ...current, description: event.target.value }))} />
+            </div>
+            <div>
+              <Label>Passing Score</Label>
+              <Input className="mt-2" type="number" min={0} max={100} value={categoryDraft.passingScore} onChange={(event) => setCategoryDraft((current) => ({ ...current, passingScore: event.target.value }))} />
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" onClick={() => setCategoryDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={() => void handleSaveCategory()} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                Save Category
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={questionDialogOpen} onOpenChange={setQuestionDialogOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{questionDraft.id ? 'Edit Question' : 'Create Question Item'}</DialogTitle>
+            <DialogDescription>Select a category, enter the four answer choices, and define the correct answer.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label>Category</Label>
+                <Select value={questionDraft.categoryId} onValueChange={(value) => setQuestionDraft((current) => ({ ...current, categoryId: value }))}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem key={category.id} value={category.id}>
+                        {category.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Question Number</Label>
+                <Input className="mt-2" type="number" min={1} value={questionDraft.questionNumber} onChange={(event) => setQuestionDraft((current) => ({ ...current, questionNumber: event.target.value }))} />
+              </div>
+            </div>
+            <div>
+              <Label>Question Text</Label>
+              <Textarea className="mt-2" rows={4} value={questionDraft.questionText} onChange={(event) => setQuestionDraft((current) => ({ ...current, questionText: event.target.value }))} />
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {questionDraft.choices.map((choice, index) => (
+                <div key={`choice-${index}`}>
+                  <Label>Choice {index + 1}</Label>
+                  <Input
+                    className="mt-2"
+                    value={choice}
+                    onChange={(event) =>
+                      setQuestionDraft((current) => {
+                        const nextChoices = [...current.choices] as QuestionDraft['choices']
+                        nextChoices[index] = event.target.value
+                        return { ...current, choices: nextChoices }
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <Label>Correct Answer</Label>
+                <Input className="mt-2" value={questionDraft.correctAnswer} onChange={(event) => setQuestionDraft((current) => ({ ...current, correctAnswer: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Difficulty</Label>
+                <Select value={questionDraft.difficulty || 'none'} onValueChange={(value) => setQuestionDraft((current) => ({ ...current, difficulty: value === 'none' ? '' : value as QuestionDraft['difficulty'] }))}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Optional difficulty" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No difficulty</SelectItem>
+                    <SelectItem value="easy">Easy</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="hard">Hard</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label>Explanation</Label>
+              <Textarea className="mt-2" rows={4} value={questionDraft.explanation} onChange={(event) => setQuestionDraft((current) => ({ ...current, explanation: event.target.value }))} />
+            </div>
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" onClick={() => setQuestionDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={() => void handleSaveQuestion()} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                Save Question
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={assignmentDialogOpen} onOpenChange={setAssignmentDialogOpen}>
+        <DialogContent className="max-w-5xl">
+          <DialogHeader>
+            <DialogTitle>{assignmentDraft.id ? 'Edit Assignment' : 'Assign Assessment'}</DialogTitle>
+            <DialogDescription>Choose the target, assignment mode, and question pool rules for this assessment.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div>
+                <Label>Category</Label>
+                <Select
+                  value={assignmentDraft.categoryId}
+                  onValueChange={(value) => {
+                    const nextCategory = categories.find((category) => category.id === value)
+                    setAssignmentDraft((current) => ({
+                      ...current,
+                      categoryId: value,
+                      questionIds: [],
+                      passingScore: String(nextCategory?.passingScore || 90),
+                    }))
+                  }}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map((category) => (
+                      <SelectItem key={category.id} value={category.id}>
+                        {category.title}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Assignment Title</Label>
+                <Input className="mt-2" value={assignmentDraft.title} onChange={(event) => setAssignmentDraft((current) => ({ ...current, title: event.target.value }))} />
+              </div>
+            </div>
+
+            <div>
+              <Label>Description</Label>
+              <Textarea className="mt-2" rows={3} value={assignmentDraft.description} onChange={(event) => setAssignmentDraft((current) => ({ ...current, description: event.target.value }))} />
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-3">
+              <div>
+                <Label>Target Type</Label>
+                <Select value={assignmentDraft.targetType} onValueChange={(value: 'batch' | 'trainee') => setAssignmentDraft((current) => ({ ...current, targetType: value, targetId: '' }))}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="batch">Batch / Wave</SelectItem>
+                    <SelectItem value="trainee">Trainee</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>{assignmentDraft.targetType === 'batch' ? 'Batch / Wave' : 'Trainee'}</Label>
+                <Select value={assignmentDraft.targetId} onValueChange={(value) => setAssignmentDraft((current) => ({ ...current, targetId: value }))}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder={`Select ${assignmentDraft.targetType === 'batch' ? 'batch' : 'trainee'}`} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {assignmentDraft.targetType === 'batch'
+                      ? (workspace.batches || []).map((batch) => (
+                          <SelectItem key={batch.id} value={batch.id}>
+                            {batch.waveNumber ? `${batch.name} | Wave ${batch.waveNumber}` : batch.name}
+                          </SelectItem>
+                        ))
+                      : (workspace.trainees || []).map((trainee) => (
+                          <SelectItem key={trainee.id} value={trainee.id}>
+                            {trainee.fullName} ({trainee.batchNames[0] || 'No batch'})
+                          </SelectItem>
+                        ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Assignment Mode</Label>
+                <Select value={assignmentDraft.assignmentMode} onValueChange={(value: AssignmentDraft['assignmentMode']) => setAssignmentDraft((current) => ({ ...current, assignmentMode: value }))}>
+                  <SelectTrigger className="mt-2">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="entire_category">Entire Category</SelectItem>
+                    <SelectItem value="selected_questions">Selected Questions</SelectItem>
+                    <SelectItem value="random_subset">Random Subset</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-4">
+              <div>
+                <Label>Due Date</Label>
+                <Input className="mt-2" type="date" value={assignmentDraft.dueAt} onChange={(event) => setAssignmentDraft((current) => ({ ...current, dueAt: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Passing Score</Label>
+                <Input className="mt-2" type="number" min={0} max={100} value={assignmentDraft.passingScore} onChange={(event) => setAssignmentDraft((current) => ({ ...current, passingScore: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Maximum Attempts</Label>
+                <Input className="mt-2" type="number" min={1} value={assignmentDraft.maximumAttempts} onChange={(event) => setAssignmentDraft((current) => ({ ...current, maximumAttempts: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Timer (Minutes)</Label>
+                <Input className="mt-2" type="number" min={1} value={assignmentDraft.timeLimitMinutes} onChange={(event) => setAssignmentDraft((current) => ({ ...current, timeLimitMinutes: event.target.value }))} />
+              </div>
+            </div>
+
+            <div className="grid gap-4 xl:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-slate-950">Randomization</div>
+                    <div className="text-sm text-slate-600">Shuffle answer choices and optionally question order each attempt.</div>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">Shuffle answer choices</div>
+                      <div className="text-xs text-slate-500">Randomize choice order on every attempt.</div>
+                    </div>
+                    <Switch checked={assignmentDraft.shuffleChoices} onCheckedChange={(value) => setAssignmentDraft((current) => ({ ...current, shuffleChoices: value }))} />
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">Shuffle question order</div>
+                      <div className="text-xs text-slate-500">Serve questions in a different order each time.</div>
+                    </div>
+                    <Switch checked={assignmentDraft.shuffleQuestions} onCheckedChange={(value) => setAssignmentDraft((current) => ({ ...current, shuffleQuestions: value }))} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="font-semibold text-slate-950">Question Pool</div>
+                <div className="mt-2 text-sm text-slate-600">
+                  {assignmentDraft.assignmentMode === 'entire_category'
+                    ? 'All active questions from the selected category will be used.'
+                    : assignmentDraft.assignmentMode === 'selected_questions'
+                      ? 'Pick the exact questions to include in the assignment.'
+                      : 'Optionally narrow the pool below, then define how many questions are drawn per attempt.'}
+                </div>
+                {assignmentDraft.assignmentMode === 'random_subset' ? (
+                  <div className="mt-4">
+                    <Label>Random Question Count</Label>
+                    <Input className="mt-2" type="number" min={1} value={assignmentDraft.randomQuestionCount} onChange={(event) => setAssignmentDraft((current) => ({ ...current, randomQuestionCount: event.target.value }))} />
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            {assignmentDraft.assignmentMode !== 'entire_category' ? (
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                  <div>
+                    <div className="font-semibold text-slate-950">Selectable Questions</div>
+                    <div className="text-sm text-slate-600">
+                      {assignmentDraft.assignmentMode === 'selected_questions'
+                        ? 'These selected questions become the exact assessment set.'
+                        : 'These selected questions define the pool for random draws. Leave blank to use the full category pool.'}
+                    </div>
+                  </div>
+                  <Input
+                    className="max-w-sm"
+                    value={assignmentQuestionSearch}
+                    onChange={(event) => setAssignmentQuestionSearch(event.target.value)}
+                    placeholder="Search questions in this category"
+                  />
+                </div>
+                <ScrollArea className="mt-4 h-[260px] pr-4">
+                  <div className="space-y-3">
+                    {filteredAssignmentPoolQuestions.map((question) => {
+                      const isChecked = assignmentDraft.questionIds.includes(question.id)
+                      return (
+                        <label key={question.id} className="flex items-start gap-3 rounded-2xl border border-slate-200 p-4">
+                          <Checkbox
+                            checked={isChecked}
+                            onCheckedChange={(checked) => {
+                              setAssignmentDraft((current) => ({
+                                ...current,
+                                questionIds: checked
+                                  ? [...current.questionIds, question.id]
+                                  : current.questionIds.filter((questionId) => questionId !== question.id),
+                              }))
+                            }}
+                          />
+                          <div className="space-y-1">
+                            <div className="font-medium text-slate-950">
+                              Q{question.questionNumber || question.orderIndex + 1}. {question.questionText}
+                            </div>
+                            <div className="text-xs text-slate-500">
+                              Correct answer: {question.correctAnswer}
+                              {question.difficulty ? ` | ${question.difficulty}` : ''}
+                            </div>
+                          </div>
+                        </label>
+                      )
+                    })}
+                    {!filteredAssignmentPoolQuestions.length ? (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                        No questions are available for the selected category and search.
+                      </div>
+                    ) : null}
+                  </div>
+                </ScrollArea>
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" onClick={() => setAssignmentDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={() => void handleSaveAssignment()} disabled={saving}>
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                Save Assignment
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!coachingTarget} onOpenChange={(open) => !open && setCoachingTarget(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Coach Attempt</DialogTitle>
+            <DialogDescription>
+              Add shared coaching feedback for {coachingTarget?.traineeName || 'this trainee'}.
+            </DialogDescription>
+          </DialogHeader>
+          {coachingTarget ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <MetricCard label="Trainee" value={coachingTarget.traineeName} icon={<Users className="size-4 text-sky-600" />} />
+                <MetricCard label="Score" value={`${coachingTarget.score.toFixed(2)}%`} icon={<BarChart3 className="size-4 text-emerald-600" />} />
+                <MetricCard label="Status" value={coachingTarget.status.toUpperCase()} icon={<CheckCircle2 className="size-4 text-amber-600" />} />
+              </div>
+              <div>
+                <Label>Feedback</Label>
+                <Textarea className="mt-2" rows={4} value={coachingDraft.feedback} onChange={(event) => setCoachingDraft((current) => ({ ...current, feedback: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Trainer Note</Label>
+                <Textarea className="mt-2" rows={3} value={coachingDraft.trainerNote} onChange={(event) => setCoachingDraft((current) => ({ ...current, trainerNote: event.target.value }))} />
+              </div>
+              <div>
+                <Label>Action Items</Label>
+                <Textarea className="mt-2" rows={3} value={coachingDraft.actionItems} onChange={(event) => setCoachingDraft((current) => ({ ...current, actionItems: event.target.value }))} />
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button type="button" variant="outline" onClick={() => setCoachingTarget(null)}>
+                  Cancel
+                </Button>
+                <Button type="button" onClick={() => void handleSaveCoaching()} disabled={saving}>
+                  {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                  Save Coaching Note
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
 
-function MetricCard({
+function InfoLine({
   label,
   value,
-  icon,
 }: {
   label: string
   value: string
-  icon: React.ReactNode
 }) {
   return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm text-slate-600">
-          {icon}
-          {label}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="text-3xl font-bold text-slate-950">{value}</div>
-      </CardContent>
-    </Card>
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
+    </div>
+  )
+}
+
+function MiniAnalysisBlock({
+  title,
+  items,
+  tone,
+}: {
+  title: string
+  items: string[]
+  tone: 'emerald' | 'amber' | 'sky'
+}) {
+  const toneClassName =
+    tone === 'emerald'
+      ? 'border-emerald-200 bg-emerald-50/80'
+      : tone === 'amber'
+        ? 'border-amber-200 bg-amber-50/80'
+        : 'border-sky-200 bg-sky-50/80'
+
+  return (
+    <div className={`rounded-2xl border p-4 ${toneClassName}`}>
+      <div className="font-semibold text-slate-950">{title}</div>
+      {items.length ? (
+        <div className="mt-3 space-y-2">
+          {items.map((item) => (
+            <div key={item} className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm text-slate-700">
+              {item}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 text-sm text-slate-600">No notes recorded yet.</div>
+      )}
+    </div>
   )
 }

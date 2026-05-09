@@ -149,6 +149,7 @@ export interface ModuleFormState {
     required_keywords?: string;
   }>;
   // Quiz specific
+  quiz_reading_content: string;
   quiz_questions: Array<{
     question: string;
     options: string[];
@@ -162,9 +163,11 @@ export interface ModuleFormState {
   // Infographic specific
   infographic_questions: Array<{
     question: string;
-    type: 'multiple_choice';
-    options: string[];
-    correct_option: string;
+    type: 'open_ended' | 'multiple_choice';
+    options?: string[];
+    correct_option?: string;
+    sample_answer?: string;
+    required_keywords?: string;
   }>;
   // Case Study specific
   case_study_content: string;
@@ -227,6 +230,7 @@ export function emptyModuleForm(): ModuleFormState {
     difficulty: 'basic',
     topic_category_id: '',
     video_questions: [],
+    quiz_reading_content: '',
     quiz_questions: [],
     flashcards: [],
     infographic_questions: [],
@@ -315,6 +319,7 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
     case 'quiz':
       return {
         ...preserved,
+        reading_passage: form.quiz_reading_content.trim() || undefined,
         questions: form.quiz_questions.map(q => ({
           question: q.question,
           options: q.options,
@@ -348,8 +353,10 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
         questions: form.infographic_questions.map(q => ({
           question: q.question,
           type: q.type,
-          options: q.options,
-          correct_option: q.correct_option,
+          options: q.options || [],
+          correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: splitToList(q.required_keywords || ''),
         })),
       };
     case 'case_study':
@@ -467,6 +474,12 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
     case 'quiz':
       return {
         ...baseForm,
+        quiz_reading_content:
+          content.reading_passage ||
+          content.reading_content ||
+          content.story_content ||
+          content.scenario_text ||
+          '',
         quiz_questions: (content.questions || []).map((q: any) => ({
           question: q.question || '',
           options: q.options || [],
@@ -489,6 +502,8 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
           type: q.type || 'multiple_choice',
           options: q.options || [],
           correct_option: q.correct_option || '',
+          sample_answer: q.sample_answer || '',
+          required_keywords: Array.isArray(q.required_keywords) ? q.required_keywords.join(', ') : '',
         })),
       };
     case 'case_study':

@@ -50,8 +50,10 @@ async def get_session_audio(
         trainee_batch_ids = {batch.id for batch in trainee.batches}
         if not trainer_batch_ids.intersection(trainee_batch_ids):
             raise HTTPException(status_code=403, detail="Trainer cannot access this trainee's recordings")
+    elif current_user.role == UserRole.ADMIN:
+        pass
     else:
-        raise HTTPException(status_code=403, detail="Only trainees and trainers can access recordings")
+        raise HTTPException(status_code=403, detail="Only trainees, trainers, and admins can access recordings")
 
     # Check if recording exists
     if not session.audio_url:
@@ -65,10 +67,14 @@ async def get_session_audio(
             "type": "supabase_redirect",
         }
 
-    raise HTTPException(
-        status_code=503,
-        detail="This session recording is not stored in Supabase. Regenerate or re-record it from the active workspace.",
-    )
+    if session.audio_url.startswith("/media/"):
+        return {
+            "audio_url": session.audio_url,
+            "message": "Recording found in the local media fallback workspace",
+            "type": "local_proxy",
+        }
+
+    raise HTTPException(status_code=404, detail="No playable recording URL is available for this session")
 
 
 @router.get("/recordings/{user_id}/{filename}")

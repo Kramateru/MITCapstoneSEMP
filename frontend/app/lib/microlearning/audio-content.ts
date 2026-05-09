@@ -78,6 +78,15 @@ type UploadMicrolearningAudioParams = {
   audioLanguage?: string | null
 }
 
+type UploadMicrolearningAudioUrlParams = {
+  authorization: string
+  moduleId: string
+  trainerId: string
+  title: string
+  audioUrl: string
+  audioLanguage?: string | null
+}
+
 export type UploadMicrolearningAudioResult = {
   audio_content_id: string
   module_id: string
@@ -270,6 +279,46 @@ function inferAudioMimeType(assetUrl: string, contentType?: string | null) {
   return 'audio/mpeg'
 }
 
+function extensionForAudioMimeType(mimeType: string) {
+  const normalizedMimeType = mimeType.trim().toLowerCase()
+  if (normalizedMimeType === 'audio/wav' || normalizedMimeType === 'audio/x-wav') {
+    return '.wav'
+  }
+  if (normalizedMimeType === 'audio/mp4' || normalizedMimeType === 'audio/x-m4a') {
+    return '.m4a'
+  }
+  if (normalizedMimeType === 'audio/ogg') {
+    return '.ogg'
+  }
+  if (normalizedMimeType === 'audio/aac') {
+    return '.aac'
+  }
+  if (normalizedMimeType === 'audio/flac') {
+    return '.flac'
+  }
+  if (normalizedMimeType === 'audio/webm') {
+    return '.webm'
+  }
+  return '.mp3'
+}
+
+function deriveAudioFileNameFromUrl(assetUrl: string, mimeType?: string | null) {
+  try {
+    const parsed = new URL(assetUrl)
+    const candidate = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '').trim()
+    if (candidate) {
+      if (/\.[A-Za-z0-9]+$/.test(candidate)) {
+        return sanitizeAudioFileName(candidate)
+      }
+      return sanitizeAudioFileName(`${candidate}${extensionForAudioMimeType(mimeType || '')}`)
+    }
+  } catch {
+    // Fall through to the default file name below.
+  }
+
+  return `audio-module${extensionForAudioMimeType(mimeType || '')}`
+}
+
 function buildCaptionCues(transcript: string, durationSeconds?: number | null) {
   const normalizedTranscript = transcript.replace(/\s+/g, ' ').trim()
   if (!normalizedTranscript) {
@@ -317,6 +366,11 @@ function buildCaptionCues(transcript: string, durationSeconds?: number | null) {
 }
 
 async function loadAudioAssetBytes(assetUrl: string) {
+  const assetFile = await loadAudioAssetFile(assetUrl)
+  return assetFile.fileBytes
+}
+
+async function loadAudioAssetFile(assetUrl: string) {
   if (assetUrl.startsWith('http://') || assetUrl.startsWith('https://')) {
     const response = await fetch(assetUrl, { cache: 'no-store' })
     if (!response.ok) {
@@ -325,7 +379,13 @@ async function loadAudioAssetBytes(assetUrl: string) {
         `Unable to download the lesson audio asset (${response.status}).`,
       )
     }
-    return Buffer.from(await response.arrayBuffer())
+    const mimeType = inferAudioMimeType(assetUrl, response.headers.get('content-type'))
+    const fileName = deriveAudioFileNameFromUrl(assetUrl, mimeType)
+    return {
+      fileBytes: Buffer.from(await response.arrayBuffer()),
+      mimeType,
+      fileName,
+    }
   }
 
   throw new AssessmentHttpError(400, 'Unsupported lesson audio asset URL.')
@@ -1013,4 +1073,35 @@ export async function uploadMicrolearningAudioContent({
     original_filename: fileName,
     caption_data: captionData,
   }
+}
+
+export async function uploadMicrolearningAudioContentFromUrl({
+  authorization,
+  moduleId,
+  trainerId,
+  title,
+  audioUrl,
+  audioLanguage,
+}: UploadMicrolearningAudioUrlParams): Promise<UploadMicrolearningAudioResult> {
+  const normalizedAudioUrl = audioUrl.trim()
+  if (!normalizedAudioUrl) {
+    throw new AssessmentHttpError(400, 'A direct audio URL is required.')
+  }
+
+  const {
+    fileBytes,
+    mimeType,
+    fileName,
+  } = await loadAudioAssetFile(normalizedAudioUrl)
+
+  return uploadMicrolearningAudioContent({
+    authorization,
+    moduleId,
+    trainerId,
+    title,
+    fileName,
+    mimeType,
+    fileBytes,
+    audioLanguage,
+  })
 }

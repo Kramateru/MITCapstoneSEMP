@@ -5,7 +5,7 @@ import {
   handleAssessmentRouteError,
   isAssessmentServiceUnavailableError,
 } from '@/app/lib/assessment/route-utils'
-import { getTrainerAssessmentBootstrap } from '@/app/lib/assessment/service'
+import { getTrainerAssessmentBootstrap } from '@/app/lib/assessment/module-service'
 import type { TrainerBootstrapResponse } from '@/app/lib/assessment/types'
 
 export const runtime = 'nodejs'
@@ -13,13 +13,25 @@ export const runtime = 'nodejs'
 function buildEmptyTrainerBootstrap(): TrainerBootstrapResponse {
   return {
     categories: [],
+    questions: [],
     batches: [],
     trainees: [],
     assignments: [],
     attempts: [],
+    certificates: [],
     reports: {
       categories: [],
+      batches: [],
       questions: [],
+    },
+    analytics: {
+      totalQuestions: 0,
+      totalAssignments: 0,
+      activeAssignments: 0,
+      totalAttempts: 0,
+      passRate: 0,
+      averageScore: 0,
+      certificatesIssued: 0,
     },
   }
 }

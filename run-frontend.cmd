@@ -7,10 +7,13 @@ set "BACKEND_DIR=%APP_ROOT%backend"
 call :load_env_file "%FRONTEND_DIR%\.env.local"
 call :load_env_file "%FRONTEND_DIR%\.env"
 call :load_env_file "%APP_ROOT%.env.local"
+call :load_env_file "%BACKEND_DIR%\.env.local"
 call :load_env_file "%BACKEND_DIR%\.env"
 call :load_env_file "%APP_ROOT%.env"
 
 cd /d "%FRONTEND_DIR%" || exit /b 1
+if defined HOST if not defined FRONTEND_HOST set "FRONTEND_HOST=%HOST%"
+if defined PORT if not defined FRONTEND_PORT set "FRONTEND_PORT=%PORT%"
 if not defined FRONTEND_HOST set "FRONTEND_HOST=localhost"
 if not defined FRONTEND_PORT set "FRONTEND_PORT=3000"
 if not defined BACKEND_URL set "BACKEND_URL=http://127.0.0.1:8000"
@@ -18,6 +21,7 @@ if not defined NODE_OPTIONS set "NODE_OPTIONS=--no-deprecation"
 if not defined SKIP_FRONTEND_BUILD set "SKIP_FRONTEND_BUILD=0"
 if not defined NEXT_TELEMETRY_DISABLED set "NEXT_TELEMETRY_DISABLED=1"
 if not defined WAIT_FOR_BACKEND set "WAIT_FOR_BACKEND=1"
+if not defined RESTART_IF_RUNNING set "RESTART_IF_RUNNING=1"
 
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%SUPABASE_URL%"
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined REACT_APP_SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%REACT_APP_SUPABASE_URL%"
@@ -74,8 +78,54 @@ if /I "%SKIP_FRONTEND_BUILD%"=="1" if /I not "%FRONTEND_BUILD_READY%"=="1" (
   echo Run this script without SKIP_FRONTEND_BUILD=1 or build the frontend manually first.
   exit /b 1
 )
+
+call :restart_listener "%FRONTEND_PORT%" "frontend"
+if errorlevel 1 exit /b 1
+
 echo Starting frontend in production mode against %BACKEND_URL%...
 call npm.cmd run start -- --hostname %FRONTEND_HOST% --port %FRONTEND_PORT%
+exit /b %errorlevel%
+
+:restart_listener
+set "RESTART_PORT=%~1"
+set "RESTART_NAME=%~2"
+if "%RESTART_PORT%"=="" exit /b 0
+set "FOUND_LISTENER="
+for /f %%P in ('powershell -NoProfile -ExecutionPolicy Bypass -Command "$port = %RESTART_PORT%; netstat -ano | Select-String (':'+$port+'\s+.*LISTENING\s+\d+$') | ForEach-Object { if ($_.Line -match 'LISTENING\s+(\d+)\s*$') { $matches[1] } } | Sort-Object -Unique"') do (
+  set "FOUND_LISTENER=1"
+  if /I "%RESTART_IF_RUNNING%"=="0" (
+    echo Port %RESTART_PORT% is already in use by PID %%P.
+    echo Set RESTART_IF_RUNNING=1 to stop the existing listener automatically.
+    exit /b 1
+  )
+  echo Stopping existing %RESTART_NAME% listener on port %RESTART_PORT% ^(PID %%P^)...
+  taskkill /PID %%P /F >nul 2>&1
+  if errorlevel 1 (
+    echo Failed to stop PID %%P on port %RESTART_PORT%.
+    exit /b 1
+  )
+)
+if defined FOUND_LISTENER (
+  call :wait_for_port_release "%RESTART_PORT%"
+  if errorlevel 1 exit /b 1
+)
+set "FOUND_LISTENER="
+set "RESTART_PORT="
+set "RESTART_NAME="
+exit /b 0
+
+:wait_for_port_release
+if "%~1"=="" exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$port = %~1;" ^
+  "$deadline = (Get-Date).AddSeconds(15);" ^
+  "while ((Get-Date) -lt $deadline) {" ^
+  "  $inUse = netstat -ano | Select-String (':'+$port+'\s+.*LISTENING\s+\d+$');" ^
+  "  if (-not $inUse) { exit 0 }" ^
+  "  Start-Sleep -Milliseconds 500;" ^
+  "}" ^
+  "Write-Host 'Timed out waiting for port %~1 to be released.';" ^
+  "exit 1"
 exit /b %errorlevel%
 
 :wait_for_backend

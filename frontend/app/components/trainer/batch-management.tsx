@@ -133,7 +133,7 @@ export default function BatchManagement() {
 
   const validateBatchForm = () => {
     if (!batchForm.name.trim() && !batchForm.wave_number.trim()) {
-      toast.error('Enter a batch name or a batch number.');
+      toast.error('Enter a batch name or a wave number.');
       return false;
     }
     if (batchForm.start_date && batchForm.end_date && batchForm.end_date < batchForm.start_date) {
@@ -358,7 +358,7 @@ export default function BatchManagement() {
                 <DialogContent>
                   <DialogHeader>
                     <DialogTitle>Create New Batch</DialogTitle>
-                    <DialogDescription>Create a batch name, a batch number, or both for trainee assignment.</DialogDescription>
+                    <DialogDescription>Create a batch name, a wave number, or both for trainee assignment.</DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4 py-4">
                     <div className="space-y-2">
@@ -371,7 +371,7 @@ export default function BatchManagement() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="batch-wave">Batch Number</Label>
+                      <Label htmlFor="batch-wave">Wave Number</Label>
                       <Input
                         id="batch-wave"
                         placeholder="For example 12"
@@ -519,7 +519,7 @@ export default function BatchManagement() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Edit Batch</DialogTitle>
-            <DialogDescription>Update the saved batch label or batch number used across your trainer navigation and reports.</DialogDescription>
+            <DialogDescription>Update the saved batch label or wave number used across your trainer navigation and reports.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -532,7 +532,7 @@ export default function BatchManagement() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-batch-wave">Batch Number</Label>
+              <Label htmlFor="edit-batch-wave">Wave Number</Label>
               <Input
                 id="edit-batch-wave"
                 placeholder="For example 12"

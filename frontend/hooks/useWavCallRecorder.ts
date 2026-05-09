@@ -164,6 +164,7 @@ export function useWavCallRecorder() {
       setError(message);
       await cleanup();
       setIsCapturing(false);
+      throw new Error(message);
     }
   }, [cleanup, isCapturing]);
 

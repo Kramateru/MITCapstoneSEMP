@@ -1,6 +1,6 @@
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { getTrainerAssessmentCsvExport } from '@/app/lib/assessment/service'
+import { getTrainerAssessmentCsvExport } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 

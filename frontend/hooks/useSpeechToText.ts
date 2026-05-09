@@ -96,50 +96,59 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
   }, []);
 
   const startRecording = useCallback(async () => {
-    setError(null);
-    setLastResult(null);
-    chunksRef.current = [];
+    try {
+      setError(null);
+      setLastResult(null);
+      chunksRef.current = [];
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-        channelCount: 1,
-      },
-    });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+          channelCount: 1,
+        },
+      });
 
-    streamRef.current = stream;
-    startedAtRef.current = performance.now();
+      streamRef.current = stream;
+      startedAtRef.current = performance.now();
 
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (AudioContextClass) {
-      const audioContext = new AudioContextClass();
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 2048;
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-      audioContextRef.current = audioContext;
-      analyserRef.current = analyser;
-      monitorAudio();
-    }
-
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm';
-
-    const recorder = new MediaRecorder(stream, { mimeType });
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        chunksRef.current.push(event.data);
+      const AudioContextClass =
+        window.AudioContext ||
+        (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (AudioContextClass) {
+        const audioContext = new AudioContextClass();
+        const analyser = audioContext.createAnalyser();
+        analyser.fftSize = 2048;
+        const source = audioContext.createMediaStreamSource(stream);
+        source.connect(analyser);
+        audioContextRef.current = audioContext;
+        analyserRef.current = analyser;
+        monitorAudio();
       }
-    };
-    mediaRecorderRef.current = recorder;
-    recorder.start(250);
-    setIsRecording(true);
-  }, [monitorAudio]);
+
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+
+      const recorder = new MediaRecorder(stream, { mimeType });
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start(250);
+      setIsRecording(true);
+    } catch (recordError) {
+      const message = recordError instanceof Error ? recordError.message : 'Unable to access the microphone.';
+      setError(message);
+      cleanupGraph();
+      cleanupStream();
+      setIsRecording(false);
+      throw new Error(message);
+    }
+  }, [cleanupGraph, cleanupStream, monitorAudio]);
 
   const stopRecording = useCallback(
     async ({ stepNumber, liveTranscript }: { stepNumber: number; liveTranscript?: string }) => {

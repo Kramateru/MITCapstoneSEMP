@@ -487,7 +487,7 @@ def build_type_specific_exercises(
                     "title": card.get("title") or f"Flashcard Recall {index}",
                     "type": "flashcard_recall",
                     "prompt": card.get("mastery_prompt")
-                    or "Memorize both sides of the card, then type the hidden side exactly.",
+                    or "Review the front and back, then explain the answer side as accurately as you can.",
                     "front": (card.get("front") or "").strip(),
                     "back": (card.get("back") or "").strip(),
                     "preview_seconds": preview_seconds,
@@ -496,7 +496,7 @@ def build_type_specific_exercises(
                     "required_keywords": _clean_string_list(card.get("required_keywords")),
                     "tips": [
                         f"Study both sides during the {preview_seconds}-second preview.",
-                        f"When one side stays visible, type the hidden side within {answer_time_limit_seconds} seconds.",
+                        f"When the front side stays visible, explain the back-side answer within {answer_time_limit_seconds} seconds.",
                     ],
                     "sample_answer": (card.get("mastery_answer") or card.get("back") or "").strip() or None,
                 }

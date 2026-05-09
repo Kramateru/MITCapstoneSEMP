@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Optional
 
 try:
@@ -221,6 +222,212 @@ Provide specific, actionable coaching tips that will help the trainee improve.""
             "provider": "fallback",
         }
 
+    def score_microlearning_open_response(
+        self,
+        *,
+        prompt: str,
+        sample_answer: str,
+        trainee_response: str,
+        required_keywords: Optional[list[str]] = None,
+        max_points: int = 10,
+    ) -> dict[str, Any]:
+        """Score an open-ended microlearning response against the trainer sample answer."""
+        normalized_response = (trainee_response or "").strip()
+        normalized_sample_answer = (sample_answer or "").strip()
+        normalized_prompt = (prompt or "").strip()
+        cleaned_keywords = [
+            str(keyword or "").strip()
+            for keyword in (required_keywords or [])
+            if str(keyword or "").strip()
+        ]
+
+        if not normalized_response:
+            return {
+                "score": 0,
+                "feedback": "No answer was submitted.",
+                "matched_keywords": [],
+                "missing_keywords": cleaned_keywords,
+                "provider": "fallback",
+            }
+
+        if not self.is_available():
+            return self._fallback_microlearning_open_response(
+                prompt=normalized_prompt,
+                sample_answer=normalized_sample_answer,
+                trainee_response=normalized_response,
+                required_keywords=cleaned_keywords,
+                max_points=max_points,
+            )
+
+        prompt_text = self._build_microlearning_open_response_prompt(
+            prompt=normalized_prompt,
+            sample_answer=normalized_sample_answer,
+            trainee_response=normalized_response,
+            required_keywords=cleaned_keywords,
+            max_points=max_points,
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt_text,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                    system_instruction=self._get_microlearning_open_response_instruction(max_points=max_points),
+                ),
+            )
+
+            if response.text:
+                parsed = json.loads(response.text)
+                score = parsed.get("score")
+                try:
+                    numeric_score = int(round(float(score)))
+                except (TypeError, ValueError):
+                    numeric_score = max_points
+                numeric_score = max(1, min(max_points, numeric_score))
+
+                matched_keywords = [
+                    str(keyword or "").strip()
+                    for keyword in (parsed.get("matched_keywords") or [])
+                    if str(keyword or "").strip()
+                ]
+                missing_keywords = [
+                    str(keyword or "").strip()
+                    for keyword in (parsed.get("missing_keywords") or [])
+                    if str(keyword or "").strip()
+                ]
+                feedback = str(parsed.get("feedback") or "").strip()
+                if not feedback:
+                    feedback = "Gemini reviewed your response against the trainer sample answer."
+
+                return {
+                    "score": numeric_score,
+                    "feedback": feedback,
+                    "matched_keywords": matched_keywords,
+                    "missing_keywords": missing_keywords,
+                    "provider": "gemini",
+                }
+        except Exception as exc:
+            logger.error("Gemini microlearning open-response scoring failed: %s", exc)
+
+        return self._fallback_microlearning_open_response(
+            prompt=normalized_prompt,
+            sample_answer=normalized_sample_answer,
+            trainee_response=normalized_response,
+            required_keywords=cleaned_keywords,
+            max_points=max_points,
+        )
+
+    def _get_microlearning_open_response_instruction(self, *, max_points: int) -> str:
+        return f"""You are grading a trainee's open-ended microlearning response for a BPO training platform.
+
+Score the trainee response against the trainer's sample answer and prompt intent.
+- Use semantic meaning, not just exact wording.
+- Treat the required keywords as helpful signals, not a strict checklist.
+- Give an integer score from 1 to {max_points} when the trainee submitted a non-empty answer.
+- Give higher scores when the response is clearly relevant, accurate, and aligned with the trainer sample answer.
+- Give lower scores when the response is vague, off-topic, or misses the main idea.
+- Do not invent facts not supported by the trainee response.
+
+Return JSON only in this exact shape:
+{{
+  "score": 1,
+  "feedback": "Short constructive feedback for the trainee",
+  "matched_keywords": ["keyword 1"],
+  "missing_keywords": ["keyword 2"]
+}}"""
+
+    def _build_microlearning_open_response_prompt(
+        self,
+        *,
+        prompt: str,
+        sample_answer: str,
+        trainee_response: str,
+        required_keywords: list[str],
+        max_points: int,
+    ) -> str:
+        keyword_text = ", ".join(required_keywords) if required_keywords else "None provided"
+        return f"""Grade this microlearning open-ended response.
+
+Prompt:
+{prompt or "No prompt provided."}
+
+Trainer sample answer:
+{sample_answer or "No sample answer provided."}
+
+Required keywords:
+{keyword_text}
+
+Trainee response:
+{trainee_response}
+
+Score the response from 1 to {max_points} based on how closely it matches the trainer's intended meaning and key ideas."""
+
+    def _fallback_microlearning_open_response(
+        self,
+        *,
+        prompt: str,
+        sample_answer: str,
+        trainee_response: str,
+        required_keywords: list[str],
+        max_points: int,
+    ) -> dict[str, Any]:
+        del prompt
+
+        response_tokens = set(_tokenize_for_microlearning(trainee_response))
+        sample_tokens = set(_tokenize_for_microlearning(sample_answer))
+        matched_keywords = [
+            keyword for keyword in required_keywords if keyword.lower() in trainee_response.lower()
+        ]
+        missing_keywords = [
+            keyword for keyword in required_keywords if keyword not in matched_keywords
+        ]
+
+        keyword_coverage = (
+            len(matched_keywords) / len(required_keywords)
+            if required_keywords
+            else 0.0
+        )
+        sample_overlap = (
+            len(response_tokens & sample_tokens) / len(sample_tokens)
+            if sample_tokens
+            else 0.0
+        )
+
+        if required_keywords and sample_tokens:
+            blended_score = keyword_coverage * 0.45 + sample_overlap * 0.55
+        elif required_keywords:
+            blended_score = keyword_coverage
+        elif sample_tokens:
+            blended_score = sample_overlap
+        else:
+            blended_score = 1.0 if trainee_response.strip() else 0.0
+
+        if not trainee_response.strip():
+            points = 0
+        elif blended_score <= 0:
+            points = 1
+        else:
+            points = max(1, min(max_points, int(round(blended_score * max_points))))
+
+        if points >= max_points - 1:
+            feedback = "Strong response. It closely matches the trainer sample answer."
+        elif points >= max(6, max_points - 4):
+            feedback = "Mostly correct. A few trainer ideas could be stated more clearly."
+        elif points >= 4:
+            feedback = "Partially related. Review the trainer sample answer and strengthen the main idea."
+        else:
+            feedback = "The response is weak or off-target. Review the trainer sample answer and key ideas."
+
+        return {
+            "score": points,
+            "feedback": feedback,
+            "matched_keywords": matched_keywords,
+            "missing_keywords": missing_keywords,
+            "provider": "fallback",
+        }
+
 
 # Singleton instance
 _evaluation_engine: Optional[GeminiEvaluationEngine] = None
@@ -253,3 +460,26 @@ async def generate_evaluation_feedback(
     target_kpis = evaluation_data.get("target_kpis", {})
 
     return engine.evaluate(transcript, script_flow, target_kpis)
+
+
+def _tokenize_for_microlearning(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", (value or "").lower())
+
+
+def score_microlearning_open_response(
+    *,
+    prompt: str,
+    sample_answer: str,
+    trainee_response: str,
+    required_keywords: Optional[list[str]] = None,
+    max_points: int = 10,
+) -> dict[str, Any]:
+    """Score a microlearning open-ended response with Gemini when available."""
+    engine = get_evaluation_engine()
+    return engine.score_microlearning_open_response(
+        prompt=prompt,
+        sample_answer=sample_answer,
+        trainee_response=trainee_response,
+        required_keywords=required_keywords,
+        max_points=max_points,
+    )

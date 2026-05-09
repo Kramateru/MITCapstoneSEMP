@@ -66,6 +66,14 @@ interface ScenarioCard {
   retake_required: boolean;
   competent: boolean;
   latest_score: number;
+  latest_session_id?: string | null;
+  latest_status?: string | null;
+  active_session_id?: string | null;
+  latest_certificate_id?: string | null;
+  can_retake?: boolean;
+  remaining_attempts?: number | null;
+  launch_blocked?: boolean;
+  launch_block_reason?: string | null;
 }
 
 interface ScenarioStep {
@@ -83,6 +91,7 @@ interface SessionData {
   session_id: string;
   scenario_title: string;
   scenario_description?: string | null;
+  current_step: number;
   passing_score: number;
   member_profile: Record<string, unknown>;
   cxone_metadata: Record<string, unknown>;
@@ -278,6 +287,9 @@ function getRepeatPromptMessage(prompt?: string | null) {
 }
 
 function getScenarioPriorityScore(scenario: ScenarioCard) {
+  if (scenario.active_session_id) {
+    return -1;
+  }
   if (scenario.retake_required) {
     return 0;
   }
@@ -288,6 +300,42 @@ function getScenarioPriorityScore(scenario: ScenarioCard) {
     return 2;
   }
   return 3;
+}
+
+function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
+  if (!scenario) {
+    return 'Launch BPO Softphone';
+  }
+  if (scenario.active_session_id) {
+    return 'Resume Active Softphone';
+  }
+  if (scenario.launch_blocked && scenario.competent) {
+    return 'Completed in Certificates';
+  }
+  if (scenario.can_retake) {
+    return 'Launch Retake';
+  }
+  return 'Launch BPO Softphone';
+}
+
+function getScenarioLaunchNote(scenario: ScenarioCard | null) {
+  if (!scenario) {
+    return 'Select a trainer-assigned call simulation to launch the BPO softphone.';
+  }
+  if (scenario.launch_block_reason?.trim()) {
+    return scenario.launch_block_reason.trim();
+  }
+  if (scenario.active_session_id) {
+    return 'An in-progress call was found. Relaunching will continue from your next pending scenario turn.';
+  }
+  if (scenario.can_retake) {
+    const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} retake${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
+    return `A new retake attempt will be created from the same trainer assignment.${attemptsLeft}`;
+  }
+  if (scenario.competent) {
+    return 'This Call Simulation is already complete and tied to your certificate history.';
+  }
+  return 'The phone will ring first, then Accept Call will start the microphone and BPO call workflow.';
 }
 
 function getPreferredScenarioId(
@@ -467,6 +515,14 @@ function TraineeSimFloorPageContent() {
   const selectedScenario = useMemo(
     () => scenarios.find((scenario) => scenario.id === selectedScenarioId) || null,
     [scenarios, selectedScenarioId],
+  );
+  const selectedScenarioLaunchLabel = useMemo(
+    () => getScenarioLaunchLabel(selectedScenario),
+    [selectedScenario],
+  );
+  const selectedScenarioLaunchNote = useMemo(
+    () => getScenarioLaunchNote(selectedScenario),
+    [selectedScenario],
   );
 
   const {
@@ -1094,6 +1150,10 @@ function TraineeSimFloorPageContent() {
       toast.error('Select a scenario and set your status to Available first.');
       return;
     }
+    if (selectedScenario?.launch_blocked) {
+      toast.error(selectedScenario.launch_block_reason || 'This Call Simulation cannot be launched right now.');
+      return;
+    }
 
     const token = localStorage.getItem('token');
     const response = await fetch('/api/call-simulation/start', {
@@ -1109,10 +1169,15 @@ function TraineeSimFloorPageContent() {
       throw new Error(payload?.detail || 'Unable to start the scenario.');
     }
 
-    setSessionData(payload as SessionData);
+    const sessionPayload = payload as SessionData;
+    const startStepIndex = Array.isArray(sessionPayload.steps)
+      ? sessionPayload.steps.findIndex((step) => step.step_number === Number(sessionPayload.current_step || 1))
+      : -1;
+
+    setSessionData(sessionPayload);
     setSessionResult(null);
     setLiveTranscript('');
-    setCurrentStepIndex(0);
+    setCurrentStepIndex(startStepIndex >= 0 ? startStepIndex : 0);
     setCallTimer(0);
     setIsMuted(false);
     setIsOnHold(false);
@@ -1126,13 +1191,24 @@ function TraineeSimFloorPageContent() {
     setFeedbackReport(null);
     silenceStartRef.current = null;
     setCallState('ringing');
-    startRingtone((payload as SessionData).ringer_audio_url);
-  }, [isAvailable, selectedScenarioId, startRingtone]);
+    startRingtone(sessionPayload.ringer_audio_url);
+
+    if (selectedScenario?.active_session_id) {
+      toast.info('Resuming the in-progress call from your next pending scenario turn.');
+    } else if (selectedScenario?.can_retake) {
+      toast.info('Retake attempt loaded. Accept the call to begin the next scored attempt.');
+    }
+  }, [isAvailable, selectedScenario, selectedScenarioId, startRingtone]);
 
   const acceptCall = useCallback(async () => {
-    await Promise.all([fadeOutRingtone(), startCapture()]);
-    await moveToStep(0);
-  }, [fadeOutRingtone, moveToStep, startCapture]);
+    try {
+      await startCapture();
+      await fadeOutRingtone();
+      await moveToStep(currentStepIndex);
+    } catch {
+      setCallState('ringing');
+    }
+  }, [currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
 
   const handleHoldToggle = useCallback(async () => {
     if (callState === 'ringing' || isRecording || memberTurnState === 'playing') {
@@ -1223,9 +1299,13 @@ function TraineeSimFloorPageContent() {
       setLiveTranscript('');
       setShowSilenceAlert(false);
       silenceStartRef.current = null;
-      await startRecording();
-      startBrowserTranscript();
-      setCallState('csr-speaking');
+      try {
+        await startRecording();
+        startBrowserTranscript();
+        setCallState('csr-speaking');
+      } catch {
+        setCallState('connected');
+      }
       return;
     }
 
@@ -1648,10 +1728,21 @@ function TraineeSimFloorPageContent() {
                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
                       <span>{scenario.assignment_id ? 'Assignment synced to Supabase' : 'Trainer assigned'}</span>
                       <span>Attempts: {scenario.attempt_count}</span>
+                      {scenario.active_session_id ? <span className="text-sky-700">In progress</span> : null}
                       {scenario.retake_required ? <span className="text-rose-600">Retake required</span> : null}
-                      {scenario.competent ? <span className="text-emerald-700">Competent</span> : null}
+                      {scenario.competent ? <span className="text-emerald-700">Completed</span> : null}
+                      {scenario.can_retake ? (
+                        <span className="text-amber-700">
+                          {typeof scenario.remaining_attempts === 'number'
+                            ? `${scenario.remaining_attempts} retake${scenario.remaining_attempts === 1 ? '' : 's'} left`
+                            : 'Retake available'}
+                        </span>
+                      ) : null}
                       {scenario.latest_score ? <span>Latest {scenario.latest_score.toFixed(1)}%</span> : null}
                     </div>
+                    {scenario.launch_block_reason ? (
+                      <div className="mt-2 text-xs text-amber-700">{scenario.launch_block_reason}</div>
+                    ) : null}
                   </button>
                 ))}
                 {!scenarios.length ? (
@@ -1695,7 +1786,9 @@ function TraineeSimFloorPageContent() {
                       {selectedScenario.assignment_batch_name ? <span>Batch: {selectedScenario.assignment_batch_name}</span> : null}
                       {selectedScenario.assigned_by_name ? <span>Assigned by {selectedScenario.assigned_by_name}</span> : null}
                       <span>{selectedScenario.steps_count} turns</span>
+                      {selectedScenario.active_session_id ? <span className="text-sky-300">In progress</span> : null}
                       {selectedScenario.retake_required ? <span className="text-amber-300">Retake required</span> : null}
+                      {selectedScenario.competent ? <span className="text-emerald-300">Completed</span> : null}
                     </div>
                   </div>
                 ) : null}
@@ -1703,11 +1796,14 @@ function TraineeSimFloorPageContent() {
                   className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                   size="lg"
                   onClick={() => void startSimulation()}
-                  disabled={!selectedScenarioId || !isAvailable}
+                  disabled={!selectedScenarioId || !isAvailable || Boolean(selectedScenario?.launch_blocked)}
                 >
                   <Phone className="mr-2 h-4 w-4" />
-                  Launch BPO Softphone
+                  {selectedScenarioLaunchLabel}
                 </Button>
+                <div className="text-xs text-slate-400">
+                  {selectedScenarioLaunchNote}
+                </div>
               </CardContent>
             </Card>
           </div>

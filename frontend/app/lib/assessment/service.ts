@@ -1204,6 +1204,10 @@ export async function createQuestion(
   sessionUser: BackendSessionUser,
   payload: CreateQuestionPayload,
 ) {
+  if (!payload.assessmentId) {
+    throw new AssessmentHttpError(400, 'Assessment is required before creating a question.')
+  }
+
   await getOwnedAssessment(payload.assessmentId, sessionUser)
 
   const supabase = createSupabaseAdminClient()
@@ -1234,6 +1238,10 @@ export async function updateQuestion(
   questionId: string,
   payload: UpdateQuestionPayload,
 ) {
+  if (!payload.assessmentId) {
+    throw new AssessmentHttpError(400, 'Assessment is required before updating a question.')
+  }
+
   await getOwnedQuestion(questionId, sessionUser)
 
   const supabase = createSupabaseAdminClient()

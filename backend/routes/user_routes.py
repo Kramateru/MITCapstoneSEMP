@@ -314,7 +314,7 @@ async def upload_current_user_profile_image(
     if not new_profile_image_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase storage is required for profile image uploads.",
+            detail="Profile image upload failed. Try again in a moment.",
         )
 
     previous_profile_image_url = current_user.profile_image_url

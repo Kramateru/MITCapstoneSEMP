@@ -1924,6 +1924,45 @@ def _build_scenario_steps(
     return fallback_steps
 
 
+def _build_session_start_response(
+    db: Session,
+    *,
+    session: SimSession,
+    scenario: Scenario,
+    batch_id: Optional[str],
+    variation: Optional[ScenarioVariation] = None,
+    kpi_config: Optional[BatchKPIConfig] = None,
+) -> SimSessionStartResponse:
+    effective_batch_id = batch_id or session.batch_id
+    effective_kpi = kpi_config or _get_effective_kpi_config(db, effective_batch_id)
+    effective_call_simulation_config = _resolve_call_simulation_config_for_batch(
+        db,
+        scenario,
+        batch_id=effective_batch_id,
+    )
+    passing_score = _resolve_call_scenario_passing_score(
+        scenario,
+        float(effective_kpi.passing_score or DEFAULT_PASSING_SCORE),
+    )
+
+    return SimSessionStartResponse(
+        session_id=session.id,
+        scenario_title=scenario.title,
+        scenario_description=scenario.description,
+        opening_prompt=scenario.opening_prompt,
+        current_step=int(session.current_step or 1),
+        variation=ScenarioVariationResponse.model_validate(variation) if variation else None,
+        kpi_config=BatchKPIConfigResponse.model_validate(effective_kpi),
+        passing_score=passing_score,
+        member_profile=_normalize_json_object(scenario.member_profile),
+        cxone_metadata=_normalize_json_object(scenario.cxone_metadata),
+        call_simulation_config=effective_call_simulation_config,
+        ringer_audio_url=scenario.ringer_audio_url,
+        hold_audio_url=scenario.hold_audio_url,
+        steps=_build_scenario_steps(scenario),
+    )
+
+
 def _serialize_scenario(
     db: Session,
     scenario: Scenario,
@@ -2074,8 +2113,37 @@ def _get_accessible_session(db: Session, current_user: User, session_id: str) ->
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    if current_user.role == UserRole.TRAINEE and session.trainee_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Access denied")
+    if current_user.role == UserRole.TRAINEE:
+        if session.trainee_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        assignment = (
+            db.query(CallSimulationAssignment)
+            .filter(
+                CallSimulationAssignment.trainee_id == current_user.id,
+                CallSimulationAssignment.scenario_id == session.scenario_id,
+                CallSimulationAssignment.is_active == True,
+            )
+            .order_by(CallSimulationAssignment.assigned_at.desc(), CallSimulationAssignment.updated_at.desc())
+            .first()
+        )
+        if not assignment:
+            raise HTTPException(
+                status_code=403,
+                detail="This Call Simulation is no longer assigned to your trainee workspace.",
+            )
+
+        trainee_batch_ids = {batch.id for batch in current_user.batches if batch.id}
+        if assignment.batch_id and assignment.batch_id not in trainee_batch_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="The assigned batch for this Call Simulation is no longer active for your trainee profile.",
+            )
+        if assignment.batch_id and session.batch_id and assignment.batch_id != session.batch_id:
+            raise HTTPException(
+                status_code=403,
+                detail="This session no longer matches the active batch assignment for the Call Simulation.",
+            )
 
     if current_user.role in [UserRole.TRAINER, UserRole.ADMIN]:
         if current_user.role == UserRole.ADMIN:
@@ -4587,6 +4655,22 @@ async def get_available_scenarios(
         )
         .all()
     )
+    scenario_sessions = (
+        db.query(SimSession)
+        .filter(
+            SimSession.trainee_id == current_user.id,
+            SimSession.scenario_id.in_(scenario_ids),
+        )
+        .order_by(SimSession.created_at.desc())
+        .all()
+    )
+    sessions_by_scenario: dict[str, list[SimSession]] = defaultdict(list)
+    for session in scenario_sessions:
+        sessions_by_scenario[session.scenario_id].append(session)
+    latest_coaching_logs = _get_latest_sim_session_coaching_logs(
+        db,
+        [session.id for session in scenario_sessions],
+    )
 
     scenarios_payload: list[dict[str, Any]] = []
     for assignment in assignments:
@@ -4611,15 +4695,48 @@ async def get_available_scenarios(
             )
             .count()
         )
-        latest_session = (
-            db.query(SimSession)
-            .filter(
-                SimSession.trainee_id == current_user.id,
-                SimSession.scenario_id == scenario.id,
+        trainee_sessions = [
+            session
+            for session in sessions_by_scenario.get(scenario.id, [])
+            if not assignment.batch_id or session.batch_id in {assignment.batch_id, None}
+        ]
+        latest_session = trainee_sessions[0] if trainee_sessions else None
+        latest_coaching_log = latest_coaching_logs.get(latest_session.id) if latest_session else None
+        normalized_verdict = (latest_session.trainer_verdict_status or "pending").strip().lower() if latest_session else "pending"
+        active_session = next((session for session in trainee_sessions if session.status == "in_progress"), None)
+        completion_locked = bool(
+            latest_session
+            and (
+                normalized_verdict == "competent"
+                or (latest_session.pass_fail and normalized_verdict != "retake")
+                or latest_session.certificate_id
             )
-            .order_by(SimSession.created_at.desc())
-            .first()
         )
+        can_retake = False
+        launch_blocked = False
+        launch_block_reason: Optional[str] = None
+        remaining_attempts: Optional[int] = None
+
+        if latest_session:
+            latest_attempt_number = int(latest_session.attempt_number or 1)
+            latest_max_attempts = int(latest_session.max_attempts or DEFAULT_MAX_ATTEMPTS)
+            remaining_attempts = max(latest_max_attempts - latest_attempt_number, 0)
+
+            if latest_session.status == "in_progress":
+                launch_block_reason = "A call attempt is already in progress. Resume the softphone to continue."
+            elif completion_locked:
+                launch_blocked = True
+                launch_block_reason = "This Call Simulation is already completed. Review your certificate instead of launching a new attempt."
+            elif not latest_session.pass_fail:
+                if latest_coaching_log and latest_coaching_log.status == "sent":
+                    launch_blocked = True
+                    launch_block_reason = "Acknowledge the trainer coaching notes before retaking this simulation."
+                elif latest_attempt_number >= latest_max_attempts:
+                    launch_blocked = True
+                    launch_block_reason = "Maximum retake attempts reached for this Call Simulation."
+                else:
+                    can_retake = True
+
         scenarios_payload.append(
             {
                 "id": scenario.id,
@@ -4652,17 +4769,18 @@ async def get_available_scenarios(
                     }
                     for summary in assigned_batches
                 ],
-                "attempt_count": (
-                    db.query(SimSession)
-                    .filter(
-                        SimSession.trainee_id == current_user.id,
-                        SimSession.scenario_id == scenario.id,
-                    )
-                    .count()
-                ),
-                "retake_required": bool(latest_session and latest_session.trainer_verdict_status == "retake"),
-                "competent": bool(latest_session and latest_session.trainer_verdict_status == "competent"),
+                "attempt_count": len(trainee_sessions),
+                "retake_required": bool(normalized_verdict == "retake" or can_retake),
+                "competent": completion_locked,
                 "latest_score": float(latest_session.weighted_score or 0.0) if latest_session else 0.0,
+                "latest_session_id": latest_session.id if latest_session else None,
+                "latest_status": latest_session.status if latest_session else None,
+                "active_session_id": active_session.id if active_session else None,
+                "latest_certificate_id": latest_session.certificate_id if latest_session else None,
+                "can_retake": can_retake,
+                "remaining_attempts": remaining_attempts,
+                "launch_blocked": launch_blocked,
+                "launch_block_reason": launch_block_reason,
             }
         )
 
@@ -4849,6 +4967,61 @@ async def start_simulation(
         raise HTTPException(status_code=400, detail="Assigned scenario is missing its batch context")
 
     kpi_config = db.query(BatchKPIConfig).filter(BatchKPIConfig.batch_id == batch_id).first()
+    latest_session = (
+        db.query(SimSession)
+        .filter(
+            SimSession.trainee_id == current_user.id,
+            SimSession.scenario_id == scenario.id,
+            SimSession.batch_id == batch_id,
+        )
+        .order_by(SimSession.created_at.desc())
+        .first()
+    )
+    next_attempt_number = 1
+    max_attempts = DEFAULT_MAX_ATTEMPTS
+
+    if latest_session:
+        normalized_verdict = (latest_session.trainer_verdict_status or "pending").strip().lower()
+        latest_coaching_log = _get_latest_sim_session_coaching_logs(db, [latest_session.id]).get(latest_session.id)
+        max_attempts = int(latest_session.max_attempts or DEFAULT_MAX_ATTEMPTS)
+
+        if latest_session.status == "in_progress":
+            variation = (
+                db.query(ScenarioVariation)
+                .filter(ScenarioVariation.id == latest_session.scenario_variation_id)
+                .first()
+                if latest_session.scenario_variation_id
+                else None
+            )
+            return _build_session_start_response(
+                db,
+                session=latest_session,
+                scenario=scenario,
+                batch_id=latest_session.batch_id or batch_id,
+                variation=variation,
+                kpi_config=kpi_config,
+            )
+
+        if (
+            normalized_verdict == "competent"
+            or latest_session.certificate_id
+            or (latest_session.pass_fail and normalized_verdict != "retake")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This Call Simulation is already completed. Open your certificates or reports instead of launching a new attempt.",
+            )
+
+        if latest_coaching_log and latest_coaching_log.status == "sent":
+            raise HTTPException(
+                status_code=409,
+                detail="Acknowledge the trainer coaching notes before retaking this Call Simulation.",
+            )
+
+        if int(latest_session.attempt_number or 1) >= max_attempts:
+            raise HTTPException(status_code=409, detail="Maximum retake attempts reached for this Call Simulation.")
+
+        next_attempt_number = int(latest_session.attempt_number or 1) + 1
 
     variation = (
         db.query(ScenarioVariation)
@@ -4870,8 +5043,8 @@ async def start_simulation(
         current_step=1,
         started_at=datetime.utcnow(),
         aht_target=(kpi_config.target_aht_seconds if kpi_config else 120),
-        attempt_number=1,
-        max_attempts=DEFAULT_MAX_ATTEMPTS,
+        attempt_number=next_attempt_number,
+        max_attempts=max_attempts,
         pass_fail=False,
         transcript_log=[],
         turn_logs=[],
@@ -4880,32 +5053,13 @@ async def start_simulation(
     db.add(new_session)
     db.commit()
     db.refresh(new_session)
-
-    effective_kpi = kpi_config or _build_default_kpi_config(batch_id=batch_id)
-    effective_call_simulation_config = _resolve_call_simulation_config_for_batch(
+    return _build_session_start_response(
         db,
-        scenario,
+        session=new_session,
+        scenario=scenario,
         batch_id=batch_id,
-    )
-    passing_score = _resolve_call_scenario_passing_score(
-        scenario,
-        float(effective_kpi.passing_score or DEFAULT_PASSING_SCORE),
-    )
-    return SimSessionStartResponse(
-        session_id=new_session.id,
-        scenario_title=scenario.title,
-        scenario_description=scenario.description,
-        opening_prompt=scenario.opening_prompt,
-        current_step=int(new_session.current_step or 1),
-        variation=ScenarioVariationResponse.model_validate(variation) if variation else None,
-        kpi_config=BatchKPIConfigResponse.model_validate(effective_kpi),
-        passing_score=passing_score,
-        member_profile=_normalize_json_object(scenario.member_profile),
-        cxone_metadata=_normalize_json_object(scenario.cxone_metadata),
-        call_simulation_config=effective_call_simulation_config,
-        ringer_audio_url=scenario.ringer_audio_url,
-        hold_audio_url=scenario.hold_audio_url,
-        steps=_build_scenario_steps(scenario),
+        variation=variation,
+        kpi_config=kpi_config,
     )
 
 

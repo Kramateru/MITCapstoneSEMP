@@ -89,10 +89,12 @@ except Exception as e:
     GEMINI_AVAILABLE = False
     logger.error(f"Failed to initialize Google GenAI SDK: {e}. Gemini features disabled.", exc_info=True)
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import inspect, text
+from sqlalchemy.exc import OperationalError
 
 try:
     from .env_loader import load_backend_environment
@@ -228,7 +230,7 @@ from backend.services.speech_pipeline import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     ensure_admin_user()
-    sync_runtime_users_to_supabase_auth(fail_fast=True)
+    sync_runtime_users_to_supabase_auth(fail_fast=False)
     yield
     engine.dispose()
     logger.info("Database connection pool cleaned up")
@@ -240,8 +242,37 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
+@app.exception_handler(OperationalError)
+async def handle_database_operational_error(request: Request, exc: OperationalError):
+    logger.warning(
+        "Database connection error while serving %s %s: %s",
+        request.method,
+        request.url.path,
+        exc,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "The primary database is temporarily unavailable. Please try again in a moment.",
+        },
+    )
+
+
+def initialize_database_metadata() -> None:
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database schema verified")
+    except OperationalError:
+        logger.exception(
+            "Unable to verify the database schema during startup. Continuing in degraded mode until the database becomes reachable."
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected error while verifying the database schema during startup. Continuing in degraded mode."
+        )
+
+
+initialize_database_metadata()
 
 
 def ensure_user_settings_columns() -> None:
@@ -1546,7 +1577,7 @@ async def speech_endpoint(websocket: WebSocket):
             pass
 
 
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse
 
 
 @app.get("/health", include_in_schema=False)

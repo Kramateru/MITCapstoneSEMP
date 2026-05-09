@@ -5,7 +5,7 @@ import {
   handleAssessmentRouteError,
   isAssessmentServiceUnavailableError,
 } from '@/app/lib/assessment/route-utils'
-import { getTraineeAssessmentDashboard } from '@/app/lib/assessment/service'
+import { getTraineeAssessmentDashboard } from '@/app/lib/assessment/module-service'
 import type { TraineeDashboardResponse } from '@/app/lib/assessment/types'
 
 export const runtime = 'nodejs'
@@ -21,6 +21,8 @@ function buildEmptyTraineeDashboard(): TraineeDashboardResponse {
       completedCount: 0,
       passedCount: 0,
       averageScore: 0,
+      retakeCount: 0,
+      certificateCount: 0,
     },
   }
 }

@@ -10,7 +10,7 @@ import os
 from typing import Optional, Dict, Any
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from .config_validation import (
     classify_supabase_api_key,
@@ -188,6 +188,70 @@ class SupabaseClient:
         except Exception as exc:
             logger.error("Failed to save local media fallback %s: %s", normalized_relative_path, exc)
             return None
+
+    def _to_public_media_url(self, local_url: Optional[str]) -> Optional[str]:
+        normalized_local_url = (local_url or "").strip()
+        if not normalized_local_url:
+            return None
+
+        if normalized_local_url.startswith(("http://", "https://")):
+            return normalized_local_url
+
+        backend_base_url = normalize_env_value(os.getenv("BACKEND_URL")) or "http://127.0.0.1:8000"
+        try:
+            parsed = urlparse(backend_base_url)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                backend_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            else:
+                backend_base_url = "http://127.0.0.1:8000"
+        except Exception:
+            backend_base_url = "http://127.0.0.1:8000"
+
+        if not normalized_local_url.startswith("/"):
+            normalized_local_url = f"/{normalized_local_url}"
+
+        return f"{backend_base_url.rstrip('/')}{normalized_local_url}"
+
+    def _delete_local_media_copy(self, public_url: str) -> bool:
+        normalized_url = (public_url or "").strip()
+        if not normalized_url:
+            return False
+
+        try:
+            parsed = urlparse(normalized_url)
+            local_path = parsed.path if parsed.scheme in {"http", "https"} else normalized_url
+            normalized_local_path = unquote(local_path).replace("\\", "/").strip()
+            if not normalized_local_path.startswith("/media/"):
+                return False
+
+            relative_path = normalized_local_path.split("/media/", 1)[1].strip("/")
+            if not relative_path:
+                return False
+
+            media_root = Path("media").resolve()
+            target_path = (media_root / Path(*relative_path.split("/"))).resolve()
+            try:
+                target_path.relative_to(media_root)
+            except ValueError:
+                logger.warning("Rejected local media deletion outside media root: %s", target_path)
+                return False
+
+            if target_path.exists():
+                target_path.unlink()
+                logger.info("Deleted local media fallback: %s", target_path)
+
+            parent = target_path.parent
+            while parent != media_root and parent.exists():
+                try:
+                    parent.rmdir()
+                except OSError:
+                    break
+                parent = parent.parent
+
+            return True
+        except Exception as exc:
+            logger.error("Failed to delete local media fallback %s: %s", normalized_url, exc)
+            return False
 
     def upload_audio(
         self,
@@ -381,9 +445,16 @@ class SupabaseClient:
         content_type: str,
     ) -> Optional[str]:
         """Upload a user profile image to Supabase storage."""
+        local_url = self._to_public_media_url(
+            self._write_local_media_copy(
+                relative_path=f"profiles/{user_id}/{filename}",
+                file_data=file_data,
+            )
+        )
+
         if not self.is_available:
-            logger.warning("Supabase not available. Profile image not uploaded to cloud.")
-            return None
+            logger.warning("Supabase not available. Using local fallback for profile image upload.")
+            return local_url
 
         try:
             path = f"profiles/{user_id}/{filename}"
@@ -400,7 +471,7 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload profile image: {e}")
-            return None
+            return local_url
 
     def upload_microlearning_audio(
         self,
@@ -501,13 +572,22 @@ class SupabaseClient:
         folder: str = "assets",
     ) -> Optional[str]:
         """Upload an arbitrary microlearning companion file such as captions."""
+        sanitized_folder = self._normalize_microlearning_folder(folder)
+        path = f"{sanitized_folder}/{trainer_id}/{module_id}/{filename}"
+        local_url = self._to_public_media_url(
+            self._write_local_media_copy(
+                relative_path=path,
+                file_data=file_data,
+            )
+        )
+
         if not self.is_available:
-            logger.warning("Supabase not available. Microlearning companion file not uploaded to cloud.")
-            return None
+            logger.warning(
+                "Supabase not available. Using local fallback for microlearning companion file upload."
+            )
+            return local_url
 
         try:
-            sanitized_folder = self._normalize_microlearning_folder(folder)
-            path = f"{sanitized_folder}/{trainer_id}/{module_id}/{filename}"
             self.client.storage.from_(self.microlearning_bucket_name).upload(
                 path=path,
                 file=file_data,
@@ -521,7 +601,7 @@ class SupabaseClient:
             return public_url
         except Exception as e:
             logger.error(f"Failed to upload microlearning companion file: {e}")
-            return None
+            return local_url
 
     def upload_binary(
         self,
@@ -605,7 +685,13 @@ class SupabaseClient:
 
     def delete_by_public_url(self, public_url: str) -> bool:
         """Delete a public Supabase storage file when the bucket path can be derived."""
-        if not self.is_available or not public_url:
+        if not public_url:
+            return False
+
+        if self._delete_local_media_copy(public_url):
+            return True
+
+        if not self.is_available or not self.client:
             return False
 
         try:

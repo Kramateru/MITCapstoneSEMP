@@ -16,6 +16,7 @@ from ..models import (
     MicrolearningModule,
     ScenarioDifficulty,
 )
+from .gemini_evaluation import score_microlearning_open_response
 from .microlearning_catalog import (
     build_type_specific_exercises,
     normalize_module_type,
@@ -54,6 +55,9 @@ def _format_batch_label(batch: Any) -> Optional[str]:
 _SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
 _DIRECT_AUDIO_EXTENSIONS = (".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac", ".webm")
 _DIRECT_VIDEO_EXTENSIONS = (".mp4", ".webm", ".ogg", ".mov", ".m4v")
+MICROLEARNING_MULTIPLE_CHOICE_POINTS = 2.0
+MICROLEARNING_OPEN_ENDED_POINTS = 10.0
+MICROLEARNING_FLASHCARD_POINTS = 10.0
 
 
 def _normalize_text_value(value: Any) -> str:
@@ -1087,6 +1091,46 @@ def _derive_required_keywords(exercise: dict[str, Any]) -> list[str]:
     return _dedupe_preserving_order(_tokenize_text(sample_answer))[:6]
 
 
+def _exercise_point_value(exercise: dict[str, Any]) -> float:
+    exercise_type = str(exercise.get("type") or "").strip().lower()
+    if exercise_type == "multiple_choice":
+        return MICROLEARNING_MULTIPLE_CHOICE_POINTS
+    if exercise_type == "flashcard_recall":
+        return MICROLEARNING_FLASHCARD_POINTS
+    return MICROLEARNING_OPEN_ENDED_POINTS
+
+
+def _normalized_percentage_from_points(points_earned: float, points_possible: float) -> float:
+    if points_possible <= 0:
+        return 0.0
+    return round((points_earned / points_possible) * 100, 2)
+
+
+def _coerce_attempt_points(
+    exercise: dict[str, Any],
+    attempt: dict[str, Any],
+) -> tuple[float, float]:
+    points_possible = _exercise_point_value(exercise)
+    if not attempt.get("is_completed"):
+        return 0.0, points_possible
+
+    raw_points_earned = attempt.get("points_earned")
+    try:
+        if raw_points_earned is not None:
+            points_earned = float(raw_points_earned)
+            return max(0.0, min(points_possible, points_earned)), points_possible
+    except (TypeError, ValueError):
+        pass
+
+    try:
+        legacy_score = float(attempt.get("score") or 0.0)
+    except (TypeError, ValueError):
+        legacy_score = 0.0
+
+    legacy_points = round((max(0.0, min(100.0, legacy_score)) / 100.0) * points_possible, 2)
+    return legacy_points, points_possible
+
+
 def _exercise_options_for_current_attempt(
     assignment: MicrolearningAssignment,
     exercise: dict[str, Any],
@@ -1119,14 +1163,47 @@ def reset_assignment_for_retake(assignment: MicrolearningAssignment) -> None:
 
 
 def _assignment_average_score(assignment: MicrolearningAssignment) -> float:
-    completed_scores = [
-        float(attempt.get("score") or 0.0)
-        for _, attempt in _response_entries(assignment)
-        if attempt.get("is_completed")
-    ]
-    if not completed_scores:
+    exercises_by_id = {
+        str(exercise.get("id")): exercise
+        for exercise in ((assignment.module.exercises or []) if assignment.module else [])
+        if exercise.get("id")
+    }
+    points_earned = 0.0
+    points_possible = 0.0
+    for exercise_id, attempt in _response_entries(assignment):
+        if not attempt.get("is_completed"):
+            continue
+        exercise = exercises_by_id.get(str(exercise_id))
+        if not exercise:
+            continue
+        earned, possible = _coerce_attempt_points(exercise, attempt)
+        points_earned += earned
+        points_possible += possible
+
+    if points_possible <= 0:
         return 0.0
-    return round(sum(completed_scores) / len(completed_scores), 2)
+    return _normalized_percentage_from_points(points_earned, points_possible)
+
+
+def _assignment_point_totals(assignment: MicrolearningAssignment) -> tuple[float, float]:
+    exercises_by_id = {
+        str(exercise.get("id")): exercise
+        for exercise in ((assignment.module.exercises or []) if assignment.module else [])
+        if exercise.get("id")
+    }
+    points_earned = 0.0
+    points_possible = 0.0
+    for exercise_id, attempt in _response_entries(assignment):
+        if not attempt.get("is_completed"):
+            continue
+        exercise = exercises_by_id.get(str(exercise_id))
+        if not exercise:
+            continue
+        earned, possible = _coerce_attempt_points(exercise, attempt)
+        points_earned += earned
+        points_possible += possible
+
+    return round(points_earned, 2), round(points_possible, 2)
 
 
 def _assignment_is_passed(assignment: MicrolearningAssignment) -> bool:
@@ -1238,6 +1315,7 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
     trainer = getattr(assignment, "trainer", None)
     certificate = getattr(assignment, "certificate", None)
     average_score = _assignment_average_score(assignment)
+    points_earned, points_possible = _assignment_point_totals(assignment)
     is_passed = _assignment_is_passed(assignment)
     retake_count = _get_retake_count(assignment)
     can_retake = (
@@ -1260,6 +1338,8 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
         "status": assignment.status,
         "completion_percentage": float(assignment.completion_percentage or 0.0),
         "average_score": average_score,
+        "points_earned": points_earned,
+        "points_possible": points_possible,
         "is_passed": is_passed,
         "can_retake": can_retake,
         "retake_count": retake_count,
@@ -1318,6 +1398,7 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
                 "explanation": exercise.get("explanation"),
                 "option_feedback": exercise.get("option_feedback") or {},
                 "sample_answer": exercise.get("sample_answer"),
+                "point_value": _exercise_point_value(exercise),
                 "front": exercise.get("front"),
                 "back": exercise.get("back"),
                 "preview_seconds": exercise.get("preview_seconds"),
@@ -1369,7 +1450,9 @@ def evaluate_exercise_submission(
     if exercise_type == "multiple_choice":
         correct_option = (exercise.get("correct_option") or "").strip()
         option_feedback = dict(exercise.get("option_feedback") or {})
-        score = 100.0 if normalized_option and normalized_option == correct_option else 0.0
+        points_possible = _exercise_point_value(exercise)
+        points_earned = points_possible if normalized_option and normalized_option == correct_option else 0.0
+        score = _normalized_percentage_from_points(points_earned, points_possible)
         feedback = option_feedback.get(normalized_option) or exercise.get("explanation") or (
             "Correct answer selected."
             if score == 100.0
@@ -1381,6 +1464,8 @@ def evaluate_exercise_submission(
             "selected_option": selected_option,
             "input_mode": input_mode or "selection",
             "score": score,
+            "points_earned": points_earned,
+            "points_possible": points_possible,
             "feedback": feedback,
             "is_completed": bool(normalized_option),
             "submitted_at": datetime.utcnow().isoformat(),
@@ -1391,22 +1476,76 @@ def evaluate_exercise_submission(
         front = (exercise.get("front") or "").strip()
         back = (exercise.get("back") or "").strip()
         expected_answer = front if revealed == "front" else back if revealed == "back" else ""
-        is_correct = bool(expected_answer) and _normalize_exact_text(normalized_text) == _normalize_exact_text(expected_answer)
-        feedback = (
-            "Correct. You recalled the selected side exactly."
-            if is_correct
-            else "Not yet. Review both sides again, then type the selected side exactly to continue."
+        points_possible = _exercise_point_value(exercise)
+        flashcard_sample_answer = (
+            expected_answer
+            if expected_answer
+            else (exercise.get("sample_answer") or "").strip()
         )
+        if revealed == "front":
+            required_keywords = _dedupe_preserving_order(_tokenize_text(front))[:6]
+        else:
+            required_keywords = _derive_required_keywords(exercise)
+
+        response_lower = normalized_text.lower()
+        matched_keywords = [keyword for keyword in required_keywords if keyword in response_lower]
+        missing_keywords = [keyword for keyword in required_keywords if keyword not in matched_keywords]
+        response_tokens = set(_tokenize_text(normalized_text))
+        sample_tokens = set(_tokenize_text(flashcard_sample_answer))
+        similarity_score = (
+            round((len(response_tokens & sample_tokens) / len(sample_tokens)) * 100, 2)
+            if sample_tokens
+            else 0.0
+        )
+
+        if normalized_text:
+            ai_assessment = score_microlearning_open_response(
+                prompt=str(exercise.get("prompt") or ""),
+                sample_answer=flashcard_sample_answer,
+                trainee_response=normalized_text,
+                required_keywords=required_keywords,
+                max_points=int(points_possible),
+            )
+            points_earned = round(max(0.0, min(points_possible, float(ai_assessment.get("score") or 0.0))), 2)
+            feedback = str(ai_assessment.get("feedback") or "").strip()
+            if not feedback:
+                feedback = "Flashcard response reviewed against the target answer."
+            ai_provider = str(ai_assessment.get("provider") or "fallback")
+            ai_matched_keywords = [
+                str(keyword or "").strip().lower()
+                for keyword in (ai_assessment.get("matched_keywords") or [])
+                if str(keyword or "").strip()
+            ]
+            ai_missing_keywords = [
+                str(keyword or "").strip().lower()
+                for keyword in (ai_assessment.get("missing_keywords") or [])
+                if str(keyword or "").strip()
+            ]
+            if ai_matched_keywords:
+                matched_keywords = _dedupe_preserving_order(ai_matched_keywords)
+            if ai_missing_keywords:
+                missing_keywords = _dedupe_preserving_order(ai_missing_keywords)
+        else:
+            points_earned = 0.0
+            feedback = "Type your flashcard answer before submitting."
+            ai_provider = None
+
         return {
             "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
             "response_text": response_text,
             "selected_option": selected_option,
             "input_mode": input_mode or "typed",
             "revealed_side": revealed or None,
-            "score": 100.0 if is_correct else 0.0,
+            "matched_keywords": matched_keywords,
+            "missing_keywords": missing_keywords,
+            "score": _normalized_percentage_from_points(points_earned, points_possible),
+            "points_earned": points_earned,
+            "points_possible": points_possible,
             "feedback": feedback,
-            "expected_answer_length": len(expected_answer),
-            "is_completed": is_correct,
+            "expected_answer_length": len(flashcard_sample_answer),
+            "sample_similarity": similarity_score,
+            "ai_provider": ai_provider,
+            "is_completed": bool(normalized_text),
             "submitted_at": datetime.utcnow().isoformat(),
         }
 
@@ -1429,32 +1568,41 @@ def evaluate_exercise_submission(
         else 0.0
     )
 
-    if required_keywords and sample_tokens:
-        score = round(keyword_score * 0.7 + similarity_score * 0.3, 2)
-    elif required_keywords:
-        score = keyword_score
-    elif sample_tokens:
-        score = similarity_score
-    else:
-        score = 100.0 if normalized_text else 0.0
+    points_possible = _exercise_point_value(exercise)
 
-    if required_keywords or sample_tokens:
-        if missing_keywords:
-            feedback = (
-                "Matched trainer expectations: "
-                + ", ".join(matched_keywords or ["none"])
-                + ". Missing focus terms: "
-                + ", ".join(missing_keywords)
-                + "."
-            )
-        elif score >= 85:
-            feedback = "Strong response. Your answer closely matches the trainer's expected answer."
-        elif score >= 60:
-            feedback = "Partially correct. Review the trainer sample answer and include the missing key ideas next time."
-        else:
-            feedback = "Your answer needs more of the trainer's key points. Review the sample answer and try again if needed."
+    if normalized_text:
+        ai_assessment = score_microlearning_open_response(
+            prompt=str(exercise.get("prompt") or ""),
+            sample_answer=sample_answer,
+            trainee_response=normalized_text,
+            required_keywords=required_keywords,
+            max_points=int(points_possible),
+        )
+        points_earned = round(max(0.0, min(points_possible, float(ai_assessment.get("score") or 0.0))), 2)
+        feedback = str(ai_assessment.get("feedback") or "").strip()
+        if not feedback:
+            feedback = "Response reviewed against the trainer sample answer."
+        ai_provider = str(ai_assessment.get("provider") or "fallback")
+        ai_matched_keywords = [
+            str(keyword or "").strip().lower()
+            for keyword in (ai_assessment.get("matched_keywords") or [])
+            if str(keyword or "").strip()
+        ]
+        ai_missing_keywords = [
+            str(keyword or "").strip().lower()
+            for keyword in (ai_assessment.get("missing_keywords") or [])
+            if str(keyword or "").strip()
+        ]
+        if ai_matched_keywords:
+            matched_keywords = _dedupe_preserving_order(ai_matched_keywords)
+        if ai_missing_keywords:
+            missing_keywords = _dedupe_preserving_order(ai_missing_keywords)
     else:
+        points_earned = 0.0
         feedback = "Response saved successfully."
+        ai_provider = None
+
+    score = _normalized_percentage_from_points(points_earned, points_possible)
 
     return {
         "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
@@ -1464,8 +1612,11 @@ def evaluate_exercise_submission(
         "matched_keywords": matched_keywords,
         "missing_keywords": missing_keywords,
         "score": score,
+        "points_earned": points_earned,
+        "points_possible": points_possible,
         "feedback": feedback,
         "sample_similarity": similarity_score,
+        "ai_provider": ai_provider,
         "is_completed": bool(normalized_text),
         "submitted_at": datetime.utcnow().isoformat(),
     }

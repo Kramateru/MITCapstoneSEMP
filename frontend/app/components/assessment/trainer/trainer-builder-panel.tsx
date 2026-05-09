@@ -238,6 +238,7 @@ export function TrainerBuilderPanel({
 
     await createAssessmentQuestion({
       assessmentId: selectedAssessment.id,
+      questionNumber: selectedAssessment.questions.length + 1,
       questionText: newQuestionDraft.questionText,
       questionType: newQuestionDraft.questionType,
       options: newQuestionDraft.questionType === 'multiple_choice' ? sanitizedOptions : [],

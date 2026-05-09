@@ -5,6 +5,7 @@ Handles batch management, course assignment, interaction reviewing, and coaching
 
 import csv
 import io
+import logging
 import re
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
 from pydantic import BaseModel
 from sqlalchemy import func
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from .. import auth_utils
@@ -73,6 +75,7 @@ from ..services.supabase_auth_service import SupabaseUserSyncError, sync_user_to
 from ..supabase_client import get_supabase_client
 
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
+logger = logging.getLogger(__name__)
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
 SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
 SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".ogg", ".m4v")
@@ -122,7 +125,7 @@ def _derive_batch_name(name: Optional[str], wave_number: Optional[int]) -> str:
         return normalized_name
     if wave_number is not None:
         return f"Batch {wave_number}"
-    raise HTTPException(status_code=400, detail="Provide a batch name or batch number")
+    raise HTTPException(status_code=400, detail="Provide a batch name or wave number")
 
 
 def _get_trainer_batch(
@@ -697,27 +700,43 @@ def _upload_microlearning_asset(
             status_code=503,
             detail="Supabase storage could not save the uploaded microlearning media asset.",
         )
+    used_local_media_fallback = asset_url.startswith(("http://", "https://")) and "/media/" in asset_url
+    if not used_local_media_fallback:
+        used_local_media_fallback = asset_url.startswith("/media/")
 
-    asset = MicrolearningUploadedAsset(
-        trainer_id=trainer_id,
-        filename=sanitized,
-        content_type=content_type or "application/octet-stream",
-        byte_size=len(file_bytes),
-        file_bytes=file_bytes,
-    )
-    db.add(asset)
-    db.commit()
-    db.refresh(asset)
+    asset_record_id: Optional[str] = None
+    asset_byte_size = len(file_bytes)
+    try:
+        asset = MicrolearningUploadedAsset(
+            trainer_id=trainer_id,
+            filename=sanitized,
+            content_type=content_type or "application/octet-stream",
+            byte_size=asset_byte_size,
+            file_bytes=file_bytes,
+        )
+        db.add(asset)
+        db.commit()
+        db.refresh(asset)
+        asset_record_id = asset.id
+        asset_byte_size = asset.byte_size
+    except SQLAlchemyError:
+        db.rollback()
+        logger.warning(
+            "Trainer microlearning asset metadata could not be persisted for trainer %s. "
+            "Continuing with Supabase storage-backed upload only.",
+            trainer_id,
+            exc_info=True,
+        )
 
     return {
         "asset_url": asset_url,
-        "asset_record_id": asset.id,
-        "storage_backend": "supabase_storage",
-        "storage_path": storage_path,
-        "bucket_name": bucket_name,
-        "signed_url_required": True,
+        "asset_record_id": asset_record_id,
+        "storage_backend": "local_media" if used_local_media_fallback else "supabase_storage",
+        "storage_path": None if used_local_media_fallback else storage_path,
+        "bucket_name": None if used_local_media_fallback else bucket_name,
+        "signed_url_required": not used_local_media_fallback,
         "content_type": content_type or "application/octet-stream",
-        "byte_size": asset.byte_size,
+        "byte_size": asset_byte_size,
     }
 
 
@@ -1196,29 +1215,6 @@ async def create_batch(
 
     batch_name = _derive_batch_name(batch_data.name, batch_data.wave_number)
 
-    existing_name = (
-        db.query(Batch)
-        .filter(
-            Batch.created_by == current_user.id,
-            func.lower(Batch.name) == batch_name.lower(),
-        )
-        .first()
-    )
-    if existing_name:
-        raise HTTPException(status_code=400, detail="Batch name already exists")
-
-    if batch_data.wave_number is not None:
-        existing_wave = (
-            db.query(Batch)
-            .filter(
-                Batch.created_by == current_user.id,
-                Batch.wave_number == batch_data.wave_number,
-            )
-            .first()
-        )
-        if existing_wave:
-            raise HTTPException(status_code=400, detail="Batch number already exists")
-
     new_batch = Batch(
         name=batch_name,
         description=_normalize_text_value(batch_data.description) or None,
@@ -1314,31 +1310,6 @@ async def update_batch(
 
     batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
     batch_name = _derive_batch_name(batch_data.name, batch_data.wave_number)
-
-    existing_name = (
-        db.query(Batch)
-        .filter(
-            Batch.created_by == current_user.id,
-            func.lower(Batch.name) == batch_name.lower(),
-            Batch.id != batch.id,
-        )
-        .first()
-    )
-    if existing_name:
-        raise HTTPException(status_code=400, detail="Batch name already exists")
-
-    if batch_data.wave_number is not None:
-        existing_wave = (
-            db.query(Batch)
-            .filter(
-                Batch.created_by == current_user.id,
-                Batch.wave_number == batch_data.wave_number,
-                Batch.id != batch.id,
-            )
-            .first()
-        )
-        if existing_wave:
-            raise HTTPException(status_code=400, detail="Batch number already exists")
 
     batch.name = batch_name
     batch.description = _normalize_text_value(batch_data.description) or None
@@ -1810,7 +1781,7 @@ async def download_trainee_bulk_upload_template(
         instructions.append(["Full Name", "Required"])
         instructions.append(["Role", "Use trainee"])
         instructions.append(["Password", f"Default password is always {DEFAULT_TRAINEE_PASSWORD}"])
-        instructions.append(["Wave/Batch", "Use an existing active trainer batch name or batch number"])
+        instructions.append(["Wave/Batch", "Use an existing active trainer batch name or wave number"])
 
         output = io.BytesIO()
         workbook.save(output)

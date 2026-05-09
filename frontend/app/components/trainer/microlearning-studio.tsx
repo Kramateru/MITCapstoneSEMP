@@ -168,7 +168,12 @@ function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['mod
   return null;
 }
 
-function validateModuleForm(form: ModuleFormState) {
+function validateModuleForm(
+  form: ModuleFormState,
+  options?: {
+    allowAudioDraftWithoutQuestions?: boolean;
+  },
+) {
   if (!form.title.trim()) {
     return 'Module title is required.';
   }
@@ -241,18 +246,22 @@ function validateModuleForm(form: ModuleFormState) {
 
   if (form.module_type === 'infographic') {
     if (!form.infographic_questions.length) {
-      return 'Add at least one infographic knowledge check.';
+      return 'Add at least one infographic assessment item.';
     }
 
     for (const [index, question] of form.infographic_questions.entries()) {
       if (!question.question.trim()) {
         return `Infographic question ${index + 1} needs a prompt.`;
       }
-      if (!hasTwoValidOptions(question.options)) {
-        return `Infographic question ${index + 1} needs at least two non-empty choices.`;
-      }
-      if (!question.correct_option?.trim()) {
-        return `Select the correct answer for infographic question ${index + 1}.`;
+      if (question.type === 'multiple_choice') {
+        if (!hasTwoValidOptions(question.options)) {
+          return `Infographic question ${index + 1} needs at least two non-empty choices.`;
+        }
+        if (!question.correct_option?.trim()) {
+          return `Select the correct answer for infographic question ${index + 1}.`;
+        }
+      } else if (!question.sample_answer?.trim()) {
+        return `Provide the trainer sample answer for infographic question ${index + 1}.`;
       }
     }
   }
@@ -261,7 +270,9 @@ function validateModuleForm(form: ModuleFormState) {
     if (form.module_type === 'case_study' && !form.case_study_content.trim()) {
       return 'Case study scenario content is required.';
     }
-    if (!form.case_study_questions.length) {
+    const allowAudioDraftWithoutQuestions =
+      form.module_type === 'audio' && options?.allowAudioDraftWithoutQuestions;
+    if (!form.case_study_questions.length && !allowAudioDraftWithoutQuestions) {
       return form.module_type === 'audio'
         ? 'Add at least one audio listening question.'
         : 'Add at least one case study question.';
@@ -426,21 +437,21 @@ export default function TrainerMicrolearningStudio() {
         body: formData,
       });
       const payload = await response.json().catch(() => null);
-      setModuleForm((current) => ({
-        ...current,
-        content_url: payload?.asset_url || '',
-        asset_record_id: typeof payload?.asset_record_id === 'string' ? payload.asset_record_id : '',
-        asset_storage_path: typeof payload?.storage_path === 'string' ? payload.storage_path : '',
-        asset_bucket_name: typeof payload?.bucket_name === 'string' ? payload.bucket_name : '',
-        asset_content_type: typeof payload?.content_type === 'string' ? payload.content_type : (file.type || ''),
-        asset_signed_url_required: Boolean(payload?.storage_path || payload?.signed_url_required),
-      }));
-      toast.success(
-        moduleForm.module_type === 'video'
-          ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
-          : 'Asset uploaded to Supabase.',
-      );
-    } catch (error) {
+        setModuleForm((current) => ({
+          ...current,
+          content_url: payload?.asset_url || '',
+          asset_record_id: typeof payload?.asset_record_id === 'string' ? payload.asset_record_id : '',
+          asset_storage_path: typeof payload?.storage_path === 'string' ? payload.storage_path : '',
+          asset_bucket_name: typeof payload?.bucket_name === 'string' ? payload.bucket_name : '',
+          asset_content_type: typeof payload?.content_type === 'string' ? payload.content_type : (file.type || ''),
+          asset_signed_url_required: Boolean(payload?.storage_path || payload?.signed_url_required),
+        }));
+        toast.success(
+          moduleForm.module_type === 'video'
+            ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
+            : 'Asset uploaded successfully.',
+        );
+      } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Asset upload failed.');
     } finally {
       setUploading(false);
@@ -499,23 +510,48 @@ export default function TrainerMicrolearningStudio() {
     showModuleDialog,
   ]);
 
-  async function uploadAudioForModule(file: File, moduleId: string) {
+  async function processAudioSourceForModule(
+    {
+      file,
+      audioUrl,
+    }: {
+      file?: File;
+      audioUrl?: string;
+    },
+    moduleId: string,
+  ) {
     if (!token) {
       toast.error('Your session has expired. Please sign in again.');
       return null;
     }
-    const validationError = getTrainerMediaUploadError(file, moduleForm.module_type);
-    if (validationError) {
-      toast.error(validationError);
+    if (file) {
+      const validationError = getTrainerMediaUploadError(file, moduleForm.module_type);
+      if (validationError) {
+        toast.error(validationError);
+        return null;
+      }
+    }
+    if (!file && !audioUrl?.trim()) {
+      toast.error('Paste a direct audio link or choose an audio file first.');
       return null;
     }
     setAudioUploading(true);
     setAudioProcessing(true);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      if (file) {
+        formData.append('file', file);
+      }
+      if (audioUrl?.trim()) {
+        formData.append('audioUrl', audioUrl.trim());
+      }
       formData.append('moduleId', moduleId);
-      formData.append('title', moduleForm.title.trim() || file.name.replace(/\.[A-Za-z0-9]+$/i, ''));
+      formData.append(
+        'title',
+        moduleForm.title.trim()
+          || file?.name.replace(/\.[A-Za-z0-9]+$/i, '')
+          || 'Audio Lesson',
+      );
       formData.append('audioLanguage', moduleForm.audio_language || 'en-US');
 
       const response = await authedFetch('/api/microlearning/audio-content/upload', {
@@ -534,7 +570,7 @@ export default function TrainerMicrolearningStudio() {
         audio_storage_path: result.storage_path || current.audio_storage_path,
         audio_bucket_name: result.bucket_name || current.audio_bucket_name,
         audio_content_type: result.mime_type || current.audio_content_type,
-        audio_original_filename: result.original_filename || file.name || current.audio_original_filename,
+        audio_original_filename: result.original_filename || file?.name || current.audio_original_filename,
         audio_transcript_provider: result.transcript_provider || current.audio_transcript_provider,
         audio_captions_url: result.captions_url || current.audio_captions_url,
         audio_caption_data_json: Array.isArray(result.caption_data)
@@ -573,7 +609,7 @@ export default function TrainerMicrolearningStudio() {
         },
       }) : current);
 
-      toast.success('Audio uploaded successfully.');
+      toast.success(file ? 'Audio uploaded successfully.' : 'Audio link processed successfully.');
       if (result.transcript_text || result.transcript) {
         toast.info('Speech-to-text caption data saved for trainee playback.');
       }
@@ -631,6 +667,66 @@ export default function TrainerMicrolearningStudio() {
     }
   }
 
+  function buildModuleRequestBody(targetModule?: MicrolearningModule | null) {
+    return {
+      title: moduleForm.title.trim(),
+      description: moduleForm.description.trim() || null,
+      category: moduleForm.feedback_category,
+      module_type: moduleForm.module_type,
+      duration_minutes: Number(moduleForm.duration_minutes),
+      passing_score: Number(moduleForm.passing_score),
+      skill_focus: moduleForm.skill_focus.trim() || null,
+      content_url: moduleForm.content_url.trim() || null,
+      difficulty: moduleForm.difficulty,
+      topic_category_id: moduleForm.topic_category_id || null,
+      content_data: buildContentData(
+        moduleForm,
+        targetModule && targetModule.module_type === moduleForm.module_type
+          ? targetModule.content_data
+          : undefined,
+      ),
+    };
+  }
+
+  async function ensureAudioModuleReadyForProcessing() {
+    if (editingModule?.id) {
+      return editingModule.id;
+    }
+
+    const validationError = validateModuleForm(moduleForm, {
+      allowAudioDraftWithoutQuestions: true,
+    });
+    if (validationError) {
+      toast.error(validationError);
+      return null;
+    }
+
+    setSaving(true);
+    try {
+      const response = await authedFetch('/api/trainer/microlearning-modules', {
+        method: 'POST',
+        body: JSON.stringify(buildModuleRequestBody()),
+      });
+      const result = await response.json();
+      const createdModule = result?.module as MicrolearningModule | undefined;
+
+      if (!createdModule?.id) {
+        throw new Error('The audio module draft was created, but the response did not include a module ID.');
+      }
+
+      setEditingModule(createdModule);
+      setSelectedModuleIds([createdModule.id]);
+      await loadData();
+      toast.success('Audio module draft saved. Continue by uploading a file or processing an audio link.');
+      return createdModule.id;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to create the audio module draft.');
+      return null;
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveModule() {
     if (uploading || audioUploading || audioProcessing) {
       toast.error('Please wait for the current media upload to finish before saving the module.');
@@ -645,24 +741,7 @@ export default function TrainerMicrolearningStudio() {
     try {
       const response = await authedFetch(editingModule ? `/api/trainer/microlearning-modules/${editingModule.id}` : '/api/trainer/microlearning-modules', {
         method: editingModule ? 'PUT' : 'POST',
-        body: JSON.stringify({
-          title: moduleForm.title.trim(),
-          description: moduleForm.description.trim() || null,
-          category: moduleForm.feedback_category,
-          module_type: moduleForm.module_type,
-          duration_minutes: Number(moduleForm.duration_minutes),
-          passing_score: Number(moduleForm.passing_score),
-          skill_focus: moduleForm.skill_focus.trim() || null,
-          content_url: moduleForm.content_url.trim() || null,
-          difficulty: moduleForm.difficulty,
-          topic_category_id: moduleForm.topic_category_id || null,
-          content_data: buildContentData(
-            moduleForm,
-            editingModule && editingModule.module_type === moduleForm.module_type
-              ? editingModule.content_data
-              : undefined,
-          ),
-        }),
+        body: JSON.stringify(buildModuleRequestBody(editingModule)),
       });
       const result = await response.json();
       setShowModuleDialog(false);
@@ -819,7 +898,7 @@ export default function TrainerMicrolearningStudio() {
   }
 
 
-  const needsMediaAsset = ['video', 'infographic', 'case_study', 'audio'].includes(moduleForm.module_type);
+  const needsMediaAsset = ['video', 'infographic', 'case_study'].includes(moduleForm.module_type);
   const mediaAssetLabel =
     moduleForm.module_type === 'video'
       ? 'Video or YouTube Link'
@@ -827,9 +906,7 @@ export default function TrainerMicrolearningStudio() {
         ? 'Infographic / Image Upload'
         : moduleForm.module_type === 'case_study'
           ? 'Audio Upload'
-          : moduleForm.module_type === 'audio'
-            ? 'Audio File'
-            : 'Supporting Asset';
+          : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
       ? 'Upload a trainer video to Supabase storage or paste a YouTube link trainees should review before the practice prompt.'
@@ -837,15 +914,13 @@ export default function TrainerMicrolearningStudio() {
         ? 'Upload the infographic or image trainees should review.'
         : moduleForm.module_type === 'case_study'
           ? 'Upload the audio file trainees should analyze with the transcript.'
-          : moduleForm.module_type === 'audio'
-            ? 'Upload the audio file with automatic transcription, reusable caption data, and learner summary support.'
-            : 'Upload a supporting media asset.';
+          : 'Upload a supporting media asset.';
   const mediaAssetAccept =
     moduleForm.module_type === 'video'
       ? 'video/*'
       : moduleForm.module_type === 'infographic'
         ? 'image/*'
-        : moduleForm.module_type === 'case_study' || moduleForm.module_type === 'audio'
+        : moduleForm.module_type === 'case_study'
           ? 'audio/*'
           : undefined;
   const authoredItemCount =
@@ -866,13 +941,12 @@ export default function TrainerMicrolearningStudio() {
         : moduleForm.module_type === 'flashcard'
           ? 'flashcards'
           : moduleForm.module_type === 'infographic'
-            ? 'knowledge checks'
+            ? 'assessment items'
             : moduleForm.module_type === 'audio'
               ? 'audio questions'
               : 'analysis questions';
   const selectedTopicName =
     categories.find((category) => category.id === moduleForm.topic_category_id)?.name || 'No topic selected';
-  const selectedFeedbackCategoryName = formatLabel(moduleForm.feedback_category);
   const trainerVideoPreviewUrl = moduleForm.module_type === 'video' ? moduleForm.content_url.trim() : '';
   const trainerYouTubePreviewUrl = getTrainerYouTubeEmbedUrl(trainerVideoPreviewUrl);
   const trainerShowsDirectVideoPreview =
@@ -1364,7 +1438,7 @@ export default function TrainerMicrolearningStudio() {
                     <div className="mb-4">
                       <div className="text-lg font-semibold">Module Settings</div>
                       <div className="text-sm leading-6 text-muted-foreground">
-                        These settings control the module type, scoring, and reporting group.
+                        These settings control the module type, scoring, and delivery setup.
                       </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
@@ -1389,19 +1463,6 @@ export default function TrainerMicrolearningStudio() {
                             {moduleForm.module_type === 'case_study' ? (
                               <SelectItem value="case_study">Legacy Case Study</SelectItem>
                             ) : null}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Feedback Category</Label>
-                        <Select value={moduleForm.feedback_category} onValueChange={(value) => setModuleForm((current) => ({ ...current, feedback_category: value as 'pronunciation' | 'fluency' | 'grammar' | 'empathy' | 'clarity' }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="pronunciation">Pronunciation</SelectItem>
-                            <SelectItem value="fluency">Fluency</SelectItem>
-                            <SelectItem value="grammar">Grammar</SelectItem>
-                            <SelectItem value="empathy">Empathy</SelectItem>
-                            <SelectItem value="clarity">Clarity</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -1456,10 +1517,6 @@ export default function TrainerMicrolearningStudio() {
                       <div className="rounded-xl border bg-white p-3">
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">Module Type</div>
                         <div className="mt-1 font-medium">{formatLabel(moduleForm.module_type)}</div>
-                      </div>
-                      <div className="rounded-xl border bg-white p-3">
-                        <div className="text-xs uppercase tracking-wide text-muted-foreground">Feedback Category</div>
-                        <div className="mt-1 font-medium">{selectedFeedbackCategoryName}</div>
                       </div>
                       <div className="rounded-xl border bg-white p-3">
                         <div className="text-xs uppercase tracking-wide text-muted-foreground">Topic</div>
@@ -1549,7 +1606,7 @@ export default function TrainerMicrolearningStudio() {
                 </div>
               ) : null}
 
-              {/* Audio Module Section - Upload audio with automatic transcription */}
+              {/* Audio Module Section - Upload or link audio with automatic transcription */}
               {(moduleForm.module_type === 'case_study' || moduleForm.module_type === 'audio') && (
                 <div className="rounded-2xl border bg-slate-50 p-5">
                   <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -1558,7 +1615,9 @@ export default function TrainerMicrolearningStudio() {
                         {moduleForm.module_type === 'audio' ? 'Microlearning Audio Module' : 'Audio Case Study'}
                       </div>
                       <div className="text-sm text-muted-foreground">
-                        Upload MP3, WAV, M4A, or OGG lesson audio. The system will automatically:
+                        {moduleForm.module_type === 'audio'
+                          ? 'Upload a lesson audio file or process a direct audio link. The system will automatically:'
+                          : 'Upload MP3, WAV, M4A, or OGG lesson audio. The system will automatically:'}
                         <ul className="mt-2 list-inside list-disc space-y-1">
                           <li>Upload the file to the private Supabase `audio-modules` bucket</li>
                           <li>Send the audio to Gemini for speech-to-text captions and a concise summary</li>
@@ -1568,34 +1627,75 @@ export default function TrainerMicrolearningStudio() {
                     </div>
                     <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border bg-white px-3 py-2 text-sm font-medium">
                       <Upload className="size-4" />
-                      {audioUploading ? 'Uploading audio...' : audioProcessing ? 'Generating captions...' : 'Upload Audio'}
+                      {audioUploading || audioProcessing ? 'Processing Audio...' : 'Upload Audio File'}
                       <input 
                         type="file" 
-                        accept=".mp3,.wav,.m4a,.ogg,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg" 
+                        accept=".mp3,.wav,.m4a,.ogg,.aac,.flac,.webm,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/x-m4a,audio/ogg,audio/aac,audio/flac,audio/webm" 
                         className="hidden" 
                         disabled={audioUploading || audioProcessing || saving || uploading}
                         onChange={async (event) => { 
                           const file = event.target.files?.[0]; 
                           if (file) {
-                            // First save the module to get an ID, then upload audio
-                            const moduleId = editingModule?.id;
-                            if (!moduleId) {
-                              toast.error('Please save the module first, then upload audio.');
-                              return;
-                            }
-                            await uploadAudioForModule(file, moduleId);
+                            const moduleId = await ensureAudioModuleReadyForProcessing();
+                            if (!moduleId) return;
+                            await processAudioSourceForModule({ file }, moduleId);
                           }
                           event.currentTarget.value = ''; 
                         }} 
                       />
                     </label>
                   </div>
+
+                  {moduleForm.module_type === 'audio' ? (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto]">
+                      <div className="space-y-2">
+                        <Label htmlFor="audio-link-input">Audio Link</Label>
+                        <Input
+                          id="audio-link-input"
+                          value={moduleForm.content_url}
+                          onChange={(event) =>
+                            setModuleForm((current) => ({
+                              ...current,
+                              content_url: event.target.value,
+                            }))
+                          }
+                          placeholder="https://example.com/lesson.mp3 or a Supabase-hosted audio URL"
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Paste a direct MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM link, then process it to generate transcript and caption text automatically.
+                        </p>
+                      </div>
+                      <div className="flex items-end">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={
+                            audioUploading
+                            || audioProcessing
+                            || saving
+                            || uploading
+                            || !moduleForm.content_url.trim()
+                          }
+                          onClick={async () => {
+                            const moduleId = await ensureAudioModuleReadyForProcessing();
+                            if (!moduleId) return;
+                            await processAudioSourceForModule(
+                              { audioUrl: moduleForm.content_url.trim() },
+                              moduleId,
+                            );
+                          }}
+                        >
+                          {audioUploading || audioProcessing ? 'Processing Link...' : 'Process Audio Link'}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
                   
                   {/* Audio Processing Status */}
                   {(audioUploading || audioProcessing) && (
                     <div className="mt-4 flex items-center gap-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700">
                       <Loader2 className="size-4 animate-spin" />
-                      <span>{audioUploading ? 'Uploading audio to Supabase...' : 'Generating speech-to-text captions and learner summary...'}</span>
+                      <span>Uploading lesson audio and generating speech-to-text captions plus learner summary...</span>
                     </div>
                   )}
                   
@@ -1658,7 +1758,7 @@ export default function TrainerMicrolearningStudio() {
                       </div>
                       
                       <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
-                        <strong>Note:</strong> After saving the module, upload the audio once. Trainee playback will request a signed Supabase URL on demand and use the stored speech-to-text caption data plus the saved summary for lesson navigation.
+                        <strong>Note:</strong> If this is a brand-new audio lesson, the system will save a draft module first so it can attach the processed audio, transcript, and caption data automatically.
                       </div>
                     </div>
                   )}
@@ -1869,6 +1969,31 @@ export default function TrainerMicrolearningStudio() {
                   <div className="font-medium">Quiz Content</div>
                   <div className="text-sm text-muted-foreground">Create multiple-choice checks and mark the correct answer for reporting.</div>
                 </div>
+
+                <div className="rounded-xl border bg-slate-50 p-4">
+                  <div className="font-medium">Read-First Story or Scenario</div>
+                  <div className="mt-1 text-sm text-muted-foreground">
+                    Add the story, mock call scenario, policy excerpt, or short passage trainees must read before answering the quiz.
+                  </div>
+                  <div className="mt-4">
+                    <Label htmlFor="quiz-reading-content">Reading Content</Label>
+                    <Textarea
+                      id="quiz-reading-content"
+                      rows={6}
+                      value={moduleForm.quiz_reading_content}
+                      onChange={(e) =>
+                        setModuleForm((current) => ({
+                          ...current,
+                          quiz_reading_content: e.target.value,
+                        }))
+                      }
+                      placeholder="Paste the story, mock call scenario, script excerpt, or reading passage trainees should review before the quiz."
+                    />
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      When this section is filled in, trainees will need to confirm they have read it before the quiz answers unlock.
+                    </p>
+                  </div>
+                </div>
                 
                 <div className="space-y-4">
                   {moduleForm.quiz_questions.map((question, index) => (
@@ -2020,12 +2145,36 @@ export default function TrainerMicrolearningStudio() {
               <div className="rounded-2xl border p-5 space-y-4">
                 <div>
                   <div className="font-medium">Infographic Content</div>
-                  <div className="text-sm text-muted-foreground">Pair the visual asset with short knowledge checks so trainees confirm what they noticed.</div>
+                  <div className="text-sm text-muted-foreground">
+                    Pair the visual asset with multiple-choice or open-ended assessments so trainees can prove what they understood.
+                  </div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                  Multiple-choice infographic items are scored at 2 points each. Open-ended infographic items are scored at 10 points each and reviewed against the trainer sample answer with Gemini AI.
                 </div>
                 
                 <div className="space-y-4">
                   {moduleForm.infographic_questions.map((question, index) => (
                     <div key={index} className="rounded-lg border p-4">
+                      <div>
+                        <div>
+                          <Label>Question Type</Label>
+                          <Select
+                            value={question.type}
+                            onValueChange={(value: 'open_ended' | 'multiple_choice') => {
+                              const newQuestions = [...moduleForm.infographic_questions];
+                              newQuestions[index].type = value;
+                              setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
+                            }}
+                          >
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="open_ended">Open-Ended</SelectItem>
+                              <SelectItem value="multiple_choice">Multiple Choice</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
                       <div className="mb-4">
                         <Label>Question {index + 1}</Label>
                         <Textarea
@@ -2038,37 +2187,73 @@ export default function TrainerMicrolearningStudio() {
                           placeholder="Enter question text"
                         />
                       </div>
-                      <div className="space-y-2">
-                        <Label>Options</Label>
-                        {question.options.map((option, optIndex) => (
-                          <div key={optIndex} className="flex gap-2">
-                            <Input
-                              value={option}
+                      {question.type === 'open_ended' ? (
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <Label>Trainer Sample Answer</Label>
+                            <Textarea
+                              rows={4}
+                              value={question.sample_answer || ''}
                               onChange={(e) => {
                                 const newQuestions = [...moduleForm.infographic_questions];
-                                newQuestions[index].options[optIndex] = e.target.value;
+                                newQuestions[index].sample_answer = e.target.value;
                                 setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
                               }}
-                              placeholder={`Option ${String.fromCharCode(65 + optIndex)}`}
+                              placeholder="Enter the model answer trainees will be compared against"
                             />
-                            <RadioGroup
-                              value={question.correct_option === option ? 'correct' : ''}
-                              onValueChange={(value) => {
-                                if (value === 'correct') {
-                                  const newQuestions = [...moduleForm.infographic_questions];
-                                  newQuestions[index].correct_option = option;
-                                  setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
-                                }
-                              }}
-                            >
-                              <div className="flex items-center space-x-2">
-                                <RadioGroupItem value="correct" id={`infographic-correct-${index}-${optIndex}`} />
-                                <Label htmlFor={`infographic-correct-${index}-${optIndex}`}>Correct</Label>
-                              </div>
-                            </RadioGroup>
                           </div>
-                        ))}
-                      </div>
+                          <div>
+                            <Label>Key Phrases (optional)</Label>
+                            <Textarea
+                              rows={4}
+                              value={question.required_keywords || ''}
+                              onChange={(e) => {
+                                const newQuestions = [...moduleForm.infographic_questions];
+                                newQuestions[index].required_keywords = e.target.value;
+                                setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
+                              }}
+                              placeholder="Comma or new-line separated phrases to reward"
+                            />
+                            <p className="mt-2 text-xs text-muted-foreground">
+                              {splitToList(question.required_keywords || '').length} phrase(s) configured for auto-analysis.
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <Label>Options</Label>
+                          {(question.options || []).map((option, optIndex) => (
+                            <div key={optIndex} className="flex gap-2">
+                              <Input
+                                value={option}
+                                onChange={(e) => {
+                                  const newQuestions = [...moduleForm.infographic_questions];
+                                  if (newQuestions[index].options) {
+                                    newQuestions[index].options![optIndex] = e.target.value;
+                                  }
+                                  setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
+                                }}
+                                placeholder={`Option ${String.fromCharCode(65 + optIndex)}`}
+                              />
+                              <RadioGroup
+                                value={question.correct_option === option ? 'correct' : ''}
+                                onValueChange={(value) => {
+                                  if (value === 'correct') {
+                                    const newQuestions = [...moduleForm.infographic_questions];
+                                    newQuestions[index].correct_option = option;
+                                    setModuleForm(current => ({ ...current, infographic_questions: newQuestions }));
+                                  }
+                                }}
+                              >
+                                <div className="flex items-center space-x-2">
+                                  <RadioGroupItem value="correct" id={`infographic-correct-${index}-${optIndex}`} />
+                                  <Label htmlFor={`infographic-correct-${index}-${optIndex}`}>Correct</Label>
+                                </div>
+                              </RadioGroup>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       <Button
                         type="button"
                         variant="destructive"
@@ -2090,12 +2275,19 @@ export default function TrainerMicrolearningStudio() {
                       ...current,
                       infographic_questions: [
                         ...current.infographic_questions,
-                        { question: '', type: 'multiple_choice', options: ['', '', '', ''], correct_option: '' }
+                        {
+                          question: '',
+                          type: 'multiple_choice',
+                          options: ['', '', '', ''],
+                          correct_option: '',
+                          sample_answer: '',
+                          required_keywords: '',
+                        }
                       ]
                     }))}
                   >
                     <Plus className="size-4 mr-2" />
-                    Add Knowledge Check
+                    Add Assessment Item
                   </Button>
                 </div>
               </div>
@@ -2109,7 +2301,7 @@ export default function TrainerMicrolearningStudio() {
                   </div>
                   <div className="text-sm text-muted-foreground">
                     {moduleForm.module_type === 'audio'
-                      ? 'Use the auto-generated transcript as caption text, then add listening questions trainees must answer after replaying the audio.'
+                      ? 'Use the auto-generated transcript or caption text, then add listening questions trainees must answer after replaying the audio.'
                       : 'Describe the scenario clearly, then add analysis questions or spoken responses for practice.'}
                   </div>
                 </div>
@@ -2122,7 +2314,7 @@ export default function TrainerMicrolearningStudio() {
                     onChange={(e) => setModuleForm(current => ({ ...current, case_study_content: e.target.value }))}
                     placeholder={
                       moduleForm.module_type === 'audio'
-                        ? 'Transcript will appear here after audio upload, but you can edit it before saving.'
+                        ? 'Transcript will appear here after audio upload or audio link processing, but you can edit it before saving.'
                         : 'Enter the case study scenario or story'
                     }
                   />

@@ -3,6 +3,11 @@ export type AssessmentDefinitionType = 'multiple_choice' | 'fill_blank' | 'mixed
 export type AssessmentQuestionType = 'multiple_choice' | 'fill_blank'
 export type AssessmentAttemptStatus = 'pass' | 'fail'
 export type CoachingVisibility = 'shared' | 'trainer_only'
+export type AssignmentMode = 'selected_questions' | 'entire_category' | 'random_subset'
+export type QuestionDifficulty = 'easy' | 'medium' | 'hard'
+export type CertificateStatus = 'issued' | 'revoked' | 'not_issued'
+export type AnalysisSource = 'rules' | 'ai'
+export type AssessmentSectionRole = 'trainer' | 'trainee' | 'admin'
 
 export interface BackendSessionUser {
   userId: string
@@ -29,13 +34,29 @@ export interface TraineeOption {
 export interface AssessmentQuestionRecord {
   id: string
   assessmentId: string
+  categoryId?: string
+  categoryName?: string | null
+  trainerId?: string | null
+  questionNumber?: number
   questionText: string
   questionType: AssessmentQuestionType
   options: string[]
+  choices?: string[]
   correctAnswer: string
+  difficulty?: QuestionDifficulty | null
   explanation?: string | null
   orderIndex: number
+  activeStatus?: boolean
+  createdAt?: string
+  updatedAt?: string
   metadata?: Record<string, unknown>
+  usageCount?: number
+  answerCount?: number
+  correctCount?: number
+  incorrectCount?: number
+  accuracyRate?: number
+  missRate?: number
+  lastUsedAt?: string | null
 }
 
 export interface AssessmentRecord {
@@ -56,16 +77,25 @@ export interface AssessmentRecord {
 export interface CategoryRecord {
   id: string
   title: string
+  categoryName?: string
   description?: string | null
   passingScore: number
   createdBy: string
+  trainerId?: string
+  activeStatus?: boolean
   isArchived: boolean
   createdAt: string
   updatedAt: string
+  questionCount?: number
   assignmentCount: number
+  activeAssignmentCount?: number
   attemptCount: number
   passRate: number
   averageScore: number
+  completionRate?: number
+  retakeRate?: number
+  highestScore?: number
+  lowestScore?: number
   assessments: AssessmentRecord[]
 }
 
@@ -80,19 +110,61 @@ export interface AssignmentRecord {
   dueAt?: string | null
   isActive: boolean
   categoryTitle: string
+  categoryName?: string
   assessmentTitle?: string | null
+  title?: string
+  description?: string | null
   targetLabel: string
   targetType: 'batch' | 'trainee'
+  waveNumber?: number | null
+  assignmentMode?: AssignmentMode
+  questionCount?: number
+  randomQuestionCount?: number | null
+  passingScore?: number
+  maximumAttempts?: number | null
+  timeLimitMinutes?: number | null
+  shuffleChoices?: boolean
+  shuffleQuestions?: boolean
+  selectedQuestionIds?: string[]
+  assignedTrainees?: number
+  completedTrainees?: number
+  passedTrainees?: number
+  failedTrainees?: number
+  certificateCount?: number
+  averageScore?: number
+  highestScore?: number
+  lowestScore?: number
+  retakeRate?: number
+  statusLabel?: string
 }
 
 export interface AttemptQuestionResult {
   questionId: string
+  questionNumber?: number
   questionText: string
   questionType: AssessmentQuestionType
+  difficulty?: QuestionDifficulty | null
+  options?: string[]
+  choiceOrder?: string[]
   userAnswer: string
   correctAnswer: string
   isCorrect: boolean
   explanation?: string | null
+}
+
+export interface AttemptAnalysisSummary {
+  source: AnalysisSource
+  summary: string
+  strengths: string[]
+  improvements: string[]
+  recommendations: string[]
+  categoryBreakdown: Array<{
+    categoryId: string
+    categoryTitle: string
+    totalQuestions: number
+    correctAnswers: number
+    score: number
+  }>
 }
 
 export interface AttemptRecord {
@@ -100,6 +172,7 @@ export interface AttemptRecord {
   assignmentId?: string | null
   assessmentId: string
   categoryId: string
+  assignmentTitle?: string
   assessmentTitle: string
   categoryTitle: string
   traineeId: string
@@ -107,15 +180,26 @@ export interface AttemptRecord {
   traineeEmail?: string | null
   batchId?: string | null
   batchName?: string | null
+  waveNumber?: number | null
   attemptNo: number
   score: number
+  passingScore?: number
   status: AssessmentAttemptStatus
   feedback?: string | null
   trainerNote?: string | null
   submittedAt: string
+  startedAt?: string | null
+  completedAt?: string | null
+  timeSpentSeconds?: number
+  correctAnswers?: number
+  incorrectAnswers?: number
+  totalQuestions?: number
   certificateId?: string | null
   certificateCode?: string | null
+  certificateStatus?: CertificateStatus
+  certificateUrl?: string | null
   questionResults: AttemptQuestionResult[]
+  analysis?: AttemptAnalysisSummary
 }
 
 export interface CoachingNoteRecord {
@@ -134,11 +218,15 @@ export interface CertificateRecord {
   id: string
   traineeId: string
   categoryId: string
+  assignmentId?: string | null
   assessmentId: string
   attemptId: string
   categoryTitle: string
+  assignmentTitle?: string
   assessmentTitle: string
   certificateCode: string
+  certificateStatus?: CertificateStatus
+  certificateUrl?: string | null
   earnedAt: string
 }
 
@@ -146,19 +234,47 @@ export interface CategoryReportRecord {
   categoryId: string
   categoryTitle: string
   passingScore: number
+  questionCount?: number
+  assignmentCount?: number
+  assignedTraineeCount?: number
+  completedTraineeCount?: number
   attemptCount: number
   passCount: number
   failCount: number
   averageScore: number
   passRate: number
+  failRate?: number
+  retakeRate?: number
+  highestScore?: number
+  lowestScore?: number
+  completionRate?: number
+}
+
+export interface BatchReportRecord {
+  batchId: string
+  batchName: string
+  waveNumber?: number | null
+  categoryId: string
+  categoryTitle: string
+  assignmentCount: number
+  assignedTraineeCount: number
+  completedTraineeCount: number
+  attemptCount: number
+  averageScore: number
+  passRate: number
+  completionRate: number
+  highestScore: number
+  lowestScore: number
 }
 
 export interface QuestionReportRecord {
   questionId: string
-  assessmentId: string
   categoryId: string
+  categoryTitle?: string
+  questionNumber?: number
   questionText: string
   questionType: AssessmentQuestionType
+  difficulty?: QuestionDifficulty | null
   answerCount: number
   correctCount: number
   incorrectCount: number
@@ -167,21 +283,34 @@ export interface QuestionReportRecord {
 
 export interface TrainerBootstrapResponse {
   categories: CategoryRecord[]
+  questions?: AssessmentQuestionRecord[]
   batches: BatchOption[]
   trainees: TraineeOption[]
   assignments: AssignmentRecord[]
   attempts: AttemptRecord[]
+  certificates?: CertificateRecord[]
   reports: {
     categories: CategoryReportRecord[]
+    batches?: BatchReportRecord[]
     questions: QuestionReportRecord[]
+  }
+  analytics?: {
+    totalQuestions: number
+    totalAssignments: number
+    activeAssignments: number
+    totalAttempts: number
+    passRate: number
+    averageScore: number
+    certificatesIssued: number
   }
 }
 
 export interface TraineeAssessmentCard {
-  assignmentId?: string | null
+  assignmentId: string
   assessmentId: string
   categoryId: string
   categoryTitle: string
+  assignmentTitle?: string
   assessmentTitle: string
   assessmentDescription?: string | null
   type: AssessmentDefinitionType
@@ -191,8 +320,47 @@ export interface TraineeAssessmentCard {
   questionCount: number
   questionTypes: AssessmentQuestionType[]
   latestAttempt?: AttemptRecord
+  attemptCount?: number
+  attemptsRemaining?: number | null
+  canStart?: boolean
+  canRetake?: boolean
+  isCompleted?: boolean
+  maximumAttempts?: number | null
+  timeLimitMinutes?: number | null
   certificate?: CertificateRecord
   questions: AssessmentQuestionRecord[]
+}
+
+export interface AssessmentSessionQuestion {
+  id: string
+  questionNumber: number
+  questionText: string
+  questionType: AssessmentQuestionType
+  difficulty?: QuestionDifficulty | null
+  choices: string[]
+}
+
+export interface TraineeAssessmentSession {
+  assignmentId: string
+  assessmentId: string
+  categoryId: string
+  categoryTitle: string
+  assignmentTitle?: string
+  assessmentTitle: string
+  description?: string | null
+  passingScore: number
+  targetDueAt?: string | null
+  targetLabel: string
+  questionCount: number
+  attemptCount?: number
+  attemptsRemaining?: number | null
+  maximumAttempts?: number | null
+  timeLimitMinutes?: number | null
+  canRetake: boolean
+  isCompleted: boolean
+  latestAttempt?: AttemptRecord
+  certificate?: CertificateRecord
+  questions: AssessmentSessionQuestion[]
 }
 
 export interface TraineeDashboardResponse {
@@ -205,13 +373,19 @@ export interface TraineeDashboardResponse {
     completedCount: number
     passedCount: number
     averageScore: number
+    retakeCount?: number
+    certificateCount?: number
   }
 }
 
 export interface SubmitAssessmentPayload {
-  assessmentId: string
   assignmentId?: string | null
+  assessmentId?: string | null
   answers: Record<string, string>
+  questionIds?: string[]
+  choiceMap?: Record<string, string[]>
+  timeSpentSeconds?: number
+  startedAt?: string | null
 }
 
 export interface SubmitAssessmentResponse {
@@ -243,11 +417,14 @@ export interface UpdateAssessmentPayload {
 }
 
 export interface CreateQuestionPayload {
-  assessmentId: string
+  assessmentId?: string
+  categoryId?: string
+  questionNumber: number
   questionText: string
   questionType: AssessmentQuestionType
   options: string[]
   correctAnswer: string
+  difficulty?: QuestionDifficulty | null
   explanation?: string
   orderIndex: number
 }
@@ -260,7 +437,19 @@ export interface CreateAssignmentPayload {
   batchId?: string | null
   traineeId?: string | null
   dueAt?: string | null
+  title: string
+  description?: string
+  assignmentMode: AssignmentMode
+  questionIds?: string[]
+  randomQuestionCount?: number | null
+  passingScore?: number
+  maximumAttempts?: number | null
+  timeLimitMinutes?: number | null
+  shuffleChoices?: boolean
+  shuffleQuestions?: boolean
 }
+
+export interface UpdateAssignmentPayload extends CreateAssignmentPayload {}
 
 export interface CoachAttemptPayload {
   attemptId: string
@@ -268,4 +457,21 @@ export interface CoachAttemptPayload {
   trainerNote?: string
   actionItems?: string
   visibility?: CoachingVisibility
+}
+
+export interface BulkUploadErrorRecord {
+  rowNumber: number
+  category: string
+  questionNumber: string
+  question: string
+  error: string
+}
+
+export interface BulkUploadQuestionsResponse {
+  totalRows: number
+  successfulImports: number
+  failedRows: number
+  importedQuestions: AssessmentQuestionRecord[]
+  errors: BulkUploadErrorRecord[]
+  errorCsv?: string | null
 }

@@ -711,7 +711,7 @@ export default function TrainerUsersPage() {
                 disabled={!activeBatches.length}
                 title="Select batch for trainee assignment"
               >
-                <option value="">{activeBatches.length ? 'Select batch / wave number' : 'No active batches available'}</option>
+                <option value="">{activeBatches.length ? 'Select batch / wave' : 'No active batches available'}</option>
                 {activeBatches.map((batch) => (
                   <option key={batch.id} value={batch.id}>
                     {formatBatchLabel(batch)}
@@ -754,7 +754,7 @@ export default function TrainerUsersPage() {
             <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
               Expected CSV columns: <span className="font-semibold">Email Address</span>, <span className="font-semibold">Full Name</span>, <span className="font-semibold">Role</span>, <span className="font-semibold">Password</span>, <span className="font-semibold">Wave/Batch</span>.
               <div className="mt-2 text-xs text-gray-500">
-                The upload uses the default password <span className="font-semibold">{DEFAULT_TRAINEE_PASSWORD}</span> and matches each row to an existing trainer batch by batch name or batch number.
+                The upload uses the default password <span className="font-semibold">{DEFAULT_TRAINEE_PASSWORD}</span> and matches each row to an existing trainer batch by batch name or wave number.
               </div>
               <div className="mt-2 text-xs text-gray-500">
                 The downloaded template contains the correct headers only, so every uploaded trainee row comes from your own prepared source file.
@@ -1186,7 +1186,7 @@ export default function TrainerUsersPage() {
                         disabled={!activeBatches.length}
                         title="Select batch for trainee assignment"
                       >
-                        <option value="">{activeBatches.length ? 'Select batch / wave number' : 'No active batches available'}</option>
+                        <option value="">{activeBatches.length ? 'Select batch / wave' : 'No active batches available'}</option>
                         {activeBatches.map((batch) => (
                           <option key={batch.id} value={batch.id}>
                             {formatBatchLabel(batch)}

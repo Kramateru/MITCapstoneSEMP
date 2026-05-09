@@ -84,6 +84,8 @@ export function TrainerAssignmentPanel({
       batchId: draft.targetType === 'batch' ? draft.targetId : null,
       traineeId: draft.targetType === 'trainee' ? draft.targetId : null,
       dueAt: draft.dueAt || null,
+      title: `${selectedCategory?.title || 'Assessment'} Assignment`,
+      assignmentMode: draft.assessmentId === 'all' ? 'entire_category' : 'selected_questions',
     })
 
     toast.success('Assignment created.')

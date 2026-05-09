@@ -16,6 +16,8 @@ import type { AssessmentQuestionRecord } from '@/app/lib/assessment/types'
 
 type QuestionDraft = {
   assessmentId: string
+  categoryId?: string
+  questionNumber: number
   questionText: string
   questionType: 'multiple_choice' | 'fill_blank'
   options: string[]
@@ -27,6 +29,8 @@ type QuestionDraft = {
 function toDraft(question: AssessmentQuestionRecord): QuestionDraft {
   return {
     assessmentId: question.assessmentId,
+    categoryId: question.categoryId,
+    questionNumber: question.questionNumber || question.orderIndex + 1,
     questionText: question.questionText,
     questionType: question.questionType,
     options: question.options.length ? [...question.options] : ['', '', '', ''],
@@ -93,6 +97,8 @@ export function QuestionEditorCard({
       try {
         const payload = {
           assessmentId: draft.assessmentId,
+          categoryId: draft.categoryId,
+          questionNumber: draft.questionNumber,
           questionText: draft.questionText,
           questionType: draft.questionType,
           options: draft.questionType === 'multiple_choice' ? sanitizedOptions : [],
@@ -104,6 +110,8 @@ export function QuestionEditorCard({
         const updated = (await updateAssessmentQuestion(question.id, payload)) as {
           id: string
           assessment_id: string
+          category_id?: string
+          question_number?: number
           question_text: string
           question_type: 'multiple_choice' | 'fill_blank'
           options: string[]
@@ -116,6 +124,8 @@ export function QuestionEditorCard({
         const nextQuestion: AssessmentQuestionRecord = {
           id: updated.id,
           assessmentId: updated.assessment_id,
+          categoryId: updated.category_id,
+          questionNumber: updated.question_number,
           questionText: updated.question_text,
           questionType: updated.question_type,
           options: updated.options || [],
@@ -127,6 +137,8 @@ export function QuestionEditorCard({
 
         serializedBaselineRef.current = JSON.stringify({
           assessmentId: nextQuestion.assessmentId,
+          categoryId: nextQuestion.categoryId,
+          questionNumber: nextQuestion.questionNumber || nextQuestion.orderIndex + 1,
           questionText: nextQuestion.questionText,
           questionType: nextQuestion.questionType,
           options: nextQuestion.options.length ? nextQuestion.options : ['', '', '', ''],

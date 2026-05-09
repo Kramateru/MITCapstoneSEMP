@@ -55,6 +55,8 @@ interface AssignmentSummary {
   status: AssignmentStatus;
   completion_percentage: number;
   average_score?: number;
+  points_earned?: number;
+  points_possible?: number;
   is_passed?: boolean;
   can_retake?: boolean;
   retake_count?: number;
@@ -83,9 +85,12 @@ interface ExerciseAttempt {
   matched_keywords?: string[];
   missing_keywords?: string[];
   score?: number | null;
+  points_earned?: number | null;
+  points_possible?: number | null;
   feedback?: string | null;
   revealed_side?: 'front' | 'back' | string | null;
   sample_similarity?: number | null;
+  ai_provider?: string | null;
   is_completed: boolean;
   submitted_at?: string | null;
 }
@@ -101,6 +106,7 @@ interface AssignmentExercise {
   explanation?: string;
   option_feedback?: Record<string, string>;
   sample_answer?: string;
+  point_value?: number;
   front?: string;
   back?: string;
   preview_seconds?: number;
@@ -244,6 +250,28 @@ function formatBatchLabel(assignment?: AssignmentSummary | null) {
   return 'No batch assigned';
 }
 
+function formatPoints(earned?: number | null, possible?: number | null) {
+  const safePossible = Number(possible || 0);
+  if (!Number.isFinite(safePossible) || safePossible <= 0) {
+    return null;
+  }
+
+  const safeEarned = Number(earned || 0);
+  const earnedLabel = Number.isInteger(safeEarned) ? String(safeEarned) : safeEarned.toFixed(1);
+  const possibleLabel = Number.isInteger(safePossible) ? String(safePossible) : safePossible.toFixed(1);
+  return `${earnedLabel}/${possibleLabel} pts`;
+}
+
+function formatAttemptScore(attempt?: ExerciseAttempt | null) {
+  if (!attempt) {
+    return '0%';
+  }
+
+  const pointsLabel = formatPoints(attempt.points_earned, attempt.points_possible);
+  const percentLabel = `${Math.round(attempt.score || 0)}%`;
+  return pointsLabel ? `${pointsLabel} • ${percentLabel}` : percentLabel;
+}
+
 function hasStartedAssignment(assignment?: AssignmentSummary | null) {
   return Boolean(
     assignment &&
@@ -286,6 +314,28 @@ function getFirstContentArray(content: Record<string, any>, keys: string[]) {
   }
 
   return [];
+}
+
+function getFirstContentText(content: Record<string, any>, keys: string[]) {
+  for (const key of keys) {
+    if (typeof content[key] === 'string' && content[key].trim()) {
+      return content[key].trim();
+    }
+  }
+
+  return '';
+}
+
+function getQuizReadingContent(content: Record<string, any>) {
+  return getFirstContentText(content, ['reading_passage', 'reading_content', 'story_content', 'scenario_text']);
+}
+
+function getQuizReadingGateKey(assignment?: AssignmentSummary | null) {
+  if (!assignment?.id) {
+    return '';
+  }
+
+  return `${assignment.id}:${assignment.attempt_number || 1}`;
 }
 
 function formatTimestamp(seconds?: number | null) {
@@ -522,7 +572,7 @@ function getExerciseActionLabel(moduleType: ModuleType, exercise: AssignmentExer
     return 'Submit Quiz Answer';
   }
   if (moduleType === 'flashcard') {
-    return 'Submit Flashcard Recall';
+    return 'Submit Flashcard Answer';
   }
   if (moduleType === 'infographic') {
     return 'Submit Infographic Answer';
@@ -1653,10 +1703,10 @@ function FlashcardRecallExerciseCard({
       return;
     }
 
-    const timerId = window.setTimeout(() => {
+      const timerId = window.setTimeout(() => {
       const beginChallenge = () => {
-        const nextAnswerSide: FlashcardSide = Math.random() < 0.5 ? 'front' : 'back';
-        setReferenceSide(getOppositeFlashcardSide(nextAnswerSide));
+        const nextAnswerSide: FlashcardSide = 'back';
+        setReferenceSide('front');
         onDraftChange({
           responseText: '',
           revealedSide: nextAnswerSide,
@@ -1708,11 +1758,21 @@ function FlashcardRecallExerciseCard({
         ? exercise.front || 'No front text set.'
         : '';
   const latestAttempt = exercise.attempt;
-  const latestAttemptTone = latestAttempt?.is_completed
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-      : latestAttempt
-      ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : 'border-slate-200 bg-slate-50 text-slate-700';
+  const latestAttemptScore = Number(latestAttempt?.score || 0);
+  const latestAttemptTone = latestAttempt
+    ? latestAttemptScore >= 80
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+      : latestAttemptScore >= 50
+        ? 'border-amber-200 bg-amber-50 text-amber-800'
+        : 'border-rose-200 bg-rose-50 text-rose-800'
+    : 'border-slate-200 bg-slate-50 text-slate-700';
+  const latestAttemptLabel = latestAttempt
+    ? latestAttemptScore >= 80
+      ? 'Latest result: Strong recall'
+      : latestAttemptScore >= 50
+        ? 'Latest result: Partial recall'
+        : 'Latest result: Needs review'
+    : 'Latest result';
 
   function startCycle() {
     setPhase('preview');
@@ -1740,7 +1800,7 @@ function FlashcardRecallExerciseCard({
             <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Flashcard Recall</p>
             <p className="mt-1 text-sm text-slate-700">
               Press Start to begin this card. You will get {previewSeconds} seconds to review both sides, then {answerTimeLimitSeconds}{' '}
-              seconds to answer with one side of the flashcard still visible.
+              seconds to answer while the front side stays visible as your prompt.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1814,7 +1874,7 @@ function FlashcardRecallExerciseCard({
               <p className="mt-1 text-sm text-slate-700">
                 {phase === 'expired'
                   ? `The answer window closed. Review the ${formatLabel(referenceSide)} side and restart the card to try again.`
-                  : `The ${formatLabel(referenceSide)} side stays visible while you answer. Type the ${formatLabel(promptedSide)} side exactly before the timer runs out.`}
+                  : `The ${formatLabel(referenceSide)} side stays visible while you answer. Give the ${formatLabel(promptedSide)} answer in your own words or a close paraphrase before the timer runs out.`}
               </p>
             </div>
             <Badge variant="outline" className="flex items-center gap-1">
@@ -1828,7 +1888,7 @@ function FlashcardRecallExerciseCard({
               <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{visibleReferenceText}</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor={`${exercise.id}-flashcard-answer`}>Type the {formatLabel(promptedSide)} exactly</Label>
+              <Label htmlFor={`${exercise.id}-flashcard-answer`}>Answer the {formatLabel(promptedSide)} side</Label>
               <Input
                 ref={answerInputRef}
                 id={`${exercise.id}-flashcard-answer`}
@@ -1839,11 +1899,11 @@ function FlashcardRecallExerciseCard({
                     inputMode: 'typed',
                   })
                 }
-                placeholder={`Enter the ${formatLabel(promptedSide)} exactly`}
+                placeholder={`Explain the ${formatLabel(promptedSide)} side as accurately as you can`}
                 disabled={phase === 'expired'}
               />
               <p className="text-xs text-slate-500">
-                Answer limit: {answerTimeLimitSeconds} second{answerTimeLimitSeconds === 1 ? '' : 's'}.
+                Answer limit: {answerTimeLimitSeconds} second{answerTimeLimitSeconds === 1 ? '' : 's'}. Gemini will score how closely your answer matches the flashcard meaning.
               </p>
             </div>
           </div>
@@ -1857,7 +1917,7 @@ function FlashcardRecallExerciseCard({
               onClick={onSubmit}
               disabled={isSaving || phase === 'expired' || !response.responseText.trim()}
             >
-              {isSaving ? 'Checking Recall...' : 'Submit Flashcard Recall'}
+              {isSaving ? 'Scoring Flashcard...' : 'Submit Flashcard Answer'}
             </Button>
           </div>
         </div>
@@ -1866,8 +1926,8 @@ function FlashcardRecallExerciseCard({
       {latestAttempt ? (
         <div className={`rounded-lg border p-3 text-sm ${latestAttemptTone}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium">{latestAttempt.is_completed ? 'Latest result: Correct' : 'Latest result: Try again'}</p>
-            <Badge className="border-white/60 bg-white/80 text-current">Score: {Math.round(latestAttempt.score || 0)}%</Badge>
+            <p className="font-medium">{latestAttemptLabel}</p>
+            <Badge className="border-white/60 bg-white/80 text-current">Score: {formatAttemptScore(latestAttempt)}</Badge>
           </div>
           <p className="mt-2">{latestAttempt.feedback || 'Saved successfully.'}</p>
           {latestAttempt.submitted_at ? (
@@ -1898,6 +1958,7 @@ export default function MicrolearningHub() {
   const [flashcardIndexes, setFlashcardIndexes] = useState<Record<string, number>>({});
   const [quizIndexes, setQuizIndexes] = useState<Record<string, number>>({});
   const [quizAnswers, setQuizAnswers] = useState<Record<string, Record<number, number>>>({});
+  const [quizReadingConfirmed, setQuizReadingConfirmed] = useState<Record<string, boolean>>({});
   const [speechResults, setSpeechResults] = useState<Record<string, Record<string | number, string>>>({});
   const [isListening, setIsListening] = useState(false);
   const [activeSpeechExerciseId, setActiveSpeechExerciseId] = useState('');
@@ -2458,9 +2519,7 @@ export default function MicrolearningHub() {
         },
       );
 
-      if (exercise.type === 'flashcard_recall' && !result.attempt.is_completed) {
-        toast.error('Flashcard answer was incorrect. Review the card again and retry.');
-      } else if (result.assignment.is_passed && result.assignment.certificate_id) {
+      if (result.assignment.is_passed && result.assignment.certificate_id) {
         toast.success('Module passed. Your certificate has been unlocked.');
       } else if (result.assignment.completed_exercises === result.assignment.exercise_count && !result.assignment.is_passed) {
         toast.success('Module completed. Review your score and retake it if needed.');
@@ -2479,6 +2538,14 @@ export default function MicrolearningHub() {
   const activeAssignment = assignments.find((assignment) => assignment.id === activeAssignmentId) || assignmentDetail?.assignment || null;
   const hasDetailForActiveAssignment = assignmentDetail?.assignment?.id === activeAssignmentId;
   const moduleStarted = hasStartedAssignment(activeAssignment);
+  const quizReadingContent = assignmentDetail ? getQuizReadingContent(assignmentDetail.module.content_data || {}) : '';
+  const quizReadingGateKey = getQuizReadingGateKey(activeAssignment);
+  const isQuizReadingLocked = Boolean(
+    assignmentDetail &&
+      assignmentDetail.module.module_type === 'quiz' &&
+      quizReadingContent &&
+      !quizReadingConfirmed[quizReadingGateKey],
+  );
   const activeModuleGateState =
     assignmentDetail && activeAssignment
       ? getModuleMediaGateState(
@@ -2736,6 +2803,9 @@ export default function MicrolearningHub() {
 
     if (moduleType === 'quiz') {
       const questions = getFirstContentArray(content, ['questions', 'quiz_questions']);
+      const readingContent = getQuizReadingContent(content);
+      const readingGateKey = getQuizReadingGateKey(activeAssignment);
+      const readingUnlocked = !readingContent || Boolean(quizReadingConfirmed[readingGateKey]);
       const currentQuestionIndex = quizIndexes[activeAssignment.id] || 0;
       const currentQuestion = questions[currentQuestionIndex];
       const selectedAnswer = quizAnswers[activeAssignment.id]?.[currentQuestionIndex];
@@ -2756,7 +2826,7 @@ export default function MicrolearningHub() {
                   variant="outline"
                   size="sm"
                   onClick={() => changeQuizQuestion(activeAssignment.id, questions.length, -1)}
-                  disabled={currentQuestionIndex === 0}
+                  disabled={currentQuestionIndex === 0 || !readingUnlocked}
                 >
                   <ChevronLeft className="mr-1 size-4" />
                   Previous
@@ -2766,7 +2836,7 @@ export default function MicrolearningHub() {
                   variant="outline"
                   size="sm"
                   onClick={() => changeQuizQuestion(activeAssignment.id, questions.length, 1)}
-                  disabled={currentQuestionIndex >= questions.length - 1}
+                  disabled={currentQuestionIndex >= questions.length - 1 || !readingUnlocked}
                 >
                   Next
                   <ChevronRight className="ml-1 size-4" />
@@ -2775,7 +2845,44 @@ export default function MicrolearningHub() {
             ) : null}
           </div>
 
-          {currentQuestion ? (
+          {readingContent ? (
+            <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Read First</p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    Review this story, mock call scenario, or reading passage before answering the quiz.
+                  </p>
+                </div>
+                <Badge variant="outline" className={readingUnlocked ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
+                  {readingUnlocked ? 'Reading confirmed' : 'Required before answering'}
+                </Badge>
+              </div>
+              <div className="mt-4 whitespace-pre-wrap rounded-lg border bg-white p-4 text-sm leading-6 text-slate-700">
+                {readingContent}
+              </div>
+              {!readingUnlocked ? (
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-amber-800">
+                    Finish reading this content, then confirm it to unlock the quiz questions below.
+                  </p>
+                  <Button
+                    type="button"
+                    onClick={() =>
+                      setQuizReadingConfirmed((current) => ({
+                        ...current,
+                        [readingGateKey]: true,
+                      }))
+                    }
+                  >
+                    I&apos;ve Read This
+                  </Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {currentQuestion && readingUnlocked ? (
             <div className="mt-4">
               <p className="text-base font-medium text-slate-800">{currentQuestion.question}</p>
               <div className="mt-3 space-y-2">
@@ -2819,6 +2926,10 @@ export default function MicrolearningHub() {
                 </div>
               ) : null}
             </div>
+          ) : readingContent && !readingUnlocked ? (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              Read the passage above, then confirm it to preview the quiz flow and unlock the answer cards.
+            </div>
           ) : (
             <p className="mt-4 text-sm text-slate-500">No questions available for this quiz.</p>
           )}
@@ -2838,13 +2949,15 @@ export default function MicrolearningHub() {
               {infographicQuestions.map((question: any, index: number) => (
                 <div key={index} className="rounded-lg border border-sky-200 bg-sky-50 p-3">
                   <div className="flex items-center justify-between">
-                    <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Multiple Choice Check</p>
+                    <p className="text-xs uppercase tracking-[0.18em] text-sky-700">
+                      {question.type === 'multiple_choice' ? 'Multiple Choice Assessment' : 'Open-Ended Assessment'}
+                    </p>
                     <Badge variant="outline" className="text-xs">
-                      Answer Below
+                      {question.type === 'multiple_choice' ? 'Choose Below' : 'Respond Below'}
                     </Badge>
                   </div>
                   <p className="mt-2 text-sm text-slate-700">{question.question}</p>
-                  {Array.isArray(question.options) && question.options.length ? (
+                  {question.type === 'multiple_choice' && Array.isArray(question.options) && question.options.length ? (
                     <div className="mt-3 space-y-2">
                       {question.options.map((option: string, optionIndex: number) => (
                         <div key={`${question.question}-${optionIndex}`} className="rounded-lg border bg-white px-3 py-2 text-sm text-slate-700">
@@ -2854,7 +2967,11 @@ export default function MicrolearningHub() {
                       ))}
                     </div>
                   ) : (
-                    <p className="mt-3 text-sm text-slate-500">This infographic uses the multiple-choice exercise cards below.</p>
+                    <p className="mt-3 text-sm text-slate-500">
+                      {question.type === 'multiple_choice'
+                        ? 'This infographic uses the multiple-choice exercise cards below.'
+                        : 'Read the infographic carefully, then answer in your own words in the exercise card below.'}
+                    </p>
                   )}
                 </div>
               ))}
@@ -3259,6 +3376,11 @@ export default function MicrolearningHub() {
                       <p className="mt-2 text-lg font-semibold">
                         {Number(activeAssignment.average_score || 0).toFixed(1)}% / {activeAssignment.passing_score || assignmentDetail.module.passing_score}%
                       </p>
+                      {formatPoints(activeAssignment.points_earned, activeAssignment.points_possible) ? (
+                        <p className="mt-1 text-xs text-slate-500">
+                          {formatPoints(activeAssignment.points_earned, activeAssignment.points_possible)}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 
@@ -3343,7 +3465,7 @@ export default function MicrolearningHub() {
                     const videoAssetKind = activeModuleGateState?.assetKind || 'none';
                     const isVideoLocked = Boolean(activeModuleGateState?.videoReviewLocked && !exercise.attempt);
                     const isMediaUnavailable = Boolean(activeModuleGateState?.assessmentUnavailable);
-                    const isExerciseLocked = isMediaUnavailable || isVideoLocked;
+                    const isExerciseLocked = isMediaUnavailable || isVideoLocked || isQuizReadingLocked;
                     const keywordCoverage = getKeywordCoverage(response.responseText, exercise.required_keywords);
                     const speechEnabled = exercise.enable_stt || false;
 
@@ -3400,6 +3522,7 @@ export default function MicrolearningHub() {
                             <div className="space-y-3">
                               <RadioGroup
                                 value={response.selectedOption}
+                                disabled={isExerciseLocked}
                                 onValueChange={(value) =>
                                   updateExerciseResponse(exercise.id, {
                                     selectedOption: value,
@@ -3414,9 +3537,9 @@ export default function MicrolearningHub() {
                                     <label
                                       key={option}
                                       htmlFor={optionId}
-                                      className="flex cursor-pointer items-start gap-3 rounded-lg border p-3"
+                                      className={`flex items-start gap-3 rounded-lg border p-3 ${isExerciseLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                                     >
-                                      <RadioGroupItem id={optionId} value={option} />
+                                      <RadioGroupItem id={optionId} value={option} disabled={isExerciseLocked} />
                                       <span className="text-sm text-slate-700">{option}</span>
                                     </label>
                                   );
@@ -3429,6 +3552,7 @@ export default function MicrolearningHub() {
                               <Textarea
                                 id={exercise.id}
                                 value={response.responseText}
+                                disabled={isExerciseLocked}
                                 placeholder={
                                   speechEnabled
                                     ? 'Type your response here, or use Speech-to-Text to capture your delivery.'
@@ -3466,6 +3590,7 @@ export default function MicrolearningHub() {
                                   type="button"
                                   variant="ghost"
                                   onClick={() => resetExerciseDraft(exercise)}
+                                  disabled={isExerciseLocked}
                                 >
                                   <RotateCcw className="mr-2 size-4" />
                                   Reset Draft
@@ -3506,6 +3631,7 @@ export default function MicrolearningHub() {
                               <Textarea
                                 id={exercise.id}
                                 value={response.responseText}
+                                disabled={isExerciseLocked}
                                 placeholder={
                                   speechEnabled
                                     ? 'Type your response here, or use Speech-to-Text to capture your delivery.'
@@ -3543,6 +3669,7 @@ export default function MicrolearningHub() {
                                   type="button"
                                   variant="ghost"
                                   onClick={() => resetExerciseDraft(exercise)}
+                                  disabled={isExerciseLocked}
                                 >
                                   <RotateCcw className="mr-2 size-4" />
                                   Reset Draft
@@ -3584,7 +3711,7 @@ export default function MicrolearningHub() {
                               <div className="flex flex-wrap items-center justify-between gap-2">
                                 <p className="font-medium">Latest result</p>
                                 <Badge className="bg-white text-emerald-700 border-emerald-200">
-                                  Score: {Math.round(exercise.attempt.score || 0)}%
+                                  Score: {formatAttemptScore(exercise.attempt)}
                                 </Badge>
                               </div>
                               <p className="mt-2">{exercise.attempt.feedback || 'Saved successfully.'}</p>
@@ -3611,7 +3738,9 @@ export default function MicrolearningHub() {
 
                           {isExerciseLocked ? (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                              {isMediaUnavailable
+                              {isQuizReadingLocked
+                                ? 'Read the trainer story or mock call scenario above, then confirm it to unlock the quiz questions.'
+                                : isMediaUnavailable
                                 ? activeModuleGateState?.lockMessage || 'The required module media is not available yet.'
                                 : videoAssetKind === 'file'
                                   ? 'Complete the video first to unlock this practice prompt.'
