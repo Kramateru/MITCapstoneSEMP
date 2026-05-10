@@ -6,7 +6,7 @@ Uses reportlab for PDF generation
 from html import escape
 from pathlib import Path
 
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import letter, A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT, TA_JUSTIFY
@@ -164,6 +164,7 @@ class PerformanceReportGenerator:
         # Center the logo above the text
         if logo:
             logo_table = Table([[logo]], colWidths=[7.5 * inch])
+            logo_table.hAlign = 'CENTER'
             logo_table.setStyle(TableStyle([
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
                 ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
@@ -183,6 +184,7 @@ class PerformanceReportGenerator:
             text_blocks.append(Paragraph(report_subtitle, self.styles['ReportSubtitle']))
 
         text_table = Table([[block] for block in text_blocks], colWidths=[7.5 * inch])
+        text_table.hAlign = 'CENTER'
         text_table.setStyle(TableStyle([
             ('LEFTPADDING', (0, 0), (-1, -1), 0),
             ('RIGHTPADDING', (0, 0), (-1, -1), 0),
@@ -1167,6 +1169,227 @@ class PerformanceReportGenerator:
         doc.build(story)
         self.buffer.seek(0)
         return self.buffer
+
+    def _build_document_with_footer(
+        self,
+        story: List[Any],
+        *,
+        title: str,
+        footer_text: str,
+    ) -> BytesIO:
+        def draw_footer(canvas, doc):
+            canvas.saveState()
+            canvas.setFont('Helvetica', 8)
+            canvas.setFillColor(colors.HexColor('#64748B'))
+            footer_y = 0.35 * inch
+            canvas.drawString(doc.leftMargin, footer_y, footer_text)
+            canvas.drawRightString(
+                doc.pagesize[0] - doc.rightMargin,
+                footer_y,
+                f"Page {canvas.getPageNumber()}",
+            )
+            canvas.restoreState()
+
+        doc = SimpleDocTemplate(
+            self.buffer,
+            pagesize=landscape(letter),
+            rightMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            topMargin=0.65 * inch,
+            bottomMargin=0.7 * inch,
+            title=title,
+        )
+        doc.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
+        self.buffer.seek(0)
+        return self.buffer
+
+    def _append_bullet_section(
+        self,
+        story: List[Any],
+        *,
+        title: str,
+        items: List[str],
+        empty_message: str,
+    ) -> None:
+        story.append(Paragraph(title, self.styles['CustomHeading']))
+        if items:
+            for item in items:
+                text = escape(str(item or "")).replace("\n", "<br/>")
+                story.append(Paragraph(f"&bull; {text}", self.styles['Normal']))
+                story.append(Spacer(1, 0.05 * inch))
+        else:
+            story.append(Paragraph(empty_message, self.styles['Normal']))
+        story.append(Spacer(1, 0.15 * inch))
+
+    def _append_data_table(
+        self,
+        story: List[Any],
+        *,
+        title: str,
+        headers: List[str],
+        rows: List[List[Any]],
+        col_widths: List[float],
+        empty_message: str,
+        description: Optional[str] = None,
+    ) -> None:
+        story.append(Paragraph(title, self.styles['CustomHeading']))
+        if description:
+            story.append(Paragraph(description, self.styles['Normal']))
+            story.append(Spacer(1, 0.08 * inch))
+
+        if rows:
+            table = Table(
+                [
+                    [self._table_cell(header, 'TableHeaderLeft') for header in headers],
+                    *[
+                        [self._table_cell(value) for value in row]
+                        for row in rows
+                    ],
+                ],
+                colWidths=col_widths,
+                repeatRows=1,
+            )
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+                ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+                ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#CBD5E1')),
+                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ]))
+            story.append(table)
+        else:
+            story.append(Paragraph(empty_message, self.styles['Normal']))
+        story.append(Spacer(1, 0.2 * inch))
+
+    def generate_learning_insights_report(
+        self,
+        *,
+        report_title: str,
+        report_subtitle: str,
+        generated_by_role: str,
+        generated_by_name: str,
+        generated_at: datetime,
+        scope_label: str,
+        filter_rows: List[List[str]],
+        executive_summary: str,
+        summary_rows: List[List[str]],
+        evaluation_sections: List[Dict[str, Any]],
+        analytics_tables: List[Dict[str, Any]],
+        detail_tables: List[Dict[str, Any]],
+    ) -> BytesIO:
+        story: List[Any] = []
+
+        self._append_st_peter_header(
+            story,
+            report_title=report_title,
+            report_subtitle=report_subtitle,
+        )
+
+        report_info = [
+            ['Generated By Role', generated_by_role],
+            ['Generated By', generated_by_name],
+            ['Generated At', generated_at.strftime("%B %d, %Y at %I:%M %p")],
+            ['Report Scope', scope_label],
+        ]
+        report_info_table = Table(
+            [
+                [self._table_cell(label, 'TableBodyLabel'), self._table_cell(value)]
+                for label, value in report_info
+            ],
+            colWidths=[1.9 * inch, 5.1 * inch],
+        )
+        report_info_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.lightgrey),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('WORDWRAP', (0, 0), (-1, -1), 'CJK'),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+        ]))
+        story.append(report_info_table)
+        story.append(Spacer(1, 0.18 * inch))
+
+        self._append_data_table(
+            story,
+            title="SELECTED FILTERS",
+            headers=['Filter', 'Selected Value'],
+            rows=filter_rows,
+            col_widths=[2.0 * inch, 5.0 * inch],
+            empty_message='This report used the default visible report data for the selected role.',
+        )
+
+        story.append(Paragraph("EXECUTIVE SUMMARY", self.styles['CustomHeading']))
+        story.append(Paragraph(executive_summary, self.styles['Normal']))
+        story.append(Spacer(1, 0.15 * inch))
+
+        self._append_data_table(
+            story,
+            title="KEY PERFORMANCE INDICATORS",
+            headers=['Metric', 'Value'],
+            rows=summary_rows,
+            col_widths=[4.7 * inch, 2.3 * inch],
+            empty_message='No summary metrics were available for the selected report scope.',
+        )
+
+        if evaluation_sections or analytics_tables or detail_tables:
+            story.append(PageBreak())
+
+        if evaluation_sections:
+            story.append(Paragraph("EVALUATION AND OPPORTUNITIES", self.styles['CustomHeading']))
+            story.append(Spacer(1, 0.05 * inch))
+            for section in evaluation_sections:
+                self._append_bullet_section(
+                    story,
+                    title=str(section.get('title') or 'Notes'),
+                    items=[str(item) for item in section.get('items') or []],
+                    empty_message=str(section.get('empty_message') or 'No notes available for this section.'),
+                )
+
+        if analytics_tables:
+            story.append(Paragraph("ANALYTICS SUMMARY", self.styles['CustomHeading']))
+            story.append(Spacer(1, 0.05 * inch))
+            for table in analytics_tables:
+                self._append_data_table(
+                    story,
+                    title=str(table.get('title') or 'Analytics Table'),
+                    headers=[str(header) for header in table.get('headers') or []],
+                    rows=[[str(value) if value is not None else '' for value in row] for row in table.get('rows') or []],
+                    col_widths=table.get('col_widths') or [3.5 * inch, 3.5 * inch],
+                    empty_message=str(table.get('empty_message') or 'No analytics rows were available for this section.'),
+                    description=str(table.get('description') or '') or None,
+                )
+
+        if detail_tables:
+            story.append(PageBreak())
+            story.append(Paragraph("DETAILED PROGRESS AND RESULTS", self.styles['CustomHeading']))
+            story.append(Spacer(1, 0.05 * inch))
+            for table in detail_tables:
+                self._append_data_table(
+                    story,
+                    title=str(table.get('title') or 'Detail Table'),
+                    headers=[str(header) for header in table.get('headers') or []],
+                    rows=[[str(value) if value is not None else '' for value in row] for row in table.get('rows') or []],
+                    col_widths=table.get('col_widths') or [3.5 * inch, 3.5 * inch],
+                    empty_message=str(table.get('empty_message') or 'No detailed rows were available for this section.'),
+                    description=str(table.get('description') or '') or None,
+                )
+
+        footer_text = (
+            f"{self.REPORT_INSTITUTION_SUBTITLE} | Generated {generated_at.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        return self._build_document_with_footer(
+            story,
+            title=report_title,
+            footer_text=footer_text,
+        )
 
     @staticmethod
     def _score_to_badge(score: float) -> str:

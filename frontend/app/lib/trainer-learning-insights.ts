@@ -263,3 +263,18 @@ export function buildTrainerLearningInsightsUrl(filters: TrainerLearningFilterSt
   const query = params.toString()
   return `/api/analytics/trainer/learning-insights${query ? `?${query}` : ''}`
 }
+
+export function buildTrainerLearningInsightsPdfUrl(filters: TrainerLearningFilterState) {
+  const params = new URLSearchParams()
+
+  if (filters.batchId) params.set('batch_id', filters.batchId)
+  if (filters.traineeId) params.set('trainee_id', filters.traineeId)
+  if (filters.moduleId) params.set('module_id', filters.moduleId)
+  if (filters.assessmentId) params.set('assessment_id', filters.assessmentId)
+  if (filters.exerciseId) params.set('exercise_id', filters.exerciseId)
+  if (filters.startDate) params.set('start_date', filters.startDate)
+  if (filters.endDate) params.set('end_date', filters.endDate)
+
+  const query = params.toString()
+  return `/api/analytics/trainer/learning-insights/pdf${query ? `?${query}` : ''}`
+}

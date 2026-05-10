@@ -17,7 +17,7 @@ import {
     Square,
     Volume2,
 } from 'lucide-react';
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react';
+import { startTransition, useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useAuth } from '@/app/context/AuthContext';
@@ -26,7 +26,6 @@ import { openTraineeMicrolearningLiveUpdates } from '@/app/lib/microlearning/cli
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
-import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { Progress } from '../ui/progress';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
@@ -63,6 +62,9 @@ interface AssignmentSummary {
   attempt_number?: number;
   exercise_count: number;
   completed_exercises: number;
+  flashcard_answered_count?: number;
+  flashcard_timed_out_count?: number;
+  flashcard_unanswered_count?: number;
   certificate_id?: string | null;
   topic_category_name?: string | null;
   assigned_at?: string;
@@ -82,6 +84,11 @@ interface ExerciseAttempt {
   response_text?: string | null;
   selected_option?: string | null;
   input_mode?: 'typed' | 'speech' | 'selection' | string | null;
+  status?: 'answered' | 'unanswered' | 'timed_out' | string | null;
+  study_time_seconds?: number | null;
+  answer_time_seconds?: number | null;
+  answered_at?: string | null;
+  timer_expired?: boolean;
   matched_keywords?: string[];
   missing_keywords?: string[];
   score?: number | null;
@@ -109,12 +116,39 @@ interface AssignmentExercise {
   point_value?: number;
   front?: string;
   back?: string;
+  study_time_seconds?: number;
   preview_seconds?: number;
   blank_seconds?: number;
+  answer_time_seconds?: number;
   answer_time_limit_seconds?: number;
   attempt?: ExerciseAttempt | null;
   enable_stt?: boolean;
   timestamp?: number;
+}
+
+interface FlashcardSessionState {
+  enabled: boolean;
+  phase: 'not_started' | 'study' | 'answer' | 'completed' | 'expired' | string;
+  current_exercise_id?: string | null;
+  current_card_index?: number | null;
+  current_card_number?: number | null;
+  current_card_title?: string | null;
+  current_prompt_side?: FlashcardSide | string | null;
+  revealed_side?: FlashcardSide | string | null;
+  draft_response_text?: string;
+  study_time_seconds: number;
+  answer_time_seconds: number;
+  study_started_at?: string | null;
+  answer_started_at?: string | null;
+  answer_deadline_at?: string | null;
+  phase_started_at?: string | null;
+  phase_deadline_at?: string | null;
+  seconds_remaining?: number;
+  phase_duration_seconds?: number;
+  completed_cards: number;
+  remaining_cards: number;
+  total_cards: number;
+  progress_percentage: number;
 }
 
 interface AssignmentDetailResponse {
@@ -136,6 +170,7 @@ interface AssignmentDetailResponse {
     media_ready?: boolean;
     media_status?: string | null;
   };
+  flashcard_session?: FlashcardSessionState | null;
   exercises: AssignmentExercise[];
 }
 
@@ -143,6 +178,14 @@ interface SubmitExerciseResponse {
   status: string;
   attempt: ExerciseAttempt;
   assignment: AssignmentSummary;
+  flashcard_session?: FlashcardSessionState | null;
+}
+
+interface SubmitExerciseOptions {
+  timerExpired?: boolean;
+  allowBlank?: boolean;
+  status?: 'answered' | 'unanswered' | 'timed_out';
+  suppressSuccessToast?: boolean;
 }
 
 interface ExerciseResponseState {
@@ -190,9 +233,113 @@ const STATUS_BADGE_STYLES: Record<AssignmentStatus, string> = {
   certified: 'bg-emerald-100 text-emerald-700 border-emerald-200',
 };
 
-const DEFAULT_FLASHCARD_PREVIEW_SECONDS = 10;
-const DEFAULT_FLASHCARD_BLANK_SECONDS = 2;
-const DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS = 20;
+const DEFAULT_FLASHCARD_PREVIEW_SECONDS = 30;
+const DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS = 60;
+const FLASHCARD_DRAFT_STORAGE_PREFIX = 'microlearning:flashcard:draft';
+const FLASHCARD_PENDING_STORAGE_PREFIX = 'microlearning:flashcard:pending';
+
+interface PendingFlashcardSubmission {
+  assignmentId: string;
+  exerciseId: string;
+  savedAt: string;
+}
+
+function getFlashcardDraftStorageKey(assignmentId: string, exerciseId: string) {
+  return `${FLASHCARD_DRAFT_STORAGE_PREFIX}:${assignmentId}:${exerciseId}`;
+}
+
+function getPendingFlashcardStorageKey(assignmentId: string) {
+  return `${FLASHCARD_PENDING_STORAGE_PREFIX}:${assignmentId}`;
+}
+
+function readFlashcardDraft(assignmentId: string, exerciseId: string) {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  try {
+    return window.localStorage.getItem(getFlashcardDraftStorageKey(assignmentId, exerciseId)) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeFlashcardDraft(assignmentId: string, exerciseId: string, value: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const storageKey = getFlashcardDraftStorageKey(assignmentId, exerciseId);
+    if (value.trim()) {
+      window.localStorage.setItem(storageKey, value);
+    } else {
+      window.localStorage.removeItem(storageKey);
+    }
+  } catch {
+    // Ignore storage write failures so training can continue.
+  }
+}
+
+function clearFlashcardDraft(assignmentId: string, exerciseId: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(getFlashcardDraftStorageKey(assignmentId, exerciseId));
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+}
+
+function readPendingFlashcardSubmission(assignmentId: string): PendingFlashcardSubmission | null {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(getPendingFlashcardStorageKey(assignmentId));
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsed = JSON.parse(rawValue) as PendingFlashcardSubmission | null;
+    if (!parsed?.assignmentId || !parsed?.exerciseId) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingFlashcardSubmission(pending: PendingFlashcardSubmission) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      getPendingFlashcardStorageKey(pending.assignmentId),
+      JSON.stringify(pending),
+    );
+  } catch {
+    // Ignore storage write failures so retries can still happen in-memory.
+  }
+}
+
+function clearPendingFlashcardSubmission(assignmentId: string) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(getPendingFlashcardStorageKey(assignmentId));
+  } catch {
+    // Ignore storage cleanup failures.
+  }
+}
 
 function formatLabel(value?: string | null) {
   if (!value) {
@@ -349,10 +496,6 @@ function formatTimestamp(seconds?: number | null) {
 function getPositiveWholeNumber(value: number | string | undefined | null, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
-}
-
-function getOppositeFlashcardSide(side: FlashcardSide): FlashcardSide {
-  return side === 'front' ? 'back' : 'front';
 }
 
 function getYouTubeEmbedUrl(url?: string | null) {
@@ -1634,304 +1777,312 @@ function VideoPlaybackCard({
   );
 }
 
-interface FlashcardRecallExerciseCardProps {
-  exercise: AssignmentExercise;
+interface TimedFlashcardSessionCardProps {
+  assignmentId: string;
+  assignment: AssignmentSummary;
+  exercise: AssignmentExercise | null;
   response: ExerciseResponseState;
+  session: FlashcardSessionState | null;
   isSaving: boolean;
   onDraftChange: (patch: Partial<ExerciseResponseState>) => void;
-  onRestart: () => void;
-  onSubmit: () => void;
+  onPersistDraft: (responseText: string, revealedSide: FlashcardSide) => Promise<void>;
+  onAutoSubmit: (status: 'timed_out' | 'unanswered') => void;
 }
 
-function FlashcardRecallExerciseCard({
+function TimedFlashcardSessionCard({
+  assignmentId,
+  assignment,
   exercise,
   response,
+  session,
   isSaving,
   onDraftChange,
-  onRestart,
-  onSubmit,
-}: FlashcardRecallExerciseCardProps) {
-  const previewSeconds = getPositiveWholeNumber(exercise.preview_seconds, DEFAULT_FLASHCARD_PREVIEW_SECONDS);
-  const blankSeconds = getPositiveWholeNumber(exercise.blank_seconds, DEFAULT_FLASHCARD_BLANK_SECONDS);
-  const answerTimeLimitSeconds = getPositiveWholeNumber(
-    exercise.answer_time_limit_seconds,
+  onPersistDraft,
+  onAutoSubmit,
+}: TimedFlashcardSessionCardProps) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const autoSubmitRef = useRef('');
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const tickClock = useEffectEvent(() => {
+    setNowMs(Date.now());
+  });
+  const triggerAutoSubmit = useEffectEvent((nextStatus: 'timed_out' | 'unanswered') => {
+    onAutoSubmit(nextStatus);
+  });
+
+  useEffect(() => {
+    tickClock();
+    const intervalId = window.setInterval(() => {
+      tickClock();
+    }, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [tickClock, session?.answer_deadline_at, session?.current_exercise_id, session?.phase]);
+
+  const totalCards = Math.max(0, session?.total_cards || 0);
+  const completedCards = Math.max(0, session?.completed_cards || 0);
+  const studySeconds = getPositiveWholeNumber(
+    session?.study_time_seconds ?? exercise?.preview_seconds,
+    DEFAULT_FLASHCARD_PREVIEW_SECONDS,
+  );
+  const answerSeconds = getPositiveWholeNumber(
+    session?.answer_time_seconds ?? exercise?.answer_time_limit_seconds,
     DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS,
   );
-  const [phase, setPhase] = useState<'idle' | 'preview' | 'blank' | 'challenge' | 'expired' | 'completed'>('idle');
-  const [countdown, setCountdown] = useState(previewSeconds);
-  const [referenceSide, setReferenceSide] = useState<FlashcardSide | ''>('');
-  const answerInputRef = useRef<HTMLInputElement | null>(null);
+  const studyStartMs = session?.study_started_at ? new Date(session.study_started_at).getTime() : NaN;
+  const answerStartMs = session?.answer_started_at ? new Date(session.answer_started_at).getTime() : NaN;
+  const answerDeadlineMs = session?.answer_deadline_at ? new Date(session.answer_deadline_at).getTime() : NaN;
+  const hasLiveWindow =
+    Number.isFinite(studyStartMs) && Number.isFinite(answerStartMs) && Number.isFinite(answerDeadlineMs);
 
-  useEffect(() => {
-    if (exercise.attempt?.is_completed) {
-      setPhase('completed');
-      setCountdown(0);
-      setReferenceSide('');
-      onDraftChange({
-        revealedSide: (exercise.attempt.revealed_side as 'front' | 'back' | undefined) || response.revealedSide || '',
-      });
-      return;
+  let derivedPhase = session?.phase || 'not_started';
+  if (derivedPhase !== 'completed' && hasLiveWindow) {
+    if (nowMs < answerStartMs) {
+      derivedPhase = 'study';
+    } else if (nowMs < answerDeadlineMs) {
+      derivedPhase = 'answer';
+    } else {
+      derivedPhase = 'expired';
     }
-
-    setPhase('idle');
-    setCountdown(previewSeconds);
-    setReferenceSide('');
-    onDraftChange({
-      responseText: '',
-      revealedSide: '',
-      inputMode: 'typed',
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [exercise.id, exercise.attempt?.submitted_at, exercise.attempt?.is_completed, previewSeconds]);
-
-  useEffect(() => {
-    if (phase !== 'challenge' || isSaving) {
-      return;
-    }
-
-    answerInputRef.current?.focus();
-  }, [isSaving, phase]);
-
-  useEffect(() => {
-    if (
-      exercise.attempt?.is_completed ||
-      isSaving ||
-      phase === 'idle' ||
-      phase === 'completed' ||
-      phase === 'expired'
-    ) {
-      return;
-    }
-
-      const timerId = window.setTimeout(() => {
-      const beginChallenge = () => {
-        const nextAnswerSide: FlashcardSide = 'back';
-        setReferenceSide('front');
-        onDraftChange({
-          responseText: '',
-          revealedSide: nextAnswerSide,
-          inputMode: 'typed',
-        });
-        setPhase('challenge');
-        setCountdown(answerTimeLimitSeconds);
-      };
-
-      if (phase === 'preview') {
-        if (countdown > 1) {
-          setCountdown((current) => current - 1);
-        } else if (blankSeconds > 0) {
-          setPhase('blank');
-          setCountdown(blankSeconds);
-        } else {
-          beginChallenge();
-        }
-      } else if (phase === 'blank') {
-        if (countdown > 1) {
-          setCountdown((current) => current - 1);
-        } else {
-          beginChallenge();
-        }
-      } else if (phase === 'challenge') {
-        if (countdown > 1) {
-          setCountdown((current) => current - 1);
-        } else {
-          setPhase('expired');
-          setCountdown(0);
-        }
-      }
-    }, 1000);
-
-    return () => window.clearTimeout(timerId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [answerTimeLimitSeconds, blankSeconds, countdown, exercise.attempt?.is_completed, isSaving, phase]);
-
-  const promptedSide =
-    response.revealedSide === 'back'
-      ? 'back'
-      : response.revealedSide === 'front'
-        ? 'front'
-        : '';
-  const visibleReferenceText =
-    referenceSide === 'back'
-      ? exercise.back || 'No back text set.'
-      : referenceSide === 'front'
-        ? exercise.front || 'No front text set.'
-        : '';
-  const latestAttempt = exercise.attempt;
-  const latestAttemptScore = Number(latestAttempt?.score || 0);
-  const latestAttemptTone = latestAttempt
-    ? latestAttemptScore >= 80
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-      : latestAttemptScore >= 50
-        ? 'border-amber-200 bg-amber-50 text-amber-800'
-        : 'border-rose-200 bg-rose-50 text-rose-800'
-    : 'border-slate-200 bg-slate-50 text-slate-700';
-  const latestAttemptLabel = latestAttempt
-    ? latestAttemptScore >= 80
-      ? 'Latest result: Strong recall'
-      : latestAttemptScore >= 50
-        ? 'Latest result: Partial recall'
-        : 'Latest result: Needs review'
-    : 'Latest result';
-
-  function startCycle() {
-    setPhase('preview');
-    setCountdown(previewSeconds);
-    setReferenceSide('');
-    onDraftChange({
-      responseText: '',
-      revealedSide: '',
-      inputMode: 'typed',
-    });
   }
 
-  function restartCycle() {
-    setPhase('idle');
-    setCountdown(previewSeconds);
-    setReferenceSide('');
-    onRestart();
+  const answerSide =
+    session?.revealed_side === 'front'
+      ? 'front'
+      : session?.current_prompt_side === 'front'
+        ? 'front'
+        : 'back';
+  const promptSide: FlashcardSide = answerSide === 'front' ? 'back' : 'front';
+  const promptText = promptSide === 'front' ? exercise?.front || 'No front text set.' : exercise?.back || 'No back text set.';
+  const answerLabel = answerSide === 'front' ? 'Front' : 'Back';
+  const activeDeadlineMs = derivedPhase === 'study' ? answerStartMs : answerDeadlineMs;
+  const secondsRemaining =
+    Number.isFinite(activeDeadlineMs) ? Math.max(0, Math.ceil((activeDeadlineMs - nowMs) / 1000)) : 0;
+  const phaseDurationSeconds = derivedPhase === 'study' ? studySeconds : answerSeconds;
+  const phaseProgressValue =
+    phaseDurationSeconds > 0
+      ? Math.max(0, Math.min(100, ((phaseDurationSeconds - secondsRemaining) / phaseDurationSeconds) * 100))
+      : 0;
+  const autoSubmitKey = `${assignmentId}:${exercise?.id || 'done'}:${session?.answer_deadline_at || 'na'}`;
+  const latestAttempt = exercise?.attempt || null;
+  const latestAttemptStatus = latestAttempt?.status ? formatLabel(latestAttempt.status) : 'Completed';
+
+  useEffect(() => {
+    if (!exercise) {
+      return;
+    }
+
+    if (derivedPhase === 'answer') {
+      if (response.revealedSide !== answerSide) {
+        onDraftChange({
+          revealedSide: answerSide,
+          inputMode: 'typed',
+        });
+      }
+      if (!isSaving) {
+        textareaRef.current?.focus();
+      }
+      return;
+    }
+
+    if ((derivedPhase === 'study' || derivedPhase === 'not_started') && response.revealedSide) {
+      onDraftChange({
+        revealedSide: '',
+      });
+    }
+  }, [answerSide, derivedPhase, exercise, isSaving, onDraftChange, response.revealedSide]);
+
+  useEffect(() => {
+    if (!exercise || derivedPhase !== 'answer') {
+      return;
+    }
+
+    const latestDraft = session?.draft_response_text || '';
+    if (response.responseText === latestDraft && (response.revealedSide || answerSide) === answerSide) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      void onPersistDraft(response.responseText, answerSide);
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [answerSide, derivedPhase, exercise, onPersistDraft, response.responseText, response.revealedSide, session?.draft_response_text]);
+
+  useEffect(() => {
+    autoSubmitRef.current = '';
+  }, [autoSubmitKey]);
+
+  useEffect(() => {
+    if (!exercise || derivedPhase !== 'expired' || isSaving) {
+      return;
+    }
+    if (autoSubmitRef.current === autoSubmitKey) {
+      return;
+    }
+
+    autoSubmitRef.current = autoSubmitKey;
+    triggerAutoSubmit(response.responseText.trim() ? 'timed_out' : 'unanswered');
+  }, [autoSubmitKey, derivedPhase, exercise, isSaving, response.responseText, triggerAutoSubmit]);
+
+  if (!session || !session.enabled) {
+    return (
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-6 text-sm text-slate-600">
+        Flashcard timing will appear here once the module is ready.
+      </div>
+    );
+  }
+
+  if (session.phase === 'completed' || (!exercise && completedCards >= totalCards && totalCards > 0)) {
+    return (
+      <div className="space-y-4 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.18em] text-emerald-700">Flashcard Module Complete</p>
+            <p className="mt-1 text-sm text-emerald-900">
+              All {totalCards} flashcards have finished their 30-second study and 60-second answer windows.
+            </p>
+          </div>
+          <Badge className="border-emerald-200 bg-white text-emerald-700">
+            Average Score: {Math.round(assignment.average_score || 0)}%
+          </Badge>
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between text-sm text-emerald-900">
+            <span>Deck progress</span>
+            <span>{completedCards} / {totalCards} cards completed</span>
+          </div>
+          <Progress value={100} />
+        </div>
+      </div>
+    );
+  }
+
+  if (!exercise) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-600">
+        Waiting for the next flashcard to sync.
+      </div>
+    );
   }
 
   return (
     <div className="space-y-4">
-      {phase === 'idle' ? (
-        <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <div className="rounded-xl border border-slate-200 bg-white p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Flashcard Recall</p>
-            <p className="mt-1 text-sm text-slate-700">
-              Press Start to begin this card. You will get {previewSeconds} seconds to review both sides, then {answerTimeLimitSeconds}{' '}
-              seconds to answer while the front side stays visible as your prompt.
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge className={derivedPhase === 'study' ? 'bg-sky-100 text-sky-700 border-sky-200' : 'bg-amber-100 text-amber-700 border-amber-200'}>
+                {derivedPhase === 'study' ? 'Study Mode' : 'Answer Mode'}
+              </Badge>
+              <Badge variant="outline">Card {session.current_card_number} of {totalCards}</Badge>
+            </div>
+            <p className="mt-3 text-lg font-semibold text-slate-900">{exercise.title}</p>
+            <p className="mt-1 text-sm text-slate-600">{exercise.prompt}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="outline">Preview {previewSeconds}s</Badge>
-            <Badge variant="outline">Answer limit {answerTimeLimitSeconds}s</Badge>
-          </div>
-          <div className="rounded-lg border border-dashed bg-white p-6 text-sm text-slate-500">
-            The timer will stay paused until you start this flashcard.
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" onClick={startCycle}>
-              Start Flashcard
-            </Button>
-            {latestAttempt && !latestAttempt.is_completed ? (
-              <Button type="button" variant="outline" onClick={startCycle}>
-                Review Again
-              </Button>
-            ) : null}
+          <div className="min-w-[220px] rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">
+                  {derivedPhase === 'study' ? 'Study Time Remaining' : 'Answer Time Remaining'}
+                </p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{secondsRemaining}s</p>
+              </div>
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Clock3 className="size-3.5" />
+                {derivedPhase === 'study' ? `${studySeconds}s study` : `${answerSeconds}s answer`}
+              </Badge>
+            </div>
+            <div className="mt-4">
+              <Progress value={phaseProgressValue} />
+            </div>
           </div>
         </div>
-      ) : null}
 
-      {phase === 'preview' ? (
-        <div className="space-y-3 rounded-xl border border-sky-200 bg-sky-50 p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Preview Both Sides</p>
-              <p className="mt-1 text-sm text-slate-700">Memorize the pair before the recall challenge begins.</p>
-            </div>
-            <Badge variant="outline" className="flex items-center gap-1">
-              <Clock3 className="size-3.5" />
-              {countdown}s
-            </Badge>
+        <div className="mt-5 space-y-2">
+          <div className="flex items-center justify-between text-sm text-slate-600">
+            <span>Flashcard progress</span>
+            <span>{completedCards} completed, {Math.max(0, totalCards - completedCards)} remaining</span>
           </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Front</p>
+          <Progress value={session.progress_percentage || 0} />
+        </div>
+
+        {derivedPhase === 'study' ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Front</p>
               <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{exercise.front || 'No front text set.'}</p>
             </div>
-            <div className="rounded-lg border bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Back</p>
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Back</p>
               <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{exercise.back || 'No back text set.'}</p>
             </div>
           </div>
-        </div>
-      ) : null}
-
-      {phase === 'blank' ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-6 text-center">
-          <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Reset Memory</p>
-          <p className="mt-3 text-sm text-slate-600">The challenge starts in {countdown} second{countdown === 1 ? '' : 's'}.</p>
-          <div className="mt-4 rounded-lg border border-dashed bg-white p-10 text-sm text-slate-400">Blank card</div>
-        </div>
-      ) : null}
-
-      {(phase === 'challenge' || phase === 'expired') && promptedSide && referenceSide && !exercise.attempt?.is_completed ? (
-        <div
-          className={`space-y-4 rounded-xl border p-4 ${
-            phase === 'expired' ? 'border-rose-200 bg-rose-50' : 'border-amber-200 bg-amber-50'
-          }`}
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p
-                className={`text-xs uppercase tracking-[0.18em] ${
-                  phase === 'expired' ? 'text-rose-700' : 'text-amber-700'
-                }`}
-              >
-                {phase === 'expired' ? 'Time Expired' : 'Recall Challenge'}
+        ) : (
+          <div className="mt-5 space-y-4">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-amber-700">Prompt</p>
+              <p className="mt-2 text-sm text-slate-700">
+                Keep this side visible while you answer. Your response will be saved automatically when the 60-second
+                answer timer ends.
               </p>
-              <p className="mt-1 text-sm text-slate-700">
-                {phase === 'expired'
-                  ? `The answer window closed. Review the ${formatLabel(referenceSide)} side and restart the card to try again.`
-                  : `The ${formatLabel(referenceSide)} side stays visible while you answer. Give the ${formatLabel(promptedSide)} answer in your own words or a close paraphrase before the timer runs out.`}
-              </p>
+              <div className="mt-4 rounded-lg border border-white/70 bg-white p-4">
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{promptSide === 'front' ? 'Front Side' : 'Back Side'}</p>
+                <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{promptText}</p>
+              </div>
             </div>
-            <Badge variant="outline" className="flex items-center gap-1">
-              <Clock3 className="size-3.5" />
-              {phase === 'expired' ? 'Expired' : `${countdown}s left`}
-            </Badge>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-lg border bg-white p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-500">{formatLabel(referenceSide)} Reference</p>
-              <p className="mt-3 whitespace-pre-wrap text-sm text-slate-800">{visibleReferenceText}</p>
-            </div>
+
             <div className="space-y-2">
-              <Label htmlFor={`${exercise.id}-flashcard-answer`}>Answer the {formatLabel(promptedSide)} side</Label>
-              <Input
-                ref={answerInputRef}
-                id={`${exercise.id}-flashcard-answer`}
+              <Label htmlFor={`${exercise.id}-timed-flashcard-answer`}>Answer the {answerLabel} side</Label>
+              <Textarea
+                ref={textareaRef}
+                id={`${exercise.id}-timed-flashcard-answer`}
                 value={response.responseText}
+                disabled={derivedPhase !== 'answer' || isSaving}
+                placeholder={
+                  derivedPhase === 'answer'
+                    ? 'Type your answer here. The system saves it automatically when the timer reaches zero.'
+                    : 'Inputs unlock automatically once Study Mode ends.'
+                }
                 onChange={(event) =>
                   onDraftChange({
                     responseText: event.target.value,
                     inputMode: 'typed',
                   })
                 }
-                placeholder={`Explain the ${formatLabel(promptedSide)} side as accurately as you can`}
-                disabled={phase === 'expired'}
               />
               <p className="text-xs text-slate-500">
-                Answer limit: {answerTimeLimitSeconds} second{answerTimeLimitSeconds === 1 ? '' : 's'}. Gemini will score how closely your answer matches the flashcard meaning.
+                {derivedPhase === 'answer'
+                  ? 'Answer inputs stay enabled only during Answer Mode.'
+                  : 'Answer inputs are disabled during Study Mode to keep the timing sequence consistent.'}
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="outline" onClick={restartCycle}>
-              <RotateCcw className="mr-2 size-4" />
-              Reset Card
-            </Button>
-            <Button
-              type="button"
-              onClick={onSubmit}
-              disabled={isSaving || phase === 'expired' || !response.responseText.trim()}
-            >
-              {isSaving ? 'Scoring Flashcard...' : 'Submit Flashcard Answer'}
-            </Button>
-          </div>
-        </div>
-      ) : null}
+        )}
+      </div>
 
       {latestAttempt ? (
-        <div className={`rounded-lg border p-3 text-sm ${latestAttemptTone}`}>
+        <div
+          className={`rounded-xl border p-4 ${
+            latestAttempt.status === 'timed_out'
+              ? 'border-amber-200 bg-amber-50 text-amber-900'
+              : latestAttempt.status === 'unanswered'
+                ? 'border-rose-200 bg-rose-50 text-rose-900'
+                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
+          }`}
+        >
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium">{latestAttemptLabel}</p>
+            <p className="font-medium">Latest saved result: {latestAttemptStatus}</p>
             <Badge className="border-white/60 bg-white/80 text-current">Score: {formatAttemptScore(latestAttempt)}</Badge>
           </div>
-          <p className="mt-2">{latestAttempt.feedback || 'Saved successfully.'}</p>
-          {latestAttempt.submitted_at ? (
-            <p className="mt-2 text-xs opacity-80">Last submitted: {formatDate(latestAttempt.submitted_at)}</p>
+          <p className="mt-2">{latestAttempt.feedback || 'Flashcard result saved.'}</p>
+          {latestAttempt.answered_at ? (
+            <p className="mt-2 text-xs opacity-80">Saved at: {formatDate(latestAttempt.answered_at)}</p>
           ) : null}
         </div>
       ) : null}
@@ -1954,8 +2105,6 @@ export default function MicrolearningHub() {
   const [submittingExerciseId, setSubmittingExerciseId] = useState('');
   const [videoCompleted, setVideoCompleted] = useState<Record<string, boolean>>({});
   const [moduleAssetPlaybackUrls, setModuleAssetPlaybackUrls] = useState<Record<string, string>>({});
-  const [flippedFlashcardAssignments, setFlippedFlashcardAssignments] = useState<Record<string, boolean>>({});
-  const [flashcardIndexes, setFlashcardIndexes] = useState<Record<string, number>>({});
   const [quizIndexes, setQuizIndexes] = useState<Record<string, number>>({});
   const [quizAnswers, setQuizAnswers] = useState<Record<string, Record<number, number>>>({});
   const [quizReadingConfirmed, setQuizReadingConfirmed] = useState<Record<string, boolean>>({});
@@ -1964,7 +2113,6 @@ export default function MicrolearningHub() {
   const [activeSpeechExerciseId, setActiveSpeechExerciseId] = useState('');
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechSeedTextRef = useRef('');
-  const touchStartXRef = useRef<number | null>(null);
 
   const apiRequest = useCallback(async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
     if (!token) {
@@ -2037,10 +2185,22 @@ export default function MicrolearningHub() {
 
       const nextResponses: Record<string, ExerciseResponseState> = {};
       (detail.exercises || []).forEach((exercise) => {
+        const storedFlashcardDraft =
+          exercise.type === 'flashcard_recall' && !exercise.attempt?.is_completed
+            ? readFlashcardDraft(assignmentId, exercise.id)
+            : '';
+        const flashcardSession = detail.flashcard_session;
+        const isActiveFlashcard =
+          exercise.type === 'flashcard_recall' &&
+          flashcardSession?.current_exercise_id === exercise.id &&
+          flashcardSession.phase !== 'study' &&
+          flashcardSession.phase !== 'not_started';
         nextResponses[exercise.id] = {
           responseText:
             exercise.type === 'flashcard_recall' && !exercise.attempt?.is_completed
-              ? ''
+              ? flashcardSession?.current_exercise_id === exercise.id
+                ? flashcardSession.draft_response_text || storedFlashcardDraft || exercise.attempt?.response_text || ''
+                : storedFlashcardDraft || exercise.attempt?.response_text || ''
               : exercise.attempt?.response_text || '',
           selectedOption: exercise.attempt?.selected_option || '',
           inputMode:
@@ -2048,7 +2208,13 @@ export default function MicrolearningHub() {
             (exercise.type === 'multiple_choice' ? 'selection' : 'typed'),
           revealedSide:
             exercise.type === 'flashcard_recall'
-              ? ((exercise.attempt?.revealed_side as 'front' | 'back' | undefined) || '')
+              ? (
+                (exercise.attempt?.revealed_side as 'front' | 'back' | undefined)
+                || (flashcardSession?.current_exercise_id === exercise.id
+                  ? (flashcardSession.revealed_side as 'front' | 'back' | undefined)
+                  : undefined)
+                || (isActiveFlashcard ? 'back' : '')
+              )
               : '',
         };
       });
@@ -2227,6 +2393,28 @@ export default function MicrolearningHub() {
     void loadProtectedModuleAsset(moduleDetail.id).catch(() => undefined);
   }, [assignmentDetail, loadProtectedModuleAsset, moduleAssetPlaybackUrls]);
 
+  useEffect(() => {
+    if (!activeAssignmentId || assignmentDetail?.module.module_type !== 'flashcard') {
+      return;
+    }
+
+    (assignmentDetail.exercises || []).forEach((exercise) => {
+      if (exercise.type !== 'flashcard_recall') {
+        return;
+      }
+      if (exercise.attempt?.is_completed) {
+        clearFlashcardDraft(activeAssignmentId, exercise.id);
+        return;
+      }
+
+      writeFlashcardDraft(
+        activeAssignmentId,
+        exercise.id,
+        exerciseResponses[exercise.id]?.responseText || '',
+      );
+    });
+  }, [activeAssignmentId, assignmentDetail, exerciseResponses]);
+
   function updateExerciseResponse(exerciseId: string, patch: Partial<ExerciseResponseState>) {
     setExerciseResponses((current) => ({
       ...current,
@@ -2238,6 +2426,60 @@ export default function MicrolearningHub() {
       },
     }));
   }
+
+  const persistFlashcardSessionDraft = useEffectEvent(async (responseText: string, revealedSide: FlashcardSide) => {
+    if (
+      !activeAssignmentId
+      || assignmentDetail?.module.module_type !== 'flashcard'
+      || !flashcardSession?.current_exercise_id
+      || !hasStartedAssignment(activeAssignment)
+    ) {
+      return;
+    }
+
+    try {
+      const result = await apiRequest<{
+        status: string;
+        assignment: AssignmentSummary;
+        flashcard_session?: FlashcardSessionState | null;
+      }>(
+        `/api/trainee/microlearning-assignments/${activeAssignmentId}/flashcard-session`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            exercise_id: flashcardSession.current_exercise_id,
+            response_text: responseText || '',
+            revealed_side: revealedSide,
+          }),
+        },
+      );
+
+      if (!result.flashcard_session) {
+        return;
+      }
+
+      startTransition(() => {
+        setAssignmentDetail((current) => (
+          current && current.assignment.id === activeAssignmentId
+            ? {
+              ...current,
+              assignment: result.assignment || current.assignment,
+              flashcard_session: result.flashcard_session,
+            }
+            : current
+        ));
+        setAssignments((current) => sortAssignmentsForQueue(
+          current.map((assignment) => (
+            assignment.id === activeAssignmentId
+              ? { ...assignment, ...result.assignment }
+              : assignment
+          )),
+        ));
+      });
+    } catch {
+      // Keep the local draft and retry on the next change or timeout edge.
+    }
+  });
 
   async function handleStartAssignment() {
     if (!activeAssignmentId) {
@@ -2287,29 +2529,6 @@ export default function MicrolearningHub() {
     } finally {
       setStartingAssignment(false);
     }
-  }
-
-  function toggleFlashcard(assignmentId: string) {
-    setFlippedFlashcardAssignments((current) => ({
-      ...current,
-      [assignmentId]: !current[assignmentId],
-    }));
-  }
-
-  function changeFlashcard(assignmentId: string, cardCount: number, direction: -1 | 1) {
-    setFlashcardIndexes((current) => {
-      const currentIndex = current[assignmentId] || 0;
-      const nextIndex = Math.max(0, Math.min(cardCount - 1, currentIndex + direction));
-      return {
-        ...current,
-        [assignmentId]: nextIndex,
-      };
-    });
-
-    setFlippedFlashcardAssignments((current) => ({
-      ...current,
-      [assignmentId]: false,
-    }));
   }
 
   function changeQuizQuestion(assignmentId: string, questionCount: number, direction: -1 | 1) {
@@ -2377,23 +2596,6 @@ export default function MicrolearningHub() {
     recognition.start();
     setIsListening(true);
     toast.success('Speech-to-text is listening.');
-  }
-
-  function handleFlashcardTouchStart(clientX: number) {
-    touchStartXRef.current = clientX;
-  }
-
-  function handleFlashcardTouchEnd(assignmentId: string, clientX: number) {
-    if (touchStartXRef.current === null) {
-      return;
-    }
-
-    const deltaX = Math.abs(clientX - touchStartXRef.current);
-    touchStartXRef.current = null;
-
-    if (deltaX > 36) {
-      toggleFlashcard(assignmentId);
-    }
   }
 
   function handleSpeechCapture(exerciseId: string) {
@@ -2464,7 +2666,10 @@ export default function MicrolearningHub() {
     });
   }
 
-  async function handleSubmitExercise(exercise: AssignmentExercise) {
+  async function handleSubmitExercise(
+    exercise: AssignmentExercise,
+    options: SubmitExerciseOptions = {},
+  ) {
     if (!activeAssignmentId) {
       toast.error('Choose a module before saving an exercise.');
       return;
@@ -2493,13 +2698,22 @@ export default function MicrolearningHub() {
       return;
     }
 
-    if ((exercise.type === 'keyword_response' || exercise.type === 'flashcard_recall') && !response.responseText.trim()) {
+    if (
+      !options.allowBlank &&
+      (exercise.type === 'keyword_response' || exercise.type === 'flashcard_recall') &&
+      !response.responseText.trim()
+    ) {
       toast.error('Type your answer before submitting.');
       return;
     }
 
     if (exercise.type === 'flashcard_recall' && !response.revealedSide) {
-      toast.error('Start the flashcard and wait for the recall prompt before submitting.');
+      toast.error('Wait for Answer Mode to begin before the flashcard response is saved.');
+      return;
+    }
+
+    if (exercise.type === 'flashcard_recall' && !options.timerExpired) {
+      toast.error('Flashcard answers are saved automatically when the 60-second answer timer reaches zero.');
       return;
     }
 
@@ -2515,21 +2729,49 @@ export default function MicrolearningHub() {
             selected_option: response.selectedOption || null,
             input_mode: response.inputMode || (exercise.type === 'multiple_choice' ? 'selection' : 'typed'),
             revealed_side: response.revealedSide || null,
+            study_time_seconds:
+              exercise.type === 'flashcard_recall'
+                ? assignmentDetail?.flashcard_session?.study_time_seconds || DEFAULT_FLASHCARD_PREVIEW_SECONDS
+                : null,
+            answer_time_seconds:
+              exercise.type === 'flashcard_recall'
+                ? assignmentDetail?.flashcard_session?.answer_time_seconds || DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS
+                : null,
+            status: options.status || null,
+            answered_at:
+              exercise.type === 'flashcard_recall' && assignmentDetail?.flashcard_session?.answer_deadline_at
+                ? assignmentDetail.flashcard_session.answer_deadline_at
+                : null,
+            timer_expired: options.timerExpired || false,
           }),
         },
       );
+
+      if (exercise.type === 'flashcard_recall') {
+        clearFlashcardDraft(activeAssignmentId, exercise.id);
+        clearPendingFlashcardSubmission(activeAssignmentId);
+      }
 
       if (result.assignment.is_passed && result.assignment.certificate_id) {
         toast.success('Module passed. Your certificate has been unlocked.');
       } else if (result.assignment.completed_exercises === result.assignment.exercise_count && !result.assignment.is_passed) {
         toast.success('Module completed. Review your score and retake it if needed.');
-      } else {
+      } else if (!options.suppressSuccessToast) {
         toast.success('Exercise saved successfully.');
       }
       await loadAssignments({ preferredAssignmentId: activeAssignmentId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save this exercise.';
-      toast.error(message);
+      if (exercise.type === 'flashcard_recall' && options.timerExpired) {
+        writePendingFlashcardSubmission({
+          assignmentId: activeAssignmentId,
+          exerciseId: exercise.id,
+          savedAt: new Date().toISOString(),
+        });
+        toast.error('Connection issue detected. We will retry this flashcard automatically when you are back online.');
+      } else {
+        toast.error(message);
+      }
     } finally {
       setSubmittingExerciseId('');
     }
@@ -2555,12 +2797,88 @@ export default function MicrolearningHub() {
           Boolean(videoCompleted[activeAssignment.id] || activeAssignment.completed_exercises),
         )
       : null;
+  const retryPendingFlashcardSubmission = useEffectEvent(async () => {
+    if (!activeAssignmentId || assignmentDetail?.module.module_type !== 'flashcard') {
+      return;
+    }
+
+    const pending = readPendingFlashcardSubmission(activeAssignmentId);
+    if (!pending) {
+      return;
+    }
+
+    const currentExerciseId = assignmentDetail.flashcard_session?.current_exercise_id;
+    if (!currentExerciseId || pending.exerciseId !== currentExerciseId) {
+      clearPendingFlashcardSubmission(activeAssignmentId);
+      return;
+    }
+
+    const currentExercise = assignmentDetail.exercises.find((exercise) => exercise.id === currentExerciseId);
+    if (!currentExercise || submittingExerciseId) {
+      return;
+    }
+
+    await handleSubmitExercise(currentExercise, {
+      timerExpired: true,
+      allowBlank: true,
+      status: (exerciseResponses[currentExercise.id]?.responseText || '').trim() ? 'timed_out' : 'unanswered',
+      suppressSuccessToast: true,
+    });
+  });
   const notStartedAssignments = assignments.filter((assignment) => assignment.status === 'assigned').length;
   const completedAssignments = assignments.filter((assignment) => ['completed', 'certified'].includes(assignment.status)).length;
   const certifiedAssignments = assignments.filter((assignment) => assignment.status === 'certified' || assignment.certificate_id).length;
   const inProgressAssignments = assignments.filter((assignment) => assignment.status === 'in_progress').length;
   const audioLessonCount = assignments.filter((assignment) => assignment.module_type === 'audio').length;
   const assignedCount = assignments.length;
+  const isFlashcardModule = assignmentDetail?.module.module_type === 'flashcard';
+  const flashcardSession = assignmentDetail?.flashcard_session || null;
+  const flashcardExercises = isFlashcardModule
+    ? assignmentDetail?.exercises.filter((exercise) => exercise.type === 'flashcard_recall') || []
+    : [];
+  const activeFlashcardExercise = isFlashcardModule
+    ? (
+      flashcardExercises.find((exercise) => exercise.id === flashcardSession?.current_exercise_id)
+      || flashcardExercises.find((exercise) => !exercise.attempt?.is_completed)
+      || flashcardExercises[0]
+      || null
+    )
+    : null;
+  const activeFlashcardResponse = activeFlashcardExercise
+    ? (
+      exerciseResponses[activeFlashcardExercise.id] || {
+        responseText: '',
+        selectedOption: '',
+        inputMode: 'typed',
+        revealedSide: '' as const,
+      }
+    )
+    : {
+      responseText: '',
+      selectedOption: '',
+      inputMode: 'typed' as const,
+      revealedSide: '' as const,
+    };
+
+  useEffect(() => {
+    if (!activeAssignmentId || assignmentDetail?.module.module_type !== 'flashcard') {
+      return;
+    }
+
+    const retry = () => {
+      void retryPendingFlashcardSubmission();
+    };
+
+    window.addEventListener('online', retry);
+    window.addEventListener('focus', retry);
+    void retryPendingFlashcardSubmission();
+
+    return () => {
+      window.removeEventListener('online', retry);
+      window.removeEventListener('focus', retry);
+    };
+  }, [activeAssignmentId, assignmentDetail, retryPendingFlashcardSubmission]);
+
   const filteredAssignments = assignments.filter((assignment) => {
     if (queueFilter === 'all') {
       return true;
@@ -2741,62 +3059,22 @@ export default function MicrolearningHub() {
     }
 
     if (moduleType === 'flashcard') {
-      const cards = getFirstContentArray(content, ['cards']);
-      const safeCards = cards.length ? cards : [{}];
-      const currentCardIndex = Math.min(flashcardIndexes[activeAssignment.id] || 0, safeCards.length - 1);
-      const card = safeCards[currentCardIndex] || {};
-      const flipped = flippedFlashcardAssignments[activeAssignment.id];
-
       return (
         <div className="rounded-xl border bg-white p-4">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-sm font-medium text-slate-700">Flashcard Deck Preview</p>
-              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
-                {flipped ? 'Back' : 'Front'} | Card {currentCardIndex + 1} of {safeCards.length}
-              </p>
+              <p className="text-sm font-medium text-slate-700">Timed Flashcard Session</p>
+              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">Fixed pacing for every card</p>
               <p className="mt-2 text-sm text-slate-600">
-                Review the deck here, then answer the timed recall checks below with the opposite side still visible as a guide.
+                Each flashcard now runs on a fixed sequence: 30 seconds of study time, then a 60-second answer
+                window. The next card starts automatically when the answer timer ends.
               </p>
             </div>
-            {safeCards.length > 1 ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => changeFlashcard(activeAssignment.id, safeCards.length, -1)}
-                  disabled={currentCardIndex === 0}
-                >
-                  <ChevronLeft className="mr-1 size-4" />
-                  Previous
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => changeFlashcard(activeAssignment.id, safeCards.length, 1)}
-                  disabled={currentCardIndex >= safeCards.length - 1}
-                >
-                  Next
-                  <ChevronRight className="ml-1 size-4" />
-                </Button>
-              </div>
-            ) : null}
-          </div>
-
-          <button
-            type="button"
-            className="mt-4 w-full rounded-xl border bg-slate-50 p-4 text-left transition hover:border-sky-200"
-            onClick={() => toggleFlashcard(activeAssignment.id)}
-            onTouchStart={(event) => handleFlashcardTouchStart(event.touches[0]?.clientX || 0)}
-            onTouchEnd={(event) => handleFlashcardTouchEnd(activeAssignment.id, event.changedTouches[0]?.clientX || 0)}
-          >
-            <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Tap or swipe to flip</p>
-            <div className="mt-4 whitespace-pre-wrap text-base text-slate-700">
-              {flipped ? card.back || 'No back content yet.' : card.front || 'No front content yet.'}
+            <div className="grid gap-2 text-sm text-slate-600">
+              <Badge variant="outline">Study Time: 30s</Badge>
+              <Badge variant="outline">Answer Time: 60s</Badge>
             </div>
-          </button>
+          </div>
         </div>
       );
     }
@@ -3453,6 +3731,34 @@ export default function MicrolearningHub() {
                 {moduleStarted ? renderModuleContent() : null}
 
                 {moduleStarted ? (
+                isFlashcardModule ? (
+                  <TimedFlashcardSessionCard
+                    assignmentId={activeAssignmentId}
+                    assignment={activeAssignment}
+                    exercise={activeFlashcardExercise}
+                    response={activeFlashcardResponse}
+                    session={flashcardSession}
+                    isSaving={Boolean(activeFlashcardExercise && submittingExerciseId === activeFlashcardExercise.id)}
+                    onDraftChange={(patch) => {
+                      if (!activeFlashcardExercise) {
+                        return;
+                      }
+                      updateExerciseResponse(activeFlashcardExercise.id, patch);
+                    }}
+                    onPersistDraft={(responseText, revealedSide) => persistFlashcardSessionDraft(responseText, revealedSide)}
+                    onAutoSubmit={(status) => {
+                      if (!activeFlashcardExercise) {
+                        return;
+                      }
+                      void handleSubmitExercise(activeFlashcardExercise, {
+                        timerExpired: true,
+                        allowBlank: true,
+                        status,
+                        suppressSuccessToast: true,
+                      });
+                    }}
+                  />
+                ) : (
                 <div className="space-y-4">
                   {assignmentDetail.exercises.map((exercise, index) => {
                     const response = exerciseResponses[exercise.id] || {
@@ -3510,14 +3816,9 @@ export default function MicrolearningHub() {
                           ) : null}
 
                           {exercise.type === 'flashcard_recall' ? (
-                            <FlashcardRecallExerciseCard
-                              exercise={exercise}
-                              response={response}
-                              isSaving={isSaving}
-                              onDraftChange={(patch) => updateExerciseResponse(exercise.id, patch)}
-                              onRestart={() => resetExerciseDraft(exercise)}
-                              onSubmit={() => void handleSubmitExercise(exercise)}
-                            />
+                            <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
+                              Flashcard recall cards run through the dedicated timed flashcard session and are not available in the standard exercise list.
+                            </div>
                           ) : exercise.type === 'multiple_choice' ? (
                             <div className="space-y-3">
                               <RadioGroup
@@ -3760,6 +4061,7 @@ export default function MicrolearningHub() {
                     );
                   })}
                 </div>
+                )
                 ) : null}
               </div>
             )}

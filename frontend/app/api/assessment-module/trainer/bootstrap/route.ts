@@ -15,6 +15,7 @@ function buildEmptyTrainerBootstrap(): TrainerBootstrapResponse {
     categories: [],
     questions: [],
     batches: [],
+    waves: [],
     trainees: [],
     assignments: [],
     attempts: [],
@@ -22,6 +23,9 @@ function buildEmptyTrainerBootstrap(): TrainerBootstrapResponse {
     reports: {
       categories: [],
       batches: [],
+      waves: [],
+      trainees: [],
+      trainers: [],
       questions: [],
     },
     analytics: {
@@ -30,7 +34,11 @@ function buildEmptyTrainerBootstrap(): TrainerBootstrapResponse {
       activeAssignments: 0,
       totalAttempts: 0,
       passRate: 0,
+      failRate: 0,
+      retakeRate: 0,
       averageScore: 0,
+      highestScore: 0,
+      lowestScore: 0,
       certificatesIssued: 0,
     },
   }

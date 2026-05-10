@@ -4,6 +4,7 @@ export type AssessmentQuestionType = 'multiple_choice' | 'fill_blank'
 export type AssessmentAttemptStatus = 'pass' | 'fail'
 export type CoachingVisibility = 'shared' | 'trainer_only'
 export type AssignmentMode = 'selected_questions' | 'entire_category' | 'random_subset'
+export type AssignmentTargetType = 'batch' | 'wave' | 'trainee'
 export type QuestionDifficulty = 'easy' | 'medium' | 'hard'
 export type CertificateStatus = 'issued' | 'revoked' | 'not_issued'
 export type AnalysisSource = 'rules' | 'ai'
@@ -20,6 +21,14 @@ export interface BatchOption {
   name: string
   description?: string | null
   waveNumber?: number | null
+  traineeCount: number
+  createdBy?: string
+}
+
+export interface WaveOption {
+  waveNumber: number
+  label: string
+  batchCount: number
   traineeCount: number
 }
 
@@ -104,6 +113,7 @@ export interface AssignmentRecord {
   categoryId: string
   assessmentId?: string | null
   batchId?: string | null
+  waveNumber?: number | null
   traineeId?: string | null
   assignedBy: string
   assignedAt: string
@@ -115,8 +125,7 @@ export interface AssignmentRecord {
   title?: string
   description?: string | null
   targetLabel: string
-  targetType: 'batch' | 'trainee'
-  waveNumber?: number | null
+  targetType: AssignmentTargetType
   assignmentMode?: AssignmentMode
   questionCount?: number
   randomQuestionCount?: number | null
@@ -267,6 +276,52 @@ export interface BatchReportRecord {
   lowestScore: number
 }
 
+export interface WaveReportRecord {
+  waveNumber: number
+  categoryId: string
+  categoryTitle: string
+  assignmentCount: number
+  assignedTraineeCount: number
+  completedTraineeCount: number
+  attemptCount: number
+  averageScore: number
+  passRate: number
+  completionRate: number
+  highestScore: number
+  lowestScore: number
+}
+
+export interface TraineeReportRecord {
+  traineeId: string
+  traineeName: string
+  traineeEmail: string
+  batchId?: string | null
+  batchName?: string | null
+  waveNumber?: number | null
+  categoryId: string
+  categoryTitle: string
+  attemptCount: number
+  passCount: number
+  failCount: number
+  averageScore: number
+  highestScore: number
+  lowestScore: number
+  lastAttemptAt?: string | null
+  certificateCount: number
+}
+
+export interface TrainerReportRecord {
+  trainerId: string
+  trainerName: string
+  trainerEmail: string
+  categoryCount: number
+  assignmentCount: number
+  attemptCount: number
+  passRate: number
+  averageScore: number
+  certificateCount: number
+}
+
 export interface QuestionReportRecord {
   questionId: string
   categoryId: string
@@ -285,6 +340,7 @@ export interface TrainerBootstrapResponse {
   categories: CategoryRecord[]
   questions?: AssessmentQuestionRecord[]
   batches: BatchOption[]
+  waves?: WaveOption[]
   trainees: TraineeOption[]
   assignments: AssignmentRecord[]
   attempts: AttemptRecord[]
@@ -292,6 +348,9 @@ export interface TrainerBootstrapResponse {
   reports: {
     categories: CategoryReportRecord[]
     batches?: BatchReportRecord[]
+    waves?: WaveReportRecord[]
+    trainees?: TraineeReportRecord[]
+    trainers?: TrainerReportRecord[]
     questions: QuestionReportRecord[]
   }
   analytics?: {
@@ -300,7 +359,11 @@ export interface TrainerBootstrapResponse {
     activeAssignments: number
     totalAttempts: number
     passRate: number
+    failRate?: number
+    retakeRate?: number
     averageScore: number
+    highestScore?: number
+    lowestScore?: number
     certificatesIssued: number
   }
 }
@@ -310,6 +373,8 @@ export interface TraineeAssessmentCard {
   assessmentId: string
   categoryId: string
   categoryTitle: string
+  targetType?: AssignmentTargetType
+  waveNumber?: number | null
   assignmentTitle?: string
   assessmentTitle: string
   assessmentDescription?: string | null
@@ -345,6 +410,8 @@ export interface TraineeAssessmentSession {
   assessmentId: string
   categoryId: string
   categoryTitle: string
+  targetType?: AssignmentTargetType
+  waveNumber?: number | null
   assignmentTitle?: string
   assessmentTitle: string
   description?: string | null
@@ -434,7 +501,9 @@ export type UpdateQuestionPayload = CreateQuestionPayload
 export interface CreateAssignmentPayload {
   categoryId: string
   assessmentId?: string | null
+  targetType?: AssignmentTargetType
   batchId?: string | null
+  waveNumber?: number | null
   traineeId?: string | null
   dueAt?: string | null
   title: string
@@ -449,7 +518,7 @@ export interface CreateAssignmentPayload {
   shuffleQuestions?: boolean
 }
 
-export interface UpdateAssignmentPayload extends CreateAssignmentPayload {}
+export type UpdateAssignmentPayload = CreateAssignmentPayload
 
 export interface CoachAttemptPayload {
   attemptId: string
@@ -473,5 +542,6 @@ export interface BulkUploadQuestionsResponse {
   failedRows: number
   importedQuestions: AssessmentQuestionRecord[]
   errors: BulkUploadErrorRecord[]
+  createdCategories?: string[]
   errorCsv?: string | null
 }

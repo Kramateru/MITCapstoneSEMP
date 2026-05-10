@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from '@/app/components/ui/select'
 import {
+  AssessmentWorkspaceHero,
   AssessmentSectionNav,
   EmptyState,
   MetricCard,
@@ -55,7 +56,6 @@ import {
   submitAssessmentAttemptRequest,
 } from '@/app/lib/assessment/client'
 import type {
-  SubmitAssessmentResponse,
   TraineeAssessmentCard,
   TraineeAssessmentSession,
   TraineeDashboardResponse,
@@ -402,7 +402,7 @@ export function TraineeAssessmentWorkspace() {
     }
   }, [syncSection])
 
-  const handleAttemptCommitted = useCallback(async (_result: SubmitAssessmentResponse) => {
+  const handleAttemptCommitted = useCallback(async () => {
     await refreshDashboard('refresh')
   }, [refreshDashboard])
 
@@ -437,18 +437,17 @@ export function TraineeAssessmentWorkspace() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-950">Assessment Hub</h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            Review your assigned assessments, take timed sessions, monitor progress, and unlock certificates once you reach the passing score.
-          </p>
-        </div>
-        <Button type="button" variant="outline" onClick={() => void refreshDashboard('refresh')} disabled={refreshing}>
-          {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-          Refresh
-        </Button>
-      </div>
+      <AssessmentWorkspaceHero
+        eyebrow="Trainee Assessment Hub"
+        title="Assessment Hub"
+        description="Review your assigned assessments, take timed sessions, monitor progress, and unlock certificates once you reach the passing score."
+        actions={(
+          <Button type="button" variant="outline" onClick={() => void refreshDashboard('refresh')} disabled={refreshing}>
+            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+            Refresh
+          </Button>
+        )}
+      />
 
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -527,10 +526,17 @@ export function TraineeAssessmentWorkspace() {
               {filteredAvailableAssessments.map((assessment) => {
                 const queueStatus = getAssessmentQueueStatus(assessment)
                 return (
-                  <button
+                  <div
                     key={assessment.assignmentId}
-                    type="button"
                     onClick={() => setSelectedAssignmentId(assessment.assignmentId)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        setSelectedAssignmentId(assessment.assignmentId)
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
                     className={`w-full rounded-2xl border p-4 text-left transition ${
                       selectedAssignmentId === assessment.assignmentId
                         ? 'border-sky-400 bg-sky-50 shadow-sm'
@@ -551,9 +557,28 @@ export function TraineeAssessmentWorkspace() {
                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
                       <span>{assessment.questionCount} questions</span>
                       <span>Pass at {assessment.passingScore}%</span>
+                      <span>{assessment.attemptCount || 0} attempt(s)</span>
                       <span>{assessment.targetLabel}</span>
                     </div>
-                  </button>
+                    <div className="mt-4">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={queueStatus === 'passed' ? 'outline' : 'default'}
+                        disabled={queueStatus === 'passed'}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                          if (queueStatus === 'passed') {
+                            return
+                          }
+                          void loadAssessmentSession(assessment.assignmentId)
+                        }}
+                      >
+                        {queueStatus === 'passed' ? 'Completed' : queueStatus === 'retake' ? 'Retake' : 'Start'}
+                      </Button>
+                    </div>
+                  </div>
                 )
               })}
 
@@ -577,8 +602,8 @@ export function TraineeAssessmentWorkspace() {
                 <div className="grid gap-4 md:grid-cols-4">
                   <MetricCard label="Questions" value={String(selectedAssessment.questionCount)} hint="Served per attempt" icon={<ListChecks className="size-4 text-slate-700" />} />
                   <MetricCard label="Passing Score" value={`${selectedAssessment.passingScore}%`} hint="Score target" icon={<TrendingUp className="size-4 text-sky-600" />} />
+                  <MetricCard label="Attempt Status" value={selectedAssessment.isCompleted ? 'Passed' : selectedAssessment.canRetake ? 'Retake' : selectedAssessment.latestAttempt ? 'In Progress' : 'Ready'} hint={selectedAssessment.latestAttempt ? `Latest ${selectedAssessment.latestAttempt.score.toFixed(2)}%` : 'No attempt yet'} icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
                   <MetricCard label="Attempts" value={selectedAssessment.attemptCount ? String(selectedAssessment.attemptCount) : '0'} hint={selectedAssessment.maximumAttempts ? `Max ${selectedAssessment.maximumAttempts}` : 'Unlimited'} icon={<RotateCcw className="size-4 text-amber-600" />} />
-                  <MetricCard label="Certificate" value={selectedAssessment.certificate?.certificateCode || 'Pending'} hint="Completion record" icon={<Award className="size-4 text-violet-600" />} />
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -588,6 +613,13 @@ export function TraineeAssessmentWorkspace() {
                     <DetailLine label="Due Date" value={formatDateLabel(selectedAssessment.targetDueAt)} />
                     <DetailLine label="Timer" value={selectedAssessment.timeLimitMinutes ? `${selectedAssessment.timeLimitMinutes} minutes` : 'Untimed'} />
                   </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <DetailLine label="Description" value={selectedAssessment.assessmentDescription || 'No description provided'} />
+                  <DetailLine label="Attempts Remaining" value={selectedAssessment.attemptsRemaining === null ? 'Unlimited' : String(selectedAssessment.attemptsRemaining)} />
+                  <DetailLine label="Completed State" value={selectedAssessment.isCompleted ? 'Completed / Passed' : selectedAssessment.canRetake ? 'Needs retake' : 'Awaiting completion'} />
+                  <DetailLine label="Certificate" value={selectedAssessment.certificate?.certificateCode || 'Locked'} />
                 </div>
 
                 {selectedAssessment.latestAttempt ? (
@@ -607,7 +639,12 @@ export function TraineeAssessmentWorkspace() {
                       )}
                       {selectedAssessment.canRetake ? 'Open Retake Session' : 'Start Assessment'}
                     </Button>
-                  ) : null}
+                  ) : (
+                    <Button type="button" variant="outline" disabled>
+                      <CheckCircle2 className="size-4" />
+                      Completed
+                    </Button>
+                  )}
                   {selectedAssessment.certificate ? (
                     <Button type="button" variant="outline" onClick={() => syncSection('certificates')}>
                       <Award className="size-4" />

@@ -5,6 +5,7 @@ import {
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  Download,
   Gauge,
   GraduationCap,
   Loader2,
@@ -36,13 +37,14 @@ import { Progress } from '@/app/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs'
 import { TrainerLearningFilterBar } from '@/app/components/trainer/trainer-learning-filter-bar'
 import {
+  buildTrainerLearningInsightsPdfUrl,
   buildTrainerLearningInsightsUrl,
   EMPTY_TRAINER_LEARNING_FILTERS,
   type TrainerLearningFilterState,
   type TrainerLearningInsightsResponse,
 } from '@/app/lib/trainer-learning-insights'
 import { trainerSidebarItems } from '@/app/trainer/nav'
-import { apiFetch } from '@/app/utils/api'
+import { apiFetch, downloadApiFile } from '@/app/utils/api'
 
 const AUTO_REFRESH_MS = 60_000
 const SCORE_DISTRIBUTION_COLORS = ['#e2e8f0', '#cbd5e1', '#93c5fd', '#60a5fa', '#2563eb']
@@ -130,10 +132,13 @@ export default function ReportsPage() {
   const [data, setData] = useState<TrainerLearningInsightsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [downloadNotice, setDownloadNotice] = useState<{ tone: 'warning' | 'error'; message: string } | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
 
   const requestUrl = useMemo(() => buildTrainerLearningInsightsUrl(filters), [filters])
+  const pdfUrl = useMemo(() => buildTrainerLearningInsightsPdfUrl(filters), [filters])
 
   const loadReports = useCallback(
     async (mode: 'initial' | 'refresh' | 'auto' = 'initial') => {
@@ -195,6 +200,33 @@ export default function ReportsPage() {
     [data?.weakest_assessment_areas],
   )
 
+  const handleDownloadPdf = useCallback(async () => {
+    setDownloadNotice(null)
+
+    if (!hasTrainerData) {
+      setDownloadNotice({
+        tone: 'warning',
+        message: 'No report data is available for the selected filters yet.',
+      })
+      return
+    }
+
+    setDownloadingPdf(true)
+    try {
+      await downloadApiFile(
+        pdfUrl,
+        `Trainer_Report_${new Date().toISOString().slice(0, 10)}.pdf`,
+      )
+    } catch (downloadError) {
+      setDownloadNotice({
+        tone: 'error',
+        message: getErrorMessage(downloadError),
+      })
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }, [hasTrainerData, pdfUrl])
+
   return (
     <DashboardLayout sidebarItems={trainerSidebarItems()} userRole="trainer">
       <div className="space-y-6">
@@ -207,16 +239,29 @@ export default function ReportsPage() {
             </p>
           </div>
 
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => void loadReports('refresh')}
-            disabled={loading || refreshing}
-            className="rounded-full"
-          >
-            {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            Refresh Reports
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void handleDownloadPdf()}
+              disabled={downloadingPdf}
+              className="rounded-full"
+            >
+              {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
+              Download PDF Report
+            </Button>
+
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void loadReports('refresh')}
+              disabled={loading || refreshing || downloadingPdf}
+              className="rounded-full"
+            >
+              {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
+              Refresh Reports
+            </Button>
+          </div>
         </div>
 
         <Card className="border-sky-200 bg-sky-50 shadow-sm">
@@ -236,6 +281,26 @@ export default function ReportsPage() {
         {error ? (
           <Card className="border-rose-200 bg-rose-50 shadow-sm">
             <CardContent className="p-4 text-sm text-rose-700">{error}</CardContent>
+          </Card>
+        ) : null}
+
+        {downloadNotice ? (
+          <Card
+            className={
+              downloadNotice.tone === 'warning'
+                ? 'border-amber-200 bg-amber-50 shadow-sm'
+                : 'border-rose-200 bg-rose-50 shadow-sm'
+            }
+          >
+            <CardContent
+              className={
+                downloadNotice.tone === 'warning'
+                  ? 'p-4 text-sm text-amber-800'
+                  : 'p-4 text-sm text-rose-700'
+              }
+            >
+              {downloadNotice.message}
+            </CardContent>
           </Card>
         ) : null}
 

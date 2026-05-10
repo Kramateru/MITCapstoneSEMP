@@ -658,6 +658,67 @@ class MicrolearningAssignment(Base):
     trainer = relationship("User", foreign_keys=[assigned_by])
     batch = relationship("Batch")
     certificate = relationship("CertificateRecord")
+    flashcard_results = relationship(
+        "MicrolearningFlashcardResult",
+        back_populates="assignment",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class MicrolearningFlashcardResult(Base):
+    """Per-flashcard timing and answer result for timed microlearning recall."""
+
+    __tablename__ = "microlearning_flashcard_result"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    assignment_id = Column(
+        String(36),
+        ForeignKey("microlearning_assignment.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    module_id = Column(
+        String(36),
+        ForeignKey("microlearning_module.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    flashcard_id = Column(String(120), nullable=False)
+    flashcard_order = Column(Integer, nullable=False, default=1)
+    attempt_number = Column(Integer, nullable=False, default=1)
+    prompt = Column(Text, nullable=True)
+    front_text = Column(Text, nullable=True)
+    back_text = Column(Text, nullable=True)
+    answer_text = Column(Text, nullable=True)
+    selected_choice = Column(Text, nullable=True)
+    revealed_side = Column(String(20), nullable=True)
+    study_time_seconds = Column(Integer, nullable=False, default=30)
+    answer_time_seconds = Column(Integer, nullable=False, default=60)
+    status = Column(String(20), nullable=False, default="unanswered")
+    score = Column(Float, nullable=False, default=0.0)
+    points_earned = Column(Float, nullable=False, default=0.0)
+    points_possible = Column(Float, nullable=False, default=0.0)
+    started_study_at = Column(DateTime, nullable=True)
+    answer_started_at = Column(DateTime, nullable=True)
+    answer_deadline_at = Column(DateTime, nullable=True)
+    answered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    assignment = relationship("MicrolearningAssignment", back_populates="flashcard_results")
+    module = relationship("MicrolearningModule")
+    trainee = relationship("User")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "assignment_id",
+            "flashcard_id",
+            "attempt_number",
+            name="uq_microlearning_flashcard_result_attempt",
+        ),
+    )
 
 
 class PerformanceMetrics(Base):

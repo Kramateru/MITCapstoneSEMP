@@ -1066,7 +1066,7 @@ export default function TrainerSimFloorPage() {
         await deleteScenarioRecordFromSupabase(scenarioIdToDelete);
       } catch (syncError) {
         console.warn('Call simulation scenario Supabase delete sync failed:', syncError);
-        toast.error('Scenario deleted locally, but Supabase cleanup did not complete.');
+        toast.error('Module deleted locally, but Supabase cleanup did not complete.');
       }
 
       toast.success(`"${deleteScenarioTitle}" has been deleted.`);
@@ -1077,7 +1077,7 @@ export default function TrainerSimFloorPage() {
         await refreshScenarioData();
       } catch (refreshError) {
         console.error(refreshError);
-        toast.error(`Scenario deleted, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+        toast.error(`Module deleted, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
       }
     } catch (error) {
       console.error(error);
@@ -1291,7 +1291,7 @@ export default function TrainerSimFloorPage() {
           await syncScenarioRecordToSupabase(scenarioReference);
         } catch (syncError) {
           console.warn('Call simulation scenario Supabase sync failed:', syncError);
-          toast.error('Scenario saved locally, but Supabase scenario/script sync did not complete.');
+      toast.error('Module saved locally, but Supabase scenario/script sync did not complete.');
         }
 
         try {
@@ -1301,19 +1301,19 @@ export default function TrainerSimFloorPage() {
           );
         } catch (syncError) {
           console.warn('Call simulation KPI metric Supabase sync failed:', syncError);
-          toast.error('Scenario saved locally, but KPI metric sync to Supabase did not complete.');
+          toast.error('Module saved locally, but KPI metric sync to Supabase did not complete.');
         }
       }
 
       setShowScenarioDialog(false);
       setEditingScenarioId(null);
       setScenarioForm(createDefaultScenarioForm());
-      toast.success(editingScenarioId ? 'Scenario updated.' : 'Scenario created.');
+      toast.success(editingScenarioId ? 'Module updated.' : 'Module created.');
       try {
         await refreshScenarioData();
       } catch (refreshError) {
         console.error(refreshError);
-        toast.error(`Scenario saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
+        toast.error(`Module saved, but ${getErrorMessage(refreshError, 'the Call Simulation workspace could not refresh right away.')}`);
       }
     } catch (error) {
       console.error(error);
@@ -1337,7 +1337,7 @@ export default function TrainerSimFloorPage() {
 
   const handleAssignScenario = async () => {
     if (!assignScenarioId || !assignBatchId) {
-      toast.error('Choose a scenario and batch before assigning.');
+      toast.error('Choose a module and batch before assigning.');
       return;
     }
 
@@ -1366,8 +1366,8 @@ export default function TrainerSimFloorPage() {
       }
       toast.success(
         selectedAssignmentTrainees.length > 0
-          ? `Scenario assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'}.`
-          : 'Scenario removed from all trainee assignments in this batch.',
+          ? `Module assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'}.`
+          : 'Module removed from all trainee assignments in this batch.',
       );
     } catch (error) {
       console.error(error);
@@ -1851,9 +1851,9 @@ export default function TrainerSimFloorPage() {
       await fetchInteractions(selectedBatch);
       toast.success(
         status === 'competent'
-          ? 'Scenario marked as competent and certificate tracking was updated.'
+          ? 'Module marked as competent and certificate tracking was updated.'
           : status === 'retake'
-            ? 'Scenario marked for retake.'
+            ? 'Module marked for retake.'
             : 'Trainer verdict reset to pending.',
       );
     } catch (error) {
@@ -2018,7 +2018,7 @@ export default function TrainerSimFloorPage() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulation Management</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Manage the full scenario library, assign scenarios to batches, monitor CSR response scoring, and review
+              Manage the full call module library, assign modules to batches, monitor CSR response scoring, and review
               trainee recordings for coaching.
             </p>
           </div>
@@ -2196,7 +2196,7 @@ export default function TrainerSimFloorPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Batch Scenarios</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Batch Modules</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{scenarios.length}</div>
@@ -2206,11 +2206,11 @@ export default function TrainerSimFloorPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Scenario Library</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Module Library</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{libraryScenarios.length}</div>
-              <p className="text-xs text-muted-foreground">saved trainer scenarios</p>
+              <p className="text-xs text-muted-foreground">saved trainer modules</p>
             </CardContent>
           </Card>
 
@@ -2241,7 +2241,7 @@ export default function TrainerSimFloorPage() {
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <CardTitle>Batch Scenario Queue</CardTitle>
+                    <CardTitle>Batch Module Queue</CardTitle>
                     <CardDescription>
                       Title, members, CSR response variations, and score performance for {selectedBatchName}.
                     </CardDescription>
@@ -2257,7 +2257,7 @@ export default function TrainerSimFloorPage() {
                     </Button>
                     <Button size="sm" onClick={openCreateScenario}>
                       <Plus className="mr-2 h-4 w-4" />
-                      New Scenario
+                      New Module
                     </Button>
                   </div>
                 </div>
@@ -2265,7 +2265,7 @@ export default function TrainerSimFloorPage() {
               <CardContent>
                 {scenarios.length === 0 ? (
                   <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-                    No scenarios are mapped to this batch yet.
+                    No call modules are mapped to this batch yet.
                   </div>
                 ) : (
                   <Table>
@@ -2389,15 +2389,15 @@ export default function TrainerSimFloorPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Scenario Library</CardTitle>
+            <CardTitle>Module Library</CardTitle>
             <CardDescription>
-              View every saved scenario, the batches it is assigned to, and the overall trainee completion snapshot.
+              View every saved call module, the batches it is assigned to, and the overall trainee completion snapshot.
             </CardDescription>
           </CardHeader>
           <CardContent>
             {libraryScenarios.length === 0 ? (
               <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
-                No saved scenarios have been created yet.
+                No saved call modules have been created yet.
               </div>
             ) : (
               <Table>
@@ -2728,7 +2728,7 @@ export default function TrainerSimFloorPage() {
               <div className="rounded-3xl border bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-950">Scenario Builder</h3>
+                    <h3 className="text-base font-semibold text-slate-950">Module Builder</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       Use Actor, Script, Score, and Scenario Group rows. Keep at least 5 completed rows, and generate Member audio for hold playback.
                     </p>
@@ -2744,7 +2744,7 @@ export default function TrainerSimFloorPage() {
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{completeScenarioRowCount}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Scenario Groups</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Module Steps</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{scenarioGroupSuggestions.length || 0}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
@@ -2884,13 +2884,13 @@ export default function TrainerSimFloorPage() {
           <div className="shrink-0 border-t bg-white px-6 py-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <p className="text-xs text-slate-500">
-                Keep at least 5 complete rows, make sure Member rows have playable audio, and use Save when the scenario is ready for trainees.
+                Keep at least 5 complete rows, make sure Member rows have playable audio, and use Save when the module is ready for trainees.
               </p>
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
                 <Button variant="outline" onClick={() => setShowScenarioDialog(false)}>Cancel</Button>
                 <Button onClick={handleSaveScenario} disabled={saving || isGeneratingAllMemberSpeech}>
                   <Save className="mr-2 h-4 w-4" />
-                  {saving ? 'Saving...' : editingScenarioId ? 'Update Scenario' : 'Create Scenario'}
+                  {saving ? 'Saving...' : editingScenarioId ? 'Update Module' : 'Create Module'}
                 </Button>
               </div>
             </div>
@@ -2983,7 +2983,7 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showBulkDialog} onOpenChange={setShowBulkDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Bulk Upload Scenarios</DialogTitle>
+            <DialogTitle>Bulk Upload Call Modules</DialogTitle>
             <DialogDescription>
               Upload a CSV, Excel, TXT, or DOCX file. Spreadsheet uploads use `Actor`, `Script`, `Score`, and
               `Scenario` columns, while TXT or DOCX files use the file name pattern `Title_Topic_Description` and structured
@@ -3002,15 +3002,15 @@ export default function TrainerSimFloorPage() {
               </Button>
             </div>
             <div className="space-y-2">
-              <Label>Scenario Title Override</Label>
+              <Label>Module Title Override</Label>
               <Input value={bulkTitle} onChange={(event) => setBulkTitle(event.target.value)} placeholder="Optional. Leave blank to use the file name title segment." />
             </div>
             <div className="space-y-2">
               <Label>Upload File</Label>
               <Input ref={fileInputRef} type="file" accept=".csv,.xlsx,.xls,.txt,.docx" onChange={handleBulkFileSelected} />
               <p className="text-xs text-slate-500">
-                For TXT and DOCX, the platform parses `Title_Topic_Description` into the Scenario Title, Scenario Topic,
-                and Description before syncing the scenario to Supabase.
+                For TXT and DOCX, the platform parses `Title_Topic_Description` into the module title, topic,
+                and description before syncing the record to Supabase.
               </p>
             </div>
           </div>
@@ -3027,17 +3027,17 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Assign Scenario to Trainees</DialogTitle>
+            <DialogTitle>Assign Call Module to Trainees</DialogTitle>
             <DialogDescription>
-              Choose a batch, then select exactly which trainees should see this Call Simulation on the trainee side.
+              Choose a batch, then select exactly which trainees should see this Call Simulation module on the trainee side.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Scenario</Label>
+              <Label>Call Module</Label>
               <Select value={assignScenarioId} onValueChange={setAssignScenarioId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Choose a scenario" />
+                  <SelectValue placeholder="Choose a module" />
                 </SelectTrigger>
                 <SelectContent>
                   {libraryScenarios.map((scenario) => (
@@ -3142,7 +3142,7 @@ export default function TrainerSimFloorPage() {
             <Button variant="outline" onClick={() => setShowAssignDialog(false)}>Cancel</Button>
             <Button onClick={handleAssignScenario} disabled={saving || loadingAssignmentTargets || assignmentTargets.length === 0}>
               <Link2 className="mr-2 h-4 w-4" />
-              {saving ? 'Assigning...' : 'Assign Scenario'}
+              {saving ? 'Assigning...' : 'Assign Module'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3470,9 +3470,9 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Scenario</DialogTitle>
+            <DialogTitle>Delete Call Module</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{deleteScenarioTitle}"? This action cannot be undone.
+              Are you sure you want to delete "{deleteScenarioTitle}"? This permanently removes the call module.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -3483,7 +3483,7 @@ export default function TrainerSimFloorPage() {
               disabled={saving}
             >
               <Trash2 className="mr-2 h-4 w-4" />
-              {saving ? 'Deleting...' : 'Delete Scenario'}
+              {saving ? 'Deleting...' : 'Delete Module'}
             </Button>
           </DialogFooter>
         </DialogContent>

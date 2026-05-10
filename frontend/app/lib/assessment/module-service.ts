@@ -34,14 +34,18 @@ import type {
   QuestionReportRecord,
   SubmitAssessmentPayload,
   SubmitAssessmentResponse,
+  TraineeReportRecord,
   TraineeAssessmentCard,
   TraineeAssessmentSession,
   TraineeDashboardResponse,
+  TrainerReportRecord,
   TrainerBootstrapResponse,
   TraineeOption,
   UpdateAssignmentPayload,
   UpdateCategoryPayload,
   UpdateQuestionPayload,
+  WaveOption,
+  WaveReportRecord,
 } from './types'
 
 type TrainingCategoryRow = {
@@ -94,7 +98,9 @@ type TrainingAssignmentRow = {
   id: string
   category_id: string
   assessment_id?: string | null
+  target_scope?: 'batch' | 'wave' | 'trainee' | null
   batch_id?: string | null
+  wave_number?: number | null
   trainee_id?: string | null
   assigned_by: string
   assigned_at: string
@@ -210,42 +216,6 @@ type TrainingCertificateRow = {
   earned_at: string
 }
 
-type TrainingCategoryReportRow = {
-  category_id: string
-  category_title: string
-  passing_score: number
-  question_count?: number
-  assignment_count?: number
-  assigned_trainee_count?: number
-  completed_trainee_count?: number
-  attempt_count: number
-  pass_count: number
-  fail_count: number
-  average_score: number
-  pass_rate: number
-  retake_count?: number
-  highest_score?: number
-  lowest_score?: number
-  completion_rate?: number
-}
-
-type TrainingBatchReportRow = {
-  batch_id: string
-  batch_name: string
-  wave_number?: number | null
-  category_id: string
-  category_title: string
-  assignment_count: number
-  assigned_trainee_count: number
-  completed_trainee_count: number
-  attempt_count: number
-  average_score: number
-  pass_rate: number
-  completion_rate: number
-  highest_score: number
-  lowest_score: number
-}
-
 type TrainingQuestionReportRow = {
   question_id: string
   category_id: string
@@ -288,6 +258,13 @@ type AssignmentTargetCounts = {
   traineeName?: string | null
 }
 
+type TargetMembershipContext = {
+  batchMap: Map<string, BatchOption>
+  batchMembershipRows: BatchUserRow[]
+  traineeMap?: Map<string, TraineeOption>
+  categoriesById?: Map<string, Pick<CategoryRecord, 'createdBy' | 'title'>>
+}
+
 const QUESTION_TEMPLATE_HEADER = [
   'Question Number',
   'Category',
@@ -297,9 +274,9 @@ const QUESTION_TEMPLATE_HEADER = [
   'Choice 3',
   'Choice 4',
   'Correct Answer',
-  'Difficulty',
-  'Explanation',
 ]
+
+const DEFAULT_ASSESSMENT_PASSING_SCORE = 90
 
 function unique<T>(values: T[]) {
   return Array.from(new Set(values))
@@ -312,6 +289,38 @@ function notEmpty<T>(value: T | null | undefined): value is T {
 function toNumber(value: unknown, fallback = 0) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function sanitizeChoiceValues(options: string[]) {
+  return options.map((option) => option.trim())
+}
+
+function validateMultipleChoicePayload(
+  options: string[],
+  correctAnswer: string,
+) {
+  const sanitizedChoices = sanitizeChoiceValues(options)
+  if (sanitizedChoices.length !== 4 || sanitizedChoices.some((choice) => !choice)) {
+    throw new AssessmentHttpError(400, 'Exactly four answer choices are required for each multiple-choice question.')
+  }
+
+  const normalizedChoiceSet = new Set(sanitizedChoices.map((choice) => normalizeAssessmentAnswer(choice)))
+  if (normalizedChoiceSet.size !== sanitizedChoices.length) {
+    throw new AssessmentHttpError(400, 'Each answer choice must be unique.')
+  }
+
+  const matchedChoice = sanitizedChoices.find(
+    (choice) => normalizeAssessmentAnswer(choice) === normalizeAssessmentAnswer(correctAnswer),
+  )
+
+  if (!matchedChoice) {
+    throw new AssessmentHttpError(400, 'Correct answer must exactly match one of the four answer choices.')
+  }
+
+  return {
+    choices: sanitizedChoices,
+    correctAnswer: matchedChoice,
+  }
 }
 
 function toSortableTimestamp(value?: string | null, fallback = Number.MAX_SAFE_INTEGER) {
@@ -615,6 +624,7 @@ async function getTrainerBatches(sessionUser: BackendSessionUser) {
     description: batch.description,
     waveNumber: batch.wave_number,
     traineeCount: batchUserRows.filter((row) => row.batch_id === batch.id && traineeMap.has(row.user_id)).length,
+    createdBy: batch.created_by,
   }))
 
   const traineeOptions: TraineeOption[] = Array.from(traineeMap.values()).map((trainee) => {
@@ -761,10 +771,39 @@ async function getAccessibleTraineeAssignment(
       .eq('user_id', sessionUser.userId),
     'Unable to verify trainee batch membership.',
   )) as BatchUserRow[] | null) || []
-
   const batchIds = memberships.map((row) => row.batch_id)
-  const hasAccess = assignment.trainee_id === sessionUser.userId
-    || (!!assignment.batch_id && batchIds.includes(assignment.batch_id))
+  const category = await assertSupabaseResult(
+    supabase
+      .from('training_assessment_categories')
+      .select('id,title,created_by')
+      .eq('id', assignment.category_id)
+      .maybeSingle(),
+    'Unable to verify the assignment category.',
+  ) as Pick<TrainingCategoryRow, 'id' | 'title' | 'created_by'> | null
+  const batchRows = batchIds.length
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('batch')
+          .select('id,name,description,wave_number,created_by,is_active')
+          .in('id', batchIds),
+        'Unable to verify trainee batch access.',
+      )) as BatchRow[] | null) || [])
+    : []
+  const batchMap = new Map(batchRows.map((batch) => [batch.id, {
+    id: batch.id,
+    name: batch.name,
+    description: batch.description,
+    waveNumber: batch.wave_number,
+    traineeCount: 0,
+    createdBy: batch.created_by,
+  } satisfies BatchOption]))
+  const hasAccess = getAssignmentTargetTraineeIds(assignment, {
+    batchMap,
+    batchMembershipRows: memberships,
+    categoriesById: category
+      ? new Map([[assignment.category_id, { createdBy: category.created_by, title: category.title }]])
+      : new Map(),
+  }).includes(sessionUser.userId)
 
   if (!hasAccess) {
     throw new AssessmentHttpError(403, 'This assessment is not assigned to your trainee account.')
@@ -1017,6 +1056,141 @@ async function buildTrainerAssignmentContext(sessionUser: BackendSessionUser) {
   }
 }
 
+function getAssignmentTargetType(
+  assignment: Pick<TrainingAssignmentRow, 'target_scope' | 'batch_id' | 'trainee_id' | 'wave_number'>,
+) {
+  if (assignment.target_scope === 'wave' || (!!assignment.wave_number && !assignment.batch_id && !assignment.trainee_id)) {
+    return 'wave' as const
+  }
+
+  if (assignment.target_scope === 'trainee' || !!assignment.trainee_id) {
+    return 'trainee' as const
+  }
+
+  return 'batch' as const
+}
+
+function buildWaveOptions(
+  batchOptions: BatchOption[],
+  batchMembershipRows: BatchUserRow[],
+) {
+  const waveMap = new Map<number, { batchIds: string[]; traineeIds: Set<string> }>()
+
+  for (const batch of batchOptions) {
+    if (batch.waveNumber === null || batch.waveNumber === undefined) {
+      continue
+    }
+
+    const current = waveMap.get(batch.waveNumber) || {
+      batchIds: [],
+      traineeIds: new Set<string>(),
+    }
+    current.batchIds.push(batch.id)
+
+    for (const membership of batchMembershipRows) {
+      if (membership.batch_id === batch.id) {
+        current.traineeIds.add(membership.user_id)
+      }
+    }
+
+    waveMap.set(batch.waveNumber, current)
+  }
+
+  return Array.from(waveMap.entries())
+    .sort((left, right) => left[0] - right[0])
+    .map(([waveNumber, value]) => ({
+      waveNumber,
+      label: `Wave ${waveNumber}`,
+      batchCount: value.batchIds.length,
+      traineeCount: value.traineeIds.size,
+    })) satisfies WaveOption[]
+}
+
+function getAssignmentTargetBatchIds(
+  assignment: TrainingAssignmentRow,
+  context: TargetMembershipContext,
+) {
+  const targetType = getAssignmentTargetType(assignment)
+
+  if (targetType === 'batch') {
+    return assignment.batch_id ? [assignment.batch_id] : []
+  }
+
+  if (targetType === 'wave' && assignment.wave_number !== null && assignment.wave_number !== undefined) {
+    const trainerId = context.categoriesById?.get(assignment.category_id)?.createdBy
+    return Array.from(context.batchMap.values())
+      .filter((batch) =>
+        batch.waveNumber === assignment.wave_number
+        && (!trainerId || !batch.createdBy || batch.createdBy === trainerId),
+      )
+      .map((batch) => batch.id)
+  }
+
+  if (targetType === 'trainee' && assignment.trainee_id) {
+    const primaryBatchId = context.traineeMap?.get(assignment.trainee_id)?.batchIds?.[0]
+    return primaryBatchId ? [primaryBatchId] : []
+  }
+
+  return []
+}
+
+function getAssignmentTargetTraineeIds(
+  assignment: TrainingAssignmentRow,
+  context: TargetMembershipContext,
+) {
+  if (assignment.trainee_id) {
+    return [assignment.trainee_id]
+  }
+
+  const targetBatchIds = new Set(getAssignmentTargetBatchIds(assignment, context))
+  return unique(
+    context.batchMembershipRows
+      .filter((membership) => targetBatchIds.has(membership.batch_id))
+      .map((membership) => membership.user_id),
+  )
+}
+
+function getAssignmentTargetLabel(
+  assignment: Pick<TrainingAssignmentRow, 'batch_id' | 'trainee_id' | 'wave_number' | 'target_scope'>,
+  context: TargetMembershipContext,
+) {
+  const targetType = getAssignmentTargetType(assignment)
+
+  if (targetType === 'wave') {
+    return assignment.wave_number ? `Wave ${assignment.wave_number}` : 'Wave Assignment'
+  }
+
+  if (targetType === 'batch') {
+    return assignment.batch_id ? formatBatchLabel(context.batchMap.get(assignment.batch_id) || null) : 'Batch Assignment'
+  }
+
+  return context.traineeMap?.get(assignment.trainee_id || '')?.fullName || 'Trainee'
+}
+
+function getAssignmentActualBatchIdForTrainee(
+  assignment: TrainingAssignmentRow,
+  traineeId: string,
+  context: TargetMembershipContext,
+) {
+  const targetType = getAssignmentTargetType(assignment)
+
+  if (targetType === 'batch') {
+    return assignment.batch_id || null
+  }
+
+  if (targetType === 'wave') {
+    return (
+      getAssignmentTargetBatchIds(assignment, context).find((batchId) =>
+        context.batchMembershipRows.some((membership) => membership.batch_id === batchId && membership.user_id === traineeId),
+      )
+      || null
+    )
+  }
+
+  const directBatchIds = context.traineeMap?.get(traineeId)?.batchIds || []
+  return directBatchIds[0] || null
+}
+
 function getAssignmentPriority(assignment: TrainingAssignmentRow) {
   let priority = 0
 
@@ -1033,36 +1207,38 @@ function getAssignmentPriority(assignment: TrainingAssignmentRow) {
   return priority
 }
 
-function shouldReplaceAvailableAssessment(
-  currentAssignment: TrainingAssignmentRow,
-  candidateAssignment: TrainingAssignmentRow,
-) {
-  const currentPriority = getAssignmentPriority(currentAssignment)
-  const candidatePriority = getAssignmentPriority(candidateAssignment)
-
-  if (candidatePriority !== currentPriority) {
-    return candidatePriority > currentPriority
-  }
-
-  const currentDue = toSortableTimestamp(currentAssignment.due_at)
-  const candidateDue = toSortableTimestamp(candidateAssignment.due_at)
-  if (candidateDue !== currentDue) {
-    return candidateDue < currentDue
-  }
-
-  return toSortableTimestamp(candidateAssignment.assigned_at, 0) > toSortableTimestamp(currentAssignment.assigned_at, 0)
-}
-
 function buildTargetCounts(
   assignment: TrainingAssignmentRow,
   batchMap: Map<string, BatchOption>,
   traineeMap: Map<string, TraineeOption>,
+  categoriesById: Map<string, Pick<CategoryRecord, 'createdBy' | 'title'>>,
   batchMembershipRows: BatchUserRow[],
 ): AssignmentTargetCounts {
-  if (assignment.trainee_id) {
+  const context: TargetMembershipContext = {
+    batchMap,
+    traineeMap,
+    categoriesById,
+    batchMembershipRows,
+  }
+  const targetType = getAssignmentTargetType(assignment)
+
+  if (targetType === 'trainee' && assignment.trainee_id) {
     return {
       assignedTrainees: 1,
       traineeName: traineeMap.get(assignment.trainee_id)?.fullName || null,
+      batchName: getAssignmentTargetLabel(assignment, context),
+    }
+  }
+
+  if (targetType === 'wave') {
+    const targetBatchIds = new Set(getAssignmentTargetBatchIds(assignment, context))
+    return {
+      assignedTrainees: unique(
+        batchMembershipRows
+          .filter((row) => targetBatchIds.has(row.batch_id))
+          .map((row) => row.user_id),
+      ).length,
+      waveNumber: assignment.wave_number || null,
     }
   }
 
@@ -1082,6 +1258,339 @@ function buildTargetCounts(
   }
 }
 
+function getAssignmentRecordTargetBatchIds(
+  assignment: AssignmentRecord,
+  context: {
+    batchMap: Map<string, BatchOption>
+    traineeMap: Map<string, TraineeOption>
+    categoriesById: Map<string, Pick<CategoryRecord, 'createdBy' | 'title'>>
+  },
+) {
+  if (assignment.targetType === 'batch') {
+    return assignment.batchId ? [assignment.batchId] : []
+  }
+
+  if (assignment.targetType === 'wave' && assignment.waveNumber !== null && assignment.waveNumber !== undefined) {
+    const trainerId = context.categoriesById.get(assignment.categoryId)?.createdBy
+    return Array.from(context.batchMap.values())
+      .filter((batch) =>
+        batch.waveNumber === assignment.waveNumber
+        && (!trainerId || !batch.createdBy || batch.createdBy === trainerId),
+      )
+      .map((batch) => batch.id)
+  }
+
+  if (assignment.targetType === 'trainee' && assignment.traineeId) {
+    const primaryBatchId = context.traineeMap.get(assignment.traineeId)?.batchIds?.[0]
+    return primaryBatchId ? [primaryBatchId] : []
+  }
+
+  return []
+}
+
+function getAssignmentRecordTargetTraineeIds(
+  assignment: AssignmentRecord,
+  context: {
+    batchMap: Map<string, BatchOption>
+    traineeMap: Map<string, TraineeOption>
+    categoriesById: Map<string, Pick<CategoryRecord, 'createdBy' | 'title'>>
+    batchMembershipRows: BatchUserRow[]
+  },
+) {
+  if (assignment.targetType === 'trainee' && assignment.traineeId) {
+    return [assignment.traineeId]
+  }
+
+  const targetBatchIds = new Set(getAssignmentRecordTargetBatchIds(assignment, context))
+  return unique(
+    context.batchMembershipRows
+      .filter((membership) => targetBatchIds.has(membership.batch_id))
+      .map((membership) => membership.user_id),
+  )
+}
+
+function buildCategoryReportsFromData(
+  categories: CategoryRecord[],
+  assignments: AssignmentRecord[],
+  attempts: AttemptRecord[],
+  batchMap: Map<string, BatchOption>,
+  traineeMap: Map<string, TraineeOption>,
+  batchMembershipRows: BatchUserRow[],
+) {
+  const categoriesById = new Map(categories.map((category) => [category.id, category]))
+  const context = {
+    batchMap,
+    traineeMap,
+    categoriesById,
+    batchMembershipRows,
+  }
+
+  return categories.map((category) => {
+    const categoryAssignments = assignments.filter((assignment) => assignment.categoryId === category.id && assignment.isActive)
+    const assignedTraineeIds = unique(
+      categoryAssignments.flatMap((assignment) => getAssignmentRecordTargetTraineeIds(assignment, context)),
+    )
+    const categoryAttempts = attempts.filter((attempt) => attempt.categoryId === category.id)
+    const passCount = categoryAttempts.filter((attempt) => attempt.status === 'pass').length
+    const failCount = categoryAttempts.filter((attempt) => attempt.status === 'fail').length
+    const completedTrainees = unique(categoryAttempts.map((attempt) => attempt.traineeId))
+    const averageScore = categoryAttempts.length
+      ? Number((categoryAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / categoryAttempts.length).toFixed(2))
+      : 0
+    const highestScore = categoryAttempts.length ? Math.max(...categoryAttempts.map((attempt) => attempt.score)) : 0
+    const lowestScore = categoryAttempts.length ? Math.min(...categoryAttempts.map((attempt) => attempt.score)) : 0
+    const retakeCount = categoryAttempts.filter((attempt) => attempt.attemptNo > 1).length
+
+    return {
+      categoryId: category.id,
+      categoryTitle: category.title,
+      passingScore: category.passingScore,
+      questionCount: category.questionCount || 0,
+      assignmentCount: categoryAssignments.length,
+      assignedTraineeCount: assignedTraineeIds.length,
+      completedTraineeCount: completedTrainees.length,
+      attemptCount: categoryAttempts.length,
+      passCount,
+      failCount,
+      averageScore,
+      passRate: categoryAttempts.length ? Number(((passCount / categoryAttempts.length) * 100).toFixed(2)) : 0,
+      failRate: categoryAttempts.length ? Number(((failCount / categoryAttempts.length) * 100).toFixed(2)) : 0,
+      retakeRate: categoryAttempts.length ? Number(((retakeCount / categoryAttempts.length) * 100).toFixed(2)) : 0,
+      highestScore,
+      lowestScore,
+      completionRate: assignedTraineeIds.length
+        ? Number(((completedTrainees.length / assignedTraineeIds.length) * 100).toFixed(2))
+        : 0,
+    } satisfies CategoryReportRecord
+  })
+}
+
+function buildBatchReportsFromData(
+  categories: CategoryRecord[],
+  assignments: AssignmentRecord[],
+  attempts: AttemptRecord[],
+  batchOptions: BatchOption[],
+  traineeMap: Map<string, TraineeOption>,
+  batchMembershipRows: BatchUserRow[],
+) {
+  const batchMap = new Map(batchOptions.map((batch) => [batch.id, batch]))
+  const categoriesById = new Map(categories.map((category) => [category.id, category]))
+  const context = {
+    batchMap,
+    traineeMap,
+    categoriesById,
+    batchMembershipRows,
+  }
+  const reports: BatchReportRecord[] = []
+
+  for (const batch of batchOptions) {
+    for (const category of categories) {
+      const relevantAssignments = assignments.filter((assignment) =>
+        assignment.categoryId === category.id
+        && assignment.isActive
+        && getAssignmentRecordTargetBatchIds(assignment, context).includes(batch.id),
+      )
+      const assignedTraineeIds = unique(
+        relevantAssignments.flatMap((assignment) =>
+          getAssignmentRecordTargetTraineeIds(assignment, context).filter((traineeId) =>
+            batchMembershipRows.some((membership) => membership.batch_id === batch.id && membership.user_id === traineeId),
+          ),
+        ),
+      )
+      const batchAttempts = attempts.filter((attempt) => attempt.categoryId === category.id && attempt.batchId === batch.id)
+
+      if (!relevantAssignments.length && !batchAttempts.length) {
+        continue
+      }
+
+      const passCount = batchAttempts.filter((attempt) => attempt.status === 'pass').length
+      const completedTrainees = unique(batchAttempts.map((attempt) => attempt.traineeId))
+      const averageScore = batchAttempts.length
+        ? Number((batchAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / batchAttempts.length).toFixed(2))
+        : 0
+
+      reports.push({
+        batchId: batch.id,
+        batchName: batch.name,
+        waveNumber: batch.waveNumber,
+        categoryId: category.id,
+        categoryTitle: category.title,
+        assignmentCount: relevantAssignments.length,
+        assignedTraineeCount: assignedTraineeIds.length,
+        completedTraineeCount: completedTrainees.length,
+        attemptCount: batchAttempts.length,
+        averageScore,
+        passRate: batchAttempts.length ? Number(((passCount / batchAttempts.length) * 100).toFixed(2)) : 0,
+        completionRate: assignedTraineeIds.length
+          ? Number(((completedTrainees.length / assignedTraineeIds.length) * 100).toFixed(2))
+          : 0,
+        highestScore: batchAttempts.length ? Math.max(...batchAttempts.map((attempt) => attempt.score)) : 0,
+        lowestScore: batchAttempts.length ? Math.min(...batchAttempts.map((attempt) => attempt.score)) : 0,
+      })
+    }
+  }
+
+  return reports
+}
+
+function buildWaveReportsFromData(
+  categories: CategoryRecord[],
+  assignments: AssignmentRecord[],
+  attempts: AttemptRecord[],
+  waves: WaveOption[],
+  batchOptions: BatchOption[],
+  traineeMap: Map<string, TraineeOption>,
+  batchMembershipRows: BatchUserRow[],
+) {
+  const batchMap = new Map(batchOptions.map((batch) => [batch.id, batch]))
+  const categoriesById = new Map(categories.map((category) => [category.id, category]))
+  const context = {
+    batchMap,
+    traineeMap,
+    categoriesById,
+    batchMembershipRows,
+  }
+  const reports: WaveReportRecord[] = []
+
+  for (const wave of waves) {
+    for (const category of categories) {
+      const relevantBatchIds = new Set(
+        batchOptions
+          .filter((batch) => batch.waveNumber === wave.waveNumber && batch.createdBy === category.createdBy)
+          .map((batch) => batch.id),
+      )
+      const relevantAssignments = assignments.filter((assignment) =>
+        assignment.categoryId === category.id
+        && assignment.isActive
+        && getAssignmentRecordTargetBatchIds(assignment, context).some((batchId) => relevantBatchIds.has(batchId)),
+      )
+      const assignedTraineeIds = unique(
+        relevantAssignments.flatMap((assignment) =>
+          getAssignmentRecordTargetTraineeIds(assignment, context).filter((traineeId) =>
+            batchMembershipRows.some((membership) => relevantBatchIds.has(membership.batch_id) && membership.user_id === traineeId),
+          ),
+        ),
+      )
+      const waveAttempts = attempts.filter((attempt) =>
+        attempt.categoryId === category.id
+        && !!attempt.batchId
+        && relevantBatchIds.has(attempt.batchId),
+      )
+
+      if (!relevantAssignments.length && !waveAttempts.length) {
+        continue
+      }
+
+      const passCount = waveAttempts.filter((attempt) => attempt.status === 'pass').length
+      const completedTrainees = unique(waveAttempts.map((attempt) => attempt.traineeId))
+      const averageScore = waveAttempts.length
+        ? Number((waveAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / waveAttempts.length).toFixed(2))
+        : 0
+
+      reports.push({
+        waveNumber: wave.waveNumber,
+        categoryId: category.id,
+        categoryTitle: category.title,
+        assignmentCount: relevantAssignments.length,
+        assignedTraineeCount: assignedTraineeIds.length,
+        completedTraineeCount: completedTrainees.length,
+        attemptCount: waveAttempts.length,
+        averageScore,
+        passRate: waveAttempts.length ? Number(((passCount / waveAttempts.length) * 100).toFixed(2)) : 0,
+        completionRate: assignedTraineeIds.length
+          ? Number(((completedTrainees.length / assignedTraineeIds.length) * 100).toFixed(2))
+          : 0,
+        highestScore: waveAttempts.length ? Math.max(...waveAttempts.map((attempt) => attempt.score)) : 0,
+        lowestScore: waveAttempts.length ? Math.min(...waveAttempts.map((attempt) => attempt.score)) : 0,
+      })
+    }
+  }
+
+  return reports
+}
+
+function buildTraineeReportsFromData(
+  attempts: AttemptRecord[],
+  certificates: CertificateRecord[],
+  traineeMap: Map<string, TraineeOption>,
+  batchMap: Map<string, BatchOption>,
+) {
+  const groups = new Map<string, AttemptRecord[]>()
+
+  for (const attempt of attempts) {
+    const key = `${attempt.traineeId}:${attempt.categoryId}`
+    const current = groups.get(key) || []
+    current.push(attempt)
+    groups.set(key, current)
+  }
+
+  return Array.from(groups.entries()).map(([key, groupedAttempts]) => {
+    const [traineeId, categoryId] = key.split(':')
+    const latestAttempt = [...groupedAttempts].sort((left, right) =>
+      toSortableTimestamp(right.completedAt || right.submittedAt, 0) - toSortableTimestamp(left.completedAt || left.submittedAt, 0),
+    )[0]
+    const trainee = traineeMap.get(traineeId)
+    const primaryBatchId = latestAttempt.batchId || trainee?.batchIds?.[0] || null
+    const primaryBatch = primaryBatchId ? batchMap.get(primaryBatchId) : null
+    const passCount = groupedAttempts.filter((attempt) => attempt.status === 'pass').length
+    const failCount = groupedAttempts.filter((attempt) => attempt.status === 'fail').length
+    const averageScore = Number((groupedAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / groupedAttempts.length).toFixed(2))
+
+    return {
+      traineeId,
+      traineeName: latestAttempt.traineeName || trainee?.fullName || 'Trainee',
+      traineeEmail: latestAttempt.traineeEmail || trainee?.email || '',
+      batchId: primaryBatchId,
+      batchName: latestAttempt.batchName || primaryBatch?.name || null,
+      waveNumber: latestAttempt.waveNumber ?? primaryBatch?.waveNumber ?? null,
+      categoryId,
+      categoryTitle: latestAttempt.categoryTitle,
+      attemptCount: groupedAttempts.length,
+      passCount,
+      failCount,
+      averageScore,
+      highestScore: Math.max(...groupedAttempts.map((attempt) => attempt.score)),
+      lowestScore: Math.min(...groupedAttempts.map((attempt) => attempt.score)),
+      lastAttemptAt: latestAttempt.completedAt || latestAttempt.submittedAt,
+      certificateCount: certificates.filter((certificate) => certificate.traineeId === traineeId && certificate.categoryId === categoryId).length,
+    } satisfies TraineeReportRecord
+  })
+}
+
+function buildTrainerOwnerReports(
+  categories: CategoryRecord[],
+  assignments: AssignmentRecord[],
+  attempts: AttemptRecord[],
+  certificates: CertificateRecord[],
+  trainerRows: UserRow[],
+) {
+  const trainerMap = new Map(trainerRows.map((trainer) => [trainer.id, trainer]))
+
+  return unique(categories.map((category) => category.createdBy)).map((trainerId) => {
+    const trainerCategories = categories.filter((category) => category.createdBy === trainerId)
+    const trainerCategoryIds = new Set(trainerCategories.map((category) => category.id))
+    const trainerAssignments = assignments.filter((assignment) => trainerCategoryIds.has(assignment.categoryId))
+    const trainerAttempts = attempts.filter((attempt) => trainerCategoryIds.has(attempt.categoryId))
+    const trainerCertificates = certificates.filter((certificate) => trainerCategoryIds.has(certificate.categoryId))
+    const trainer = trainerMap.get(trainerId)
+    const passCount = trainerAttempts.filter((attempt) => attempt.status === 'pass').length
+
+    return {
+      trainerId,
+      trainerName: trainer?.full_name || 'Trainer',
+      trainerEmail: trainer?.email || '',
+      categoryCount: trainerCategories.length,
+      assignmentCount: trainerAssignments.length,
+      attemptCount: trainerAttempts.length,
+      passRate: trainerAttempts.length ? Number(((passCount / trainerAttempts.length) * 100).toFixed(2)) : 0,
+      averageScore: trainerAttempts.length
+        ? Number((trainerAttempts.reduce((sum, attempt) => sum + attempt.score, 0) / trainerAttempts.length).toFixed(2))
+        : 0,
+      certificateCount: trainerCertificates.length,
+    } satisfies TrainerReportRecord
+  })
+}
+
 export async function getAssessmentCsvTemplate() {
   const sampleRow = [
     '1',
@@ -1092,8 +1601,6 @@ export async function getAssessmentCsvTemplate() {
     'Skip verification if the customer sounds upset.',
     'Promise a refund immediately.',
     'Transfer to Tier 2 after validating the account details.',
-    'medium',
-    'Tier 2 escalation should happen only after the basic validation and troubleshooting steps are complete.',
   ]
 
   return [
@@ -1157,25 +1664,6 @@ export async function getTrainerAssessmentBootstrap(
       )) as TrainingCertificateRow[] | null) || [])
     : []
 
-  const categoryReportRows = categoryIds.length
-    ? (((await assertSupabaseResult(
-        supabase
-          .from('training_assessment_category_report')
-          .select('*')
-          .in('category_id', categoryIds)
-          .order('category_title', { ascending: true }),
-        'Unable to load category analytics.',
-      )) as TrainingCategoryReportRow[] | null) || [])
-    : []
-
-  const batchReportRows = (((await assertSupabaseResult(
-    supabase
-      .from('training_assessment_batch_report')
-      .select('*')
-      .order('batch_name', { ascending: true }),
-    'Unable to load batch analytics.',
-  )) as TrainingBatchReportRow[] | null) || [])
-
   const questionReportRows = categoryIds.length
     ? (((await assertSupabaseResult(
         supabase
@@ -1229,9 +1717,7 @@ export async function getTrainerAssessmentBootstrap(
     )
   }
 
-  const categoryReportMap = new Map(categoryReportRows.map((row) => [row.category_id, row]))
-  const categories: CategoryRecord[] = rawCategories.map((category) => {
-    const report = categoryReportMap.get(category.id)
+  const baseCategories: CategoryRecord[] = rawCategories.map((category) => {
     const assessment = assessments.find((item) => item.category_id === category.id)
     return {
       id: category.id,
@@ -1246,22 +1732,20 @@ export async function getTrainerAssessmentBootstrap(
       createdAt: category.created_at,
       updatedAt: category.updated_at,
       questionCount: questionsByCategory.get(category.id)?.length || 0,
-      assignmentCount: report?.assignment_count || assignmentRows.filter((row) => row.category_id === category.id).length,
-      activeAssignmentCount: assignmentRows.filter((row) => row.category_id === category.id && row.is_active).length,
-      attemptCount: report?.attempt_count || 0,
-      passRate: Number(report?.pass_rate || 0),
-      averageScore: Number(report?.average_score || 0),
-      completionRate: Number(report?.completion_rate || 0),
-      retakeRate: report?.attempt_count
-        ? Number((((report.retake_count || 0) / Math.max(report.attempt_count, 1)) * 100).toFixed(2))
-        : 0,
-      highestScore: Number(report?.highest_score || 0),
-      lowestScore: Number(report?.lowest_score || 0),
+      assignmentCount: 0,
+      activeAssignmentCount: 0,
+      attemptCount: 0,
+      passRate: 0,
+      averageScore: 0,
+      completionRate: 0,
+      retakeRate: 0,
+      highestScore: 0,
+      lowestScore: 0,
       assessments: assessment ? [assessmentsById.get(assessment.id)!] : [],
     }
   })
 
-  const categoriesById = new Map(categories.map((category) => [category.id, category]))
+  let categoriesById = new Map(baseCategories.map((category) => [category.id, category]))
   const attempts = attemptFeedRows.map(buildAttemptRecord)
   const latestAttemptsByAssignment = new Map<string, Map<string, AttemptRecord>>()
 
@@ -1276,9 +1760,16 @@ export async function getTrainerAssessmentBootstrap(
     latestAttemptsByAssignment.set(attempt.assignmentId, current)
   }
 
+  const assignmentTargetContext: TargetMembershipContext = {
+    batchMap,
+    traineeMap,
+    categoriesById,
+    batchMembershipRows,
+  }
+
   const assignments: AssignmentRecord[] = assignmentRows.map((assignment) => {
     const category = categoriesById.get(assignment.category_id)
-    const targetCounts = buildTargetCounts(assignment, batchMap, traineeMap, batchMembershipRows)
+    const targetCounts = buildTargetCounts(assignment, batchMap, traineeMap, categoriesById, batchMembershipRows)
     const latestByTrainee = latestAttemptsByAssignment.get(assignment.id) || new Map<string, AttemptRecord>()
     const latestAttempts = Array.from(latestByTrainee.values())
     const passedTrainees = latestAttempts.filter((attempt) => attempt.status === 'pass').length
@@ -1299,6 +1790,7 @@ export async function getTrainerAssessmentBootstrap(
       || (assignment.assignment_mode === 'selected_questions' && selectedQuestionIds.length
         ? selectedQuestionIds.length
         : questionsByCategory.get(assignment.category_id)?.length || 0)
+    const targetType = getAssignmentTargetType(assignment)
 
     const statusLabel = passedTrainees >= targetCounts.assignedTrainees && targetCounts.assignedTrainees > 0
       ? 'Completed'
@@ -1321,11 +1813,13 @@ export async function getTrainerAssessmentBootstrap(
       assessmentTitle: assignment.title || category?.title || 'Assessment',
       title: assignment.title || `${category?.title || 'Assessment'} Assessment`,
       description: assignment.description,
-      targetLabel: assignment.batch_id
-        ? formatBatchLabel(batchMap.get(assignment.batch_id) || null)
-        : traineeMap.get(assignment.trainee_id || '')?.fullName || 'Trainee',
-      targetType: assignment.batch_id ? 'batch' : 'trainee',
-      waveNumber: targetCounts.waveNumber,
+      targetLabel: getAssignmentTargetLabel(assignment, assignmentTargetContext),
+      targetType,
+      waveNumber:
+        assignment.wave_number
+        ?? targetCounts.waveNumber
+        ?? batchMap.get(assignment.batch_id || '')?.waveNumber
+        ?? null,
       assignmentMode: assignment.assignment_mode || 'entire_category',
       questionCount,
       randomQuestionCount: assignment.assignment_mode === 'random_subset' ? questionCount : null,
@@ -1352,47 +1846,61 @@ export async function getTrainerAssessmentBootstrap(
   const certificates = certificateRows.map((certificate) =>
     buildCertificateRecord(certificate, categoriesById, assignmentsById, assessmentsById),
   )
-
-  const categoryReports: CategoryReportRecord[] = categoryReportRows.map((report) => ({
-    categoryId: report.category_id,
-    categoryTitle: report.category_title,
-    passingScore: report.passing_score,
-    questionCount: categoriesById.get(report.category_id)?.questionCount || 0,
-    assignmentCount: report.assignment_count || 0,
-    assignedTraineeCount: report.assigned_trainee_count || 0,
-    completedTraineeCount: report.completed_trainee_count || 0,
-    attemptCount: report.attempt_count,
-    passCount: report.pass_count,
-    failCount: report.fail_count,
-    averageScore: Number(report.average_score || 0),
-    passRate: Number(report.pass_rate || 0),
-    failRate: report.attempt_count
-      ? Number((((report.fail_count || 0) / Math.max(report.attempt_count, 1)) * 100).toFixed(2))
-      : 0,
-    retakeRate: report.attempt_count
-      ? Number((((report.retake_count || 0) / Math.max(report.attempt_count, 1)) * 100).toFixed(2))
-      : 0,
-    highestScore: Number(report.highest_score || 0),
-    lowestScore: Number(report.lowest_score || 0),
-    completionRate: Number(report.completion_rate || 0),
-  }))
-
-  const batchReports: BatchReportRecord[] = batchReportRows.map((report) => ({
-    batchId: report.batch_id,
-    batchName: report.batch_name,
-    waveNumber: report.wave_number,
-    categoryId: report.category_id,
-    categoryTitle: report.category_title,
-    assignmentCount: report.assignment_count,
-    assignedTraineeCount: report.assigned_trainee_count,
-    completedTraineeCount: report.completed_trainee_count,
-    attemptCount: report.attempt_count,
-    averageScore: Number(report.average_score || 0),
-    passRate: Number(report.pass_rate || 0),
-    completionRate: Number(report.completion_rate || 0),
-    highestScore: Number(report.highest_score || 0),
-    lowestScore: Number(report.lowest_score || 0),
-  }))
+  const waves = buildWaveOptions(batchOptions, batchMembershipRows)
+  const categoryReports = buildCategoryReportsFromData(
+    baseCategories,
+    assignments,
+    attempts,
+    batchMap,
+    traineeMap,
+    batchMembershipRows,
+  )
+  const categoryReportMap = new Map(categoryReports.map((report) => [report.categoryId, report]))
+  const categories = baseCategories.map((category) => {
+    const report = categoryReportMap.get(category.id)
+    return {
+      ...category,
+      assignmentCount: report?.assignmentCount || 0,
+      activeAssignmentCount: assignments.filter((assignment) => assignment.categoryId === category.id && assignment.isActive).length,
+      attemptCount: report?.attemptCount || 0,
+      passRate: report?.passRate || 0,
+      averageScore: report?.averageScore || 0,
+      completionRate: report?.completionRate || 0,
+      retakeRate: report?.retakeRate || 0,
+      highestScore: report?.highestScore || 0,
+      lowestScore: report?.lowestScore || 0,
+    }
+  })
+  categoriesById = new Map(categories.map((category) => [category.id, category]))
+  const batchReports = buildBatchReportsFromData(
+    categories,
+    assignments,
+    attempts,
+    batchOptions,
+    traineeMap,
+    batchMembershipRows,
+  )
+  const waveReports = buildWaveReportsFromData(
+    categories,
+    assignments,
+    attempts,
+    waves,
+    batchOptions,
+    traineeMap,
+    batchMembershipRows,
+  )
+  const traineeReports = buildTraineeReportsFromData(attempts, certificates, traineeMap, batchMap)
+  const trainerIds = unique(categories.map((category) => category.createdBy))
+  const trainerRows = trainerIds.length
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('user')
+          .select('id,email,full_name,role')
+          .in('id', trainerIds),
+        'Unable to load trainer reporting records.',
+      )) as UserRow[] | null) || [])
+    : []
+  const trainerReports = buildTrainerOwnerReports(categories, assignments, attempts, certificates, trainerRows)
 
   const questionReports: QuestionReportRecord[] = questionReportRows.map((report) => ({
     questionId: report.question_id,
@@ -1410,11 +1918,14 @@ export async function getTrainerAssessmentBootstrap(
 
   const totalAttempts = attempts.length
   const totalPassed = attempts.filter((attempt) => attempt.status === 'pass').length
+  const totalFailed = attempts.filter((attempt) => attempt.status === 'fail').length
+  const retakeAttempts = attempts.filter((attempt) => attempt.attemptNo > 1).length
 
   return {
     categories,
     questions: questionRecords,
     batches: batchOptions,
+    waves,
     trainees: traineeOptions,
     assignments,
     attempts,
@@ -1422,6 +1933,9 @@ export async function getTrainerAssessmentBootstrap(
     reports: {
       categories: categoryReports,
       batches: batchReports,
+      waves: waveReports,
+      trainees: traineeReports,
+      trainers: trainerReports,
       questions: questionReports,
     },
     analytics: {
@@ -1430,9 +1944,13 @@ export async function getTrainerAssessmentBootstrap(
       activeAssignments: assignments.filter((assignment) => assignment.isActive).length,
       totalAttempts,
       passRate: totalAttempts ? Number(((totalPassed / totalAttempts) * 100).toFixed(2)) : 0,
+      failRate: totalAttempts ? Number(((totalFailed / totalAttempts) * 100).toFixed(2)) : 0,
+      retakeRate: totalAttempts ? Number(((retakeAttempts / totalAttempts) * 100).toFixed(2)) : 0,
       averageScore: totalAttempts
         ? Number((attempts.reduce((sum, attempt) => sum + attempt.score, 0) / totalAttempts).toFixed(2))
         : 0,
+      highestScore: totalAttempts ? Math.max(...attempts.map((attempt) => attempt.score)) : 0,
+      lowestScore: totalAttempts ? Math.min(...attempts.map((attempt) => attempt.score)) : 0,
       certificatesIssued: certificates.length,
     },
   }
@@ -1443,11 +1961,40 @@ export async function createCategory(
   payload: CreateCategoryPayload,
 ) {
   const supabase = createSupabaseAdminClient()
+  const normalizedTitle = payload.title.trim()
+  const existing = await findTrainerCategoryByTitle(sessionUser, normalizedTitle)
+
+  if (existing && existing.active_status && !existing.is_archived) {
+    throw new AssessmentHttpError(400, 'An assessment category with this title already exists in your workspace.')
+  }
+
+  if (existing) {
+    const reactivated = await assertSupabaseResult(
+      supabase
+        .from('training_assessment_categories')
+        .update({
+          title: normalizedTitle,
+          description: payload.description?.trim() || null,
+          passing_score: payload.passingScore,
+          active_status: true,
+          is_archived: false,
+        })
+        .eq('id', existing.id)
+        .select('*')
+        .single(),
+      'Unable to reactivate the archived assessment category.',
+    ) as TrainingCategoryRow | null
+
+    const category = expectSupabaseRow(reactivated, 'Unable to reactivate the archived assessment category.')
+    await ensurePrimaryAssessment(category.id, category)
+    return category
+  }
+
   const inserted = await assertSupabaseResult(
     supabase
       .from('training_assessment_categories')
       .insert({
-        title: payload.title.trim(),
+        title: normalizedTitle,
         description: payload.description?.trim() || null,
         passing_score: payload.passingScore,
         created_by: sessionUser.userId,
@@ -1572,6 +2119,23 @@ async function getNextQuestionNumber(categoryId: string) {
   return (rows[0]?.question_number || 0) + 1
 }
 
+async function findTrainerCategoryByTitle(
+  sessionUser: BackendSessionUser,
+  title: string,
+) {
+  const supabase = createSupabaseAdminClient()
+  const rows = ((await assertSupabaseResult(
+    supabase
+      .from('training_assessment_categories')
+      .select('*')
+      .eq('created_by', sessionUser.userId)
+      .order('created_at', { ascending: true }),
+    'Unable to verify the existing category title.',
+  )) as TrainingCategoryRow[] | null) || []
+
+  return rows.find((row) => normalizeAssessmentAnswer(row.title) === normalizeAssessmentAnswer(title)) || null
+}
+
 export async function createQuestion(
   sessionUser: BackendSessionUser,
   payload: CreateQuestionPayload,
@@ -1581,6 +2145,12 @@ export async function createQuestion(
   const nextQuestionNumber = payload.questionNumber || await getNextQuestionNumber(category.id)
   const nextOrderIndex = payload.orderIndex || nextQuestionNumber - 1
   const questionType = payload.questionType || questionTypeFromChoices(payload.options)
+  const validatedQuestion = questionType === 'multiple_choice'
+    ? validateMultipleChoicePayload(payload.options, payload.correctAnswer)
+    : {
+        choices: [] as string[],
+        correctAnswer: payload.correctAnswer.trim(),
+      }
 
   const inserted = await assertSupabaseResult(
     supabase
@@ -1592,9 +2162,9 @@ export async function createQuestion(
         question_text: payload.questionText.trim(),
         question_type: questionType,
         options: questionType === 'multiple_choice'
-          ? payload.options.map((option) => option.trim()).filter(Boolean)
+          ? validatedQuestion.choices
           : [],
-        correct_answer: payload.correctAnswer.trim(),
+        correct_answer: validatedQuestion.correctAnswer,
         difficulty: payload.difficulty || null,
         explanation: payload.explanation?.trim() || null,
         order_index: nextOrderIndex,
@@ -1621,6 +2191,12 @@ export async function updateQuestion(
   })
   const supabase = createSupabaseAdminClient()
   const questionType = payload.questionType || questionTypeFromChoices(payload.options)
+  const validatedQuestion = questionType === 'multiple_choice'
+    ? validateMultipleChoicePayload(payload.options, payload.correctAnswer)
+    : {
+        choices: [] as string[],
+        correctAnswer: payload.correctAnswer.trim(),
+      }
 
   const updated = await assertSupabaseResult(
     supabase
@@ -1632,9 +2208,9 @@ export async function updateQuestion(
         question_text: payload.questionText.trim(),
         question_type: questionType,
         options: questionType === 'multiple_choice'
-          ? payload.options.map((option) => option.trim()).filter(Boolean)
+          ? validatedQuestion.choices
           : [],
-        correct_answer: payload.correctAnswer.trim(),
+        correct_answer: validatedQuestion.correctAnswer,
         difficulty: payload.difficulty || null,
         explanation: payload.explanation?.trim() || null,
         order_index: payload.orderIndex,
@@ -1688,15 +2264,35 @@ export async function bulkUploadQuestions(
   for (const category of categoryRows) {
     assessmentMap.set(category.id, await ensurePrimaryAssessment(category.id, category))
   }
+  const existingQuestions = await loadQuestionsByCategoryIds(categoryRows.map((category) => category.id))
+  const existingQuestionNumbersByCategory = new Map<string, Set<number>>()
+  const existingQuestionTextsByCategory = new Map<string, Set<string>>()
+
+  for (const question of existingQuestions) {
+    const questionNumberSet = existingQuestionNumbersByCategory.get(question.category_id) || new Set<number>()
+    questionNumberSet.add(question.question_number)
+    existingQuestionNumbersByCategory.set(question.category_id, questionNumberSet)
+
+    const questionTextSet = existingQuestionTextsByCategory.get(question.category_id) || new Set<string>()
+    questionTextSet.add(normalizeAssessmentAnswer(question.question_text))
+    existingQuestionTextsByCategory.set(question.category_id, questionTextSet)
+  }
 
   const columnIndex = new Map(header.map((column, index) => [column, index]))
   const errors: BulkUploadErrorRecord[] = []
   const importedQuestions: AssessmentQuestionRecord[] = []
+  const createdCategories: string[] = []
+  const pendingQuestionNumbersByCategory = new Map<string, Set<number>>()
+  const pendingQuestionTextsByCategory = new Map<string, Set<string>>()
   const supabase = createSupabaseAdminClient()
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]
     const getValue = (column: string) => row[columnIndex.get(column) || 0]?.trim() || ''
+    const getOptionalValue = (column: string) => {
+      const index = columnIndex.get(column)
+      return index === undefined ? '' : row[index]?.trim() || ''
+    }
     const categoryName = getValue('Category')
     const questionNumberValue = getValue('Question Number')
     const questionText = getValue('Question')
@@ -1707,41 +2303,54 @@ export async function bulkUploadQuestions(
       getValue('Choice 4'),
     ]
     const correctAnswer = getValue('Correct Answer')
-    const difficulty = getValue('Difficulty').toLowerCase() as 'easy' | 'medium' | 'hard' | ''
-    const explanation = getValue('Explanation')
-
-    const category = categoryMap.get(normalizeAssessmentAnswer(categoryName))
+    const difficulty = getOptionalValue('Difficulty').toLowerCase() as 'easy' | 'medium' | 'hard' | ''
+    const explanation = getOptionalValue('Explanation')
     const rowNumber = rowIndex + 1
 
-    if (!category) {
+    if (!categoryName) {
       errors.push({
         rowNumber,
         category: categoryName,
         questionNumber: questionNumberValue,
         question: questionText,
-        error: 'Category does not exist or is not visible to this trainer.',
+        error: 'Category is required.',
       })
       continue
     }
 
-    if (!questionText || !correctAnswer || choices.filter(Boolean).length < 2) {
+    const parsedQuestionNumber = Number(questionNumberValue)
+    if (!Number.isInteger(parsedQuestionNumber) || parsedQuestionNumber < 1) {
       errors.push({
         rowNumber,
         category: categoryName,
         questionNumber: questionNumberValue,
         question: questionText,
-        error: 'Question text, correct answer, and at least two choices are required.',
+        error: 'Question Number must be a positive whole number.',
       })
       continue
     }
 
-    if (!choices.some((choice) => normalizeAssessmentAnswer(choice) === normalizeAssessmentAnswer(correctAnswer))) {
+    if (!questionText.trim()) {
       errors.push({
         rowNumber,
         category: categoryName,
         questionNumber: questionNumberValue,
         question: questionText,
-        error: 'Correct Answer must exactly match one of the provided choices.',
+        error: 'Question text is required.',
+      })
+      continue
+    }
+
+    let validatedChoices: ReturnType<typeof validateMultipleChoicePayload>
+    try {
+      validatedChoices = validateMultipleChoicePayload(choices, correctAnswer)
+    } catch (error) {
+      errors.push({
+        rowNumber,
+        category: categoryName,
+        questionNumber: questionNumberValue,
+        question: questionText,
+        error: error instanceof Error ? error.message : 'The multiple-choice row is invalid.',
       })
       continue
     }
@@ -1757,7 +2366,60 @@ export async function bulkUploadQuestions(
       continue
     }
 
-    const questionNumber = toNumber(questionNumberValue, 0) || await getNextQuestionNumber(category.id)
+    let category = categoryMap.get(normalizeAssessmentAnswer(categoryName))
+    if (!category) {
+      try {
+        category = await createCategory(sessionUser, {
+          title: categoryName,
+          description: '',
+          passingScore: DEFAULT_ASSESSMENT_PASSING_SCORE,
+        })
+        categoryMap.set(normalizeAssessmentAnswer(category.title), category)
+        assessmentMap.set(category.id, await ensurePrimaryAssessment(category.id, category))
+        existingQuestionNumbersByCategory.set(category.id, new Set<number>())
+        existingQuestionTextsByCategory.set(category.id, new Set<string>())
+        pendingQuestionNumbersByCategory.set(category.id, new Set<number>())
+        pendingQuestionTextsByCategory.set(category.id, new Set<string>())
+        createdCategories.push(category.title)
+      } catch (error) {
+        errors.push({
+          rowNumber,
+          category: categoryName,
+          questionNumber: questionNumberValue,
+          question: questionText,
+          error: error instanceof Error ? error.message : 'Unable to create the missing category.',
+        })
+        continue
+      }
+    }
+
+    const existingQuestionNumbers = existingQuestionNumbersByCategory.get(category.id) || new Set<number>()
+    const pendingQuestionNumbers = pendingQuestionNumbersByCategory.get(category.id) || new Set<number>()
+    if (existingQuestionNumbers.has(parsedQuestionNumber) || pendingQuestionNumbers.has(parsedQuestionNumber)) {
+      errors.push({
+        rowNumber,
+        category: categoryName,
+        questionNumber: questionNumberValue,
+        question: questionText,
+        error: 'Question Number already exists for this category.',
+      })
+      continue
+    }
+
+    const normalizedQuestionText = normalizeAssessmentAnswer(questionText)
+    const existingQuestionTexts = existingQuestionTextsByCategory.get(category.id) || new Set<string>()
+    const pendingQuestionTexts = pendingQuestionTextsByCategory.get(category.id) || new Set<string>()
+    if (existingQuestionTexts.has(normalizedQuestionText) || pendingQuestionTexts.has(normalizedQuestionText)) {
+      errors.push({
+        rowNumber,
+        category: categoryName,
+        questionNumber: questionNumberValue,
+        question: questionText,
+        error: 'Duplicate question text detected for this category.',
+      })
+      continue
+    }
+
     const assessment = assessmentMap.get(category.id)!
 
     try {
@@ -1767,14 +2429,14 @@ export async function bulkUploadQuestions(
           .insert({
             assessment_id: assessment.id,
             category_id: category.id,
-            question_number: questionNumber,
+            question_number: parsedQuestionNumber,
             question_text: questionText,
             question_type: 'multiple_choice',
-            options: choices.filter(Boolean),
-            correct_answer: correctAnswer,
+            options: validatedChoices.choices,
+            correct_answer: validatedChoices.correctAnswer,
             difficulty: difficulty || null,
             explanation: explanation || null,
-            order_index: questionNumber - 1,
+            order_index: parsedQuestionNumber - 1,
             active_status: true,
             created_by: sessionUser.userId,
           })
@@ -1785,6 +2447,10 @@ export async function bulkUploadQuestions(
 
       if (inserted) {
         importedQuestions.push(buildQuestionRecord(inserted, category.title))
+        pendingQuestionNumbers.add(parsedQuestionNumber)
+        pendingQuestionTexts.add(normalizedQuestionText)
+        pendingQuestionNumbersByCategory.set(category.id, pendingQuestionNumbers)
+        pendingQuestionTextsByCategory.set(category.id, pendingQuestionTexts)
       }
     } catch (error) {
       errors.push({
@@ -1803,7 +2469,69 @@ export async function bulkUploadQuestions(
     failedRows: errors.length,
     importedQuestions,
     errors,
+    createdCategories,
     errorCsv: errors.length ? buildBulkUploadErrorCsv(errors) : null,
+  }
+}
+
+function resolveAssignmentTargetFields(
+  category: TrainingCategoryRow,
+  batchOptions: BatchOption[],
+  traineeOptions: TraineeOption[],
+  payload: CreateAssignmentPayload,
+) {
+  const targetType = payload.targetType || (payload.traineeId ? 'trainee' : payload.waveNumber ? 'wave' : 'batch')
+  const ownedBatchOptions = batchOptions.filter((batch) => !batch.createdBy || batch.createdBy === category.created_by)
+
+  if (targetType === 'batch') {
+    if (!payload.batchId) {
+      throw new AssessmentHttpError(400, 'Pick a batch before saving the assignment.')
+    }
+
+    const selectedBatch = ownedBatchOptions.find((batch) => batch.id === payload.batchId)
+    if (!selectedBatch) {
+      throw new AssessmentHttpError(404, 'The selected batch is not available for this category owner.')
+    }
+
+    return {
+      targetType,
+      batchId: selectedBatch.id,
+      waveNumber: selectedBatch.waveNumber || null,
+      traineeId: null,
+    }
+  }
+
+  if (targetType === 'wave') {
+    if (!payload.waveNumber) {
+      throw new AssessmentHttpError(400, 'Pick a wave before saving the assignment.')
+    }
+
+    const matchingWaveBatches = ownedBatchOptions.filter((batch) => batch.waveNumber === payload.waveNumber)
+    if (!matchingWaveBatches.length) {
+      throw new AssessmentHttpError(404, 'The selected wave is not available for this category owner.')
+    }
+
+    return {
+      targetType,
+      batchId: null,
+      waveNumber: payload.waveNumber,
+      traineeId: null,
+    }
+  }
+
+  if (!payload.traineeId) {
+    throw new AssessmentHttpError(400, 'Pick a trainee before saving the assignment.')
+  }
+
+  if (!traineeOptions.some((trainee) => trainee.id === payload.traineeId)) {
+    throw new AssessmentHttpError(404, 'The selected trainee is not available in your workspace.')
+  }
+
+  return {
+    targetType,
+    batchId: null,
+    waveNumber: null,
+    traineeId: payload.traineeId,
   }
 }
 
@@ -1811,25 +2539,11 @@ export async function createAssignment(
   sessionUser: BackendSessionUser,
   payload: CreateAssignmentPayload,
 ) {
+  await createAssignmentValidationOnly(sessionUser, payload)
   const category = await getOwnedCategory(payload.categoryId, sessionUser)
   const supabase = createSupabaseAdminClient()
   const { batchOptions, traineeOptions } = await getTrainerBatches(sessionUser)
-
-  if (!payload.batchId && !payload.traineeId) {
-    throw new AssessmentHttpError(400, 'Pick a batch or a trainee before creating the assignment.')
-  }
-
-  if (payload.batchId && payload.traineeId) {
-    throw new AssessmentHttpError(400, 'Choose either a batch target or a trainee target, not both.')
-  }
-
-  if (payload.batchId && !batchOptions.some((batch) => batch.id === payload.batchId)) {
-    throw new AssessmentHttpError(404, 'The selected batch is not available in your workspace.')
-  }
-
-  if (payload.traineeId && !traineeOptions.some((trainee) => trainee.id === payload.traineeId)) {
-    throw new AssessmentHttpError(404, 'The selected trainee is not available in your workspace.')
-  }
+  const target = resolveAssignmentTargetFields(category, batchOptions, traineeOptions, payload)
 
   const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
   const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
@@ -1861,8 +2575,10 @@ export async function createAssignment(
       .insert({
         category_id: category.id,
         assessment_id: payload.assessmentId || null,
-        batch_id: payload.batchId || null,
-        trainee_id: payload.traineeId || null,
+        target_scope: target.targetType,
+        batch_id: target.batchId,
+        wave_number: target.waveNumber,
+        trainee_id: target.traineeId,
         assigned_by: sessionUser.userId,
         due_at: payload.dueAt || null,
         title: payload.title.trim(),
@@ -1912,14 +2628,19 @@ export async function updateAssignment(
   await createAssignmentValidationOnly(sessionUser, payload, existing.id)
 
   const supabase = createSupabaseAdminClient()
+  const category = await getOwnedCategory(payload.categoryId, sessionUser)
+  const { batchOptions, traineeOptions } = await getTrainerBatches(sessionUser)
+  const target = resolveAssignmentTargetFields(category, batchOptions, traineeOptions, payload)
   await assertSupabaseResult(
     supabase
       .from('training_assessment_assignments')
       .update({
         category_id: payload.categoryId,
         assessment_id: payload.assessmentId || null,
-        batch_id: payload.batchId || null,
-        trainee_id: payload.traineeId || null,
+        target_scope: target.targetType,
+        batch_id: target.batchId,
+        wave_number: target.waveNumber,
+        trainee_id: target.traineeId,
         due_at: payload.dueAt || null,
         title: payload.title.trim(),
         description: payload.description?.trim() || null,
@@ -1970,19 +2691,7 @@ async function createAssignmentValidationOnly(
 ) {
   const category = await getOwnedCategory(payload.categoryId, sessionUser)
   const { batchOptions, traineeOptions } = await getTrainerBatches(sessionUser)
-
-  if (!payload.batchId && !payload.traineeId) {
-    throw new AssessmentHttpError(400, 'Pick a batch or a trainee before saving the assignment.')
-  }
-  if (payload.batchId && payload.traineeId) {
-    throw new AssessmentHttpError(400, 'Choose either a batch target or a trainee target, not both.')
-  }
-  if (payload.batchId && !batchOptions.some((batch) => batch.id === payload.batchId)) {
-    throw new AssessmentHttpError(404, 'The selected batch is not available in your workspace.')
-  }
-  if (payload.traineeId && !traineeOptions.some((trainee) => trainee.id === payload.traineeId)) {
-    throw new AssessmentHttpError(404, 'The selected trainee is not available in your workspace.')
-  }
+  const target = resolveAssignmentTargetFields(category, batchOptions, traineeOptions, payload)
 
   const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
   const poolIds = new Set(categoryQuestions.filter((question) => question.active_status).map((question) => question.id))
@@ -2017,8 +2726,10 @@ async function createAssignmentValidationOnly(
       .from('training_assessment_assignments')
       .select('id')
       .eq('category_id', payload.categoryId)
-      .eq('batch_id', payload.batchId || null)
-      .eq('trainee_id', payload.traineeId || null)
+      .eq('target_scope', target.targetType)
+      .eq('batch_id', target.batchId)
+      .eq('wave_number', target.waveNumber)
+      .eq('trainee_id', target.traineeId)
       .eq('title', payload.title.trim())
       .eq('is_active', true),
     'Unable to validate duplicate assignments.',
@@ -2043,32 +2754,6 @@ export async function deleteAssignment(
       .eq('id', assignmentId),
     'Unable to deactivate the assignment.',
   )
-}
-
-function mapCategoryReportRows(rows: TrainingCategoryReportRow[], categoriesById: Map<string, CategoryRecord>) {
-  return rows.map((report) => ({
-    categoryId: report.category_id,
-    categoryTitle: report.category_title,
-    passingScore: report.passing_score,
-    questionCount: categoriesById.get(report.category_id)?.questionCount || 0,
-    assignmentCount: report.assignment_count || 0,
-    assignedTraineeCount: report.assigned_trainee_count || 0,
-    completedTraineeCount: report.completed_trainee_count || 0,
-    attemptCount: report.attempt_count,
-    passCount: report.pass_count,
-    failCount: report.fail_count,
-    averageScore: Number(report.average_score || 0),
-    passRate: Number(report.pass_rate || 0),
-    failRate: report.attempt_count
-      ? Number((((report.fail_count || 0) / Math.max(report.attempt_count, 1)) * 100).toFixed(2))
-      : 0,
-    retakeRate: report.attempt_count
-      ? Number((((report.retake_count || 0) / Math.max(report.attempt_count, 1)) * 100).toFixed(2))
-      : 0,
-    highestScore: Number(report.highest_score || 0),
-    lowestScore: Number(report.lowest_score || 0),
-    completionRate: Number(report.completion_rate || 0),
-  }))
 }
 
 async function getAssignmentPoolQuestionRows(
@@ -2130,6 +2815,23 @@ export async function getTraineeAssessmentDashboard(
     'Unable to load trainee batch membership.',
   )) as BatchUserRow[] | null) || [])
   const batchIds = memberships.map((row) => row.batch_id)
+  const batchRows = batchIds.length
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('batch')
+          .select('id,name,description,wave_number,created_by,is_active')
+          .in('id', batchIds),
+        'Unable to load trainee batch labels.',
+      )) as BatchRow[] | null) || [])
+    : []
+  const batchMap = new Map(batchRows.map((batch) => [batch.id, {
+    id: batch.id,
+    name: batch.name,
+    description: batch.description,
+    waveNumber: batch.wave_number,
+    traineeCount: 0,
+    createdBy: batch.created_by,
+  } satisfies BatchOption]))
 
   const directAssignments = (((await assertSupabaseResult(
     supabase
@@ -2152,9 +2854,18 @@ export async function getTraineeAssessmentDashboard(
         'Unable to load batch assignments.',
       )) as TrainingAssignmentRow[] | null) || [])
     : []
+  const waveAssignments = (((await assertSupabaseResult(
+    supabase
+      .from('training_assessment_assignments')
+      .select('*')
+      .eq('is_active', true)
+      .eq('target_scope', 'wave')
+      .order('assigned_at', { ascending: false }),
+    'Unable to load wave assignments.',
+  )) as TrainingAssignmentRow[] | null) || [])
 
   const assignmentMap = new Map<string, TrainingAssignmentRow>()
-  for (const assignment of [...directAssignments, ...batchAssignments]) {
+  for (const assignment of [...directAssignments, ...batchAssignments, ...waveAssignments]) {
     assignmentMap.set(assignment.id, assignment)
   }
   const assignments = Array.from(assignmentMap.values())
@@ -2172,8 +2883,29 @@ export async function getTraineeAssessmentDashboard(
     : []
 
   const activeCategories = categories.filter((category) => !category.is_archived && category.active_status)
-  const activeCategoryIdSet = new Set(activeCategories.map((category) => category.id))
-  const filteredAssignments = assignments.filter((assignment) => activeCategoryIdSet.has(assignment.category_id))
+  const activeCategoryMap = new Map(activeCategories.map((category) => [category.id, category]))
+  const filteredAssignments = assignments.filter((assignment) => {
+    const category = activeCategoryMap.get(assignment.category_id)
+    if (!category) {
+      return false
+    }
+
+    if (assignment.trainee_id === sessionUser.userId) {
+      return true
+    }
+
+    if (assignment.batch_id && batchIds.includes(assignment.batch_id)) {
+      return true
+    }
+
+    return (
+      getAssignmentTargetType(assignment) === 'wave'
+      && batchRows.some((batch) =>
+        batch.wave_number === assignment.wave_number
+        && batch.created_by === category.created_by,
+      )
+    )
+  })
   const categoryMap = new Map(activeCategories.map((category) => [category.id, category]))
 
   const primaryAssessments = activeCategories.length
@@ -2196,23 +2928,6 @@ export async function getTraineeAssessmentDashboard(
     current.push(question)
     questionsByCategory.set(question.category_id, current)
   }
-
-  const batchRows = batchIds.length
-    ? (((await assertSupabaseResult(
-        supabase
-          .from('batch')
-          .select('id,name,description,wave_number,created_by,is_active')
-          .in('id', batchIds),
-        'Unable to load trainee batch labels.',
-      )) as BatchRow[] | null) || [])
-    : []
-  const batchMap = new Map(batchRows.map((batch) => [batch.id, {
-    id: batch.id,
-    name: batch.name,
-    description: batch.description,
-    waveNumber: batch.wave_number,
-    traineeCount: 0,
-  }]))
 
   const attemptFeedRows = (((await assertSupabaseResult(
     supabase
@@ -2324,11 +3039,27 @@ export async function getTraineeAssessmentDashboard(
   }, new Map<string, number>())
 
   const assignmentQuestionRows = await loadAssignmentQuestionRows(assignmentIds)
+  const traineeAssignmentContext: TargetMembershipContext = {
+    batchMap,
+    traineeMap: new Map([[sessionUser.userId, {
+      id: sessionUser.userId,
+      fullName: sessionUser.userName,
+      email: '',
+      batchIds,
+      batchNames: batchIds.map((batchId) => formatBatchLabel(batchMap.get(batchId) || null)),
+    } satisfies TraineeOption]]),
+    categoriesById,
+    batchMembershipRows: memberships,
+  }
   const assignmentRecordsForCertificates = new Map<string, AssignmentRecord>()
   for (const assignment of filteredAssignments) {
+    const targetType = getAssignmentTargetType(assignment)
     assignmentRecordsForCertificates.set(assignment.id, {
       id: assignment.id,
       categoryId: assignment.category_id,
+      batchId: assignment.batch_id,
+      waveNumber: assignment.wave_number,
+      traineeId: assignment.trainee_id,
       assignedBy: assignment.assigned_by,
       assignedAt: assignment.assigned_at,
       dueAt: assignment.due_at,
@@ -2337,8 +3068,8 @@ export async function getTraineeAssessmentDashboard(
       categoryName: categoryMap.get(assignment.category_id)?.title || 'Assessment Category',
       assessmentTitle: assignment.title || categoryMap.get(assignment.category_id)?.title || 'Assessment',
       title: assignment.title || categoryMap.get(assignment.category_id)?.title || 'Assessment',
-      targetLabel: assignment.batch_id ? formatBatchLabel(batchMap.get(assignment.batch_id) || null) : 'Direct Assignment',
-      targetType: assignment.batch_id ? 'batch' : 'trainee',
+      targetLabel: getAssignmentTargetLabel(assignment, traineeAssignmentContext),
+      targetType,
     })
   }
 
@@ -2347,9 +3078,26 @@ export async function getTraineeAssessmentDashboard(
   )
   const certificateByAssignment = new Map(certificates.map((certificate) => [certificate.assignmentId || '', certificate]))
 
-  const availableAssessmentMap = new Map<string, { assignment: TrainingAssignmentRow; card: TraineeAssessmentCard }>()
+  const prioritizedAssignments = [...filteredAssignments].sort((left, right) => {
+    const leftPriority = getAssignmentPriority(left)
+    const rightPriority = getAssignmentPriority(right)
 
-  for (const assignment of filteredAssignments) {
+    if (leftPriority !== rightPriority) {
+      return rightPriority - leftPriority
+    }
+
+    const leftDue = toSortableTimestamp(left.due_at)
+    const rightDue = toSortableTimestamp(right.due_at)
+    if (leftDue !== rightDue) {
+      return leftDue - rightDue
+    }
+
+    return toSortableTimestamp(right.assigned_at, 0) - toSortableTimestamp(left.assigned_at, 0)
+  })
+
+  const availableAssessments: TraineeAssessmentCard[] = []
+
+  for (const assignment of prioritizedAssignments) {
     const category = categoryMap.get(assignment.category_id)
     if (!category) {
       continue
@@ -2368,18 +3116,21 @@ export async function getTraineeAssessmentDashboard(
     const canRetake = latestAttempt?.status === 'fail' && (maximumAttempts ? attemptCount < maximumAttempts : true)
     const canStart = !isCompleted && (!latestAttempt || canRetake || latestAttempt.status !== 'fail')
     const assessment = assessmentMap.get(category.id)
+    const targetType = getAssignmentTargetType(assignment)
     const card: TraineeAssessmentCard = {
       assignmentId: assignment.id,
       assessmentId: assessment?.id || assignment.assessment_id || assignment.id,
       categoryId: category.id,
       categoryTitle: category.title,
+      targetType,
+      waveNumber: assignment.wave_number ?? null,
       assignmentTitle: assignment.title || category.title,
       assessmentTitle: assignment.title || category.title,
       assessmentDescription: assignment.description || category.description,
       type: assessment?.type || 'multiple_choice',
       passingScore: assignment.passing_score || category.passing_score,
       targetDueAt: assignment.due_at,
-      targetLabel: assignment.batch_id ? formatBatchLabel(batchMap.get(assignment.batch_id) || null) : 'Direct Assignment',
+      targetLabel: getAssignmentTargetLabel(assignment, traineeAssignmentContext),
       questionCount: assignment.question_count || selectedQuestions.length,
       questionTypes: unique(selectedQuestions.map((question) => question.question_type)),
       latestAttempt,
@@ -2394,13 +3145,8 @@ export async function getTraineeAssessmentDashboard(
       questions: [],
     }
 
-    const existing = availableAssessmentMap.get(card.assignmentId)
-    if (!existing || shouldReplaceAvailableAssessment(existing.assignment, assignment)) {
-      availableAssessmentMap.set(card.assignmentId, { assignment, card })
-    }
+    availableAssessments.push(card)
   }
-
-  const availableAssessments = Array.from(availableAssessmentMap.values()).map((entry) => entry.card)
   const coachingNotes: CoachingNoteRecord[] = coachingRows
     .filter((note) => note.visibility === 'shared')
     .map((note) => ({
@@ -2418,6 +3164,8 @@ export async function getTraineeAssessmentDashboard(
   const averageScore = attempts.length
     ? Number((attempts.reduce((sum, attempt) => sum + attempt.score, 0) / attempts.length).toFixed(2))
     : 0
+  const completedAssignments = availableAssessments.filter((assessment) => !!assessment.latestAttempt).length
+  const passedAssignments = availableAssessments.filter((assessment) => assessment.latestAttempt?.status === 'pass').length
 
   return {
     availableAssessments,
@@ -2426,8 +3174,8 @@ export async function getTraineeAssessmentDashboard(
     certificates,
     stats: {
       assignedCount: availableAssessments.length,
-      completedCount: attempts.length,
-      passedCount: attempts.filter((attempt) => attempt.status === 'pass').length,
+      completedCount: completedAssignments,
+      passedCount: passedAssignments,
       averageScore,
       retakeCount: availableAssessments.filter((assessment) => assessment.canRetake).length,
       certificateCount: certificates.length,
@@ -2487,17 +3235,43 @@ export async function getTraineeAssessmentSession(
       .maybeSingle(),
     'Unable to load certificate state.',
   ) as TrainingCertificateRow | null
-
-  const batchTarget = assignment.batch_id
-    ? (await assertSupabaseResult(
+  const memberships = (((await assertSupabaseResult(
+    supabase
+      .from('batch_user')
+      .select('batch_id,user_id')
+      .eq('user_id', sessionUser.userId),
+    'Unable to load trainee batch membership for this session.',
+  )) as BatchUserRow[] | null) || [])
+  const batchIds = memberships.map((row) => row.batch_id)
+  const batchRows = batchIds.length
+    ? (((await assertSupabaseResult(
         supabase
           .from('batch')
           .select('id,name,description,wave_number,created_by,is_active')
-          .eq('id', assignment.batch_id)
-          .maybeSingle(),
-        'Unable to load the batch label for this assignment.',
-      )) as BatchRow | null
-    : null
+          .in('id', batchIds),
+        'Unable to load the batch labels for this assignment.',
+      )) as BatchRow[] | null) || [])
+    : []
+  const batchMap = new Map(batchRows.map((batch) => [batch.id, {
+    id: batch.id,
+    name: batch.name,
+    description: batch.description,
+    waveNumber: batch.wave_number,
+    traineeCount: 0,
+    createdBy: batch.created_by,
+  } satisfies BatchOption]))
+  const targetContext: TargetMembershipContext = {
+    batchMap,
+    batchMembershipRows: memberships,
+    traineeMap: new Map([[sessionUser.userId, {
+      id: sessionUser.userId,
+      fullName: sessionUser.userName,
+      email: '',
+      batchIds,
+      batchNames: batchIds.map((batchId) => formatBatchLabel(batchMap.get(batchId) || null)),
+    } satisfies TraineeOption]]),
+    categoriesById: new Map([[category.id, { createdBy: category.created_by, title: category.title }]]),
+  }
 
   const questionRows = await getAssignmentPoolQuestionRows(assignment, undefined)
   const orderedQuestions = questionRows.map((question) =>
@@ -2509,21 +3283,14 @@ export async function getTraineeAssessmentSession(
     assessmentId: primaryAssessment.id,
     categoryId: category.id,
     categoryTitle: category.title,
+    targetType: getAssignmentTargetType(assignment),
+    waveNumber: assignment.wave_number ?? null,
     assignmentTitle: assignment.title || category.title,
     assessmentTitle: assignment.title || category.title,
     description: assignment.description || category.description,
     passingScore: assignment.passing_score || category.passing_score,
     targetDueAt: assignment.due_at,
-    targetLabel: assignment.batch_id
-      ? formatBatchLabel(
-          batchTarget
-            ? {
-                name: batchTarget.name,
-                waveNumber: batchTarget.wave_number,
-              }
-            : null,
-        )
-      : 'Direct Assignment',
+    targetLabel: getAssignmentTargetLabel(assignment, targetContext),
     questionCount: assignment.question_count || orderedQuestions.length,
     attemptCount,
     attemptsRemaining,
@@ -2564,8 +3331,8 @@ export async function getTraineeAssessmentSession(
             categoryName: category.title,
             assessmentTitle: assignment.title || category.title,
             title: assignment.title || category.title,
-            targetLabel: 'Direct Assignment',
-            targetType: 'trainee',
+            targetLabel: getAssignmentTargetLabel(assignment, targetContext),
+            targetType: getAssignmentTargetType(assignment),
           }]]),
           new Map([[primaryAssessment.id, buildAssessmentRecord(primaryAssessment, [])]]),
         )
@@ -2618,9 +3385,39 @@ async function resolveAssignmentForSubmission(
       .order('assigned_at', { ascending: false }),
     'Unable to load matching assignments.',
   )) as TrainingAssignmentRow[] | null) || [])
-
+  const batchRows = batchIds.length
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('batch')
+          .select('id,name,description,wave_number,created_by,is_active')
+          .in('id', batchIds),
+        'Unable to verify trainee batch labels.',
+      )) as BatchRow[] | null) || [])
+    : []
+  const category = await assertSupabaseResult(
+    supabase
+      .from('training_assessment_categories')
+      .select('id,title,created_by')
+      .eq('id', assessment.category_id)
+      .maybeSingle(),
+    'Unable to verify the assignment category.',
+  ) as Pick<TrainingCategoryRow, 'id' | 'title' | 'created_by'> | null
+  const batchMap = new Map(batchRows.map((batch) => [batch.id, {
+    id: batch.id,
+    name: batch.name,
+    description: batch.description,
+    waveNumber: batch.wave_number,
+    traineeCount: 0,
+    createdBy: batch.created_by,
+  } satisfies BatchOption]))
   const matched = assignments.find((assignment) =>
-    (assignment.trainee_id === sessionUser.userId || (!!assignment.batch_id && batchIds.includes(assignment.batch_id)))
+    getAssignmentTargetTraineeIds(assignment, {
+      batchMap,
+      batchMembershipRows: memberships,
+      categoriesById: category
+        ? new Map([[assessment.category_id, { createdBy: category.created_by, title: category.title }]])
+        : new Map(),
+    }).includes(sessionUser.userId)
     && (assignment.assessment_id ? assignment.assessment_id === assessment.id : true),
   )
 
@@ -2670,6 +3467,43 @@ export async function submitAssessmentAttempt(
     throw new AssessmentHttpError(400, 'Maximum attempts reached for this assessment.')
   }
 
+  const memberships = (((await assertSupabaseResult(
+    supabase
+      .from('batch_user')
+      .select('batch_id,user_id')
+      .eq('user_id', sessionUser.userId),
+    'Unable to load trainee batch membership for attempt saving.',
+  )) as BatchUserRow[] | null) || [])
+  const batchIds = memberships.map((row) => row.batch_id)
+  const batchRows = batchIds.length
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('batch')
+          .select('id,name,description,wave_number,created_by,is_active')
+          .in('id', batchIds),
+        'Unable to load trainee batch labels for attempt saving.',
+      )) as BatchRow[] | null) || [])
+    : []
+  const actualBatchId = getAssignmentActualBatchIdForTrainee(assignment, sessionUser.userId, {
+    batchMap: new Map(batchRows.map((batch) => [batch.id, {
+      id: batch.id,
+      name: batch.name,
+      description: batch.description,
+      waveNumber: batch.wave_number,
+      traineeCount: 0,
+      createdBy: batch.created_by,
+    } satisfies BatchOption])),
+    batchMembershipRows: memberships,
+    traineeMap: new Map([[sessionUser.userId, {
+      id: sessionUser.userId,
+      fullName: sessionUser.userName,
+      email: '',
+      batchIds,
+      batchNames: [],
+    } satisfies TraineeOption]]),
+    categoriesById: new Map([[category.id, { createdBy: category.created_by, title: category.title }]]),
+  })
+
   const questionRows = await getAssignmentPoolQuestionRows(assignment, payload.questionIds)
   if (!questionRows.length) {
     throw new AssessmentHttpError(400, 'This assessment does not have any active questions right now.')
@@ -2712,7 +3546,7 @@ export async function submitAssessmentAttempt(
         assessment_id: primaryAssessment.id,
         category_id: category.id,
         trainee_id: sessionUser.userId,
-        batch_id: assignment.batch_id || null,
+        batch_id: actualBatchId,
         attempt_no: attemptNo,
         answers: payload.answers,
         question_results: scoring.questionResults,
@@ -2823,6 +3657,9 @@ export async function submitAssessmentAttempt(
         new Map([[assignment.id, {
           id: assignment.id,
           categoryId: assignment.category_id,
+          batchId: assignment.batch_id,
+          waveNumber: assignment.wave_number,
+          traineeId: assignment.trainee_id,
           assignedBy: assignment.assigned_by,
           assignedAt: assignment.assigned_at,
           dueAt: assignment.due_at,
@@ -2831,8 +3668,26 @@ export async function submitAssessmentAttempt(
           categoryName: category.title,
           assessmentTitle: assignment.title || category.title,
           title: assignment.title || category.title,
-          targetLabel: assignment.batch_id || assignment.trainee_id || 'Assignment',
-          targetType: assignment.batch_id ? 'batch' : 'trainee',
+          targetLabel: getAssignmentTargetLabel(assignment, {
+            batchMap: new Map(batchRows.map((batch) => [batch.id, {
+              id: batch.id,
+              name: batch.name,
+              description: batch.description,
+              waveNumber: batch.wave_number,
+              traineeCount: 0,
+              createdBy: batch.created_by,
+            } satisfies BatchOption])),
+            batchMembershipRows: memberships,
+            traineeMap: new Map([[sessionUser.userId, {
+              id: sessionUser.userId,
+              fullName: sessionUser.userName,
+              email: '',
+              batchIds,
+              batchNames: [],
+            } satisfies TraineeOption]]),
+            categoriesById: new Map([[category.id, { createdBy: category.created_by, title: category.title }]]),
+          }),
+          targetType: getAssignmentTargetType(assignment),
         }]]),
         new Map([[primaryAssessment.id, buildAssessmentRecord(primaryAssessment, [])]]),
       )

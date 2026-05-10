@@ -37,15 +37,21 @@ from ..services.certificate_awards import (
     sync_trainee_completion_certificates,
 )
 from ..services.microlearning import (
+    advance_flashcard_assignment_runtime,
     assignment_is_current,
     ensure_module_exercises,
     evaluate_exercise_submission,
     filter_current_assignments,
+    get_flashcard_session_state,
+    persist_flashcard_attempt_result,
     reset_assignment_for_retake,
     refresh_assignment_progress,
     serialize_assignment_detail,
     serialize_assignment_summary,
     serialize_microlearning_module,
+    start_flashcard_assignment_runtime,
+    sync_flashcard_assignment_runtime,
+    update_flashcard_assignment_runtime_progress,
 )
 from ..services.speech_assessment import (
     assess_audio_submission,
@@ -100,6 +106,17 @@ class MicrolearningExerciseSubmission(BaseModel):
     response_text: Optional[str] = None
     selected_option: Optional[str] = None
     input_mode: Optional[str] = None
+    revealed_side: Optional[str] = None
+    study_time_seconds: Optional[int] = None
+    answer_time_seconds: Optional[int] = None
+    status: Optional[str] = None
+    answered_at: Optional[datetime] = None
+    timer_expired: Optional[bool] = None
+
+
+class MicrolearningFlashcardSessionUpdate(BaseModel):
+    exercise_id: str
+    response_text: Optional[str] = None
     revealed_side: Optional[str] = None
 
 
@@ -281,6 +298,7 @@ def _build_trainee_microlearning_report(
             assignment.completed_at,
             assignment.certificate_id,
         )
+        did_update = sync_flashcard_assignment_runtime(db, assignment) or did_update
         refresh_assignment_progress(assignment)
         summary = serialize_assignment_summary(assignment)
         if summary.get("is_passed") and assignment.status in {"completed", "certified"}:
@@ -1301,6 +1319,7 @@ async def list_microlearning_assignments(
             assignment.completed_exercises,
             assignment.completed_at,
         )
+        did_update = sync_flashcard_assignment_runtime(db, assignment) or did_update
         refresh_assignment_progress(assignment)
         after = (
             assignment.status,
@@ -1340,6 +1359,7 @@ async def get_microlearning_assignment_detail(
         assignment.completed_exercises,
         assignment.completed_at,
     )
+    did_update = sync_flashcard_assignment_runtime(db, assignment) or did_update
     refresh_assignment_progress(assignment)
     after = (
         assignment.status,
@@ -1368,8 +1388,13 @@ async def start_microlearning_assignment(
     )
 
     ensure_module_exercises(assignment.module)
+    start_time = datetime.utcnow()
     if assignment.started_at is None:
-        assignment.started_at = datetime.utcnow()
+        assignment.started_at = start_time
+    start_flashcard_assignment_runtime(
+        assignment,
+        now=assignment.started_at or start_time,
+    )
 
     refresh_assignment_progress(assignment)
     db.commit()
@@ -1378,6 +1403,47 @@ async def start_microlearning_assignment(
     return {
         "status": "started",
         "assignment": serialize_assignment_summary(assignment),
+        "flashcard_session": get_flashcard_session_state(assignment),
+    }
+
+
+@router.post("/microlearning-assignments/{assignment_id}/flashcard-session")
+async def update_microlearning_flashcard_session(
+    assignment_id: str,
+    payload: MicrolearningFlashcardSessionUpdate,
+    current_user: Any = Depends(verify_trainee),
+    db: Session = Depends(),
+):
+    """Persist the in-progress flashcard answer so refreshes can resume cleanly."""
+    assignment = _get_trainee_microlearning_assignment(
+        db,
+        trainee_id=current_user.id,
+        assignment_id=assignment_id,
+    )
+
+    ensure_module_exercises(assignment.module)
+    sync_flashcard_assignment_runtime(db, assignment)
+
+    started_at = assignment.started_at or datetime.utcnow()
+    if assignment.started_at is None:
+        assignment.started_at = started_at
+        start_flashcard_assignment_runtime(assignment, now=started_at)
+
+    session_state = update_flashcard_assignment_runtime_progress(
+        assignment,
+        exercise_id=payload.exercise_id,
+        draft_response_text=payload.response_text,
+        revealed_side=payload.revealed_side,
+        now=datetime.utcnow(),
+    )
+    refresh_assignment_progress(assignment)
+    db.commit()
+    db.refresh(assignment)
+
+    return {
+        "status": "updated",
+        "assignment": serialize_assignment_summary(assignment),
+        "flashcard_session": session_state or get_flashcard_session_state(assignment),
     }
 
 
@@ -1397,22 +1463,103 @@ async def submit_microlearning_exercise(
     )
 
     ensure_module_exercises(assignment.module)
+    sync_flashcard_assignment_runtime(db, assignment)
     exercises = (assignment.module.exercises or []) if assignment.module else []
     exercise = next((item for item in exercises if item.get("id") == exercise_id), None)
     if not exercise:
         raise HTTPException(status_code=404, detail="Exercise not found")
 
-    attempt = evaluate_exercise_submission(
-        exercise,
-        response_text=payload.response_text,
-        selected_option=payload.selected_option,
-        input_mode=payload.input_mode,
-        revealed_side=payload.revealed_side,
-    )
+    existing_attempt = dict(assignment.responses or {}).get(exercise_id)
+    if (
+        str(exercise.get("type") or "").strip().lower() == "flashcard_recall"
+        and isinstance(existing_attempt, dict)
+        and existing_attempt.get("is_completed")
+    ):
+        return {
+            "status": "saved",
+            "attempt": existing_attempt,
+            "assignment": serialize_assignment_summary(assignment),
+            "flashcard_session": get_flashcard_session_state(assignment),
+        }
 
-    responses = dict(assignment.responses or {})
-    responses[exercise_id] = attempt
-    assignment.responses = responses
+    now = datetime.utcnow()
+    flashcard_session = get_flashcard_session_state(assignment, now=now)
+    if str(exercise.get("type") or "").strip().lower() == "flashcard_recall":
+        if assignment.started_at is None:
+            raise HTTPException(status_code=409, detail="Start the flashcard module before answering.")
+        if not flashcard_session or flashcard_session.get("phase") == "not_started":
+            raise HTTPException(status_code=409, detail="The flashcard timer is not active yet.")
+        if flashcard_session.get("phase") == "completed":
+            raise HTTPException(status_code=409, detail="This flashcard module is already complete.")
+        if flashcard_session.get("current_exercise_id") != exercise_id:
+            raise HTTPException(
+                status_code=409,
+                detail="Only the active flashcard can be answered. Wait for the guided sequence to advance.",
+            )
+        if flashcard_session.get("phase") == "study":
+            raise HTTPException(
+                status_code=409,
+                detail="Study Mode is still active. Answers unlock automatically after the 30-second study timer ends.",
+            )
+        if not payload.timer_expired:
+            raise HTTPException(
+                status_code=409,
+                detail="Flashcard answers are saved automatically when the 60-second answer timer expires.",
+            )
+
+        study_started_text = flashcard_session.get("study_started_at")
+        resolved_study_started_at = (
+            datetime.fromisoformat(str(study_started_text))
+            if study_started_text
+            else now
+        )
+
+        answer_deadline_text = flashcard_session.get("answer_deadline_at")
+        resolved_answer_deadline = (
+            datetime.fromisoformat(str(answer_deadline_text))
+            if answer_deadline_text
+            else resolved_study_started_at + timedelta(seconds=90)
+        )
+        answer_status = payload.status or ("timed_out" if (payload.response_text or "").strip() else "unanswered")
+        attempt = evaluate_exercise_submission(
+            exercise,
+            response_text=payload.response_text,
+            selected_option=payload.selected_option,
+            input_mode=payload.input_mode,
+            revealed_side=payload.revealed_side or "back",
+            study_time_seconds=flashcard_session.get("study_time_seconds"),
+            answer_time_seconds=flashcard_session.get("answer_time_seconds"),
+            answer_status=answer_status,
+            answered_at=resolved_answer_deadline,
+            timer_expired=True,
+            mark_completed=True,
+        )
+        responses = dict(assignment.responses or {})
+        responses[exercise_id] = attempt
+        assignment.responses = responses
+        persist_flashcard_attempt_result(
+            db,
+            assignment,
+            exercise_id=exercise_id,
+            attempt=attempt,
+            study_started_at=resolved_study_started_at,
+        )
+        advance_flashcard_assignment_runtime(
+            assignment,
+            next_start_at=resolved_answer_deadline,
+        )
+    else:
+        attempt = evaluate_exercise_submission(
+            exercise,
+            response_text=payload.response_text,
+            selected_option=payload.selected_option,
+            input_mode=payload.input_mode,
+            revealed_side=payload.revealed_side,
+        )
+        responses = dict(assignment.responses or {})
+        responses[exercise_id] = attempt
+        assignment.responses = responses
+
     refresh_assignment_progress(assignment)
     assignment_summary = serialize_assignment_summary(assignment)
     if assignment_summary.get("is_passed") and assignment.status in {"completed", "certified"}:
@@ -1429,6 +1576,7 @@ async def submit_microlearning_exercise(
         "status": "saved",
         "attempt": attempt,
         "assignment": serialize_assignment_summary(assignment),
+        "flashcard_session": get_flashcard_session_state(assignment),
     }
 
 

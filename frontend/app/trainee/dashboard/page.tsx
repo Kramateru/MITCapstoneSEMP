@@ -4,22 +4,18 @@ import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { useAuth } from '@/app/context/AuthContext';
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import {
-    Award,
     BookOpen,
     ClipboardList,
     Clock,
     GraduationCap,
     Medal,
     MessageSquare,
-    Mic,
     Play,
-    RotateCcw,
-    ShieldCheck,
     Target,
-    TrendingUp,
+    TrendingUp
 } from 'lucide-react';
 import Link from 'next/link';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -141,41 +137,42 @@ export default function TraineeDashboard() {
     }
   }
 
+  async function loadSimFloorWorkspace() {
+    try {
+      if (!user?.user_id) return;
+      const token = localStorage.getItem('token');
+      const [reportResponse, availableResponse] = await Promise.all([
+        fetch(`/api/call-simulation/reports/trainee/${user.user_id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        }),
+        fetch('/api/call-simulation/available', {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        }),
+      ]);
+
+      if (reportResponse.ok) {
+        const payload = await reportResponse.json() as SimFloorDashboardReport;
+        setSimFloorReport(payload);
+      }
+
+      if (availableResponse.ok) {
+        const payload = await availableResponse.json() as { scenarios?: SimFloorAssignedScenario[] };
+        setAssignedSimFloorScenarios(payload.scenarios || []);
+      }
+    } catch (error) {
+      console.error('Error loading Call Simulation report:', error);
+    }
+  }
+
   useEffect(() => {
     void fetchTraineeData();
+    void loadSimFloorWorkspace();
   }, []);
 
   useEffect(() => {
     if (!user?.user_id) return;
-
-    const loadSimFloorWorkspace = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const [reportResponse, availableResponse] = await Promise.all([
-          fetch(`/api/call-simulation/reports/trainee/${user.user_id}`, {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: 'no-store',
-          }),
-          fetch('/api/call-simulation/available', {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: 'no-store',
-          }),
-        ]);
-
-        if (reportResponse.ok) {
-          const payload = (await reportResponse.json()) as SimFloorDashboardReport;
-          setSimFloorReport(payload);
-        }
-
-        if (availableResponse.ok) {
-          const payload = (await availableResponse.json()) as { scenarios?: SimFloorAssignedScenario[] };
-          setAssignedSimFloorScenarios(payload.scenarios || []);
-        }
-      } catch (error) {
-        console.error('Error loading Call Simulation report:', error);
-      }
-    };
-
     void loadSimFloorWorkspace();
   }, [user?.user_id]);
 
@@ -191,26 +188,23 @@ export default function TraineeDashboard() {
     retake: coachingLogs.filter((log) => log.competency_status === 'not_competent').length,
   };
 
-  const prioritizedSimFloorScenario = useMemo(() => {
-    return [...assignedSimFloorScenarios].sort((left, right) => {
+  const prioritizedSimFloorScenario = assignedSimFloorScenarios
+    .sort((left, right) => {
       const leftPriority = left.retake_required ? 0 : left.attempt_count === 0 ? 1 : left.competent ? 3 : 2;
       const rightPriority = right.retake_required ? 0 : right.attempt_count === 0 ? 1 : right.competent ? 3 : 2;
       if (leftPriority !== rightPriority) {
         return leftPriority - rightPriority;
       }
-
       const leftAssignedAt = left.assigned_at ? new Date(left.assigned_at).getTime() : 0;
       const rightAssignedAt = right.assigned_at ? new Date(right.assigned_at).getTime() : 0;
       if (leftAssignedAt !== rightAssignedAt) {
         return rightAssignedAt - leftAssignedAt;
       }
-
       return left.title.localeCompare(right.title);
     })[0] || null;
-  }, [assignedSimFloorScenarios]);
 
   const simFloorHref = prioritizedSimFloorScenario
-    ? `/trainee/call-simulation?scenarioId=${encodeURIComponent(prioritizedSimFloorScenario.id)}`
+    ? `/trainee/call-simulation/${encodeURIComponent(prioritizedSimFloorScenario.id)}`
     : '/trainee/call-simulation';
   const simFloorDescription = prioritizedSimFloorScenario
     ? prioritizedSimFloorScenario.retake_required
@@ -487,13 +481,6 @@ export default function TraineeDashboard() {
 
                 <div className="relative grid gap-4 md:grid-cols-2">
                   <QuickLinkCard
-                    title="Call Simulation"
-                    description={simFloorDescription}
-                    href={simFloorHref}
-                    icon={<Mic size={20} />}
-                    accent="violet"
-                  />
-                  <QuickLinkCard
                     title="Microlearning"
                     description="Continue your assigned learning modules and save exercise progress."
                     href="/trainee/microlearning"
@@ -532,75 +519,6 @@ export default function TraineeDashboard() {
 
           {/* Sidebar - Coaching and Recent Sessions */}
           <div className="space-y-6">
-            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-              <div className="absolute inset-0 bg-gradient-to-br from-violet-500/5 to-purple-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-              <div className="relative">
-                <h3 className="text-xl font-bold text-slate-900 mb-6">Call Simulation Snapshot</h3>
-                {simFloorReport ? (
-                  <div className="space-y-6">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="group/item rounded-3xl border border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-violet-700">Mock Calls</div>
-                        <div className="mt-3 text-2xl font-bold text-violet-900">{simFloorReport.summary.total_sessions}</div>
-                      </div>
-                      <div className="group/item rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Certificates</div>
-                        <div className="mt-3 text-2xl font-bold text-emerald-900">{simFloorReport.certificates.length}</div>
-                      </div>
-                      <div className="group/item rounded-3xl border border-sky-200 bg-gradient-to-br from-sky-50 to-blue-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-sky-700">Average</div>
-                        <div className="mt-3 text-2xl font-bold text-sky-900">{simFloorReport.summary.average_score.toFixed(1)}%</div>
-                      </div>
-                      <div className="group/item rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                        <div className="text-xs font-bold uppercase tracking-[0.14em] text-amber-700">Retakes</div>
-                        <div className="mt-3 flex items-center gap-2 text-2xl font-bold text-amber-900">
-                          <RotateCcw size={18} />
-                          {simFloorReport.summary.retakes}
-                        </div>
-                      </div>
-                    </div>
-
-                    {simFloorReport.recent_sessions.slice(0, 2).map((session) => (
-                      <div key={session.session_id} className="group/item rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                        <div className="flex items-start justify-between gap-4">
-                          <div>
-                            <div className="font-bold text-slate-900 text-sm">{session.scenario_title}</div>
-                            <div className="mt-2 text-xs text-slate-600">
-                              Attempt {session.attempt_number} | {session.created_at ? new Date(session.created_at).toLocaleDateString() : 'No date'}
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <div className="font-bold text-slate-900">{session.score.toFixed(1)}%</div>
-                            <div className="mt-2 text-xs text-slate-600">{verdictLabel(session.trainer_verdict_status)}</div>
-                          </div>
-                        </div>
-                        <div className="mt-4 flex flex-wrap gap-2 text-xs">
-                          <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-slate-100 to-slate-200 px-3 py-1 text-slate-700 font-medium">
-                            <ShieldCheck size={12} />
-                            {verdictLabel(session.trainer_verdict_status)}
-                          </span>
-                          {session.certificate_id ? (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-emerald-100 to-green-100 px-3 py-1 text-emerald-700 font-medium">
-                              <Award size={12} />
-                              Certificate issued
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))}
-
-                    {!simFloorReport.recent_sessions.length ? (
-                      <div className="text-sm text-slate-500 font-medium">No Call Simulation attempts yet.</div>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="text-sm text-slate-500 font-medium">
-                    Start a Call Simulation scenario and your mock-call performance summary will appear here.
-                  </div>
-                )}
-              </div>
-            </div>
-
             <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
               <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
               <div className="relative">

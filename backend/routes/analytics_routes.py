@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -27,6 +28,7 @@ from ..models import (
 )
 from ..services.supabase_auth_service import filter_to_supabase_active_users
 from ..services.admin_learning_analytics import build_admin_learning_insights
+from ..services.pdf_generator import PerformanceReportGenerator
 from ..services.trainer_learning_analytics import build_trainer_learning_insights
 from ..schemas import (
     BatchAnalyticsResponse,
@@ -53,6 +55,387 @@ IMPROVEMENT_RECOMMENDATIONS = {
     "Grammar": "Review grammar patterns, sentence structure, and required knowledge keywords before the next attempt.",
     "Soft Skills": "Strengthen empathy language and proactive ownership statements.",
 }
+
+
+def _format_percent(value: Any) -> str:
+    try:
+        return f"{float(value or 0.0):.1f}%"
+    except (TypeError, ValueError):
+        return "0.0%"
+
+
+def _format_count(value: Any) -> str:
+    try:
+        return f"{int(value or 0):,}"
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _format_datetime_label(value: Any, fallback: str = "Not yet available") -> str:
+    if not value:
+        return fallback
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d %H:%M")
+    text = str(value).strip()
+    if not text:
+        return fallback
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return text
+
+
+def _format_date_label(value: Any, fallback: str = "Not set") -> str:
+    if not value:
+        return fallback
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
+
+
+def _status_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "Pending"
+    return text.replace("_", " ").title()
+
+
+def _performance_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "Unscored"
+    return text.replace("_", " ").title()
+
+
+def _result_label(status: Any, is_passed: Any) -> str:
+    if bool(is_passed):
+        return "Passed"
+    normalized = str(status or "").strip().lower()
+    if normalized == "completed":
+        return "Failed"
+    return _status_label(status or "pending")
+
+
+def _certificate_label(certificate_id: Any) -> str:
+    return "Issued" if certificate_id else "Not issued"
+
+
+def _ensure_sentence(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if text.endswith((".", "!", "?")):
+        return text
+    return f"{text}."
+
+
+def _safe_filename_fragment(value: str, fallback: str) -> str:
+    cleaned = "".join(character for character in str(value or fallback) if character not in '\\/:*?"<>|')
+    cleaned = "_".join(part for part in cleaned.strip().split() if part)
+    return cleaned or fallback
+
+
+def _option_label(options: List[dict[str, Any]], option_id: Optional[str], fallback: str) -> str:
+    if not option_id:
+        return fallback
+    for row in options:
+        if row.get("id") != option_id:
+            continue
+        for key in ("label", "name", "title"):
+            value = row.get(key)
+            if value:
+                return str(value)
+        return fallback
+    return fallback
+
+
+def _build_score_stats(insights: dict[str, Any]) -> dict[str, float]:
+    module_rows = insights.get("module_assignments") or []
+    assessment_rows = insights.get("assessment_results") or []
+    score_values: List[float] = []
+    retake_rows = 0
+    certificate_rows = 0
+
+    for row in module_rows:
+        score_value = row.get("score_value")
+        if score_value is None:
+            score_value = row.get("average_score")
+        if score_value is not None:
+            score_values.append(float(score_value))
+        if int(row.get("retake_count") or 0) > 0 or int(row.get("attempt_number") or 0) > 1:
+            retake_rows += 1
+        if row.get("certificate_id"):
+            certificate_rows += 1
+
+    for row in assessment_rows:
+        score_value = row.get("score_percentage")
+        if score_value is None:
+            score_value = row.get("score_value")
+        if score_value is not None:
+            score_values.append(float(score_value))
+        if int(row.get("attempt_count") or 0) > 1:
+            retake_rows += 1
+        if row.get("certificate_id"):
+            certificate_rows += 1
+
+    total_rows = len(module_rows) + len(assessment_rows)
+    return {
+        "highest_score": max(score_values) if score_values else 0.0,
+        "lowest_score": min(score_values) if score_values else 0.0,
+        "retake_rate": round((retake_rows / total_rows * 100) if total_rows else 0.0, 2),
+        "certificates": float(certificate_rows),
+    }
+
+
+def _ensure_learning_report_has_data(insights: dict[str, Any]) -> None:
+    summary = insights.get("summary") or {}
+    if (summary.get("assigned_module_records") or 0) > 0:
+        return
+    if (summary.get("assigned_assessment_records") or 0) > 0:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="No report data found for the selected filters.",
+    )
+
+
+def _trainer_filter_rows(
+    insights: dict[str, Any],
+    *,
+    batch_id: Optional[str],
+    trainee_id: Optional[str],
+    module_id: Optional[str],
+    assessment_id: Optional[str],
+    exercise_id: Optional[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> List[List[str]]:
+    filters = insights.get("filters") or {}
+    rows: List[List[str]] = []
+
+    if batch_id:
+        rows.append(["Batch / Wave", _option_label(filters.get("batches") or [], batch_id, batch_id)])
+    if trainee_id:
+        rows.append(["Trainee", _option_label(filters.get("trainees") or [], trainee_id, trainee_id)])
+    if module_id:
+        rows.append(["Module", _option_label(filters.get("modules") or [], module_id, module_id)])
+    if assessment_id:
+        rows.append(["Assessment", _option_label(filters.get("assessments") or [], assessment_id, assessment_id)])
+    if exercise_id:
+        rows.append(["Exercise", _option_label(filters.get("exercises") or [], exercise_id, exercise_id)])
+    if start_date or end_date:
+        rows.append([
+            "Date Range",
+            f"{_format_date_label(start_date, 'Start')} to {_format_date_label(end_date, 'Today')}",
+        ])
+
+    if not rows:
+        rows.append(["Report Scope", str((insights.get("scope") or {}).get("label") or "Default trainer report data")])
+    return rows
+
+
+def _admin_filter_rows(
+    insights: dict[str, Any],
+    *,
+    trainer_id: Optional[str],
+    batch_id: Optional[str],
+    trainee_id: Optional[str],
+    module_id: Optional[str],
+    assessment_id: Optional[str],
+    exercise_id: Optional[str],
+    completion_status: Optional[str],
+    performance_level: Optional[str],
+    start_date: Optional[date],
+    end_date: Optional[date],
+) -> List[List[str]]:
+    filters = insights.get("filters") or {}
+    rows: List[List[str]] = []
+
+    if trainer_id:
+        rows.append(["Trainer", _option_label(filters.get("trainers") or [], trainer_id, trainer_id)])
+    if batch_id:
+        rows.append(["Batch / Wave", _option_label(filters.get("batches") or [], batch_id, batch_id)])
+    if trainee_id:
+        rows.append(["Trainee", _option_label(filters.get("trainees") or [], trainee_id, trainee_id)])
+    if module_id:
+        rows.append(["Module", _option_label(filters.get("modules") or [], module_id, module_id)])
+    if assessment_id:
+        rows.append(["Assessment", _option_label(filters.get("assessments") or [], assessment_id, assessment_id)])
+    if exercise_id:
+        rows.append(["Exercise", _option_label(filters.get("exercises") or [], exercise_id, exercise_id)])
+    if completion_status:
+        rows.append(["Completion Status", _status_label(completion_status)])
+    if performance_level:
+        rows.append(["Performance Level", _performance_label(performance_level)])
+    if start_date or end_date:
+        rows.append([
+            "Date Range",
+            f"{_format_date_label(start_date, 'Start')} to {_format_date_label(end_date, 'Today')}",
+        ])
+
+    if not rows:
+        rows.append(["Report Scope", str((insights.get("scope") or {}).get("label") or "Default admin report data")])
+    return rows
+
+
+def _trainer_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]:
+    ai_analysis = insights.get("ai_analysis") or {}
+    weakest_modules = insights.get("weakest_modules") or []
+    weakest_areas = insights.get("weakest_assessment_areas") or []
+    improvement_rows = insights.get("trainees_needing_improvement") or []
+    assessment_rows = insights.get("assessment_results") or []
+    module_rows = insights.get("module_assignments") or []
+
+    low_categories = [
+        f'{row.get("category_name")}: average score {_format_percent(row.get("average_score"))}, pass rate {_format_percent(row.get("pass_rate"))}.'
+        for row in weakest_areas[:5]
+    ]
+    weak_modules = [
+        f'{row.get("module_title")}: completion {_format_percent(row.get("completion_rate"))}, pass rate {_format_percent(row.get("pass_rate"))}, average score {_format_percent(row.get("average_score"))}.'
+        for row in weakest_modules[:5]
+    ]
+
+    retake_recommendations: List[str] = []
+    for row in assessment_rows:
+        if row.get("is_passed"):
+            continue
+        retake_recommendations.append(
+            f'{row.get("trainee_name")}: retake "{row.get("assessment_title")}" after coaching on {row.get("category_name")} '
+            f'({_format_percent(row.get("score_percentage"))} vs passing score {_format_percent(row.get("passing_threshold"))}).'
+        )
+    for row in module_rows:
+        if bool(row.get("is_passed")):
+            continue
+        retake_recommendations.append(
+            f'{row.get("trainee_name") or "Trainee"}: revisit "{row.get("module_title")}" '
+            f'before the next attempt because completion is {_format_percent(row.get("completion_percentage"))} and average score is {_format_percent(row.get("average_score"))}.'
+        )
+
+    action_plan: List[str] = []
+    if weakest_modules:
+        module = weakest_modules[0]
+        action_plan.append(
+            f'Prioritize a coaching review for "{module.get("module_title")}" before assigning the next module wave.'
+        )
+    if weakest_areas:
+        area = weakest_areas[0]
+        action_plan.append(
+            f'Reinforce the "{area.get("category_name")}" assessment category with targeted remediation and question-bank review.'
+        )
+    if improvement_rows:
+        trainee = improvement_rows[0]
+        action_plan.append(
+            f'Follow up with {trainee.get("trainee_name")} in {trainee.get("batch_label")} because overall performance remains at {_format_percent(trainee.get("overall_score"))}.'
+        )
+    if not action_plan:
+        action_plan.append("Keep the current pacing and continue monitoring completion, pass rate, and weakest categories.")
+
+    return [
+        {
+            "title": "Strengths",
+            "items": ai_analysis.get("strengths") or [],
+            "empty_message": "No standout strengths were available for the selected report scope.",
+        },
+        {
+            "title": "Weak Areas",
+            "items": ai_analysis.get("weak_areas") or [],
+            "empty_message": "No weak-area notes were available for the selected report scope.",
+        },
+        {
+            "title": "Low-Performing Assessment Categories",
+            "items": low_categories,
+            "empty_message": "No low-performing assessment category was detected in this scope.",
+        },
+        {
+            "title": "Modules Needing Improvement",
+            "items": weak_modules,
+            "empty_message": "No weak module pattern was detected in this scope.",
+        },
+        {
+            "title": "Retake Recommendations",
+            "items": retake_recommendations[:6],
+            "empty_message": "No immediate retake recommendation is required for the current scope.",
+        },
+        {
+            "title": "Coaching Recommendations",
+            "items": ai_analysis.get("recommended_actions") or [],
+            "empty_message": "No coaching recommendation was available for the current scope.",
+        },
+        {
+            "title": "Suggested Action Plan",
+            "items": action_plan,
+            "empty_message": "No action plan items were generated for the current scope.",
+        },
+    ]
+
+
+def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]:
+    ai_analysis = insights.get("ai_analysis") or {}
+    weakest_modules = insights.get("weakest_modules") or []
+    weakest_areas = insights.get("weakest_assessment_areas") or []
+    at_risk_trainers = insights.get("at_risk_trainers") or []
+    at_risk_batches = insights.get("at_risk_batches") or []
+
+    intervention_suggestions: List[str] = []
+    if at_risk_trainers:
+        trainer = at_risk_trainers[0]
+        intervention_suggestions.append(
+            f'{trainer.get("trainer_name")} needs intervention support because overall performance is {_format_percent(trainer.get("overall_score"))} '
+            f'and completion is {_format_percent(trainer.get("completion_rate"))}.'
+        )
+    if at_risk_batches:
+        batch = at_risk_batches[0]
+        intervention_suggestions.append(
+            f'{batch.get("batch_label")} should receive targeted reinforcement because pass rate is {_format_percent(batch.get("pass_rate"))}.'
+        )
+    if weakest_modules:
+        module = weakest_modules[0]
+        intervention_suggestions.append(
+            f'Review module "{module.get("module_title")}" for clarity, scaffolding, and remediation because average score is {_format_percent(module.get("average_score"))}.'
+        )
+    if weakest_areas:
+        area = weakest_areas[0]
+        intervention_suggestions.append(
+            f'Audit the "{area.get("category_name")}" assessment content because pass rate is only {_format_percent(area.get("pass_rate"))}.'
+        )
+
+    return [
+        {
+            "title": "Executive Overview",
+            "items": [ai_analysis.get("overview")] if ai_analysis.get("overview") else [],
+            "empty_message": "No executive overview was available for the selected admin scope.",
+        },
+        {
+            "title": "Trainer Effectiveness",
+            "items": ai_analysis.get("trainer_effectiveness") or [],
+            "empty_message": "No trainer-effectiveness notes were available for this scope.",
+        },
+        {
+            "title": "Batch Performance",
+            "items": ai_analysis.get("batch_performance") or [],
+            "empty_message": "No batch-performance notes were available for this scope.",
+        },
+        {
+            "title": "Weak Areas",
+            "items": ai_analysis.get("weak_areas") or [],
+            "empty_message": "No weak-area notes were available for this scope.",
+        },
+        {
+            "title": "Opportunities For Improvement",
+            "items": ai_analysis.get("opportunities") or [],
+            "empty_message": "No improvement opportunities were generated for this scope.",
+        },
+        {
+            "title": "Trainer Intervention Suggestions",
+            "items": intervention_suggestions,
+            "empty_message": "No trainer intervention suggestion was generated for this scope.",
+        },
+        {
+            "title": "Recommended Action Plan",
+            "items": ai_analysis.get("recommended_actions") or [],
+            "empty_message": "No recommended action plan was generated for this scope.",
+        },
+    ]
 
 
 def _trainer_has_trainee_access(current_user: User, trainee: User) -> bool:
@@ -903,6 +1286,284 @@ async def get_admin_learning_insights(
         ) from error
 
 
+@router.get("/admin/learning-insights/pdf")
+async def download_admin_learning_insights_pdf(
+    trainer_id: Optional[str] = Query(None),
+    batch_id: Optional[str] = Query(None),
+    trainee_id: Optional[str] = Query(None),
+    module_id: Optional[str] = Query(None),
+    assessment_id: Optional[str] = Query(None),
+    exercise_id: Optional[str] = Query(None),
+    completion_status: Optional[str] = Query(None),
+    performance_level: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    current_user = await auth_utils.get_current_user(authorization, db)
+
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+
+    try:
+        insights = build_admin_learning_insights(
+            db,
+            trainer_id=trainer_id,
+            batch_id=batch_id,
+            trainee_id=trainee_id,
+            module_id=module_id,
+            assessment_id=assessment_id,
+            exercise_id=exercise_id,
+            completion_status=completion_status,
+            performance_level=performance_level,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    _ensure_learning_report_has_data(insights)
+
+    summary = insights.get("summary") or {}
+    stats = _build_score_stats(insights)
+    generated_at = datetime.utcnow()
+    scope_label = str((insights.get("scope") or {}).get("label") or "Admin learning report scope")
+    ai_analysis = insights.get("ai_analysis") or {}
+    filter_rows = _admin_filter_rows(
+        insights,
+        trainer_id=trainer_id,
+        batch_id=batch_id,
+        trainee_id=trainee_id,
+        module_id=module_id,
+        assessment_id=assessment_id,
+        exercise_id=exercise_id,
+        completion_status=completion_status,
+        performance_level=performance_level,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    summary_rows = [
+        ["Trainers in Scope", _format_count(summary.get("total_trainers"))],
+        ["Batches in Scope", _format_count(summary.get("total_batches"))],
+        ["Trainees in Scope", _format_count(summary.get("total_trainees"))],
+        ["Assigned Modules", _format_count(summary.get("assigned_module_records"))],
+        ["Assigned Assessments", _format_count(summary.get("assigned_assessment_records"))],
+        ["Completion Rate", _format_percent(summary.get("completion_rate"))],
+        ["Average Assessment Score", _format_percent(summary.get("average_assessment_score"))],
+        ["Average Exercise Score", _format_percent(summary.get("average_exercise_score"))],
+        ["Overall Score", _format_percent(summary.get("overall_score"))],
+        ["Pass Rate", _format_percent(summary.get("pass_rate"))],
+        ["Fail Rate", _format_percent(max(0.0, 100.0 - float(summary.get("pass_rate") or 0.0)))],
+        ["Retake Rate", _format_percent(stats.get("retake_rate"))],
+        ["Highest Score", _format_percent(stats.get("highest_score"))],
+        ["Lowest Score", _format_percent(stats.get("lowest_score"))],
+        ["Certificates Issued", _format_count(summary.get("certificates_issued") or stats.get("certificates"))],
+        ["Total Attempts", _format_count(summary.get("total_attempts"))],
+    ]
+
+    analytics_tables = [
+        {
+            "title": "Trainer-Handled Batch Performance",
+            "description": "Trainer-wide performance comparison based on the active admin report filters.",
+            "headers": ["Trainer", "Batches", "Trainees", "Completion", "Pass Rate", "Overall", "Certificates"],
+            "rows": [
+                [
+                    row.get("trainer_name") or "Trainer",
+                    _format_count(row.get("batch_count")),
+                    _format_count(row.get("trainee_count")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_percent(row.get("overall_score")),
+                    _format_count(row.get("certificates_issued")),
+                ]
+                for row in insights.get("trainer_comparison") or []
+            ],
+            "col_widths": [1.55 * 72, 0.8 * 72, 0.8 * 72, 1.0 * 72, 0.9 * 72, 0.85 * 72, 1.1 * 72],
+            "empty_message": "No trainer comparison rows were available for this report scope.",
+        },
+        {
+            "title": "Batch Performance Comparison",
+            "description": "Batch-level performance aligned to the current report filters.",
+            "headers": ["Batch", "Trainer", "Trainees", "Completion", "Pass Rate", "Overall", "Attempts"],
+            "rows": [
+                [
+                    row.get("batch_label") or "Batch",
+                    row.get("trainer_name") or "Unassigned trainer",
+                    _format_count(row.get("trainee_count")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_percent(row.get("overall_score")),
+                    _format_count(row.get("total_attempts")),
+                ]
+                for row in insights.get("batch_comparison") or []
+            ],
+            "col_widths": [1.6 * 72, 1.5 * 72, 0.75 * 72, 0.9 * 72, 0.9 * 72, 0.8 * 72, 0.85 * 72],
+            "empty_message": "No batch comparison rows were available for this report scope.",
+        },
+        {
+            "title": "Trainee Progress Trend",
+            "description": "Current trainee ranking and progress indicators for the selected admin scope.",
+            "headers": ["Trainee", "Batch", "Overall", "Completion", "Pass Rate", "Attempts", "Latest Activity"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("batch_label") or "Direct assignment",
+                    _format_percent(row.get("overall_score")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_count(row.get("total_attempts")),
+                    _format_datetime_label(row.get("latest_activity_at")),
+                ]
+                for row in insights.get("trainee_ranking") or []
+            ],
+            "col_widths": [1.35 * 72, 1.4 * 72, 0.8 * 72, 0.9 * 72, 0.9 * 72, 0.75 * 72, 1.9 * 72],
+            "empty_message": "No trainee ranking rows were available for this report scope.",
+        },
+        {
+            "title": "Module Performance Summary",
+            "description": "Completion and scoring summary by module.",
+            "headers": ["Module", "Trainer", "Assigned", "Completed", "Completion", "Pass", "Average"],
+            "rows": [
+                [
+                    row.get("module_title") or "Module",
+                    row.get("created_by_name") or "Trainer-owned module",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_percent(row.get("average_score")),
+                ]
+                for row in insights.get("module_progress") or []
+            ],
+            "col_widths": [1.7 * 72, 1.45 * 72, 0.7 * 72, 0.75 * 72, 0.85 * 72, 0.7 * 72, 0.85 * 72],
+            "empty_message": "No module performance rows were available for this report scope.",
+        },
+        {
+            "title": "Assessment Category Performance",
+            "description": "Lowest and current category performance based on saved assessment results.",
+            "headers": ["Category", "Assigned", "Completed", "Average", "Pass Rate", "Level"],
+            "rows": [
+                [
+                    row.get("category_name") or "Category",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_percent(row.get("average_score")),
+                    _format_percent(row.get("pass_rate")),
+                    _performance_label(row.get("performance_level")),
+                ]
+                for row in insights.get("weakest_assessment_areas") or []
+            ],
+            "col_widths": [2.35 * 72, 0.8 * 72, 0.85 * 72, 0.85 * 72, 0.9 * 72, 1.25 * 72],
+            "empty_message": "No assessment category performance rows were available for this report scope.",
+        },
+    ]
+
+    detail_tables = [
+        {
+            "title": "Module Assignment Results",
+            "description": "Detailed module progress rows for the current report filters.",
+            "headers": ["Trainee", "Module", "Batch", "Status", "Completion", "Score", "Attempts", "Retakes", "Certificate", "Completed"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("module_title") or "Module",
+                    row.get("batch_label") or "Direct assignment",
+                    _status_label(row.get("completion_status") or row.get("status")),
+                    _format_percent(row.get("completion_percentage")),
+                    _format_percent(row.get("score_value") if row.get("score_value") is not None else row.get("average_score")),
+                    _format_count(row.get("attempt_number")),
+                    _format_count(row.get("retake_count")),
+                    _certificate_label(row.get("certificate_id")),
+                    _format_datetime_label(row.get("completed_at")),
+                ]
+                for row in insights.get("module_assignments") or []
+            ],
+            "col_widths": [1.15 * 72, 1.4 * 72, 1.1 * 72, 0.85 * 72, 0.8 * 72, 0.75 * 72, 0.7 * 72, 0.7 * 72, 0.85 * 72, 1.0 * 72],
+            "empty_message": "No module assignment rows were available for this report scope.",
+        },
+        {
+            "title": "Assessment Results",
+            "description": "Detailed assessment result rows for the current report filters.",
+            "headers": ["Trainee", "Assessment", "Category", "Score", "Passing", "Result", "Attempts", "Certificate", "Completed", "Due Date"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("assessment_title") or "Assessment",
+                    row.get("category_name") or "Category",
+                    _format_percent(row.get("score_percentage")),
+                    _format_percent(row.get("passing_threshold")),
+                    _result_label(row.get("status"), row.get("is_passed")),
+                    _format_count(row.get("attempt_count")),
+                    _certificate_label(row.get("certificate_id")),
+                    _format_datetime_label(row.get("submitted_at")),
+                    _format_date_label(row.get("due_date")),
+                ]
+                for row in insights.get("assessment_results") or []
+            ],
+            "col_widths": [1.05 * 72, 1.45 * 72, 1.05 * 72, 0.65 * 72, 0.7 * 72, 0.9 * 72, 0.65 * 72, 0.85 * 72, 0.95 * 72, 0.75 * 72],
+            "empty_message": "No assessment result rows were available for this report scope.",
+        },
+        {
+            "title": "Recent Activity Log",
+            "description": "Latest report-driving events from module and assessment activity.",
+            "headers": ["Activity", "Detail", "Trainer", "Trainee", "Batch", "Status", "When"],
+            "rows": [
+                [
+                    row.get("title") or "Activity",
+                    row.get("detail") or "",
+                    row.get("trainer_name") or "Admin scope",
+                    row.get("trainee_name") or "Trainee",
+                    row.get("batch_label") or "Direct assignment",
+                    _status_label(row.get("status") or row.get("activity_type")),
+                    _format_datetime_label(row.get("activity_at")),
+                ]
+                for row in insights.get("recent_activity") or []
+            ],
+            "col_widths": [1.1 * 72, 2.25 * 72, 1.15 * 72, 1.0 * 72, 1.0 * 72, 0.8 * 72, 1.0 * 72],
+            "empty_message": "No recent activity rows were available for this report scope.",
+        },
+    ]
+
+    generator = PerformanceReportGenerator(title="Admin Learning Progress Report")
+    pdf_buffer = generator.generate_learning_insights_report(
+        report_title="Admin Learning Progress Report",
+        report_subtitle="Filtered Supabase Progress Report",
+        generated_by_role="Admin",
+        generated_by_name=getattr(current_user, "full_name", None) or current_user.email,
+        generated_at=generated_at,
+        scope_label=scope_label,
+        filter_rows=filter_rows,
+        executive_summary=(
+            f'{_ensure_sentence(ai_analysis.get("overview") or scope_label)} This export includes only the currently selected admin report filters and saved database results.'
+        ),
+        summary_rows=summary_rows,
+        evaluation_sections=_admin_evaluation_sections(insights),
+        analytics_tables=analytics_tables,
+        detail_tables=detail_tables,
+    )
+
+    filename_scope = "All"
+    if batch_id:
+        filename_scope = _option_label((insights.get("filters") or {}).get("batches") or [], batch_id, "Batch")
+    elif trainer_id:
+        filename_scope = _option_label((insights.get("filters") or {}).get("trainers") or [], trainer_id, "Trainer")
+
+    filename = f'Admin_Report_{_safe_filename_fragment(filename_scope, "All")}_{generated_at.strftime("%Y-%m-%d")}.pdf'
+    return Response(
+        content=pdf_buffer.read(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/trainer/performance-hub")
 async def get_trainer_performance_hub(
     authorization: Optional[str] = Header(None),
@@ -1131,6 +1792,257 @@ async def get_trainer_learning_insights(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(error),
         ) from error
+
+
+@router.get("/trainer/learning-insights/pdf")
+async def download_trainer_learning_insights_pdf(
+    batch_id: Optional[str] = Query(None),
+    trainee_id: Optional[str] = Query(None),
+    module_id: Optional[str] = Query(None),
+    assessment_id: Optional[str] = Query(None),
+    exercise_id: Optional[str] = Query(None),
+    start_date: Optional[date] = Query(None),
+    end_date: Optional[date] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    current_user = await auth_utils.get_current_user(authorization, db)
+
+    if current_user.role != UserRole.TRAINER:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Trainer access required",
+        )
+
+    try:
+        insights = build_trainer_learning_insights(
+            db,
+            trainer=current_user,
+            batch_id=batch_id,
+            trainee_id=trainee_id,
+            module_id=module_id,
+            assessment_id=assessment_id,
+            exercise_id=exercise_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
+    except ValueError as error:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(error),
+        ) from error
+
+    _ensure_learning_report_has_data(insights)
+
+    summary = insights.get("summary") or {}
+    stats = _build_score_stats(insights)
+    generated_at = datetime.utcnow()
+    scope_label = str((insights.get("scope") or {}).get("label") or "Trainer learning report scope")
+    ai_analysis = insights.get("ai_analysis") or {}
+    filter_rows = _trainer_filter_rows(
+        insights,
+        batch_id=batch_id,
+        trainee_id=trainee_id,
+        module_id=module_id,
+        assessment_id=assessment_id,
+        exercise_id=exercise_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+    summary_rows = [
+        ["Total Trainees", _format_count(summary.get("total_trainees"))],
+        ["Trainer-Created Modules", _format_count(summary.get("trainer_created_modules"))],
+        ["Assigned Modules", _format_count(summary.get("assigned_module_records"))],
+        ["Assigned Assessments", _format_count(summary.get("assigned_assessment_records"))],
+        ["Completed Modules", _format_count(summary.get("completed_modules"))],
+        ["Completed Assessments", _format_count(summary.get("completed_assessments"))],
+        ["Completion Rate", _format_percent(summary.get("completion_rate"))],
+        ["Average Assessment Score", _format_percent(summary.get("average_assessment_score"))],
+        ["Average Exercise Score", _format_percent(summary.get("average_exercise_score"))],
+        ["Pass Rate", _format_percent(summary.get("pass_rate"))],
+        ["Fail Rate", _format_percent(max(0.0, 100.0 - float(summary.get("pass_rate") or 0.0)))],
+        ["Retake Rate", _format_percent(stats.get("retake_rate"))],
+        ["Highest Score", _format_percent(stats.get("highest_score"))],
+        ["Lowest Score", _format_percent(stats.get("lowest_score"))],
+        ["Certificates Issued", _format_count(stats.get("certificates"))],
+        ["Total Attempts", _format_count(summary.get("total_attempts"))],
+    ]
+
+    analytics_tables = [
+        {
+            "title": "Batch Performance Comparison",
+            "description": "Batch-level performance using only the trainer's scoped report data.",
+            "headers": ["Batch", "Trainees", "Assigned", "Completed", "Completion", "Pass Rate", "Overall", "Attempts"],
+            "rows": [
+                [
+                    row.get("batch_label") or "Batch",
+                    _format_count(row.get("trainee_count")),
+                    _format_count(row.get("assigned_items")),
+                    _format_count(row.get("completed_items")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_percent(row.get("overall_score")),
+                    _format_count(row.get("total_attempts")),
+                ]
+                for row in insights.get("batch_comparison") or []
+            ],
+            "col_widths": [1.7 * 72, 0.7 * 72, 0.7 * 72, 0.75 * 72, 0.85 * 72, 0.85 * 72, 0.8 * 72, 0.85 * 72],
+            "empty_message": "No batch comparison rows were available for this report scope.",
+        },
+        {
+            "title": "Trainee Progress Trend",
+            "description": "Trainee ranking and progress based on live trainer-owned results.",
+            "headers": ["Trainee", "Batch", "Overall", "Completion", "Pass Rate", "Attempts", "Latest Activity"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("batch_label") or "Direct assignment",
+                    _format_percent(row.get("overall_score")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_count(row.get("total_attempts")),
+                    _format_datetime_label(row.get("latest_activity_at")),
+                ]
+                for row in insights.get("trainee_ranking") or []
+            ],
+            "col_widths": [1.45 * 72, 1.45 * 72, 0.85 * 72, 0.9 * 72, 0.9 * 72, 0.75 * 72, 1.7 * 72],
+            "empty_message": "No trainee ranking rows were available for this report scope.",
+        },
+        {
+            "title": "Module Progress Summary",
+            "description": "Completion and average-score summary by trainer-created module.",
+            "headers": ["Module", "Category / Type", "Assigned", "Completed", "Completion", "Pass", "Average"],
+            "rows": [
+                [
+                    row.get("module_title") or "Module",
+                    row.get("topic_category_name") or row.get("module_type") or "Module",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_percent(row.get("completion_rate")),
+                    _format_percent(row.get("pass_rate")),
+                    _format_percent(row.get("average_score")),
+                ]
+                for row in insights.get("module_progress") or []
+            ],
+            "col_widths": [1.65 * 72, 1.55 * 72, 0.75 * 72, 0.75 * 72, 0.85 * 72, 0.7 * 72, 0.75 * 72],
+            "empty_message": "No module progress rows were available for this report scope.",
+        },
+        {
+            "title": "Assessment Category Performance",
+            "description": "Assessment categories that define the trainer's weakest or strongest learning areas.",
+            "headers": ["Category", "Assigned", "Completed", "Average", "Pass Rate"],
+            "rows": [
+                [
+                    row.get("category_name") or "Category",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_percent(row.get("average_score")),
+                    _format_percent(row.get("pass_rate")),
+                ]
+                for row in insights.get("weakest_assessment_areas") or []
+            ],
+            "col_widths": [2.9 * 72, 0.85 * 72, 0.95 * 72, 1.0 * 72, 1.3 * 72],
+            "empty_message": "No assessment category rows were available for this report scope.",
+        },
+    ]
+
+    detail_tables = [
+        {
+            "title": "Module Assignment Results",
+            "description": "Detailed trainer-assigned module progress rows filtered by the current report scope.",
+            "headers": ["Trainee", "Module", "Batch", "Status", "Completion", "Average", "Attempts", "Retakes", "Certificate", "Completed"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("module_title") or "Module",
+                    row.get("batch_label") or "Direct assignment",
+                    _status_label(row.get("status")),
+                    _format_percent(row.get("completion_percentage")),
+                    _format_percent(row.get("average_score")),
+                    _format_count(row.get("attempt_number")),
+                    _format_count(row.get("retake_count")),
+                    _certificate_label(row.get("certificate_id")),
+                    _format_datetime_label(row.get("completed_at")),
+                ]
+                for row in insights.get("module_assignments") or []
+            ],
+            "col_widths": [1.1 * 72, 1.45 * 72, 1.1 * 72, 0.8 * 72, 0.8 * 72, 0.8 * 72, 0.7 * 72, 0.7 * 72, 0.85 * 72, 1.0 * 72],
+            "empty_message": "No module assignment rows were available for this report scope.",
+        },
+        {
+            "title": "Assessment Results",
+            "description": "Detailed trainer-assigned assessment results filtered by the current report scope.",
+            "headers": ["Trainee", "Assessment", "Category", "Score", "Passing", "Result", "Attempts", "Certificate", "Completed", "Due Date"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("assessment_title") or "Assessment",
+                    row.get("category_name") or "Category",
+                    _format_percent(row.get("score_percentage")),
+                    _format_percent(row.get("passing_threshold")),
+                    _result_label(row.get("status"), row.get("is_passed")),
+                    _format_count(row.get("attempt_count")),
+                    _certificate_label(row.get("certificate_id")),
+                    _format_datetime_label(row.get("submitted_at")),
+                    _format_date_label(row.get("due_date")),
+                ]
+                for row in insights.get("assessment_results") or []
+            ],
+            "col_widths": [1.05 * 72, 1.5 * 72, 1.0 * 72, 0.7 * 72, 0.7 * 72, 0.9 * 72, 0.7 * 72, 0.85 * 72, 0.95 * 72, 0.7 * 72],
+            "empty_message": "No assessment result rows were available for this report scope.",
+        },
+        {
+            "title": "Recent Activity Log",
+            "description": "Latest module and assessment events contributing to this trainer report.",
+            "headers": ["Activity", "Detail", "Trainee", "Batch", "Status", "When"],
+            "rows": [
+                [
+                    row.get("title") or "Activity",
+                    row.get("detail") or "",
+                    row.get("trainee_name") or "Trainee",
+                    row.get("batch_label") or "Direct assignment",
+                    _status_label(row.get("status") or row.get("activity_type")),
+                    _format_datetime_label(row.get("activity_at")),
+                ]
+                for row in insights.get("recent_activity") or []
+            ],
+            "col_widths": [1.25 * 72, 2.85 * 72, 1.2 * 72, 1.05 * 72, 0.85 * 72, 1.0 * 72],
+            "empty_message": "No recent activity rows were available for this report scope.",
+        },
+    ]
+
+    generator = PerformanceReportGenerator(title="Trainer Learning Progress Report")
+    pdf_buffer = generator.generate_learning_insights_report(
+        report_title="Trainer Learning Progress Report",
+        report_subtitle="Filtered Batch and Trainee Progress Report",
+        generated_by_role="Trainer",
+        generated_by_name=getattr(current_user, "full_name", None) or current_user.email,
+        generated_at=generated_at,
+        scope_label=scope_label,
+        filter_rows=filter_rows,
+        executive_summary=(
+            f'{_ensure_sentence(ai_analysis.get("headline") or scope_label)} This export includes only the currently selected trainer report filters and saved database results.'
+        ),
+        summary_rows=summary_rows,
+        evaluation_sections=_trainer_evaluation_sections(insights),
+        analytics_tables=analytics_tables,
+        detail_tables=detail_tables,
+    )
+
+    filename_scope = "Scoped"
+    filters = insights.get("filters") or {}
+    if batch_id:
+        filename_scope = _option_label(filters.get("batches") or [], batch_id, "Batch")
+    elif trainee_id:
+        filename_scope = _option_label(filters.get("trainees") or [], trainee_id, "Trainee")
+
+    filename = f'Trainer_Report_{_safe_filename_fragment(filename_scope, "Scoped")}_{generated_at.strftime("%Y-%m-%d")}.pdf'
+    return Response(
+        content=pdf_buffer.read(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/trainee/performance-hub")

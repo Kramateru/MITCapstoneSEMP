@@ -16,7 +16,9 @@ export async function PATCH(
     const body = (await request.json()) as {
       categoryId?: string
       assessmentId?: string | null
+      targetType?: 'batch' | 'wave' | 'trainee'
       batchId?: string | null
+      waveNumber?: number | null
       traineeId?: string | null
       dueAt?: string | null
       title?: string
@@ -38,7 +40,9 @@ export async function PATCH(
     await updateAssignment(sessionUser, assignmentId, {
       categoryId: body.categoryId,
       assessmentId: body.assessmentId,
+      targetType: body.targetType,
       batchId: body.batchId,
+      waveNumber: body.waveNumber,
       traineeId: body.traineeId,
       dueAt: body.dueAt,
       title: body.title,

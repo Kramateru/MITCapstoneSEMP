@@ -14,7 +14,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/app/components/ui/badge'
@@ -178,15 +178,6 @@ export function AssessmentPlayer({
     }
   }, [mode, startedAtMs, timeLimitSeconds])
 
-  useEffect(() => {
-    if (mode !== 'in_progress' || !assessment || !timeLimitSeconds || remainingSeconds !== 0 || submitting) {
-      return
-    }
-
-    toast.error('Time is up. Your assessment is being submitted automatically.')
-    void handleSubmitAssessment(true)
-  }, [assessment, mode, remainingSeconds, submitting, timeLimitSeconds])
-
   const handleStartAssessment = () => {
     if (!assessment) {
       return
@@ -213,7 +204,7 @@ export function AssessmentPlayer({
     }))
   }
 
-  const handleSubmitAssessment = async (allowPartial = false) => {
+  const handleSubmitAssessment = useCallback(async (allowPartial = false) => {
     if (!assessment || !questionIds.length) {
       return
     }
@@ -260,7 +251,25 @@ export function AssessmentPlayer({
     } finally {
       setSubmitting(false)
     }
-  }
+  }, [
+    answeredCount,
+    answers,
+    assessment,
+    choiceMap,
+    onAttemptCommitted,
+    onSubmitAssessment,
+    questionIds,
+    startedAtMs,
+  ])
+
+  useEffect(() => {
+    if (mode !== 'in_progress' || !assessment || !timeLimitSeconds || remainingSeconds !== 0 || submitting) {
+      return
+    }
+
+    toast.error('Time is up. Your assessment is being submitted automatically.')
+    void handleSubmitAssessment(true)
+  }, [assessment, handleSubmitAssessment, mode, remainingSeconds, submitting, timeLimitSeconds])
 
   const handleRetake = async () => {
     if (!assessment) {
@@ -704,11 +713,16 @@ export function AssessmentPlayer({
                 ) : null}
               </div>
 
-              <div className="grid gap-6 xl:grid-cols-2">
+              <div className="grid gap-6 xl:grid-cols-3">
                 <AnalysisList
                   title="Strengths"
                   items={submission.attempt.analysis?.strengths || []}
                   tone="emerald"
+                />
+                <AnalysisList
+                  title="Areas for Improvement"
+                  items={submission.attempt.analysis?.improvements || []}
+                  tone="amber"
                 />
                 <AnalysisList
                   title="Recommendations"

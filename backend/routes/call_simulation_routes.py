@@ -1924,6 +1924,31 @@ def _build_scenario_steps(
     return fallback_steps
 
 
+def _count_scenario_groups(
+    steps: list[CallSimulationScenarioStepResponse],
+) -> int:
+    if not steps:
+        return 0
+
+    scenario_groups: set[str] = set()
+    for step in steps:
+        metadata = _normalize_json_object(getattr(step, "metadata", None))
+        for key in ("scenario_group", "script_flow_step_id", "scenario", "scenario_label", "member_context"):
+            value = metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                scenario_groups.add(value.strip())
+                break
+
+    if scenario_groups:
+        return len(scenario_groups)
+
+    csr_turn_count = len([step for step in steps if step.actor == "csr"])
+    if csr_turn_count:
+        return csr_turn_count
+
+    return max(1, len(steps))
+
+
 def _build_session_start_response(
     db: Session,
     *,
@@ -4647,6 +4672,12 @@ async def get_available_scenarios(
         .filter(Batch.id.in_(batch_ids or ["__none__"]))
         .all()
     }
+    kpi_configs_by_batch = {
+        config.batch_id: config
+        for config in db.query(BatchKPIConfig)
+        .filter(BatchKPIConfig.batch_id.in_(batch_ids or ["__none__"]))
+        .all()
+    }
     mappings = (
         db.query(BatchScenarioMapping)
         .filter(
@@ -4678,6 +4709,7 @@ async def get_available_scenarios(
         if not scenario:
             continue
 
+        scenario_steps = _build_scenario_steps(scenario)
         assigned_batches = _build_scenario_assignment_summaries(
             db,
             scenario.id,
@@ -4737,6 +4769,15 @@ async def get_available_scenarios(
                 else:
                     can_retake = True
 
+        scenario_batch = batches.get(assignment.batch_id) if assignment.batch_id else None
+        effective_kpi_config = kpi_configs_by_batch.get(assignment.batch_id) if assignment.batch_id else None
+        passing_score = _resolve_call_scenario_passing_score(
+            scenario,
+            float(effective_kpi_config.passing_score or DEFAULT_PASSING_SCORE)
+            if effective_kpi_config
+            else DEFAULT_PASSING_SCORE,
+        )
+
         scenarios_payload.append(
             {
                 "id": scenario.id,
@@ -4747,8 +4788,11 @@ async def get_available_scenarios(
                 if trainers.get(assignment.assigned_by)
                 else None,
                 "assignment_batch_id": assignment.batch_id,
-                "assignment_batch_name": batches.get(assignment.batch_id).name
-                if batches.get(assignment.batch_id)
+                "assignment_batch_name": scenario_batch.name
+                if scenario_batch
+                else None,
+                "assignment_wave_number": scenario_batch.wave_number
+                if scenario_batch
                 else None,
                 "title": scenario.title,
                 "topic": str(
@@ -4759,7 +4803,9 @@ async def get_available_scenarios(
                 "description": scenario.description,
                 "difficulty": scenario.difficulty.value if scenario.difficulty else None,
                 "variation_count": variation_count,
-                "steps_count": len(_build_scenario_steps(scenario)),
+                "scenario_groups_count": _count_scenario_groups(scenario_steps),
+                "steps_count": len(scenario_steps),
+                "passing_score": passing_score,
                 "assigned_batches": [
                     {
                         "batch_id": summary.batch_id,
@@ -4775,6 +4821,9 @@ async def get_available_scenarios(
                 "latest_score": float(latest_session.weighted_score or 0.0) if latest_session else 0.0,
                 "latest_session_id": latest_session.id if latest_session else None,
                 "latest_status": latest_session.status if latest_session else None,
+                "latest_completed_at": latest_session.completed_at.isoformat()
+                if latest_session and latest_session.completed_at
+                else None,
                 "active_session_id": active_session.id if active_session else None,
                 "latest_certificate_id": latest_session.certificate_id if latest_session else None,
                 "can_retake": can_retake,

@@ -95,6 +95,63 @@ export async function apiFetch<T>(
   return payload as T
 }
 
+function getDownloadFileName(response: Response, fallbackFileName: string) {
+  const disposition = response.headers.get('content-disposition') || ''
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1])
+  }
+
+  const fileNameMatch = disposition.match(/filename="?([^"]+)"?/i)
+  return fileNameMatch?.[1] || fallbackFileName
+}
+
+export async function downloadApiFile(
+  input: RequestInfo,
+  fallbackFileName: string,
+  init?: RequestInit,
+) {
+  const token = localStorage.getItem('token')
+  const headers: Record<string, string> = {
+    ...(init?.headers instanceof Headers
+      ? Object.fromEntries(init.headers.entries())
+      : (init?.headers as Record<string, string> | undefined) || {}),
+  }
+  if (token) {
+    headers.Authorization = `Bearer ${token}`
+  }
+
+  let response: Response
+  try {
+    response = await fetch(input, {
+      ...init,
+      headers,
+      cache: 'no-store',
+    })
+  } catch (error) {
+    throw normalizeConnectivityError(error)
+  }
+
+  if (!response.ok) {
+    const payload = await readResponsePayload(response)
+    const message = getPayloadErrorMessage(payload)
+    if (message) {
+      throw new Error(message)
+    }
+    throw new Error(response.statusText || 'Unable to download the file.')
+  }
+
+  const blob = await response.blob()
+  const downloadUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = downloadUrl
+  anchor.download = getDownloadFileName(response, fallbackFileName)
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(downloadUrl)
+}
+
 export async function post<T>(url: string, body: unknown) {
   return apiFetch<T>(url, { method: 'POST', body: JSON.stringify(body) })
 }

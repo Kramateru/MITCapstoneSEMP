@@ -452,3 +452,21 @@ export function buildAdminLearningInsightsUrl(filters: AdminLearningFilterState)
   const query = params.toString()
   return `/api/analytics/admin/learning-insights${query ? `?${query}` : ''}`
 }
+
+export function buildAdminLearningInsightsPdfUrl(filters: AdminLearningFilterState) {
+  const params = new URLSearchParams()
+
+  if (filters.trainerId) params.set('trainer_id', filters.trainerId)
+  if (filters.batchId) params.set('batch_id', filters.batchId)
+  if (filters.traineeId) params.set('trainee_id', filters.traineeId)
+  if (filters.moduleId) params.set('module_id', filters.moduleId)
+  if (filters.assessmentId) params.set('assessment_id', filters.assessmentId)
+  if (filters.exerciseId) params.set('exercise_id', filters.exerciseId)
+  if (filters.completionStatus) params.set('completion_status', filters.completionStatus)
+  if (filters.performanceLevel) params.set('performance_level', filters.performanceLevel)
+  if (filters.startDate) params.set('start_date', filters.startDate)
+  if (filters.endDate) params.set('end_date', filters.endDate)
+
+  const query = params.toString()
+  return `/api/analytics/admin/learning-insights/pdf${query ? `?${query}` : ''}`
+}

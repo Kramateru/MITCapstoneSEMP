@@ -25,9 +25,9 @@ SUPPORTED_MICROLEARNING_TYPES = {
     "audio",
 }
 
-DEFAULT_FLASHCARD_PREVIEW_SECONDS = 10
-DEFAULT_FLASHCARD_BLANK_SECONDS = 2
-DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS = 20
+DEFAULT_FLASHCARD_PREVIEW_SECONDS = 30
+DEFAULT_FLASHCARD_BLANK_SECONDS = 0
+DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS = 60
 
 DEFAULT_TOPIC_CATEGORIES: list[dict[str, str]] = [
     {
@@ -455,32 +455,14 @@ def build_type_specific_exercises(
         return exercises
 
     if normalized_type == "flashcard":
-        default_preview_seconds = _coerce_positive_int(
-            content.get("preview_seconds") or content.get("review_seconds"),
-            DEFAULT_FLASHCARD_PREVIEW_SECONDS,
-        )
-        default_blank_seconds = _coerce_positive_int(
-            content.get("blank_seconds"),
-            DEFAULT_FLASHCARD_BLANK_SECONDS,
-        )
-        default_answer_time_limit_seconds = _coerce_positive_int(
-            content.get("answer_time_limit_seconds") or content.get("recall_time_limit_seconds"),
-            DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS,
-        )
+        default_preview_seconds = DEFAULT_FLASHCARD_PREVIEW_SECONDS
+        default_blank_seconds = DEFAULT_FLASHCARD_BLANK_SECONDS
+        default_answer_time_limit_seconds = DEFAULT_FLASHCARD_ANSWER_TIME_LIMIT_SECONDS
 
         for index, card in enumerate(content.get("cards") or [], start=1):
-            preview_seconds = _coerce_positive_int(
-                card.get("preview_seconds"),
-                default_preview_seconds,
-            )
-            blank_seconds = _coerce_positive_int(
-                card.get("blank_seconds"),
-                default_blank_seconds,
-            )
-            answer_time_limit_seconds = _coerce_positive_int(
-                card.get("answer_time_limit_seconds") or card.get("recall_time_limit_seconds"),
-                default_answer_time_limit_seconds,
-            )
+            preview_seconds = default_preview_seconds
+            blank_seconds = default_blank_seconds
+            answer_time_limit_seconds = default_answer_time_limit_seconds
             exercises.append(
                 {
                     "id": str(uuid.uuid4()),
@@ -490,13 +472,15 @@ def build_type_specific_exercises(
                     or "Review the front and back, then explain the answer side as accurately as you can.",
                     "front": (card.get("front") or "").strip(),
                     "back": (card.get("back") or "").strip(),
+                    "study_time_seconds": preview_seconds,
                     "preview_seconds": preview_seconds,
                     "blank_seconds": blank_seconds,
+                    "answer_time_seconds": answer_time_limit_seconds,
                     "answer_time_limit_seconds": answer_time_limit_seconds,
                     "required_keywords": _clean_string_list(card.get("required_keywords")),
                     "tips": [
-                        f"Study both sides during the {preview_seconds}-second preview.",
-                        f"When the front side stays visible, explain the back-side answer within {answer_time_limit_seconds} seconds.",
+                        f"Study both sides during the {preview_seconds}-second study window.",
+                        f"When the prompt stays visible, the answer is auto-saved after {answer_time_limit_seconds} seconds.",
                     ],
                     "sample_answer": (card.get("mastery_answer") or card.get("back") or "").strip() or None,
                 }

@@ -34,6 +34,7 @@ import {
 import { toast } from 'sonner'
 
 import {
+  AssessmentWorkspaceHero,
   AssessmentSectionNav,
   EmptyState,
   MetricCard,
@@ -129,8 +130,9 @@ type AssignmentDraft = {
   categoryId: string
   title: string
   description: string
-  targetType: 'batch' | 'trainee'
+  targetType: 'batch' | 'wave' | 'trainee'
   targetId: string
+  waveNumber: string
   dueAt: string
   assignmentMode: 'selected_questions' | 'entire_category' | 'random_subset'
   questionIds: string[]
@@ -154,40 +156,34 @@ function getSections(role: ManagementRole) {
   if (role === 'admin') {
     return [
       {
+        id: 'dashboard' as const,
+        label: 'Assessment Dashboard',
+        description: 'Monitor category health, assignment progress, and recent assessment outcomes.',
+        icon: <Target className="size-4" />,
+      },
+      {
         id: 'categories' as const,
-        label: 'All Categories',
-        description: 'Audit and manage every assessment category across trainers.',
+        label: 'Assessment Categories',
+        description: 'Review trainer-owned categories, passing scores, and active batch or wave delivery.',
         icon: <ClipboardList className="size-4" />,
       },
       {
         id: 'question-bank' as const,
-        label: 'All Question Banks',
-        description: 'Search the shared multiple-choice question inventory.',
+        label: 'Question Bank',
+        description: 'Search and review the Supabase-backed multiple-choice question inventory.',
         icon: <BookOpenCheck className="size-4" />,
       },
       {
-        id: 'assignments' as const,
-        label: 'Assignments',
-        description: 'Review active batch, wave, and trainee assessment assignments.',
-        icon: <Users className="size-4" />,
+        id: 'bulk-upload' as const,
+        label: 'Bulk Upload Questions',
+        description: 'Import validated CSV question sets and save them into the correct category.',
+        icon: <Upload className="size-4" />,
       },
       {
         id: 'results' as const,
-        label: 'Results',
-        description: 'Inspect attempt outcomes, coaching notes, and completion status.',
+        label: 'Results and Evaluations',
+        description: 'Inspect attempt outcomes, coaching notes, and category performance by batch or wave.',
         icon: <CheckCircle2 className="size-4" />,
-      },
-      {
-        id: 'analytics' as const,
-        label: 'Analytics',
-        description: 'Track category performance, weak questions, and batch comparisons.',
-        icon: <BarChart3 className="size-4" />,
-      },
-      {
-        id: 'reports' as const,
-        label: 'Reports',
-        description: 'Export and review consolidated assessment reporting views.',
-        icon: <FileSpreadsheet className="size-4" />,
       },
     ]
   }
@@ -218,45 +214,19 @@ function getSections(role: ManagementRole) {
       icon: <Upload className="size-4" />,
     },
     {
-      id: 'assignments' as const,
-      label: 'Assign Assessment',
-      description: 'Publish assessments to a batch, wave, or individual trainee.',
-      icon: <Users className="size-4" />,
-    },
-    {
       id: 'results' as const,
       label: 'Results and Evaluations',
       description: 'Review attempt history, pass/fail results, and coaching notes.',
       icon: <CheckCircle2 className="size-4" />,
     },
-    {
-      id: 'certificates' as const,
-      label: 'Certificates',
-      description: 'Track completion certificates earned from passing assessments.',
-      icon: <Award className="size-4" />,
-    },
-    {
-      id: 'analytics' as const,
-      label: 'Analytics',
-      description: 'Compare performance across categories, questions, and batches.',
-      icon: <BarChart3 className="size-4" />,
-    },
-    {
-      id: 'reports' as const,
-      label: 'Reports',
-      description: 'Download CSV exports and review detailed report summaries.',
-      icon: <FileSpreadsheet className="size-4" />,
-    },
   ]
 }
 
 function normalizeSection(role: ManagementRole, value: string | null): ManagementSection {
-  const availableSections = getSections(role).map((section) => section.id)
-  return availableSections.includes(value as ManagementSection)
+  const availableSections = getSections(role)
+  return availableSections.some((section) => section.id === value)
     ? (value as ManagementSection)
-    : role === 'trainer'
-      ? 'dashboard'
-      : 'categories'
+    : 'dashboard'
 }
 
 function createEmptyCategoryDraft(): CategoryDraft {
@@ -286,6 +256,7 @@ function createAssignmentDraft(categoryId = '', passingScore = DEFAULT_PASSING_S
     description: '',
     targetType: 'batch',
     targetId: '',
+    waveNumber: '',
     dueAt: '',
     assignmentMode: 'entire_category',
     questionIds: [],
@@ -323,7 +294,8 @@ function toAssignmentDraft(record: AssignmentRecord): AssignmentDraft {
     title: record.title || record.categoryTitle,
     description: record.description || '',
     targetType: record.targetType,
-    targetId: record.batchId || record.traineeId || '',
+    targetId: record.targetType === 'batch' ? (record.batchId || '') : record.targetType === 'trainee' ? (record.traineeId || '') : '',
+    waveNumber: record.waveNumber ? String(record.waveNumber) : '',
     dueAt: record.dueAt ? record.dueAt.slice(0, 10) : '',
     assignmentMode: record.assignmentMode || 'entire_category',
     questionIds: record.selectedQuestionIds || [],
@@ -362,7 +334,7 @@ function getQuestionBankForCategory(workspace: TrainerBootstrapResponse | null, 
 }
 
 function formatTargetLabel(assignment: AssignmentRecord) {
-  return `${assignment.targetType === 'batch' ? 'Batch / Wave' : 'Trainee'}: ${assignment.targetLabel}`
+  return `${assignment.targetType === 'trainee' ? 'Trainee' : assignment.targetType === 'wave' ? 'Wave' : 'Batch'}: ${assignment.targetLabel}`
 }
 
 export function TrainerAssessmentStudio({
@@ -388,12 +360,14 @@ export function TrainerAssessmentStudio({
   const [questionDifficultyFilter, setQuestionDifficultyFilter] = useState<'all' | 'easy' | 'medium' | 'hard'>('all')
   const [questionPage, setQuestionPage] = useState(1)
   const [assignmentSearch, setAssignmentSearch] = useState('')
-  const [assignmentTargetFilter, setAssignmentTargetFilter] = useState<'all' | 'batch' | 'trainee'>('all')
+  const [assignmentTargetFilter, setAssignmentTargetFilter] = useState<'all' | 'batch' | 'wave' | 'trainee'>('all')
   const [assignmentStatusFilter, setAssignmentStatusFilter] = useState<'all' | 'pending' | 'in_progress' | 'completed'>('all')
   const [assignmentPage, setAssignmentPage] = useState(1)
   const [resultsSearch, setResultsSearch] = useState('')
   const [resultsCategoryFilter, setResultsCategoryFilter] = useState('all')
   const [resultsBatchFilter, setResultsBatchFilter] = useState('all')
+  const [resultsWaveFilter, setResultsWaveFilter] = useState('all')
+  const [resultsTraineeFilter, setResultsTraineeFilter] = useState('all')
   const [resultsStatusFilter, setResultsStatusFilter] = useState<'all' | 'pass' | 'fail'>('all')
   const [resultsDateFrom, setResultsDateFrom] = useState('')
   const [resultsDateTo, setResultsDateTo] = useState('')
@@ -510,19 +484,60 @@ export function TrainerAssessmentStudio({
     }
   }, [refreshWorkspace, workspace])
 
-  const categories = workspace?.categories || []
-  const questions = workspace?.questions || []
-  const assignments = workspace?.assignments || []
-  const attempts = workspace?.attempts || []
-  const certificates = workspace?.certificates || []
+  const categories = useMemo(() => workspace?.categories || [], [workspace?.categories])
+  const questions = useMemo(() => workspace?.questions || [], [workspace?.questions])
+  const assignments = useMemo(() => workspace?.assignments || [], [workspace?.assignments])
+  const attempts = useMemo(() => workspace?.attempts || [], [workspace?.attempts])
+  const certificates = useMemo(() => workspace?.certificates || [], [workspace?.certificates])
   const reports = workspace?.reports
   const analytics = workspace?.analytics
 
   const selectedCategory = categories.find((category) => category.id === selectedCategoryId) || null
   const selectedCategoryQuestions = getQuestionBankForCategory(workspace, selectedCategoryId)
-  const batchMap = new Map((workspace?.batches || []).map((batch) => [batch.id, batch]))
-  const traineeMap = new Map((workspace?.trainees || []).map((trainee) => [trainee.id, trainee]))
-  const attemptById = new Map(attempts.map((attempt) => [attempt.id, attempt]))
+  const selectedCategoryAssignments = useMemo(
+    () => assignments.filter((assignment) => assignment.categoryId === selectedCategoryId && assignment.isActive),
+    [assignments, selectedCategoryId],
+  )
+  const selectedCategoryAttempts = useMemo(
+    () => attempts.filter((attempt) => attempt.categoryId === selectedCategoryId).slice(0, 4),
+    [attempts, selectedCategoryId],
+  )
+  const attemptById = useMemo(() => new Map(attempts.map((attempt) => [attempt.id, attempt])), [attempts])
+  const availableBatchOptionsForAssignment = useMemo(() => {
+    const ownerId = categories.find((category) => category.id === assignmentDraft.categoryId)?.createdBy
+    return (workspace?.batches || []).filter((batch) => !ownerId || !batch.createdBy || batch.createdBy === ownerId)
+  }, [assignmentDraft.categoryId, categories, workspace?.batches])
+  const availableWaveOptions = useMemo(() => {
+    if (!workspace?.batches?.length) {
+      return []
+    }
+
+    const ownerId = categories.find((category) => category.id === assignmentDraft.categoryId)?.createdBy
+    const waveMap = new Map<number, { batchCount: number; traineeCount: number }>()
+
+    for (const batch of workspace.batches) {
+      if (batch.waveNumber === null || batch.waveNumber === undefined) {
+        continue
+      }
+      if (ownerId && batch.createdBy && batch.createdBy !== ownerId) {
+        continue
+      }
+
+      const current = waveMap.get(batch.waveNumber) || { batchCount: 0, traineeCount: 0 }
+      current.batchCount += 1
+      current.traineeCount += batch.traineeCount || 0
+      waveMap.set(batch.waveNumber, current)
+    }
+
+    return Array.from(waveMap.entries())
+      .sort((left, right) => left[0] - right[0])
+      .map(([waveNumber, meta]) => ({
+        waveNumber,
+        label: `Wave ${waveNumber}`,
+        batchCount: meta.batchCount,
+        traineeCount: meta.traineeCount,
+      }))
+  }, [assignmentDraft.categoryId, categories, workspace?.batches])
 
   const filteredCategories = useMemo(() => {
     const normalizedSearch = categorySearch.trim().toLowerCase()
@@ -634,6 +649,14 @@ export function TrainerAssessmentStudio({
         return false
       }
 
+      if (resultsWaveFilter !== 'all' && String(attempt.waveNumber ?? '') !== resultsWaveFilter) {
+        return false
+      }
+
+      if (resultsTraineeFilter !== 'all' && attempt.traineeId !== resultsTraineeFilter) {
+        return false
+      }
+
       if (resultsStatusFilter !== 'all' && attempt.status !== resultsStatusFilter) {
         return false
       }
@@ -678,6 +701,8 @@ export function TrainerAssessmentStudio({
     resultsDateTo,
     resultsSearch,
     resultsStatusFilter,
+    resultsTraineeFilter,
+    resultsWaveFilter,
   ])
 
   const resultsPageCount = Math.max(1, Math.ceil(filteredAttempts.length / 6))
@@ -744,6 +769,12 @@ export function TrainerAssessmentStudio({
     passRate: Number(report.passRate.toFixed(2)),
   }))
 
+  const waveChartData = (reports?.waves || []).map((report) => ({
+    label: `Wave ${report.waveNumber}`,
+    averageScore: Number(report.averageScore.toFixed(2)),
+    passRate: Number(report.passRate.toFixed(2)),
+  }))
+
   const weakQuestions = (reports?.questions || []).slice(0, 5)
 
   const openCategoryDialog = (category?: CategoryRecord) => {
@@ -756,10 +787,15 @@ export function TrainerAssessmentStudio({
     setQuestionDialogOpen(true)
   }
 
-  const openAssignmentDialog = (assignment?: AssignmentRecord) => {
+  const openAssignmentDialog = (assignment?: AssignmentRecord, preferredCategoryId?: string) => {
+    const draftCategoryId = assignment?.categoryId || preferredCategoryId || selectedCategoryId || categories[0]?.id || ''
+    const draftCategory = categories.find((category) => category.id === draftCategoryId)
     const baseDraft = assignment
       ? toAssignmentDraft(assignment)
-      : createAssignmentDraft(selectedCategoryId || categories[0]?.id || '', String(selectedCategory?.passingScore || 90))
+      : {
+          ...createAssignmentDraft(draftCategoryId, String(draftCategory?.passingScore || 90)),
+          title: draftCategory ? `${draftCategory.title} Assessment` : '',
+        }
     setAssignmentDraft(baseDraft)
     setAssignmentQuestionSearch('')
     setAssignmentDialogOpen(true)
@@ -820,8 +856,8 @@ export function TrainerAssessmentStudio({
     }
 
     const sanitizedChoices = questionDraft.choices.map((choice) => choice.trim())
-    if (sanitizedChoices.filter(Boolean).length < 2) {
-      toast.error('Please provide at least two answer choices.')
+    if (sanitizedChoices.some((choice) => !choice)) {
+      toast.error('All four answer choices are required.')
       return
     }
 
@@ -883,7 +919,7 @@ export function TrainerAssessmentStudio({
       return
     }
 
-    if (!assignmentDraft.targetId) {
+    if (assignmentDraft.targetType === 'wave' ? !assignmentDraft.waveNumber : !assignmentDraft.targetId) {
       toast.error('Select a batch, wave, or trainee target.')
       return
     }
@@ -904,7 +940,9 @@ export function TrainerAssessmentStudio({
         categoryId: assignmentDraft.categoryId,
         title: assignmentDraft.title.trim(),
         description: assignmentDraft.description.trim(),
+        targetType: assignmentDraft.targetType,
         batchId: assignmentDraft.targetType === 'batch' ? assignmentDraft.targetId : null,
+        waveNumber: assignmentDraft.targetType === 'wave' ? Number(assignmentDraft.waveNumber) || null : null,
         traineeId: assignmentDraft.targetType === 'trainee' ? assignmentDraft.targetId : null,
         dueAt: assignmentDraft.dueAt ? new Date(`${assignmentDraft.dueAt}T00:00:00`).toISOString() : null,
         assignmentMode: assignmentDraft.assignmentMode,
@@ -1039,7 +1077,16 @@ export function TrainerAssessmentStudio({
 
   useEffect(() => {
     setResultsPage(1)
-  }, [resultsSearch, resultsCategoryFilter, resultsBatchFilter, resultsStatusFilter, resultsDateFrom, resultsDateTo])
+  }, [
+    resultsSearch,
+    resultsCategoryFilter,
+    resultsBatchFilter,
+    resultsWaveFilter,
+    resultsTraineeFilter,
+    resultsStatusFilter,
+    resultsDateFrom,
+    resultsDateTo,
+  ])
 
   useEffect(() => {
     setCertificatePage(1)
@@ -1076,28 +1123,21 @@ export function TrainerAssessmentStudio({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-slate-950">
-            {role === 'trainer' ? 'Assessment Studio' : 'Assessment Administration'}
-          </h1>
-          <p className="mt-2 max-w-3xl text-sm text-slate-600">
-            {role === 'trainer'
-              ? 'Manage categories, question banks, assignments, results, certificates, analytics, and reports from one connected workspace.'
-              : 'Oversee categories, question banks, assignments, results, analytics, and reports across the assessment module.'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-3">
+      <AssessmentWorkspaceHero
+        eyebrow={role === 'trainer' ? 'Trainer Assessment Studio' : 'Admin Assessment Control'}
+        title={role === 'trainer' ? 'Assessment Studio' : 'Assessment Administration'}
+        description={
+          role === 'trainer'
+            ? 'Create assessment categories, maintain the question bank, assign categories to batches or waves, and review trainee results in one Supabase-connected workflow.'
+            : 'Oversee categories, question banks, category delivery, and trainee outcomes across every trainer-owned assessment workflow.'
+        }
+        actions={(
           <Button type="button" variant="outline" onClick={() => void refreshWorkspace('refresh')} disabled={refreshing}>
             {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
             Refresh
           </Button>
-          <Button type="button" variant="outline" onClick={() => void handleExportCsv()}>
-            <Download className="size-4" />
-            Export CSV
-          </Button>
-        </div>
-      </div>
+        )}
+      />
 
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
@@ -1194,9 +1234,9 @@ export function TrainerAssessmentStudio({
                   <Upload className="size-4" />
                   Open Bulk Upload
                 </Button>
-                <Button type="button" variant="outline" onClick={() => openAssignmentDialog()}>
+                <Button type="button" variant="outline" onClick={() => syncSection('categories')}>
                   <Users className="size-4" />
-                  Create Assignment
+                  Assign by Category
                 </Button>
               </CardContent>
             </Card>
@@ -1236,7 +1276,7 @@ export function TrainerAssessmentStudio({
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <CardTitle>{role === 'trainer' ? 'Category List' : 'All Categories'}</CardTitle>
-                  <CardDescription>Search and select a category to review its details.</CardDescription>
+                  <CardDescription>Search a category, review its setup, and assign it to a batch or wave.</CardDescription>
                 </div>
                 <Button type="button" size="sm" onClick={() => openCategoryDialog()}>
                   <Plus className="size-4" />
@@ -1289,6 +1329,10 @@ export function TrainerAssessmentStudio({
                     <CardDescription>{selectedCategory.description || 'No category description provided yet.'}</CardDescription>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <Button type="button" onClick={() => openAssignmentDialog(undefined, selectedCategory.id)}>
+                      <Users className="size-4" />
+                      Assign to Batch/Wave
+                    </Button>
                     <Button type="button" variant="outline" onClick={() => openCategoryDialog(selectedCategory)}>
                       <Save className="size-4" />
                       Edit
@@ -1322,8 +1366,128 @@ export function TrainerAssessmentStudio({
                   </div>
                 </div>
 
+                <div className="grid gap-6 xl:grid-cols-[1.1fr,0.9fr]">
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-semibold text-slate-900">Category Assignment Workflow</div>
+                        <div className="text-sm text-slate-600">
+                          Publish this category to a trainer-owned batch or wave. Trainee access is driven by these saved assignments.
+                        </div>
+                      </div>
+                      <Button type="button" variant="outline" onClick={() => openAssignmentDialog(undefined, selectedCategory.id)}>
+                        <Plus className="size-4" />
+                        New Assignment
+                      </Button>
+                    </div>
+
+                    {selectedCategoryAssignments.length ? (
+                      <div className="space-y-3">
+                        {selectedCategoryAssignments.map((assignment) => (
+                          <div key={assignment.id} className="rounded-2xl border border-slate-200 p-4">
+                            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="space-y-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <div className="font-semibold text-slate-950">{assignment.title || assignment.categoryTitle}</div>
+                                  <Badge variant="outline">{assignment.targetType === 'wave' ? 'Wave assignment' : assignment.targetType === 'trainee' ? 'Trainee assignment' : 'Batch assignment'}</Badge>
+                                  <Badge className={
+                                    assignment.statusLabel === 'Completed'
+                                      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                      : assignment.statusLabel === 'In Progress'
+                                        ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                        : 'border-slate-200 bg-slate-50 text-slate-700'
+                                  }>
+                                    {assignment.statusLabel || 'Pending'}
+                                  </Badge>
+                                </div>
+                                <div className="text-sm text-slate-600">{assignment.description || 'No assignment notes provided.'}</div>
+                                <div className="flex flex-wrap gap-4 text-xs text-slate-500">
+                                  <span>{formatTargetLabel(assignment)}</span>
+                                  <span>{assignment.questionCount || 0} questions</span>
+                                  <span>Pass at {assignment.passingScore || selectedCategory.passingScore}%</span>
+                                  <span>Due {formatDateLabel(assignment.dueAt)}</span>
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button type="button" variant="outline" size="sm" onClick={() => openAssignmentDialog(assignment)}>
+                                  <Save className="size-4" />
+                                  Edit
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                                  onClick={() => void handleDeleteAssignment(assignment)}
+                                >
+                                  <Trash2 className="size-4" />
+                                  Delete
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="mt-4 grid gap-3 md:grid-cols-4">
+                              <DetailLine label="Assigned" value={String(assignment.assignedTrainees || 0)} />
+                              <DetailLine label="Completed" value={String(assignment.completedTrainees || 0)} />
+                              <DetailLine label="Passed" value={String(assignment.passedTrainees || 0)} />
+                              <DetailLine label="Average Score" value={`${(assignment.averageScore || 0).toFixed(2)}%`} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                        No active batch or wave assignments exist for this category yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">Recent Results</div>
+                      <div className="text-sm text-slate-600">Latest trainee outcomes for this category.</div>
+                    </div>
+                    {selectedCategoryAttempts.length ? (
+                      <div className="space-y-3">
+                        {selectedCategoryAttempts.map((attempt) => (
+                          <div key={attempt.id} className="rounded-2xl border border-slate-200 p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{attempt.traineeName}</div>
+                                <div className="mt-1 text-sm text-slate-600">
+                                  {attempt.batchName || 'Direct assignment'} | Attempt #{attempt.attemptNo}
+                                </div>
+                              </div>
+                              <Badge className={getAttemptTone(attempt.status)}>
+                                {attempt.status === 'pass' ? 'Pass' : 'Fail'}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 grid gap-3 md:grid-cols-3">
+                              <DetailLine label="Score" value={`${attempt.score.toFixed(2)}%`} />
+                              <DetailLine label="Completed" value={formatDateLabel(attempt.completedAt || attempt.submittedAt)} />
+                              <DetailLine label="Notes" value={attempt.analysis?.improvements?.[0] || attempt.feedback || 'Result saved'} />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                        Results will appear here after trainees complete this category.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div>
-                  <div className="mb-3 text-sm font-semibold text-slate-900">Recent Questions</div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-900">Recent Questions</div>
+                      <div className="text-sm text-slate-600">Preview the current multiple-choice bank saved under this category.</div>
+                    </div>
+                    <Button type="button" variant="outline" size="sm" onClick={() => openQuestionDialog()}>
+                      <Plus className="size-4" />
+                      Add Question
+                    </Button>
+                  </div>
                   <div className="grid gap-3">
                     {selectedCategoryQuestions.slice(0, 4).map((question) => (
                       <div key={question.id} className="rounded-2xl border border-slate-200 p-4">
@@ -1471,13 +1635,13 @@ export function TrainerAssessmentStudio({
             <CardHeader>
               <CardTitle>Bulk Upload Questions</CardTitle>
               <CardDescription>
-                Download the template, map each row to an existing category name, and import the CSV in one pass.
+                Download the template, map each row to a category, and import the CSV directly into Supabase with row-level validation.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-6">
                 <div className="text-sm text-slate-700">
-                  Template columns: Question Number, Category, Question, Choice 1, Choice 2, Choice 3, Choice 4, Correct Answer, Difficulty, Explanation.
+                  Template columns: Question Number, Category, Question, Choice 1, Choice 2, Choice 3, Choice 4, Correct Answer.
                 </div>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <Button type="button" variant="outline" onClick={() => void downloadAssessmentCsvTemplate()}>
@@ -1520,6 +1684,12 @@ export function TrainerAssessmentStudio({
                     <MetricCard label="Failed" value={String(bulkUploadState.summary.failedRows)} hint="Validation issues" icon={<Filter className="size-4 text-amber-600" />} />
                     <MetricCard label="Categories" value={String(new Set(bulkUploadState.summary.importedQuestions.map((question) => question.categoryId)).size)} hint="Matched categories" icon={<ClipboardList className="size-4 text-violet-600" />} />
                   </div>
+
+                  {bulkUploadState.summary.createdCategories?.length ? (
+                    <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4 text-sm text-sky-900">
+                      Created categories: {bulkUploadState.summary.createdCategories.join(', ')}
+                    </div>
+                  ) : null}
 
                   {bulkUploadState.summary.errors.length ? (
                     <div className="space-y-3">
@@ -1587,13 +1757,14 @@ export function TrainerAssessmentStudio({
                 onChange={(event) => setAssignmentSearch(event.target.value)}
                 placeholder="Search category, title, or target"
               />
-              <Select value={assignmentTargetFilter} onValueChange={(value: 'all' | 'batch' | 'trainee') => setAssignmentTargetFilter(value)}>
+              <Select value={assignmentTargetFilter} onValueChange={(value: 'all' | 'batch' | 'wave' | 'trainee') => setAssignmentTargetFilter(value)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All targets</SelectItem>
                   <SelectItem value="batch">Batch / Wave</SelectItem>
+                  <SelectItem value="wave">Wave</SelectItem>
                   <SelectItem value="trainee">Trainee</SelectItem>
                 </SelectContent>
               </Select>
@@ -1703,11 +1874,19 @@ export function TrainerAssessmentStudio({
       {activeSection === 'results' ? (
         <Card>
           <CardHeader>
-            <CardTitle>Results and Evaluations</CardTitle>
-            <CardDescription>Filter by batch, wave, category, trainee, status, and date range.</CardDescription>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <CardTitle>Results and Evaluations</CardTitle>
+                <CardDescription>Filter by batch, wave, category, trainee, status, and date range.</CardDescription>
+              </div>
+              <Button type="button" variant="outline" onClick={() => void handleExportCsv()}>
+                <Download className="size-4" />
+                Export Results CSV
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_170px_170px]">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px_220px_180px_220px_170px]">
               <Input
                 value={resultsSearch}
                 onChange={(event) => setResultsSearch(event.target.value)}
@@ -1735,6 +1914,32 @@ export function TrainerAssessmentStudio({
                   {(workspace.batches || []).map((batch) => (
                     <SelectItem key={batch.id} value={batch.id}>
                       {batch.waveNumber ? `${batch.name} | Wave ${batch.waveNumber}` : batch.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={resultsWaveFilter} onValueChange={setResultsWaveFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Wave" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All waves</SelectItem>
+                  {(workspace.waves || []).map((wave) => (
+                    <SelectItem key={`wave-${wave.waveNumber}`} value={String(wave.waveNumber)}>
+                      {wave.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={resultsTraineeFilter} onValueChange={setResultsTraineeFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Trainee" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All trainees</SelectItem>
+                  {(workspace.trainees || []).map((trainee) => (
+                    <SelectItem key={trainee.id} value={trainee.id}>
+                      {trainee.fullName}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1896,12 +2101,12 @@ export function TrainerAssessmentStudio({
 
             <Card>
               <CardHeader>
-                <CardTitle>Batch Performance Comparison</CardTitle>
+                <CardTitle>Batch / Wave Performance Comparison</CardTitle>
                 <CardDescription>See how each batch or wave is performing across assigned categories.</CardDescription>
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={batchChartData}>
+                  <BarChart data={batchChartData.length ? batchChartData : waveChartData}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="label" interval={0} angle={-12} textAnchor="end" height={70} />
                     <YAxis domain={[0, 100]} />
@@ -1975,7 +2180,7 @@ export function TrainerAssessmentStudio({
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div>
                   <CardTitle>Reports</CardTitle>
-                  <CardDescription>Export CSV data and review category, batch, and question-level summaries.</CardDescription>
+                  <CardDescription>Export CSV data and review category, batch, wave, trainee, and trainer-level summaries.</CardDescription>
                 </div>
                 <Button type="button" onClick={() => void handleExportCsv()}>
                   <Download className="size-4" />
@@ -2007,9 +2212,24 @@ export function TrainerAssessmentStudio({
 
               <Card className="border-slate-200">
                 <CardHeader>
-                  <CardTitle className="text-lg">Batch / Wave Report</CardTitle>
+                  <CardTitle className="text-lg">Batch and Wave Report</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  {(reports?.waves || []).slice(0, 6).map((report) => (
+                    <div key={`wave-${report.waveNumber}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="font-semibold text-slate-950">
+                        Wave {report.waveNumber}
+                      </div>
+                      <div className="text-sm text-slate-600">{report.categoryTitle}</div>
+                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                        <div>Assignments: {report.assignmentCount}</div>
+                        <div>Attempts: {report.attemptCount}</div>
+                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
+                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
+                        <div>Completion rate: {report.completionRate.toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  ))}
                   {(reports?.batches || []).map((report) => (
                     <div key={`${report.batchId}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
                       <div className="font-semibold text-slate-950">
@@ -2028,6 +2248,60 @@ export function TrainerAssessmentStudio({
                   {!(reports?.batches || []).length ? (
                     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                       Batch reporting will appear after assignments and attempts are recorded.
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-200">
+                <CardHeader>
+                  <CardTitle className="text-lg">Trainee Report</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(reports?.trainees || []).slice(0, 10).map((report) => (
+                    <div key={`${report.traineeId}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="font-semibold text-slate-950">{report.traineeName}</div>
+                      <div className="text-sm text-slate-600">
+                        {report.categoryTitle} | {report.batchName || 'Direct'}{report.waveNumber ? ` | Wave ${report.waveNumber}` : ''}
+                      </div>
+                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                        <div>Attempts: {report.attemptCount}</div>
+                        <div>Certificates: {report.certificateCount}</div>
+                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
+                        <div>Highest score: {report.highestScore.toFixed(2)}%</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!(reports?.trainees || []).length ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                      Trainee reporting will appear after attempts are recorded.
+                    </div>
+                  ) : null}
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-200">
+                <CardHeader>
+                  <CardTitle className="text-lg">Trainer Report</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {(reports?.trainers || []).map((report) => (
+                    <div key={report.trainerId} className="rounded-2xl border border-slate-200 p-4">
+                      <div className="font-semibold text-slate-950">{report.trainerName}</div>
+                      <div className="text-sm text-slate-600">{report.trainerEmail || 'No email recorded'}</div>
+                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                        <div>Categories: {report.categoryCount}</div>
+                        <div>Assignments: {report.assignmentCount}</div>
+                        <div>Attempts: {report.attemptCount}</div>
+                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
+                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
+                        <div>Certificates: {report.certificateCount}</div>
+                      </div>
+                    </div>
+                  ))}
+                  {!(reports?.trainers || []).length ? (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                      Trainer-level reporting will appear after categories and attempts are available.
                     </div>
                   ) : null}
                 </CardContent>
@@ -2193,8 +2467,8 @@ export function TrainerAssessmentStudio({
       <Dialog open={assignmentDialogOpen} onOpenChange={setAssignmentDialogOpen}>
         <DialogContent className="max-w-5xl">
           <DialogHeader>
-            <DialogTitle>{assignmentDraft.id ? 'Edit Assignment' : 'Assign Assessment'}</DialogTitle>
-            <DialogDescription>Choose the target, assignment mode, and question pool rules for this assessment.</DialogDescription>
+            <DialogTitle>{assignmentDraft.id ? 'Edit Category Assignment' : 'Assign Category to Batch/Wave'}</DialogTitle>
+            <DialogDescription>Choose the delivery target, question pool rules, and completion settings for this category.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid gap-4 xl:grid-cols-2">
@@ -2208,6 +2482,8 @@ export function TrainerAssessmentStudio({
                       ...current,
                       categoryId: value,
                       questionIds: [],
+                      targetId: '',
+                      waveNumber: '',
                       passingScore: String(nextCategory?.passingScore || 90),
                     }))
                   }}
@@ -2238,36 +2514,72 @@ export function TrainerAssessmentStudio({
             <div className="grid gap-4 xl:grid-cols-3">
               <div>
                 <Label>Target Type</Label>
-                <Select value={assignmentDraft.targetType} onValueChange={(value: 'batch' | 'trainee') => setAssignmentDraft((current) => ({ ...current, targetType: value, targetId: '' }))}>
+                <Select
+                  value={assignmentDraft.targetType}
+                  onValueChange={(value: 'batch' | 'wave' | 'trainee') =>
+                    setAssignmentDraft((current) => ({
+                      ...current,
+                      targetType: value,
+                      targetId: '',
+                      waveNumber: value === 'wave' ? current.waveNumber : '',
+                    }))
+                  }
+                >
                   <SelectTrigger className="mt-2">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="batch">Batch / Wave</SelectItem>
-                    <SelectItem value="trainee">Trainee</SelectItem>
+                    <SelectItem value="batch">Batch</SelectItem>
+                    <SelectItem value="wave">Wave</SelectItem>
+                    {assignmentDraft.id && assignmentDraft.targetType === 'trainee' ? (
+                      <SelectItem value="trainee">Trainee</SelectItem>
+                    ) : null}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <Label>{assignmentDraft.targetType === 'batch' ? 'Batch / Wave' : 'Trainee'}</Label>
-                <Select value={assignmentDraft.targetId} onValueChange={(value) => setAssignmentDraft((current) => ({ ...current, targetId: value }))}>
-                  <SelectTrigger className="mt-2">
-                    <SelectValue placeholder={`Select ${assignmentDraft.targetType === 'batch' ? 'batch' : 'trainee'}`} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {assignmentDraft.targetType === 'batch'
-                      ? (workspace.batches || []).map((batch) => (
-                          <SelectItem key={batch.id} value={batch.id}>
-                            {batch.waveNumber ? `${batch.name} | Wave ${batch.waveNumber}` : batch.name}
-                          </SelectItem>
-                        ))
-                      : (workspace.trainees || []).map((trainee) => (
-                          <SelectItem key={trainee.id} value={trainee.id}>
-                            {trainee.fullName} ({trainee.batchNames[0] || 'No batch'})
-                          </SelectItem>
-                        ))}
-                  </SelectContent>
-                </Select>
+                <Label>
+                  {assignmentDraft.targetType === 'batch'
+                    ? 'Batch'
+                    : assignmentDraft.targetType === 'wave'
+                      ? 'Wave'
+                      : 'Trainee'}
+                </Label>
+                {assignmentDraft.targetType === 'wave' ? (
+                  <Select value={assignmentDraft.waveNumber || 'none'} onValueChange={(value) => setAssignmentDraft((current) => ({ ...current, waveNumber: value === 'none' ? '' : value }))}>
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder="Select wave" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Select wave</SelectItem>
+                      {availableWaveOptions.map((wave) => (
+                        <SelectItem key={`assignment-wave-${wave.waveNumber}`} value={String(wave.waveNumber)}>
+                          {wave.label} ({wave.traineeCount} trainees)
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Select value={assignmentDraft.targetId} onValueChange={(value) => setAssignmentDraft((current) => ({ ...current, targetId: value }))}>
+                    <SelectTrigger className="mt-2">
+                      <SelectValue placeholder={`Select ${assignmentDraft.targetType === 'batch' ? 'batch' : 'trainee'}`} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {assignmentDraft.targetType === 'batch'
+                        ? availableBatchOptionsForAssignment
+                            .map((batch) => (
+                              <SelectItem key={batch.id} value={batch.id}>
+                                {batch.waveNumber ? `${batch.name} | Wave ${batch.waveNumber}` : batch.name}
+                              </SelectItem>
+                            ))
+                        : (workspace.trainees || []).map((trainee) => (
+                            <SelectItem key={trainee.id} value={trainee.id}>
+                              {trainee.fullName} ({trainee.batchNames[0] || 'No batch'})
+                            </SelectItem>
+                          ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div>
                 <Label>Assignment Mode</Label>

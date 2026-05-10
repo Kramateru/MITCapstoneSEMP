@@ -31,12 +31,13 @@ import {
 
 import { AdminLearningFilterBar } from '@/app/components/admin/admin-learning-filter-bar'
 import {
+  buildAdminLearningInsightsPdfUrl,
   buildAdminLearningInsightsUrl,
   EMPTY_ADMIN_LEARNING_FILTERS,
   type AdminLearningFilterState,
   type AdminLearningInsightsResponse,
 } from '@/app/lib/admin-learning-insights'
-import { apiFetch } from '@/app/utils/api'
+import { apiFetch, downloadApiFile } from '@/app/utils/api'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
@@ -208,10 +209,13 @@ export function AdminLearningReportWorkspace() {
   const [data, setData] = useState<AdminLearningInsightsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [downloadNotice, setDownloadNotice] = useState<{ tone: 'warning' | 'error'; message: string } | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
 
   const requestUrl = useMemo(() => buildAdminLearningInsightsUrl(filters), [filters])
+  const pdfUrl = useMemo(() => buildAdminLearningInsightsPdfUrl(filters), [filters])
 
   const loadReport = useCallback(
     async (mode: 'initial' | 'refresh' | 'auto' = 'initial') => {
@@ -249,15 +253,38 @@ export function AdminLearningReportWorkspace() {
     return () => window.clearInterval(timer)
   }, [loadReport])
 
-  const handlePrint = useCallback(() => {
-    window.print()
-  }, [])
-
   const summary = data?.summary
   const hasLearningData = Boolean(
     (summary?.assigned_module_records || 0) > 0
       || (summary?.assigned_assessment_records || 0) > 0,
   )
+
+  const handleDownloadPdf = useCallback(async () => {
+    setDownloadNotice(null)
+
+    if (!hasLearningData) {
+      setDownloadNotice({
+        tone: 'warning',
+        message: 'No report data is available for the selected filters yet.',
+      })
+      return
+    }
+
+    setDownloadingPdf(true)
+    try {
+      await downloadApiFile(
+        pdfUrl,
+        `Admin_Report_${new Date().toISOString().slice(0, 10)}.pdf`,
+      )
+    } catch (downloadError) {
+      setDownloadNotice({
+        tone: 'error',
+        message: getErrorMessage(downloadError),
+      })
+    } finally {
+      setDownloadingPdf(false)
+    }
+  }, [hasLearningData, pdfUrl])
 
   const trainerRows = useMemo(() => data?.trainer_comparison || [], [data?.trainer_comparison])
   const batchRows = useMemo(() => data?.batch_comparison || [], [data?.batch_comparison])
@@ -321,15 +348,21 @@ export function AdminLearningReportWorkspace() {
             <FileBarChart className="mr-2 size-4" />
             Open Analytics
           </Link>
-          <Button type="button" variant="outline" onClick={handlePrint} className="rounded-full">
-            <Download className="mr-2 size-4" />
-            Print / Save PDF
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handleDownloadPdf()}
+            disabled={downloadingPdf}
+            className="rounded-full"
+          >
+            {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
+            Download PDF Report
           </Button>
           <Button
             type="button"
             variant="outline"
             onClick={() => void loadReport('refresh')}
-            disabled={loading || refreshing}
+            disabled={loading || refreshing || downloadingPdf}
             className="rounded-full"
           >
             {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
@@ -362,6 +395,26 @@ export function AdminLearningReportWorkspace() {
       {error ? (
         <Card className="border-rose-200 bg-rose-50 shadow-sm">
           <CardContent className="p-4 text-sm text-rose-700">{error}</CardContent>
+        </Card>
+      ) : null}
+
+      {downloadNotice ? (
+        <Card
+          className={
+            downloadNotice.tone === 'warning'
+              ? 'border-amber-200 bg-amber-50 shadow-sm'
+              : 'border-rose-200 bg-rose-50 shadow-sm'
+          }
+        >
+          <CardContent
+            className={
+              downloadNotice.tone === 'warning'
+                ? 'p-4 text-sm text-amber-800'
+                : 'p-4 text-sm text-rose-700'
+            }
+          >
+            {downloadNotice.message}
+          </CardContent>
         </Card>
       ) : null}
 

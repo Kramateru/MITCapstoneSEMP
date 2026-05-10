@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -13,6 +13,7 @@ from ..models import (
     FeedbackType,
     MicrolearningAssessmentMethod,
     MicrolearningAssignment,
+    MicrolearningFlashcardResult,
     MicrolearningModule,
     ScenarioDifficulty,
 )
@@ -58,6 +59,10 @@ _DIRECT_VIDEO_EXTENSIONS = (".mp4", ".webm", ".ogg", ".mov", ".m4v")
 MICROLEARNING_MULTIPLE_CHOICE_POINTS = 2.0
 MICROLEARNING_OPEN_ENDED_POINTS = 10.0
 MICROLEARNING_FLASHCARD_POINTS = 10.0
+MICROLEARNING_FLASHCARD_STUDY_SECONDS = 30
+MICROLEARNING_FLASHCARD_BLANK_SECONDS = 0
+MICROLEARNING_FLASHCARD_ANSWER_SECONDS = 60
+MICROLEARNING_FLASHCARD_RUNTIME_KEY = "flashcard_runtime"
 
 
 def _normalize_text_value(value: Any) -> str:
@@ -1041,6 +1046,695 @@ def _set_assignment_meta(assignment: MicrolearningAssignment, **updates: Any) ->
     assignment.responses = responses
 
 
+def _replace_assignment_meta(assignment: MicrolearningAssignment, meta: dict[str, Any]) -> None:
+    responses = dict(assignment.responses or {})
+    if meta:
+        responses["__meta__"] = meta
+    else:
+        responses.pop("__meta__", None)
+    assignment.responses = responses
+
+
+def _parse_datetime_value(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if not value:
+        return None
+
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+
+    try:
+        return datetime.fromisoformat(text_value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+def _seconds_remaining(deadline: datetime, now: datetime) -> int:
+    return max(0, int((deadline - now).total_seconds() + 0.999))
+
+
+def _is_flashcard_module(module: Optional[MicrolearningModule]) -> bool:
+    return normalize_module_type(getattr(module, "type", None)) == "flashcard"
+
+
+def _flashcard_exercises(assignment: MicrolearningAssignment) -> list[dict[str, Any]]:
+    return [
+        dict(exercise or {})
+        for exercise in ((assignment.module.exercises or []) if assignment.module else [])
+        if str((exercise or {}).get("type") or "").strip().lower() == "flashcard_recall"
+    ]
+
+
+def _normalized_flashcard_tips(study_seconds: int, answer_seconds: int) -> list[str]:
+    return [
+        f"Study both sides during the {study_seconds}-second study window.",
+        f"The prompt stays visible while the answer auto-saves after {answer_seconds} seconds.",
+    ]
+
+
+def _normalize_flashcard_exercise_payloads(
+    exercises: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], bool]:
+    normalized_exercises: list[dict[str, Any]] = []
+    did_change = False
+
+    for exercise in exercises:
+        exercise_type = str((exercise or {}).get("type") or "").strip().lower()
+        if exercise_type != "flashcard_recall":
+            normalized_exercises.append(exercise)
+            continue
+
+        normalized = dict(exercise or {})
+        normalized["study_time_seconds"] = MICROLEARNING_FLASHCARD_STUDY_SECONDS
+        normalized["preview_seconds"] = MICROLEARNING_FLASHCARD_STUDY_SECONDS
+        normalized["blank_seconds"] = MICROLEARNING_FLASHCARD_BLANK_SECONDS
+        normalized["answer_time_seconds"] = MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+        normalized["answer_time_limit_seconds"] = MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+        normalized["tips"] = _normalized_flashcard_tips(
+            MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+            MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+        )
+        normalized_exercises.append(normalized)
+        if normalized != exercise:
+            did_change = True
+
+    return normalized_exercises, did_change
+
+
+def _flashcard_attempt_status_counts(assignment: MicrolearningAssignment) -> dict[str, int]:
+    counts = {"answered": 0, "timed_out": 0, "unanswered": 0}
+    flashcard_ids = {str(exercise.get("id")) for exercise in _flashcard_exercises(assignment) if exercise.get("id")}
+    for exercise_id, attempt in _response_entries(assignment):
+        if str(exercise_id) not in flashcard_ids:
+            continue
+        status = str(attempt.get("status") or "").strip().lower()
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _flashcard_runtime_meta(assignment: MicrolearningAssignment) -> dict[str, Any]:
+    meta = _assignment_meta(assignment)
+    runtime = meta.get(MICROLEARNING_FLASHCARD_RUNTIME_KEY)
+    return dict(runtime) if isinstance(runtime, dict) else {}
+
+
+def _set_flashcard_runtime_meta(assignment: MicrolearningAssignment, runtime: Optional[dict[str, Any]]) -> None:
+    meta = _assignment_meta(assignment)
+    if runtime:
+        meta[MICROLEARNING_FLASHCARD_RUNTIME_KEY] = runtime
+    else:
+        meta.pop(MICROLEARNING_FLASHCARD_RUNTIME_KEY, None)
+    _replace_assignment_meta(assignment, meta)
+
+
+def _flashcard_completion_counts(
+    exercises: list[dict[str, Any]],
+    responses: dict[str, Any],
+) -> tuple[int, int]:
+    completed_cards = 0
+    for exercise in exercises:
+        exercise_id = str(exercise.get("id") or "")
+        attempt = responses.get(exercise_id)
+        if isinstance(attempt, dict) and attempt.get("is_completed"):
+            completed_cards += 1
+    total_cards = len(exercises)
+    return completed_cards, total_cards
+
+
+def _first_incomplete_flashcard_index(
+    exercises: list[dict[str, Any]],
+    responses: dict[str, Any],
+    *,
+    start_index: int = 0,
+) -> Optional[int]:
+    for index in range(max(0, start_index), len(exercises)):
+        exercise_id = str(exercises[index].get("id") or "")
+        attempt = responses.get(exercise_id)
+        if not (isinstance(attempt, dict) and attempt.get("is_completed")):
+            return index
+    return None
+
+
+def _build_flashcard_runtime_view(
+    assignment: MicrolearningAssignment,
+    *,
+    exercises: list[dict[str, Any]],
+    current_index: Optional[int],
+    study_started_at: Optional[datetime],
+    now: Optional[datetime] = None,
+    phase_override: Optional[str] = None,
+) -> dict[str, Any]:
+    now = now or datetime.utcnow()
+    responses = dict(assignment.responses or {})
+    completed_cards, total_cards = _flashcard_completion_counts(exercises, responses)
+    progress_percentage = round((completed_cards / total_cards) * 100, 2) if total_cards else 0.0
+
+    if current_index is None or current_index < 0 or current_index >= total_cards:
+        return {
+            "enabled": True,
+            "phase": phase_override or ("completed" if total_cards else "not_started"),
+            "current_exercise_id": None,
+            "current_card_index": None,
+            "current_card_number": None,
+            "current_card_title": None,
+            "current_prompt_side": None,
+            "study_time_seconds": MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+            "answer_time_seconds": MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+            "study_started_at": None,
+            "answer_started_at": None,
+            "answer_deadline_at": None,
+            "phase_started_at": None,
+            "phase_deadline_at": None,
+            "seconds_remaining": 0,
+            "phase_duration_seconds": 0,
+            "completed_cards": completed_cards,
+            "remaining_cards": max(0, total_cards - completed_cards),
+            "total_cards": total_cards,
+            "progress_percentage": progress_percentage,
+        }
+
+    current_exercise = exercises[current_index]
+    study_anchor = study_started_at or now
+    answer_started_at = study_anchor + timedelta(seconds=MICROLEARNING_FLASHCARD_STUDY_SECONDS)
+    answer_deadline_at = answer_started_at + timedelta(seconds=MICROLEARNING_FLASHCARD_ANSWER_SECONDS)
+
+    if phase_override in {"not_started", "completed"}:
+        return {
+            "enabled": True,
+            "phase": phase_override,
+            "current_exercise_id": current_exercise.get("id"),
+            "current_card_index": current_index,
+            "current_card_number": current_index + 1,
+            "current_card_title": current_exercise.get("title"),
+            "current_prompt_side": "back",
+            "study_time_seconds": MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+            "answer_time_seconds": MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+            "study_started_at": None,
+            "answer_started_at": None,
+            "answer_deadline_at": None,
+            "phase_started_at": None,
+            "phase_deadline_at": None,
+            "seconds_remaining": 0,
+            "phase_duration_seconds": 0,
+            "completed_cards": completed_cards,
+            "remaining_cards": max(0, total_cards - completed_cards),
+            "total_cards": total_cards,
+            "progress_percentage": progress_percentage,
+        }
+
+    if phase_override:
+        phase = phase_override
+    elif now < answer_started_at:
+        phase = "study"
+    elif now < answer_deadline_at:
+        phase = "answer"
+    else:
+        phase = "expired"
+
+    if phase == "study":
+        phase_started_at = study_anchor
+        phase_deadline_at = answer_started_at
+        phase_duration_seconds = MICROLEARNING_FLASHCARD_STUDY_SECONDS
+    else:
+        phase_started_at = answer_started_at
+        phase_deadline_at = answer_deadline_at
+        phase_duration_seconds = MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+
+    return {
+        "enabled": True,
+        "phase": phase,
+        "current_exercise_id": current_exercise.get("id"),
+        "current_card_index": current_index,
+        "current_card_number": current_index + 1,
+        "current_card_title": current_exercise.get("title"),
+        "current_prompt_side": "back",
+        "study_time_seconds": MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+        "answer_time_seconds": MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+        "study_started_at": study_anchor.isoformat(),
+        "answer_started_at": answer_started_at.isoformat(),
+        "answer_deadline_at": answer_deadline_at.isoformat(),
+        "phase_started_at": phase_started_at.isoformat(),
+        "phase_deadline_at": phase_deadline_at.isoformat(),
+        "seconds_remaining": _seconds_remaining(phase_deadline_at, now),
+        "phase_duration_seconds": phase_duration_seconds,
+        "completed_cards": completed_cards,
+        "remaining_cards": max(0, total_cards - completed_cards),
+        "total_cards": total_cards,
+        "progress_percentage": progress_percentage,
+    }
+
+
+def _upsert_flashcard_result(
+    db: Session,
+    assignment: MicrolearningAssignment,
+    exercise: dict[str, Any],
+    attempt: dict[str, Any],
+    *,
+    flashcard_index: int,
+    study_started_at: datetime,
+) -> None:
+    answer_started_at = study_started_at + timedelta(seconds=MICROLEARNING_FLASHCARD_STUDY_SECONDS)
+    answer_deadline_at = answer_started_at + timedelta(seconds=MICROLEARNING_FLASHCARD_ANSWER_SECONDS)
+    answered_at = _parse_datetime_value(
+        attempt.get("answered_at") or attempt.get("submitted_at")
+    ) or answer_deadline_at
+    attempt_number = _current_attempt_number(assignment)
+    flashcard_id = str(exercise.get("id") or "")
+
+    result = (
+        db.query(MicrolearningFlashcardResult)
+        .filter(
+            MicrolearningFlashcardResult.assignment_id == assignment.id,
+            MicrolearningFlashcardResult.flashcard_id == flashcard_id,
+            MicrolearningFlashcardResult.attempt_number == attempt_number,
+        )
+        .first()
+    )
+    if not result:
+        result = MicrolearningFlashcardResult(
+            assignment_id=assignment.id,
+            module_id=assignment.module_id,
+            trainee_id=assignment.trainee_id,
+            flashcard_id=flashcard_id,
+            attempt_number=attempt_number,
+        )
+        db.add(result)
+
+    result.module_id = assignment.module_id
+    result.trainee_id = assignment.trainee_id
+    result.flashcard_order = flashcard_index + 1
+    result.prompt = str(exercise.get("prompt") or "").strip() or None
+    result.front_text = str(exercise.get("front") or "").strip() or None
+    result.back_text = str(exercise.get("back") or "").strip() or None
+    result.answer_text = str(attempt.get("response_text") or "").strip() or None
+    result.selected_choice = str(attempt.get("selected_option") or "").strip() or None
+    result.revealed_side = str(attempt.get("revealed_side") or "").strip() or None
+    result.study_time_seconds = int(
+        attempt.get("study_time_seconds") or MICROLEARNING_FLASHCARD_STUDY_SECONDS
+    )
+    result.answer_time_seconds = int(
+        attempt.get("answer_time_seconds") or MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+    )
+    result.status = str(attempt.get("status") or "unanswered").strip().lower() or "unanswered"
+    result.score = float(attempt.get("score") or 0.0)
+    result.points_earned = float(attempt.get("points_earned") or 0.0)
+    result.points_possible = float(attempt.get("points_possible") or 0.0)
+    result.started_study_at = study_started_at
+    result.answer_started_at = answer_started_at
+    result.answer_deadline_at = answer_deadline_at
+    result.answered_at = answered_at
+
+
+def persist_flashcard_attempt_result(
+    db: Session,
+    assignment: MicrolearningAssignment,
+    *,
+    exercise_id: str,
+    attempt: dict[str, Any],
+    study_started_at: datetime,
+) -> None:
+    exercises = _flashcard_exercises(assignment)
+    for index, exercise in enumerate(exercises):
+        if str(exercise.get("id") or "") == str(exercise_id or ""):
+            _upsert_flashcard_result(
+                db,
+                assignment,
+                exercise,
+                attempt,
+                flashcard_index=index,
+                study_started_at=study_started_at,
+            )
+            return
+
+
+def update_flashcard_assignment_runtime_progress(
+    assignment: MicrolearningAssignment,
+    *,
+    exercise_id: str,
+    draft_response_text: Optional[str] = None,
+    revealed_side: Optional[str] = None,
+    now: Optional[datetime] = None,
+) -> Optional[dict[str, Any]]:
+    if not _is_flashcard_module(assignment.module):
+        return None
+
+    now = now or datetime.utcnow()
+    exercises = _flashcard_exercises(assignment)
+    responses = dict(assignment.responses or {})
+    first_incomplete_index = _first_incomplete_flashcard_index(exercises, responses)
+    if first_incomplete_index is None:
+        _set_flashcard_runtime_meta(assignment, None)
+        return get_flashcard_session_state(assignment, now=now)
+
+    target_index = first_incomplete_index
+    for index, exercise in enumerate(exercises):
+        if str(exercise.get("id") or "") == str(exercise_id or ""):
+            target_index = index
+            break
+
+    if target_index != first_incomplete_index:
+        target_index = first_incomplete_index
+
+    target_exercise_id = str(exercises[target_index].get("id") or "")
+    runtime = _flashcard_runtime_meta(assignment)
+    existing_study_started_at = _parse_datetime_value(runtime.get("study_started_at"))
+    next_runtime = {
+        "current_exercise_id": target_exercise_id,
+        "current_index": target_index,
+        "study_started_at": (
+            existing_study_started_at.isoformat()
+            if existing_study_started_at and str(runtime.get("current_exercise_id") or "") == target_exercise_id
+            else now.isoformat()
+        ),
+        "updated_at": now.isoformat(),
+        "draft_response_text": (
+            str(draft_response_text)
+            if draft_response_text is not None
+            else str(runtime.get("draft_response_text") or "")
+        ),
+        "revealed_side": (
+            str(revealed_side or "").strip().lower()
+            or str(runtime.get("revealed_side") or "").strip().lower()
+            or "back"
+        ),
+    }
+    _set_flashcard_runtime_meta(assignment, next_runtime)
+    return get_flashcard_session_state(assignment, now=now)
+
+
+def get_flashcard_session_state(
+    assignment: MicrolearningAssignment,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[dict[str, Any]]:
+    if not _is_flashcard_module(assignment.module):
+        return None
+
+    now = now or datetime.utcnow()
+    exercises = _flashcard_exercises(assignment)
+    if not exercises:
+        return {
+            "enabled": True,
+            "phase": "not_started",
+            "current_exercise_id": None,
+            "current_card_index": None,
+            "current_card_number": None,
+            "current_card_title": None,
+            "current_prompt_side": None,
+            "revealed_side": None,
+            "draft_response_text": "",
+            "study_time_seconds": MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+            "answer_time_seconds": MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+            "study_started_at": None,
+            "answer_started_at": None,
+            "answer_deadline_at": None,
+            "phase_started_at": None,
+            "phase_deadline_at": None,
+            "seconds_remaining": 0,
+            "phase_duration_seconds": 0,
+            "completed_cards": 0,
+            "remaining_cards": 0,
+            "total_cards": 0,
+            "progress_percentage": 0.0,
+        }
+
+    responses = dict(assignment.responses or {})
+    first_incomplete_index = _first_incomplete_flashcard_index(exercises, responses)
+    if assignment.started_at is None:
+        session_state = _build_flashcard_runtime_view(
+            assignment,
+            exercises=exercises,
+            current_index=first_incomplete_index,
+            study_started_at=None,
+            now=now,
+            phase_override="not_started",
+        )
+        session_state["revealed_side"] = "back"
+        session_state["draft_response_text"] = ""
+        return session_state
+
+    if first_incomplete_index is None:
+        session_state = _build_flashcard_runtime_view(
+            assignment,
+            exercises=exercises,
+            current_index=None,
+            study_started_at=None,
+            now=now,
+            phase_override="completed",
+        )
+        session_state["revealed_side"] = None
+        session_state["draft_response_text"] = ""
+        return session_state
+
+    runtime = _flashcard_runtime_meta(assignment)
+    current_exercise_id = str(runtime.get("current_exercise_id") or "")
+    current_index = None
+    for index, exercise in enumerate(exercises):
+        if str(exercise.get("id") or "") == current_exercise_id:
+            current_index = index
+            break
+
+    if current_index is None:
+        current_index = first_incomplete_index
+
+    study_started_at = _parse_datetime_value(runtime.get("study_started_at")) or now
+    session_state = _build_flashcard_runtime_view(
+        assignment,
+        exercises=exercises,
+        current_index=current_index,
+        study_started_at=study_started_at,
+        now=now,
+    )
+    session_state["revealed_side"] = str(runtime.get("revealed_side") or "back").strip().lower() or "back"
+    session_state["draft_response_text"] = str(runtime.get("draft_response_text") or "")
+    return session_state
+
+
+def start_flashcard_assignment_runtime(
+    assignment: MicrolearningAssignment,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[dict[str, Any]]:
+    if not _is_flashcard_module(assignment.module):
+        return None
+
+    now = now or datetime.utcnow()
+    exercises = _flashcard_exercises(assignment)
+    responses = dict(assignment.responses or {})
+    first_incomplete_index = _first_incomplete_flashcard_index(exercises, responses)
+    if first_incomplete_index is None:
+        _set_flashcard_runtime_meta(assignment, None)
+        return get_flashcard_session_state(assignment, now=now)
+
+    has_completed_cards = any(
+        isinstance(responses.get(str(exercise.get("id") or "")), dict)
+        and responses.get(str(exercise.get("id") or "")).get("is_completed")
+        for exercise in exercises
+    )
+    start_anchor = (
+        assignment.started_at
+        if assignment.started_at is not None and not has_completed_cards
+        else now
+    )
+    _set_flashcard_runtime_meta(
+        assignment,
+        {
+            "current_exercise_id": exercises[first_incomplete_index].get("id"),
+            "current_index": first_incomplete_index,
+            "study_started_at": start_anchor.isoformat(),
+            "updated_at": now.isoformat(),
+            "draft_response_text": "",
+            "revealed_side": "back",
+        },
+    )
+    return get_flashcard_session_state(assignment, now=now)
+
+
+def advance_flashcard_assignment_runtime(
+    assignment: MicrolearningAssignment,
+    *,
+    next_start_at: datetime,
+) -> Optional[dict[str, Any]]:
+    if not _is_flashcard_module(assignment.module):
+        return None
+
+    exercises = _flashcard_exercises(assignment)
+    responses = dict(assignment.responses or {})
+    next_index = _first_incomplete_flashcard_index(exercises, responses)
+    if next_index is None:
+        _set_flashcard_runtime_meta(assignment, None)
+        return get_flashcard_session_state(assignment, now=next_start_at)
+
+    _set_flashcard_runtime_meta(
+        assignment,
+        {
+            "current_exercise_id": exercises[next_index].get("id"),
+            "current_index": next_index,
+            "study_started_at": next_start_at.isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "draft_response_text": "",
+            "revealed_side": "back",
+        },
+    )
+    return get_flashcard_session_state(assignment, now=next_start_at)
+
+
+def sync_flashcard_assignment_runtime(
+    db: Session,
+    assignment: MicrolearningAssignment,
+    *,
+    now: Optional[datetime] = None,
+) -> bool:
+    if not _is_flashcard_module(assignment.module):
+        return False
+
+    now = now or datetime.utcnow()
+    exercises = _flashcard_exercises(assignment)
+    if not exercises:
+        _set_flashcard_runtime_meta(assignment, None)
+        return False
+
+    if assignment.started_at is None:
+        _set_flashcard_runtime_meta(assignment, None)
+        return False
+
+    responses = dict(assignment.responses or {})
+    first_incomplete_index = _first_incomplete_flashcard_index(exercises, responses)
+    if first_incomplete_index is None:
+        _set_flashcard_runtime_meta(assignment, None)
+        refresh_assignment_progress(assignment)
+        return False
+
+    runtime = _flashcard_runtime_meta(assignment)
+    current_exercise_id = str(runtime.get("current_exercise_id") or "")
+    current_index = None
+    for index, exercise in enumerate(exercises):
+        if str(exercise.get("id") or "") == current_exercise_id:
+            current_index = index
+            break
+
+    did_change = False
+    study_started_at = _parse_datetime_value(runtime.get("study_started_at"))
+
+    if current_index is None:
+        seed_time = assignment.started_at if first_incomplete_index == 0 else now
+        _set_flashcard_runtime_meta(
+            assignment,
+            {
+                "current_exercise_id": exercises[first_incomplete_index].get("id"),
+                "current_index": first_incomplete_index,
+                "study_started_at": seed_time.isoformat(),
+                "updated_at": now.isoformat(),
+                "draft_response_text": "",
+                "revealed_side": "back",
+            },
+        )
+        responses = dict(assignment.responses or {})
+        current_index = first_incomplete_index
+        study_started_at = seed_time
+        did_change = True
+
+    if current_index != first_incomplete_index and first_incomplete_index is not None:
+        current_index = first_incomplete_index
+        study_started_at = now
+        _set_flashcard_runtime_meta(
+            assignment,
+            {
+                "current_exercise_id": exercises[current_index].get("id"),
+                "current_index": current_index,
+                "study_started_at": study_started_at.isoformat(),
+                "updated_at": now.isoformat(),
+                "draft_response_text": "",
+                "revealed_side": "back",
+            },
+        )
+        responses = dict(assignment.responses or {})
+        did_change = True
+
+    if study_started_at is None:
+        study_started_at = now
+        _set_flashcard_runtime_meta(
+            assignment,
+            {
+                "current_exercise_id": exercises[current_index].get("id"),
+                "current_index": current_index,
+                "study_started_at": study_started_at.isoformat(),
+                "updated_at": now.isoformat(),
+                "draft_response_text": "",
+                "revealed_side": "back",
+            },
+        )
+        responses = dict(assignment.responses or {})
+        did_change = True
+
+    while current_index is not None and current_index < len(exercises):
+        current_exercise = exercises[current_index]
+        answer_deadline_at = study_started_at + timedelta(
+            seconds=MICROLEARNING_FLASHCARD_STUDY_SECONDS + MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+        )
+        if now < answer_deadline_at:
+            break
+
+        exercise_id = str(current_exercise.get("id") or "")
+        current_attempt = responses.get(exercise_id)
+        if not (isinstance(current_attempt, dict) and current_attempt.get("is_completed")):
+            draft_response_text = str(runtime.get("draft_response_text") or "")
+            revealed_side = str(runtime.get("revealed_side") or "back").strip().lower() or "back"
+            timed_out_attempt = evaluate_exercise_submission(
+                current_exercise,
+                response_text=draft_response_text or None,
+                selected_option=None,
+                input_mode="typed",
+                revealed_side=revealed_side,
+                study_time_seconds=MICROLEARNING_FLASHCARD_STUDY_SECONDS,
+                answer_time_seconds=MICROLEARNING_FLASHCARD_ANSWER_SECONDS,
+                answer_status="timed_out" if draft_response_text.strip() else "unanswered",
+                answered_at=answer_deadline_at,
+                timer_expired=True,
+                mark_completed=True,
+            )
+            responses[exercise_id] = timed_out_attempt
+            assignment.responses = responses
+            responses = dict(assignment.responses or {})
+            _upsert_flashcard_result(
+                db,
+                assignment,
+                current_exercise,
+                timed_out_attempt,
+                flashcard_index=current_index,
+                study_started_at=study_started_at,
+            )
+            did_change = True
+
+        next_index = _first_incomplete_flashcard_index(exercises, responses, start_index=current_index + 1)
+        if next_index is None:
+            _set_flashcard_runtime_meta(assignment, None)
+            refresh_assignment_progress(assignment)
+            return True
+
+        current_index = next_index
+        study_started_at = answer_deadline_at
+        _set_flashcard_runtime_meta(
+            assignment,
+            {
+                "current_exercise_id": exercises[current_index].get("id"),
+                "current_index": current_index,
+                "study_started_at": study_started_at.isoformat(),
+                "updated_at": now.isoformat(),
+                "draft_response_text": "",
+                "revealed_side": "back",
+            },
+        )
+        responses = dict(assignment.responses or {})
+        did_change = True
+
+    refresh_assignment_progress(assignment)
+    return did_change
+
+
 def _get_retake_count(assignment: MicrolearningAssignment) -> int:
     try:
         return int(_assignment_meta(assignment).get("retake_count") or 0)
@@ -1264,8 +1958,14 @@ def ensure_module_exercises(module: Optional[MicrolearningModule]) -> bool:
     if not module:
         return False
 
+    did_change = False
     if module.exercises:
-        return False
+        existing_exercises = list(module.exercises or [])
+        normalized_exercises, normalized_changed = _normalize_flashcard_exercise_payloads(existing_exercises)
+        if normalized_changed:
+            module.exercises = normalized_exercises
+            did_change = True
+        return did_change
 
     module.exercises = build_type_specific_exercises(
         normalize_module_type(getattr(module, "type", None)),
@@ -1273,7 +1973,11 @@ def ensure_module_exercises(module: Optional[MicrolearningModule]) -> bool:
         title=module.title,
         skill_focus=module.skill_focus,
     )
-    return bool(module.exercises)
+    generated_exercises = list(module.exercises or [])
+    normalized_exercises, normalized_changed = _normalize_flashcard_exercise_payloads(generated_exercises)
+    if normalized_changed:
+        module.exercises = normalized_exercises
+    return bool(module.exercises) or normalized_changed
 
 
 def refresh_assignment_progress(assignment: MicrolearningAssignment) -> None:
@@ -1318,6 +2022,7 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
     points_earned, points_possible = _assignment_point_totals(assignment)
     is_passed = _assignment_is_passed(assignment)
     retake_count = _get_retake_count(assignment)
+    flashcard_status_counts = _flashcard_attempt_status_counts(assignment)
     can_retake = (
         assignment.status in {"completed", "certified"}
         and not is_passed
@@ -1340,6 +2045,9 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
         "average_score": average_score,
         "points_earned": points_earned,
         "points_possible": points_possible,
+        "flashcard_answered_count": flashcard_status_counts["answered"],
+        "flashcard_timed_out_count": flashcard_status_counts["timed_out"],
+        "flashcard_unanswered_count": flashcard_status_counts["unanswered"],
         "is_passed": is_passed,
         "can_retake": can_retake,
         "retake_count": retake_count,
@@ -1401,8 +2109,10 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
                 "point_value": _exercise_point_value(exercise),
                 "front": exercise.get("front"),
                 "back": exercise.get("back"),
+                "study_time_seconds": exercise.get("study_time_seconds"),
                 "preview_seconds": exercise.get("preview_seconds"),
                 "blank_seconds": exercise.get("blank_seconds"),
+                "answer_time_seconds": exercise.get("answer_time_seconds"),
                 "answer_time_limit_seconds": exercise.get("answer_time_limit_seconds"),
                 "enable_stt": bool(exercise.get("enable_stt")),
                 "timestamp": exercise.get("timestamp"),
@@ -1431,6 +2141,7 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
             "media_ready": bool(media_state.get("media_ready")),
             "media_status": media_state.get("media_status"),
         },
+        "flashcard_session": get_flashcard_session_state(assignment),
         "exercises": exercises,
     }
 
@@ -1442,6 +2153,12 @@ def evaluate_exercise_submission(
     selected_option: Optional[str],
     input_mode: Optional[str] = None,
     revealed_side: Optional[str] = None,
+    study_time_seconds: Optional[int] = None,
+    answer_time_seconds: Optional[int] = None,
+    answer_status: Optional[str] = None,
+    answered_at: Optional[Any] = None,
+    timer_expired: bool = False,
+    mark_completed: Optional[bool] = None,
 ) -> dict[str, Any]:
     exercise_type = (exercise.get("type") or "").strip().lower()
     normalized_text = (response_text or "").strip()
@@ -1477,6 +2194,8 @@ def evaluate_exercise_submission(
         back = (exercise.get("back") or "").strip()
         expected_answer = front if revealed == "front" else back if revealed == "back" else ""
         points_possible = _exercise_point_value(exercise)
+        resolved_answered_at = _parse_datetime_value(answered_at) or datetime.utcnow()
+        completed_answer_status = str(answer_status or "").strip().lower()
         flashcard_sample_answer = (
             expected_answer
             if expected_answer
@@ -1527,8 +2246,27 @@ def evaluate_exercise_submission(
                 missing_keywords = _dedupe_preserving_order(ai_missing_keywords)
         else:
             points_earned = 0.0
-            feedback = "Type your flashcard answer before submitting."
+            if timer_expired:
+                feedback = "No answer was submitted before the answer timer expired."
+            else:
+                feedback = "Type your flashcard answer before the answer timer expires."
             ai_provider = None
+
+        if not completed_answer_status:
+            if timer_expired and normalized_text:
+                completed_answer_status = "timed_out"
+            elif timer_expired:
+                completed_answer_status = "unanswered"
+            elif normalized_text:
+                completed_answer_status = "answered"
+            else:
+                completed_answer_status = "unanswered"
+
+        is_completed = bool(normalized_text)
+        if mark_completed is not None:
+            is_completed = bool(mark_completed)
+        elif timer_expired:
+            is_completed = True
 
         return {
             "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
@@ -1536,6 +2274,15 @@ def evaluate_exercise_submission(
             "selected_option": selected_option,
             "input_mode": input_mode or "typed",
             "revealed_side": revealed or None,
+            "status": completed_answer_status,
+            "study_time_seconds": int(
+                study_time_seconds or MICROLEARNING_FLASHCARD_STUDY_SECONDS
+            ),
+            "answer_time_seconds": int(
+                answer_time_seconds or MICROLEARNING_FLASHCARD_ANSWER_SECONDS
+            ),
+            "answered_at": resolved_answered_at.isoformat(),
+            "timer_expired": bool(timer_expired),
             "matched_keywords": matched_keywords,
             "missing_keywords": missing_keywords,
             "score": _normalized_percentage_from_points(points_earned, points_possible),
@@ -1545,8 +2292,8 @@ def evaluate_exercise_submission(
             "expected_answer_length": len(flashcard_sample_answer),
             "sample_similarity": similarity_score,
             "ai_provider": ai_provider,
-            "is_completed": bool(normalized_text),
-            "submitted_at": datetime.utcnow().isoformat(),
+            "is_completed": is_completed,
+            "submitted_at": resolved_answered_at.isoformat(),
         }
 
     required_keywords = _derive_required_keywords(exercise)
