@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 
+import { archiveCategory, updateCategory } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { archiveCategory, updateCategory } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
@@ -27,7 +27,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Passing score is required.' }, { status: 400 })
     }
 
-    const category = await updateCategory(sessionUser, categoryId, {
+    const category = await updateCategory(request, sessionUser, categoryId, {
       title: body.title,
       description: body.description,
       passingScore: body.passingScore,
@@ -46,7 +46,7 @@ export async function DELETE(
   try {
     const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
     const { categoryId } = await context.params
-    await archiveCategory(sessionUser, categoryId)
+    await archiveCategory(request, sessionUser, categoryId)
     return NextResponse.json({ ok: true })
   } catch (error) {
     return handleAssessmentRouteError(error)

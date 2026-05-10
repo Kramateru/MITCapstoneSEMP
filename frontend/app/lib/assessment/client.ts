@@ -3,22 +3,25 @@
 import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
 import type {
-  BulkUploadQuestionsResponse,
-  CoachAttemptPayload,
-  CreateAssessmentPayload,
-  CreateAssignmentPayload,
-  CreateCategoryPayload,
-  CreateQuestionPayload,
-  SubmitAssessmentPayload,
-  SubmitAssessmentResponse,
-  TraineeAssessmentSession,
-  TraineeDashboardResponse,
-  TrainerBootstrapResponse,
-  UpdateAssessmentPayload,
-  UpdateAssignmentPayload,
-  UpdateCategoryPayload,
-  UpdateQuestionPayload,
+    BulkUploadQuestionsResponse,
+    CoachAttemptPayload,
+    CreateAssessmentPayload,
+    CreateAssignmentPayload,
+    CreateCategoryPayload,
+    CreateQuestionPayload,
+    SubmitAssessmentPayload,
+    SubmitAssessmentResponse,
+    TraineeAssessmentSession,
+    TraineeDashboardResponse,
+    TrainerBootstrapResponse,
+    UpdateAssessmentPayload,
+    UpdateAssignmentPayload,
+    UpdateCategoryPayload,
+    UpdateQuestionPayload,
 } from './types'
+
+const DEFAULT_RETRY_COUNT = 3
+const DEFAULT_RETRY_DELAY_MS = 1000
 
 function getToken() {
   return window.localStorage.getItem('token')
@@ -29,7 +32,11 @@ function getJsonErrorMessage(payload: unknown) {
   return candidate?.error || candidate?.detail || candidate?.message || 'Assessment request failed.'
 }
 
-async function request<T>(input: string, init?: RequestInit): Promise<T> {
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function request<T>(input: string, init?: RequestInit, retryCount = 0): Promise<T> {
   const token = getToken()
   const headers = new Headers(init?.headers || undefined)
 
@@ -50,12 +57,20 @@ async function request<T>(input: string, init?: RequestInit): Promise<T> {
       cache: 'no-store',
     })
   } catch (error) {
-    throw normalizeConnectivityError(error)
+    const normalizedError = normalizeConnectivityError(error)
+    if (retryCount < DEFAULT_RETRY_COUNT && (error instanceof TypeError || error instanceof Error)) {
+      await sleep(DEFAULT_RETRY_DELAY_MS * (retryCount + 1))
+      return request<T>(input, init, retryCount + 1)
+    }
+    throw normalizedError
   }
 
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
-    throw new Error(getJsonErrorMessage(payload))
+    const errorMessage = getJsonErrorMessage(payload)
+    const error = new Error(errorMessage)
+    Object.defineProperty(error, 'status', { value: response.status })
+    throw error
   }
 
   return payload as T

@@ -28,6 +28,7 @@ import type {
   CertificateRecord,
   CoachAttemptPayload,
   CoachingNoteRecord,
+  CreateAssessmentPayload,
   CreateAssignmentPayload,
   CreateCategoryPayload,
   CreateQuestionPayload,
@@ -41,6 +42,7 @@ import type {
   TrainerReportRecord,
   TrainerBootstrapResponse,
   TraineeOption,
+  UpdateAssessmentPayload,
   UpdateAssignmentPayload,
   UpdateCategoryPayload,
   UpdateQuestionPayload,
@@ -707,6 +709,28 @@ async function getOwnedCategory(categoryId: string, sessionUser: BackendSessionU
   return category
 }
 
+async function getOwnedAssessment(assessmentId: string, sessionUser: BackendSessionUser) {
+  const supabase = createSupabaseAdminClient()
+  const assessment = await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .select('*')
+      .eq('id', assessmentId)
+      .maybeSingle(),
+    'Unable to load the selected assessment shell.',
+  ) as TrainingAssessmentRow | null
+
+  if (!assessment || assessment.active_status === false) {
+    throw new AssessmentHttpError(404, 'Assessment definition not found.')
+  }
+
+  const category = await getOwnedCategory(assessment.category_id, sessionUser)
+  return {
+    assessment,
+    category,
+  }
+}
+
 async function getOwnedQuestion(questionId: string, sessionUser: BackendSessionUser) {
   const supabase = createSupabaseAdminClient()
   const question = await assertSupabaseResult(
@@ -827,6 +851,19 @@ async function loadQuestionsByCategoryIds(categoryIds: string[]) {
       .order('created_at', { ascending: true }),
     'Unable to load the assessment question bank.',
   )) as TrainingQuestionRow[] | null) || [])
+}
+
+function applyNullableFilter<T extends {
+  eq: (column: string, value: string | number | boolean) => T
+  is: (column: string, value: null) => T
+}>(
+  query: T,
+  column: string,
+  value: string | number | boolean | null | undefined,
+) {
+  return value === null || value === undefined
+    ? query.is(column, null)
+    : query.eq(column, value)
 }
 
 async function loadAssignmentQuestionRows(assignmentIds: string[]) {
@@ -2065,6 +2102,111 @@ export async function archiveCategory(
   )
 }
 
+export async function createAssessment(
+  sessionUser: BackendSessionUser,
+  payload: CreateAssessmentPayload,
+) {
+  const category = await getOwnedCategory(payload.categoryId, sessionUser)
+  const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
+  const supabase = createSupabaseAdminClient()
+  const normalizedTitle = payload.title.trim()
+  const normalizedDescription = payload.description?.trim() || null
+
+  const updatedCategory = await assertSupabaseResult(
+    supabase
+      .from('training_assessment_categories')
+      .update({
+        title: normalizedTitle,
+        description: normalizedDescription,
+      })
+      .eq('id', category.id)
+      .select('*')
+      .single(),
+    'Unable to update the linked assessment category.',
+  ) as TrainingCategoryRow | null
+
+  const updatedAssessment = await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .update({
+        title: normalizedTitle,
+        description: normalizedDescription,
+        type: payload.type,
+        is_published: payload.isPublished ?? true,
+        active_status: true,
+      })
+      .eq('id', primaryAssessment.id)
+      .select('*')
+      .single(),
+    'Unable to update the category assessment shell.',
+  ) as TrainingAssessmentRow | null
+
+  expectSupabaseRow(updatedCategory, 'Unable to update the linked assessment category.')
+  return expectSupabaseRow(updatedAssessment, 'Unable to update the category assessment shell.')
+}
+
+export async function updateAssessment(
+  sessionUser: BackendSessionUser,
+  assessmentId: string,
+  payload: UpdateAssessmentPayload,
+) {
+  const { assessment, category } = await getOwnedAssessment(assessmentId, sessionUser)
+  const supabase = createSupabaseAdminClient()
+  const normalizedTitle = payload.title.trim()
+  const normalizedDescription = payload.description?.trim() || null
+
+  if (assessment.is_primary) {
+    await assertSupabaseResult(
+      supabase
+        .from('training_assessment_categories')
+        .update({
+          title: normalizedTitle,
+          description: normalizedDescription,
+        })
+        .eq('id', category.id),
+      'Unable to sync the linked category metadata.',
+    )
+  }
+
+  const updatedAssessment = await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .update({
+        title: normalizedTitle,
+        description: normalizedDescription,
+        type: payload.type,
+        is_published: payload.isPublished,
+        active_status: true,
+      })
+      .eq('id', assessmentId)
+      .select('*')
+      .single(),
+    'Unable to update the assessment definition.',
+  ) as TrainingAssessmentRow | null
+
+  return expectSupabaseRow(updatedAssessment, 'Unable to update the assessment definition.')
+}
+
+export async function deleteAssessment(
+  sessionUser: BackendSessionUser,
+  assessmentId: string,
+) {
+  const { assessment, category } = await getOwnedAssessment(assessmentId, sessionUser)
+  const supabase = createSupabaseAdminClient()
+
+  await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .delete()
+      .eq('id', assessmentId),
+    'Unable to delete the assessment definition.',
+  )
+
+  if (assessment.is_primary) {
+    await ensurePrimaryAssessment(category.id, category)
+  }
+}
+
 function questionTypeFromChoices(options: string[]) {
   return options.some((option) => option.trim().length > 0) ? 'multiple_choice' : 'fill_blank'
 }
@@ -2629,6 +2771,10 @@ export async function updateAssignment(
 
   const supabase = createSupabaseAdminClient()
   const category = await getOwnedCategory(payload.categoryId, sessionUser)
+  const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
+  const activeCategoryQuestionCount = categoryQuestions.filter((question) => question.active_status).length
+  const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
+  const assignmentMode = payload.assignmentMode || 'entire_category'
   const { batchOptions, traineeOptions } = await getTrainerBatches(sessionUser)
   const target = resolveAssignmentTargetFields(category, batchOptions, traineeOptions, payload)
   await assertSupabaseResult(
@@ -2644,11 +2790,13 @@ export async function updateAssignment(
         due_at: payload.dueAt || null,
         title: payload.title.trim(),
         description: payload.description?.trim() || null,
-        assignment_mode: payload.assignmentMode,
+        assignment_mode: assignmentMode,
         question_count:
-          payload.assignmentMode === 'random_subset'
+          assignmentMode === 'random_subset'
             ? payload.randomQuestionCount || null
-            : (payload.questionIds || []).length || null,
+            : assignmentMode === 'selected_questions'
+              ? selectedQuestionIds.length || null
+              : activeCategoryQuestionCount,
         passing_score: payload.passingScore || existing.passing_score || 90,
         maximum_attempts: payload.maximumAttempts || null,
         time_limit_minutes: payload.timeLimitMinutes || null,
@@ -2667,7 +2815,6 @@ export async function updateAssignment(
     'Unable to reset the selected assignment questions.',
   )
 
-  const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
   if (selectedQuestionIds.length) {
     await assertSupabaseResult(
       supabase
@@ -2721,17 +2868,20 @@ async function createAssignmentValidationOnly(
   }
 
   const supabase = createSupabaseAdminClient()
+  let duplicateQuery = supabase
+    .from('training_assessment_assignments')
+    .select('id')
+    .eq('category_id', payload.categoryId)
+    .eq('target_scope', target.targetType)
+    .eq('title', payload.title.trim())
+    .eq('is_active', true)
+
+  duplicateQuery = applyNullableFilter(duplicateQuery, 'batch_id', target.batchId)
+  duplicateQuery = applyNullableFilter(duplicateQuery, 'wave_number', target.waveNumber)
+  duplicateQuery = applyNullableFilter(duplicateQuery, 'trainee_id', target.traineeId)
+
   const duplicateCheck = await assertSupabaseResult(
-    supabase
-      .from('training_assessment_assignments')
-      .select('id')
-      .eq('category_id', payload.categoryId)
-      .eq('target_scope', target.targetType)
-      .eq('batch_id', target.batchId)
-      .eq('wave_number', target.waveNumber)
-      .eq('trainee_id', target.traineeId)
-      .eq('title', payload.title.trim())
-      .eq('is_active', true),
+    duplicateQuery,
     'Unable to validate duplicate assignments.',
   ) as Array<{ id: string }> | null
 

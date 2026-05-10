@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
+import { deleteAssignment, updateAssignment } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
-import { deleteAssignment, updateAssignment } from '@/app/lib/assessment/module-service'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
 
 export const runtime = 'nodejs'
@@ -37,7 +37,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Category and assignment title are required.' }, { status: 400 })
     }
 
-    await updateAssignment(sessionUser, assignmentId, {
+    await updateAssignment(request, sessionUser, assignmentId, {
       categoryId: body.categoryId,
       assessmentId: body.assessmentId,
       targetType: body.targetType,
@@ -70,7 +70,7 @@ export async function DELETE(
   try {
     const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
     const { assignmentId } = await context.params
-    await deleteAssignment(sessionUser, assignmentId)
+    await deleteAssignment(request, sessionUser, assignmentId)
     return NextResponse.json({ success: true })
   } catch (error) {
     return handleAssessmentRouteError(error)

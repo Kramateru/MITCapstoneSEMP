@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 
+import { createCategory } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { createCategory } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
@@ -23,7 +23,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Passing score is required.' }, { status: 400 })
     }
 
-    const category = await createCategory(sessionUser, {
+    const category = await createCategory(request, sessionUser, {
       title: body.title,
       description: body.description,
       passingScore: body.passingScore,

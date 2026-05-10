@@ -1,4 +1,4 @@
-import { getAssessmentCsvTemplate } from '@/app/lib/assessment/module-service'
+import { getAssessmentCsvTemplate } from '@/app/lib/assessment/backend-module-service'
 
 export const runtime = 'nodejs'
 

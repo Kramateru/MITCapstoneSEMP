@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 
+import { submitAssessmentAttempt } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { submitAssessmentAttempt } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const payload = await submitAssessmentAttempt(sessionUser, {
+    const payload = await submitAssessmentAttempt(request, sessionUser, {
       assessmentId: body.assessmentId,
       assignmentId: body.assignmentId,
       answers: body.answers,

@@ -88,8 +88,8 @@ function getSupabaseApiKeyKind(token: string): SupabaseApiKeyKind | null {
 
 function resolveSupabaseApiKey() {
   const serviceRoleKey = normalizeEnvValue(getConfigValue([
-    'SUPABASE_SERVICE_ROLE_KEY',
     'SUPABASE_SERVICE_KEY',
+    'SUPABASE_SERVICE_ROLE_KEY',
     'SUPABASE_KEY',
     'SUPABASE_SERVICE_ROLE',
   ], ''))
@@ -111,19 +111,34 @@ export function createSupabaseAdminClient() {
   const serviceRoleKey = resolveSupabaseApiKey()
 
   if (!isLikelySupabaseUrl(supabaseUrl)) {
+    console.error('Supabase URL not configured:', {
+      envVars: ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'REACT_APP_SUPABASE_URL'],
+      received: supabaseUrl || 'empty',
+    })
     throw new Error('A valid Supabase URL is not configured for the assessment workspace.')
   }
 
   if (!serviceRoleKey) {
+    console.error('Supabase service role key not configured')
     throw new Error(
-      'A valid Supabase service-role key is not configured for the assessment workspace.',
+      'A valid Supabase service-role key is not configured for the assessment workspace. Please set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY.',
     )
   }
 
-  return createClient(supabaseUrl, serviceRoleKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  })
+  try {
+    return createClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+      global: {
+        headers: {
+          'X-Client-Info': 'assessment-module',
+        },
+      },
+    })
+  } catch (error) {
+    console.error('Failed to create Supabase client:', error)
+    throw new Error('Failed to initialize Supabase client. Please check your configuration.')
+  }
 }

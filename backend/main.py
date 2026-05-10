@@ -207,6 +207,7 @@ from backend.routes import (
     scenario_routes,
     assessment_routes,
     assessment_management_routes,
+    assessment_redesign_routes,
     microlearning_routes,
     analytics_routes,
     admin_routes,
@@ -1228,6 +1229,7 @@ app.include_router(certification_routes.router)
 app.include_router(notification_routes.router)
 app.include_router(call_simulation_routes.router)
 app.include_router(call_simulation_recordings.router)
+app.include_router(assessment_redesign_routes.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))

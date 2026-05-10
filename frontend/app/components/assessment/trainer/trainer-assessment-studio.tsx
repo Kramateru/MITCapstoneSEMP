@@ -1,98 +1,90 @@
 'use client'
 
 import {
-  Award,
-  BarChart3,
-  BookOpenCheck,
-  CheckCircle2,
-  ClipboardList,
-  Download,
-  FileSpreadsheet,
-  Filter,
-  Loader2,
-  MessageSquarePlus,
-  Plus,
-  RefreshCw,
-  Save,
-  Sparkles,
-  Target,
-  Trash2,
-  Upload,
-  Users,
+    Award,
+    BarChart3,
+    BookOpenCheck,
+    CheckCircle2,
+    ClipboardList,
+    Download,
+    FileSpreadsheet,
+    Filter,
+    Loader2,
+    MessageSquarePlus,
+    Plus,
+    RefreshCw,
+    Save,
+    Sparkles,
+    Target,
+    Trash2,
+    Upload,
+    Users,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
-  AssessmentWorkspaceHero,
-  AssessmentSectionNav,
-  EmptyState,
-  MetricCard,
-  PaginationBar,
-  formatDateLabel,
-  formatDateTimeLabel,
-  formatDurationLabel,
-  getAttemptTone,
+    AssessmentSectionNav,
+    AssessmentWorkspaceHero,
+    EmptyState,
+    MetricCard,
+    PaginationBar,
+    formatDateLabel,
+    formatDateTimeLabel,
+    formatDurationLabel,
+    getAttemptTone,
 } from '@/app/components/assessment/shared/assessment-ui'
+import TrainerMcqWorkspace from '@/app/components/trainer/trainer-mcq-workspace'
 import { Badge } from '@/app/components/ui/badge'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
 import { Checkbox } from '@/app/components/ui/checkbox'
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
 } from '@/app/components/ui/dialog'
 import { Input } from '@/app/components/ui/input'
 import { Label } from '@/app/components/ui/label'
 import { Progress } from '@/app/components/ui/progress'
 import { ScrollArea } from '@/app/components/ui/scroll-area'
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
 } from '@/app/components/ui/select'
 import { Switch } from '@/app/components/ui/switch'
 import { Textarea } from '@/app/components/ui/textarea'
 import {
-  archiveAssessmentCategory,
-  bulkUploadAssessmentQuestions,
-  coachAssessmentAttemptRequest,
-  createAssessmentAssignment,
-  createAssessmentCategory,
-  createAssessmentQuestion,
-  deleteAssessmentAssignment,
-  deleteAssessmentQuestion,
-  downloadAssessmentCsvTemplate,
-  downloadTrainerAssessmentCsv,
-  fetchTrainerAssessmentBootstrap,
-  openTrainerAssessmentStream,
-  updateAssessmentAssignment,
-  updateAssessmentCategory,
-  updateAssessmentQuestion,
+    archiveAssessmentCategory,
+    bulkUploadAssessmentQuestions,
+    coachAssessmentAttemptRequest,
+    createAssessmentAssignment,
+    createAssessmentCategory,
+    createAssessmentQuestion,
+    deleteAssessmentAssignment,
+    deleteAssessmentQuestion,
+    downloadAssessmentCsvTemplate,
+    downloadTrainerAssessmentCsv,
+    fetchTrainerAssessmentBootstrap,
+    openTrainerAssessmentStream,
+    updateAssessmentAssignment,
+    updateAssessmentCategory,
+    updateAssessmentQuestion,
 } from '@/app/lib/assessment/client'
 import { normalizeAssessmentAnswer } from '@/app/lib/assessment/scoring'
 import type {
-  AssessmentQuestionRecord,
-  AttemptRecord,
-  AssignmentRecord,
-  BulkUploadQuestionsResponse,
-  CategoryRecord,
-  TrainerBootstrapResponse,
+    AssessmentQuestionRecord,
+    AssignmentRecord,
+    AttemptRecord,
+    BulkUploadQuestionsResponse,
+    CategoryRecord,
+    TrainerBootstrapResponse,
 } from '@/app/lib/assessment/types'
 
 type ManagementRole = 'trainer' | 'admin'
@@ -103,9 +95,6 @@ type ManagementSection =
   | 'bulk-upload'
   | 'assignments'
   | 'results'
-  | 'certificates'
-  | 'analytics'
-  | 'reports'
 
 type CategoryDraft = {
   id?: string | null
@@ -178,6 +167,12 @@ function getSections(role: ManagementRole) {
         label: 'Bulk Upload Questions',
         description: 'Import validated CSV question sets and save them into the correct category.',
         icon: <Upload className="size-4" />,
+      },
+      {
+        id: 'assignments' as const,
+        label: 'Assignments',
+        description: 'Create and monitor category delivery across batches, waves, and individual trainees.',
+        icon: <Users className="size-4" />,
       },
       {
         id: 'results' as const,
@@ -405,6 +400,8 @@ export function TrainerAssessmentStudio({
     nextParams.set('section', nextSection)
     router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false })
   }, [pathname, router, searchParams])
+
+  const shouldUseLegacyWorkspace = role === 'trainer' && /credentials are invalid|invalid api key/i.test(error)
 
   const refreshWorkspace = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     try {
@@ -1102,6 +1099,27 @@ export function TrainerAssessmentStudio({
   }
 
   if (!workspace) {
+    if (shouldUseLegacyWorkspace) {
+      return (
+        <div className="space-y-6">
+          <Card className="border-amber-200 bg-amber-50/80">
+            <CardHeader>
+              <CardTitle>Assessment studio switched to compatibility mode</CardTitle>
+              <CardDescription>
+                The Supabase-backed assessment workspace is unavailable with the current local API key.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="text-sm text-amber-900">
+                Using the existing backend-backed MCQ workspace so trainer assessments remain available.
+              </div>
+            </CardContent>
+          </Card>
+          <TrainerMcqWorkspace />
+        </div>
+      )
+    }
+
     return (
       <Card className="border-amber-200 bg-amber-50/80">
         <CardHeader>
@@ -2025,325 +2043,9 @@ export function TrainerAssessmentStudio({
         </Card>
       ) : null}
 
-      {activeSection === 'certificates' ? (
-        <Card>
-          <CardHeader>
-            <CardTitle>Certificates</CardTitle>
-            <CardDescription>Passing attempts automatically unlock certificates for the completed category.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <Input
-              value={certificateSearch}
-              onChange={(event) => setCertificateSearch(event.target.value)}
-              placeholder="Search category, certificate code, or trainee"
-            />
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              {paginatedCertificates.map((certificate) => {
-                const sourceAttempt = attemptById.get(certificate.attemptId)
-                return (
-                  <div key={certificate.id} className="rounded-2xl border border-slate-200 p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-950">{certificate.categoryTitle}</div>
-                        <div className="text-sm text-slate-600">{certificate.assessmentTitle}</div>
-                        <div className="mt-2 text-xs text-slate-500">
-                          {sourceAttempt?.traineeName || 'Trainee'} | Earned {formatDateTimeLabel(certificate.earnedAt)}
-                        </div>
-                      </div>
-                      <Award className="size-6 text-amber-600" />
-                    </div>
-                    <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-900">
-                      {certificate.certificateCode}
-                    </div>
-                  </div>
-                )
-              })}
 
-              {!paginatedCertificates.length ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                  No certificates match the current search.
-                </div>
-              ) : null}
-            </div>
 
-            <PaginationBar
-              currentPage={Math.min(certificatePage, certificatePageCount)}
-              totalPages={certificatePageCount}
-              itemCountLabel={`Showing ${paginatedCertificates.length} of ${filteredCertificates.length} certificates`}
-              onPrevious={() => setCertificatePage((current) => Math.max(current - 1, 1))}
-              onNext={() => setCertificatePage((current) => Math.min(current + 1, certificatePageCount))}
-            />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {activeSection === 'analytics' ? (
-        <div className="space-y-6">
-          <div className="grid gap-6 xl:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Category Performance</CardTitle>
-                <CardDescription>Average score, pass rate, and completion rate by category.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={categoryChartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" interval={0} angle={-12} textAnchor="end" height={70} />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="averageScore" fill="#0f766e" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Batch / Wave Performance Comparison</CardTitle>
-                <CardDescription>See how each batch or wave is performing across assigned categories.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={batchChartData.length ? batchChartData : waveChartData}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" interval={0} angle={-12} textAnchor="end" height={70} />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="passRate" fill="#0284c7" radius={[8, 8, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              </CardContent>
-            </Card>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
-            <Card>
-              <CardHeader>
-                <CardTitle>Weakest Questions</CardTitle>
-                <CardDescription>These items have the highest miss rates across submitted attempts.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {weakQuestions.map((question) => (
-                  <div key={question.questionId} className="rounded-2xl border border-slate-200 p-4">
-                    <div className="font-medium text-slate-950">{question.questionText}</div>
-                    <div className="mt-2 text-sm text-slate-600">
-                      {question.incorrectCount} misses from {question.answerCount} answers
-                    </div>
-                    <Badge variant="outline" className="mt-3">
-                      {question.missRate.toFixed(2)}% miss rate
-                    </Badge>
-                  </div>
-                ))}
-                {!weakQuestions.length ? (
-                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                    Question analytics will populate after enough attempts are recorded.
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Category Analytics Snapshot</CardTitle>
-                <CardDescription>Use this list for fast operational review without leaving the module.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {(reports?.categories || []).map((report) => (
-                  <div key={report.categoryId} className="rounded-2xl border border-slate-200 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-950">{report.categoryTitle}</div>
-                        <div className="text-sm text-slate-600">
-                          Avg {report.averageScore.toFixed(2)}% | Pass {report.passRate.toFixed(2)}% | Completion {(report.completionRate || 0).toFixed(2)}%
-                        </div>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Badge variant="outline">{report.attemptCount} attempts</Badge>
-                        <Badge variant="outline">{report.passCount} pass</Badge>
-                        <Badge variant="outline">{report.failCount} fail</Badge>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </CardContent>
-            </Card>
-          </div>
-        </div>
-      ) : null}
-
-      {activeSection === 'reports' ? (
-        <div className="space-y-6">
-          <Card>
-            <CardHeader>
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                <div>
-                  <CardTitle>Reports</CardTitle>
-                  <CardDescription>Export CSV data and review category, batch, wave, trainee, and trainer-level summaries.</CardDescription>
-                </div>
-                <Button type="button" onClick={() => void handleExportCsv()}>
-                  <Download className="size-4" />
-                  Download CSV Report
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="grid gap-6 xl:grid-cols-[1fr,1fr]">
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle className="text-lg">Category Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {(reports?.categories || []).map((report) => (
-                    <div key={report.categoryId} className="rounded-2xl border border-slate-200 p-4">
-                      <div className="font-semibold text-slate-950">{report.categoryTitle}</div>
-                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                        <div>Attempts: {report.attemptCount}</div>
-                        <div>Assignments: {report.assignmentCount || 0}</div>
-                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
-                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
-                        <div>Retake rate: {(report.retakeRate || 0).toFixed(2)}%</div>
-                        <div>Completion rate: {(report.completionRate || 0).toFixed(2)}%</div>
-                      </div>
-                    </div>
-                  ))}
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle className="text-lg">Batch and Wave Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {(reports?.waves || []).slice(0, 6).map((report) => (
-                    <div key={`wave-${report.waveNumber}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
-                      <div className="font-semibold text-slate-950">
-                        Wave {report.waveNumber}
-                      </div>
-                      <div className="text-sm text-slate-600">{report.categoryTitle}</div>
-                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                        <div>Assignments: {report.assignmentCount}</div>
-                        <div>Attempts: {report.attemptCount}</div>
-                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
-                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
-                        <div>Completion rate: {report.completionRate.toFixed(2)}%</div>
-                      </div>
-                    </div>
-                  ))}
-                  {(reports?.batches || []).map((report) => (
-                    <div key={`${report.batchId}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
-                      <div className="font-semibold text-slate-950">
-                        {report.batchName}{report.waveNumber ? ` | Wave ${report.waveNumber}` : ''}
-                      </div>
-                      <div className="text-sm text-slate-600">{report.categoryTitle}</div>
-                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                        <div>Assignments: {report.assignmentCount}</div>
-                        <div>Attempts: {report.attemptCount}</div>
-                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
-                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
-                        <div>Completion rate: {report.completionRate.toFixed(2)}%</div>
-                      </div>
-                    </div>
-                  ))}
-                  {!(reports?.batches || []).length ? (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                      Batch reporting will appear after assignments and attempts are recorded.
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle className="text-lg">Trainee Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {(reports?.trainees || []).slice(0, 10).map((report) => (
-                    <div key={`${report.traineeId}-${report.categoryId}`} className="rounded-2xl border border-slate-200 p-4">
-                      <div className="font-semibold text-slate-950">{report.traineeName}</div>
-                      <div className="text-sm text-slate-600">
-                        {report.categoryTitle} | {report.batchName || 'Direct'}{report.waveNumber ? ` | Wave ${report.waveNumber}` : ''}
-                      </div>
-                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                        <div>Attempts: {report.attemptCount}</div>
-                        <div>Certificates: {report.certificateCount}</div>
-                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
-                        <div>Highest score: {report.highestScore.toFixed(2)}%</div>
-                      </div>
-                    </div>
-                  ))}
-                  {!(reports?.trainees || []).length ? (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                      Trainee reporting will appear after attempts are recorded.
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle className="text-lg">Trainer Report</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {(reports?.trainers || []).map((report) => (
-                    <div key={report.trainerId} className="rounded-2xl border border-slate-200 p-4">
-                      <div className="font-semibold text-slate-950">{report.trainerName}</div>
-                      <div className="text-sm text-slate-600">{report.trainerEmail || 'No email recorded'}</div>
-                      <div className="mt-2 grid gap-2 text-sm text-slate-600 md:grid-cols-2">
-                        <div>Categories: {report.categoryCount}</div>
-                        <div>Assignments: {report.assignmentCount}</div>
-                        <div>Attempts: {report.attemptCount}</div>
-                        <div>Pass rate: {report.passRate.toFixed(2)}%</div>
-                        <div>Average score: {report.averageScore.toFixed(2)}%</div>
-                        <div>Certificates: {report.certificateCount}</div>
-                      </div>
-                    </div>
-                  ))}
-                  {!(reports?.trainers || []).length ? (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                      Trainer-level reporting will appear after categories and attempts are available.
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle>Question Difficulty Analysis</CardTitle>
-              <CardDescription>Compare answer counts, correctness, and miss rate across the question bank.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {(reports?.questions || []).map((question) => (
-                <div key={question.questionId} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-                    <div>
-                      <div className="font-semibold text-slate-950">
-                        Q{question.questionNumber || 0}. {question.questionText}
-                      </div>
-                      <div className="mt-1 text-sm text-slate-600">
-                        {question.categoryTitle || 'Category'} | {question.difficulty || 'unspecified'} difficulty
-                      </div>
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-4">
-                      <MetricCard label="Answers" value={String(question.answerCount)} icon={<Users className="size-4 text-sky-600" />} />
-                      <MetricCard label="Correct" value={String(question.correctCount)} icon={<CheckCircle2 className="size-4 text-emerald-600" />} />
-                      <MetricCard label="Incorrect" value={String(question.incorrectCount)} icon={<Filter className="size-4 text-amber-600" />} />
-                      <MetricCard label="Miss Rate" value={`${question.missRate.toFixed(2)}%`} icon={<BarChart3 className="size-4 text-violet-600" />} />
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {!(reports?.questions || []).length ? (
-                <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                  Question-level reporting will appear after attempts are saved.
-                </div>
-              ) : null}
-            </CardContent>
-          </Card>
-        </div>
-      ) : null}
 
       <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
         <DialogContent className="max-w-2xl">
@@ -2782,6 +2484,21 @@ function InfoLine({
 }) {
   return (
     <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
+      <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
+    </div>
+  )
+}
+
+function DetailLine({
+  label,
+  value,
+}: {
+  label: string
+  value: string
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
       <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
     </div>

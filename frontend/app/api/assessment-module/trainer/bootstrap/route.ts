@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
 
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
+import { getTrainerAssessmentBootstrap } from '@/app/lib/assessment/backend-module-service'
 import {
   handleAssessmentRouteError,
   isAssessmentServiceUnavailableError,
 } from '@/app/lib/assessment/route-utils'
-import { getTrainerAssessmentBootstrap } from '@/app/lib/assessment/module-service'
 import type { TrainerBootstrapResponse } from '@/app/lib/assessment/types'
 
 export const runtime = 'nodejs'
@@ -47,7 +47,7 @@ function buildEmptyTrainerBootstrap(): TrainerBootstrapResponse {
 export async function GET(request: Request) {
   try {
     const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
-    const payload = await getTrainerAssessmentBootstrap(sessionUser)
+    const payload = await getTrainerAssessmentBootstrap(request, sessionUser)
     return NextResponse.json(payload)
   } catch (error) {
     if (isAssessmentServiceUnavailableError(error)) {

@@ -1,13 +1,13 @@
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
+import { getTrainerAssessmentCsvExport } from '@/app/lib/assessment/backend-module-service'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { getTrainerAssessmentCsvExport } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   try {
     const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
-    const exportPayload = await getTrainerAssessmentCsvExport(sessionUser)
+    const exportPayload = await getTrainerAssessmentCsvExport(request, sessionUser)
 
     return new Response(exportPayload.content, {
       status: 200,

@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 
+import { createQuestion } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { createQuestion } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const question = await createQuestion(sessionUser, {
+    const question = await createQuestion(request, sessionUser, {
       assessmentId: body.assessmentId,
       categoryId: body.categoryId,
       questionNumber: body.questionNumber || 0,

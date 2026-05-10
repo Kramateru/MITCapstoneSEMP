@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 
+import { createAssignment } from '@/app/lib/assessment/backend-module-service'
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
 import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
-import { createAssignment } from '@/app/lib/assessment/module-service'
 
 export const runtime = 'nodejs'
 
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Category and assignment title are required.' }, { status: 400 })
     }
 
-    const assignment = await createAssignment(sessionUser, {
+    const assignment = await createAssignment(request, sessionUser, {
       categoryId: body.categoryId,
       assessmentId: body.assessmentId,
       targetType: body.targetType,

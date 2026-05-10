@@ -1,11 +1,11 @@
 import { NextResponse } from 'next/server'
 
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
+import { getTraineeAssessmentDashboard } from '@/app/lib/assessment/backend-module-service'
 import {
   handleAssessmentRouteError,
   isAssessmentServiceUnavailableError,
 } from '@/app/lib/assessment/route-utils'
-import { getTraineeAssessmentDashboard } from '@/app/lib/assessment/module-service'
 import type { TraineeDashboardResponse } from '@/app/lib/assessment/types'
 
 export const runtime = 'nodejs'
@@ -30,7 +30,7 @@ function buildEmptyTraineeDashboard(): TraineeDashboardResponse {
 export async function GET(request: Request) {
   try {
     const sessionUser = await requireBackendSessionUser(request, ['trainee'])
-    const payload = await getTraineeAssessmentDashboard(sessionUser)
+    const payload = await getTraineeAssessmentDashboard(request, sessionUser)
     return NextResponse.json(payload)
   } catch (error) {
     if (isAssessmentServiceUnavailableError(error)) {
