@@ -56,10 +56,18 @@ function getToken() {
   return window.localStorage.getItem('token')
 }
 
+function getSupabaseAccessToken() {
+  return window.localStorage.getItem('supabase_access_token')
+}
+
 export function openCallSimulationRealtimeStream(options?: { batchId?: string | null }) {
   const token = getToken()
+  const supabaseAccessToken = getSupabaseAccessToken()
   if (!token) {
     throw new Error('Missing session token.')
+  }
+  if (!supabaseAccessToken) {
+    throw new Error('Supabase realtime session is not available for this client session.')
   }
 
   if (
@@ -70,6 +78,9 @@ export function openCallSimulationRealtimeStream(options?: { batchId?: string | 
   }
 
   const params = new URLSearchParams({ token })
+  if (supabaseAccessToken) {
+    params.set('supabase_token', supabaseAccessToken)
+  }
   const batchId = options?.batchId?.trim()
   if (batchId) {
     params.set('batchId', batchId)

@@ -51,8 +51,8 @@ def _get_supabase_auth_rest_config() -> tuple[str, str]:
     publishable_key = normalize_env_value(
         os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
         or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+        or os.getenv("SUPABASE_ANON_KEY")
         or os.getenv("REACT_APP_ANON_KEY")
-        or os.getenv("SUPABASE_KEY")
     )
 
     if not is_usable_supabase_url(supabase_url):

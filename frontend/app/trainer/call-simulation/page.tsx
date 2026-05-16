@@ -69,6 +69,7 @@ interface AssignmentTarget {
   is_assigned: boolean;
   assignment_id?: string | null;
   assigned_at?: string | null;
+  max_attempts?: number | null;
 }
 
 interface ScenarioStep {
@@ -133,11 +134,15 @@ interface InteractionSession {
   id: string;
   trainee_id?: string;
   trainee_name: string;
+  batch_id?: string | null;
+  batch_name?: string | null;
+  batch_wave_number?: number | null;
   scenario_title: string;
   score: number;
   pass_fail: boolean;
   attempt_number: number;
   audio_url?: string;
+  audio_duration_seconds?: number | null;
   transcript?: string;
   transcript_log?: Array<Record<string, unknown>>;
   turn_logs?: Array<Record<string, unknown>>;
@@ -167,6 +172,7 @@ interface InteractionSession {
   coaching_id?: string | null;
   coaching_status?: string | null;
   coaching_acknowledged_at?: string | null;
+  completed_at?: string | null;
   created_at?: string;
 }
 
@@ -342,6 +348,19 @@ function formatClockTime(totalSeconds?: number | null) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
+function formatBatchWaveLabel(batchName?: string | null, waveNumber?: number | null) {
+  if (!batchName && typeof waveNumber !== 'number') {
+    return 'Batch not assigned';
+  }
+  if (batchName && typeof waveNumber === 'number') {
+    return `${batchName} - Wave ${waveNumber}`;
+  }
+  if (batchName) {
+    return batchName;
+  }
+  return `Wave ${waveNumber}`;
+}
+
 function readNumber(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
@@ -363,6 +382,22 @@ function readPointValue(value: unknown, fallback = 0) {
         : Number.NaN;
 
   return Number.isFinite(numericValue) ? Math.max(0, numericValue) : fallback;
+}
+
+function readAttemptLimit(value: unknown, fallback = 3) {
+  const numericValue =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim()
+        ? Number(value)
+        : Number.NaN;
+
+  return Number.isFinite(numericValue) ? Math.max(1, Math.round(numericValue)) : fallback;
+}
+
+function resolveScenarioAttemptLimit(scenario?: Scenario | null, fallback = 3) {
+  const configuredValue = scenario?.call_simulation_config?.max_attempts;
+  return readAttemptLimit(configuredValue, fallback);
 }
 
 function parseScenarioConfig(scenario: Scenario) {
@@ -672,6 +707,7 @@ export default function TrainerSimFloorPage() {
   const [bulkTitle, setBulkTitle] = useState('');
   const [assignScenarioId, setAssignScenarioId] = useState('');
   const [assignBatchId, setAssignBatchId] = useState('');
+  const [assignMaxAttempts, setAssignMaxAttempts] = useState('3');
   const [assignmentTargets, setAssignmentTargets] = useState<AssignmentTarget[]>([]);
   const [selectedAssignmentTrainees, setSelectedAssignmentTrainees] = useState<string[]>([]);
   const [loadingAssignmentTargets, setLoadingAssignmentTargets] = useState(false);
@@ -848,6 +884,11 @@ export default function TrainerSimFloorPage() {
       const payload = (await response.json()) as AssignmentTarget[];
       setAssignmentTargets(payload);
       const assignedIds = payload.filter((target) => target.is_assigned).map((target) => target.trainee_id);
+      const firstAssignedAttemptLimit = payload.find((target) => target.is_assigned && typeof target.max_attempts === 'number')?.max_attempts;
+      const scenarioAttemptLimit = resolveScenarioAttemptLimit(
+        libraryScenarios.find((scenario) => scenario.id === scenarioId) || null,
+      );
+      setAssignMaxAttempts(String(readAttemptLimit(firstAssignedAttemptLimit, scenarioAttemptLimit)));
       setSelectedAssignmentTrainees(
         assignedIds.length > 0
           ? assignedIds
@@ -856,7 +897,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setLoadingAssignmentTargets(false);
     }
-  }, [authedFetch]);
+  }, [authedFetch, libraryScenarios]);
 
   const loadBatchData = useCallback(async (batchId: string) => {
     const results = await Promise.allSettled([
@@ -1016,8 +1057,11 @@ export default function TrainerSimFloorPage() {
   };
 
   const openAssignDialog = (scenarioId?: string) => {
-    setAssignScenarioId(scenarioId || libraryScenarios[0]?.id || '');
+    const nextScenarioId = scenarioId || libraryScenarios[0]?.id || '';
+    const selectedScenario = libraryScenarios.find((scenario) => scenario.id === nextScenarioId) || null;
+    setAssignScenarioId(nextScenarioId);
     setAssignBatchId(selectedBatch || batches[0]?.id || '');
+    setAssignMaxAttempts(String(resolveScenarioAttemptLimit(selectedScenario)));
     setAssignmentTargets([]);
     setSelectedAssignmentTrainees([]);
     setShowAssignDialog(true);
@@ -1341,6 +1385,7 @@ export default function TrainerSimFloorPage() {
       return;
     }
 
+    const resolvedAttemptLimit = readAttemptLimit(assignMaxAttempts, 3);
     setSaving(true);
     try {
       const response = await authedFetch('/api/call-simulation/assignments', {
@@ -1350,6 +1395,7 @@ export default function TrainerSimFloorPage() {
           scenario_id: assignScenarioId,
           batch_id: assignBatchId,
           trainee_ids: selectedAssignmentTrainees,
+          max_attempts: resolvedAttemptLimit,
         }),
       });
       if (!response.ok) {
@@ -1366,7 +1412,7 @@ export default function TrainerSimFloorPage() {
       }
       toast.success(
         selectedAssignmentTrainees.length > 0
-          ? `Module assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'}.`
+          ? `Module assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'} with a ${resolvedAttemptLimit}-attempt limit.`
           : 'Module removed from all trainee assignments in this batch.',
       );
     } catch (error) {
@@ -2499,15 +2545,21 @@ export default function TrainerSimFloorPage() {
                     <TableHead>Score</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Attempt</TableHead>
+                    <TableHead>Duration</TableHead>
                     <TableHead>AI KPI</TableHead>
-                    <TableHead>Date</TableHead>
+                    <TableHead>Submitted</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {interactions.map((session) => (
                     <TableRow key={session.id}>
-                      <TableCell className="font-medium">{session.trainee_name}</TableCell>
+                      <TableCell className="font-medium">
+                        <div>{session.trainee_name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {formatBatchWaveLabel(session.batch_name, session.batch_wave_number)}
+                        </div>
+                      </TableCell>
                       <TableCell>{session.scenario_title}</TableCell>
                       <TableCell>{session.score.toFixed(1)}%</TableCell>
                       <TableCell>
@@ -2535,12 +2587,13 @@ export default function TrainerSimFloorPage() {
                         ) : null}
                       </TableCell>
                       <TableCell>{session.attempt_number}</TableCell>
+                      <TableCell>{formatClockTime(session.audio_duration_seconds)}</TableCell>
                       <TableCell>
                         <div className="text-xs text-muted-foreground">
                           G {session.grammar_score?.toFixed(0) ?? '0'} | P {session.pronunciation_score?.toFixed(0) ?? '0'} | Pace {session.pacing_score?.toFixed(0) ?? '0'}
                         </div>
                       </TableCell>
-                      <TableCell>{session.created_at ? new Date(session.created_at).toLocaleDateString() : 'N/A'}</TableCell>
+                      <TableCell>{formatDateTime(session.completed_at || session.created_at)}</TableCell>
                       <TableCell>
                         <Button variant="ghost" size="sm" onClick={() => openCoachingDialog(session)}>
                           <Mic className="mr-1 h-3 w-3" />
@@ -3061,6 +3114,20 @@ export default function TrainerSimFloorPage() {
                 </SelectContent>
               </Select>
             </div>
+            <div className="space-y-2">
+              <Label>Attempt Limit Per Trainee</Label>
+              <Input
+                type="number"
+                min={1}
+                step={1}
+                value={assignMaxAttempts}
+                onChange={(event) => setAssignMaxAttempts(event.target.value)}
+                placeholder="Enter how many scored attempts each trainee can use"
+              />
+              <p className="text-xs text-muted-foreground">
+                Trainees who fail can retake only until this limit is reached. Passed trainees stay locked unless you reassign them.
+              </p>
+            </div>
             {selectedAssignScenario ? (
               <div className="rounded-lg border p-4 text-sm text-muted-foreground">
                 <div className="font-medium text-slate-900">{selectedAssignScenario.title}</div>
@@ -3069,6 +3136,9 @@ export default function TrainerSimFloorPage() {
                 </div>
                 <div className="mt-1">
                   {selectedAssignmentTrainees.length} trainee{selectedAssignmentTrainees.length === 1 ? '' : 's'} will receive the assignment in this batch.
+                </div>
+                <div className="mt-1">
+                  Each selected trainee can use up to {readAttemptLimit(assignMaxAttempts, 3)} scored attempt{readAttemptLimit(assignMaxAttempts, 3) === 1 ? '' : 's'}.
                 </div>
               </div>
             ) : null}
@@ -3125,6 +3195,7 @@ export default function TrainerSimFloorPage() {
                           <div className="mt-1 text-xs text-muted-foreground">
                             {target.language_dialect ? `Dialect: ${target.language_dialect}` : 'Dialect not set'}
                             {target.is_assigned && target.assigned_at ? ` | Already assigned on ${formatDateTime(target.assigned_at)}` : ''}
+                            {target.is_assigned && target.max_attempts ? ` | Limit ${target.max_attempts} attempts` : ''}
                           </div>
                         </div>
                       </label>
@@ -3168,10 +3239,14 @@ export default function TrainerSimFloorPage() {
           </DialogHeader>
           {selectedInteraction ? (
             <div className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-3">
+              <div className="grid gap-4 sm:grid-cols-4">
                 <div className="rounded-lg border p-4">
                   <p className="text-sm text-muted-foreground">Trainee</p>
                   <p className="font-semibold">{selectedInteraction.trainee_name}</p>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <p className="text-sm text-muted-foreground">Batch / Wave</p>
+                  <p className="font-semibold">{formatBatchWaveLabel(selectedInteraction.batch_name, selectedInteraction.batch_wave_number)}</p>
                 </div>
                 <div className="rounded-lg border p-4">
                   <p className="text-sm text-muted-foreground">Scenario</p>
@@ -3201,6 +3276,14 @@ export default function TrainerSimFloorPage() {
                 </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-4">
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="text-muted-foreground">Submitted</p>
+                  <p className="font-semibold">{formatDateTime(selectedInteraction.completed_at || selectedInteraction.created_at)}</p>
+                </div>
+                <div className="rounded-lg border p-3 text-sm">
+                  <p className="text-muted-foreground">Call Duration</p>
+                  <p className="font-semibold">{formatClockTime(selectedInteraction.audio_duration_seconds)}</p>
+                </div>
                 <div className="rounded-lg border p-3 text-sm">
                   <p className="text-muted-foreground">Overall</p>
                   <p className="font-semibold">{selectedInteraction.score?.toFixed(1) ?? '0.0'}%</p>
@@ -3341,7 +3424,7 @@ export default function TrainerSimFloorPage() {
               )}
               {selectedInteraction.ai_feedback ? (
                 <div className="rounded-lg border p-4">
-                  <p className="text-sm font-medium text-muted-foreground">AI Feedback</p>
+                  <p className="text-sm font-medium text-muted-foreground">Gemini AI Summary</p>
                   <p className="mt-2">{selectedInteraction.ai_feedback}</p>
                 </div>
               ) : null}

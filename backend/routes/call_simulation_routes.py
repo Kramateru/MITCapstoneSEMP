@@ -192,6 +192,14 @@ def _coerce_nonnegative_float(value: Any, *, fallback: float = 0.0) -> float:
     return round(max(0.0, resolved), 2)
 
 
+def _coerce_positive_int(value: Any, *, fallback: int) -> int:
+    try:
+        resolved = int(value)
+    except (TypeError, ValueError):
+        resolved = fallback
+    return max(1, resolved)
+
+
 def _normalize_uploaded_document_title(filename: Optional[str]) -> str:
     raw_name = os.path.splitext(os.path.basename(filename or ""))[0]
     cleaned = re.sub(r"[_\-]+", " ", raw_name)
@@ -1434,8 +1442,13 @@ def _upsert_call_simulation_assignment(
     trainer_id: str,
     batch_id: Optional[str],
     assigned_at: Optional[datetime],
+    max_attempts: Optional[int] = None,
 ) -> tuple[CallSimulationAssignment, bool]:
     created = assignment is None
+    resolved_max_attempts = _coerce_positive_int(
+        max_attempts,
+        fallback=_coerce_positive_int(DEFAULT_MAX_ATTEMPTS, fallback=3),
+    )
     if assignment is None:
         assignment = CallSimulationAssignment(
             id=str(uuid.uuid4()),
@@ -1443,6 +1456,7 @@ def _upsert_call_simulation_assignment(
             trainee_id=trainee_id,
             assigned_by=trainer_id,
             batch_id=batch_id,
+            max_attempts=resolved_max_attempts,
             assigned_at=assigned_at or datetime.utcnow(),
             is_active=True,
         )
@@ -1456,6 +1470,9 @@ def _upsert_call_simulation_assignment(
     if assignment.batch_id != batch_id:
         assignment.batch_id = batch_id
         changed = True
+    if int(assignment.max_attempts or 0) != resolved_max_attempts:
+        assignment.max_attempts = resolved_max_attempts
+        changed = True
     if assignment.assigned_at != next_assigned_at:
         assignment.assigned_at = next_assigned_at
         changed = True
@@ -1464,6 +1481,24 @@ def _upsert_call_simulation_assignment(
         changed = True
 
     return assignment, changed or created
+
+
+def _get_active_call_simulation_assignment(
+    db: Session,
+    *,
+    trainee_id: str,
+    scenario_id: str,
+) -> Optional[CallSimulationAssignment]:
+    return (
+        db.query(CallSimulationAssignment)
+        .filter(
+            CallSimulationAssignment.trainee_id == trainee_id,
+            CallSimulationAssignment.scenario_id == scenario_id,
+            CallSimulationAssignment.is_active == True,
+        )
+        .order_by(CallSimulationAssignment.assigned_at.desc(), CallSimulationAssignment.updated_at.desc())
+        .first()
+    )
 
 
 def _sync_call_simulation_assignments_for_scenario(
@@ -1798,6 +1833,39 @@ def _resolve_call_simulation_config(scenario: Optional[Scenario]) -> dict[str, A
     return _normalize_json_object(getattr(scenario, "call_simulation_config", None))
 
 
+def _resolve_call_scenario_max_attempts(
+    scenario: Optional[Scenario],
+    fallback: int = DEFAULT_MAX_ATTEMPTS,
+) -> int:
+    resolved_fallback = _coerce_positive_int(fallback, fallback=DEFAULT_MAX_ATTEMPTS)
+    config = _resolve_call_simulation_config(scenario)
+    for candidate in (
+        config.get("max_attempts"),
+        config.get("attempt_limit"),
+        config.get("retake_limit"),
+    ):
+        try:
+            resolved = int(candidate)
+        except (TypeError, ValueError):
+            continue
+        if resolved >= 1:
+            return resolved
+    return resolved_fallback
+
+
+def _resolve_call_assignment_max_attempts(
+    assignment: Optional[CallSimulationAssignment],
+    *,
+    scenario: Optional[Scenario],
+    fallback: int = DEFAULT_MAX_ATTEMPTS,
+) -> int:
+    scenario_fallback = _resolve_call_scenario_max_attempts(scenario, fallback=fallback)
+    return _coerce_positive_int(
+        assignment.max_attempts if assignment else None,
+        fallback=scenario_fallback,
+    )
+
+
 def _resolve_call_scenario_passing_score(
     scenario: Optional[Scenario],
     fallback: float,
@@ -1972,6 +2040,10 @@ def _build_session_start_response(
 
     return SimSessionStartResponse(
         session_id=session.id,
+        assignment_id=session.assignment_id,
+        assigned_by_id=session.assigned_by_id,
+        attempt_number=int(session.attempt_number or 1),
+        max_attempts=int(session.max_attempts or 1),
         scenario_title=scenario.title,
         scenario_description=scenario.description,
         opening_prompt=scenario.opening_prompt,
@@ -2142,15 +2214,10 @@ def _get_accessible_session(db: Session, current_user: User, session_id: str) ->
         if session.trainee_id != current_user.id:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        assignment = (
-            db.query(CallSimulationAssignment)
-            .filter(
-                CallSimulationAssignment.trainee_id == current_user.id,
-                CallSimulationAssignment.scenario_id == session.scenario_id,
-                CallSimulationAssignment.is_active == True,
-            )
-            .order_by(CallSimulationAssignment.assigned_at.desc(), CallSimulationAssignment.updated_at.desc())
-            .first()
+        assignment = _get_active_call_simulation_assignment(
+            db,
+            trainee_id=current_user.id,
+            scenario_id=session.scenario_id,
         )
         if not assignment:
             raise HTTPException(
@@ -3931,6 +3998,7 @@ async def get_assignment_targets(
             is_assigned=bool(latest_assignments.get(trainee.id) and latest_assignments[trainee.id].is_active),
             assignment_id=latest_assignments.get(trainee.id).id if latest_assignments.get(trainee.id) else None,
             assigned_at=latest_assignments.get(trainee.id).assigned_at if latest_assignments.get(trainee.id) else None,
+            max_attempts=latest_assignments.get(trainee.id).max_attempts if latest_assignments.get(trainee.id) else None,
         )
         for trainee in trainees
     ]
@@ -4003,6 +4071,11 @@ async def assign_call_simulation_to_trainees(
     assignments_updated = 0
     assignments_deactivated = 0
     assigned_at = datetime.utcnow()
+    resolved_max_attempts = _resolve_call_assignment_max_attempts(
+        None,
+        scenario=scenario,
+        fallback=payload.max_attempts or DEFAULT_MAX_ATTEMPTS,
+    )
 
     for trainee_id in sorted(selected_trainee_ids):
         assignment, changed = _upsert_call_simulation_assignment(
@@ -4012,6 +4085,7 @@ async def assign_call_simulation_to_trainees(
             trainer_id=current_user.id,
             batch_id=batch.id,
             assigned_at=assigned_at,
+            max_attempts=resolved_max_attempts,
         )
         if assignment_lookup.get(trainee_id) is None:
             db.add(assignment)
@@ -4034,6 +4108,7 @@ async def assign_call_simulation_to_trainees(
         scenario_id=scenario.id,
         batch_id=batch.id,
         assigned_trainee_ids=sorted(selected_trainee_ids),
+        max_attempts=resolved_max_attempts,
         assignments_created=assignments_created,
         assignments_updated=assignments_updated,
         assignments_deactivated=assignments_deactivated,
@@ -4732,6 +4807,11 @@ async def get_available_scenarios(
             for session in sessions_by_scenario.get(scenario.id, [])
             if not assignment.batch_id or session.batch_id in {assignment.batch_id, None}
         ]
+        configured_max_attempts = _resolve_call_assignment_max_attempts(
+            assignment,
+            scenario=scenario,
+            fallback=DEFAULT_MAX_ATTEMPTS,
+        )
         latest_session = trainee_sessions[0] if trainee_sessions else None
         latest_coaching_log = latest_coaching_logs.get(latest_session.id) if latest_session else None
         normalized_verdict = (latest_session.trainer_verdict_status or "pending").strip().lower() if latest_session else "pending"
@@ -4751,7 +4831,7 @@ async def get_available_scenarios(
 
         if latest_session:
             latest_attempt_number = int(latest_session.attempt_number or 1)
-            latest_max_attempts = int(latest_session.max_attempts or DEFAULT_MAX_ATTEMPTS)
+            latest_max_attempts = configured_max_attempts
             remaining_attempts = max(latest_max_attempts - latest_attempt_number, 0)
 
             if latest_session.status == "in_progress":
@@ -4816,6 +4896,7 @@ async def get_available_scenarios(
                     for summary in assigned_batches
                 ],
                 "attempt_count": len(trainee_sessions),
+                "max_attempts": configured_max_attempts,
                 "retake_required": bool(normalized_verdict == "retake" or can_retake),
                 "competent": completion_locked,
                 "latest_score": float(latest_session.weighted_score or 0.0) if latest_session else 0.0,
@@ -4990,15 +5071,10 @@ async def start_simulation(
     if did_sync_assignments:
         db.flush()
 
-    assignment = (
-        db.query(CallSimulationAssignment)
-        .filter(
-            CallSimulationAssignment.trainee_id == current_user.id,
-            CallSimulationAssignment.scenario_id == scenario.id,
-            CallSimulationAssignment.is_active == True,
-        )
-        .order_by(CallSimulationAssignment.assigned_at.desc(), CallSimulationAssignment.updated_at.desc())
-        .first()
+    assignment = _get_active_call_simulation_assignment(
+        db,
+        trainee_id=current_user.id,
+        scenario_id=scenario.id,
     )
     if not assignment:
         raise HTTPException(status_code=403, detail="Scenario is not assigned to your trainee workspace")
@@ -5027,14 +5103,30 @@ async def start_simulation(
         .first()
     )
     next_attempt_number = 1
-    max_attempts = DEFAULT_MAX_ATTEMPTS
+    max_attempts = _resolve_call_assignment_max_attempts(
+        assignment,
+        scenario=scenario,
+        fallback=DEFAULT_MAX_ATTEMPTS,
+    )
 
     if latest_session:
         normalized_verdict = (latest_session.trainer_verdict_status or "pending").strip().lower()
         latest_coaching_log = _get_latest_sim_session_coaching_logs(db, [latest_session.id]).get(latest_session.id)
-        max_attempts = int(latest_session.max_attempts or DEFAULT_MAX_ATTEMPTS)
+        latest_session_changed = False
+        if int(latest_session.max_attempts or 0) != max_attempts:
+            latest_session.max_attempts = max_attempts
+            latest_session_changed = True
+        if latest_session.assignment_id != assignment.id:
+            latest_session.assignment_id = assignment.id
+            latest_session_changed = True
+        if latest_session.assigned_by_id != assignment.assigned_by:
+            latest_session.assigned_by_id = assignment.assigned_by
+            latest_session_changed = True
 
         if latest_session.status == "in_progress":
+            if latest_session_changed:
+                db.commit()
+                db.refresh(latest_session)
             variation = (
                 db.query(ScenarioVariation)
                 .filter(ScenarioVariation.id == latest_session.scenario_variation_id)
@@ -5086,6 +5178,8 @@ async def start_simulation(
         id=str(uuid.uuid4()),
         trainee_id=current_user.id,
         scenario_id=scenario.id,
+        assignment_id=assignment.id,
+        assigned_by_id=assignment.assigned_by,
         scenario_variation_id=variation.id if variation else None,
         batch_id=batch_id,
         status="in_progress",
@@ -5754,10 +5848,21 @@ async def retake_session(
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainee(current_user)
     session = _get_accessible_session(db, current_user, session_id)
+    scenario = db.query(Scenario).filter(Scenario.id == session.scenario_id).first()
+    assignment = _get_active_call_simulation_assignment(
+        db,
+        trainee_id=current_user.id,
+        scenario_id=session.scenario_id,
+    )
+    effective_max_attempts = _resolve_call_assignment_max_attempts(
+        assignment,
+        scenario=scenario,
+        fallback=int(session.max_attempts or DEFAULT_MAX_ATTEMPTS),
+    )
 
     if session.pass_fail:
         raise HTTPException(status_code=400, detail="Passed sessions do not require retakes")
-    if session.attempt_number >= session.max_attempts:
+    if session.attempt_number >= effective_max_attempts:
         raise HTTPException(status_code=400, detail="Maximum attempts reached")
 
     coaching_log = _get_latest_sim_session_coaching_logs(db, [session.id]).get(session.id)
@@ -5781,6 +5886,8 @@ async def retake_session(
         id=str(uuid.uuid4()),
         trainee_id=current_user.id,
         scenario_id=session.scenario_id,
+        assignment_id=assignment.id if assignment else session.assignment_id,
+        assigned_by_id=assignment.assigned_by if assignment else session.assigned_by_id,
         scenario_variation_id=variation.id if variation else None,
         batch_id=session.batch_id,
         status="in_progress",
@@ -5788,7 +5895,7 @@ async def retake_session(
         started_at=datetime.utcnow(),
         aht_target=session.aht_target,
         attempt_number=session.attempt_number + 1,
-        max_attempts=session.max_attempts,
+        max_attempts=effective_max_attempts,
         pass_fail=False,
         transcript_log=[],
         turn_logs=[],
@@ -5808,10 +5915,21 @@ async def check_retake_status(
 ):
     current_user = await auth_utils.get_current_user(authorization, db)
     session = _get_accessible_session(db, current_user, session_id)
+    assignment = _get_active_call_simulation_assignment(
+        db,
+        trainee_id=session.trainee_id,
+        scenario_id=session.scenario_id,
+    )
+    scenario = db.query(Scenario).filter(Scenario.id == session.scenario_id).first()
+    effective_max_attempts = _resolve_call_assignment_max_attempts(
+        assignment,
+        scenario=scenario,
+        fallback=int(session.max_attempts or DEFAULT_MAX_ATTEMPTS),
+    )
     return {
-        "can_retake": not session.pass_fail and session.attempt_number < session.max_attempts,
+        "can_retake": not session.pass_fail and session.attempt_number < effective_max_attempts,
         "attempt_number": session.attempt_number,
-        "max_attempts": session.max_attempts,
+        "max_attempts": effective_max_attempts,
         "passed": session.pass_fail,
     }
 
@@ -5866,6 +5984,12 @@ async def get_interaction_history(
         .filter(User.id.in_([session.trainee_id for session in sessions] or ["__none__"]))
         .all()
     }
+    batch_map = {
+        batch.id: batch
+        for batch in db.query(Batch)
+        .filter(Batch.id.in_([session.batch_id for session in sessions if session.batch_id] or ["__none__"]))
+        .all()
+    }
     latest_coaching_logs = _get_latest_sim_session_coaching_logs(
         db,
         [session.id for session in sessions],
@@ -5875,17 +5999,22 @@ async def get_interaction_history(
     for session in sessions:
         scenario = scenario_map.get(session.scenario_id)
         trainee = trainee_map.get(session.trainee_id)
+        batch = batch_map.get(session.batch_id) if session.batch_id else None
         coaching_log = latest_coaching_logs.get(session.id)
         payload.append(
             {
                 "id": session.id,
                 "trainee_id": session.trainee_id,
                 "trainee_name": trainee.full_name if trainee else "Unknown",
+                "batch_id": session.batch_id,
+                "batch_name": batch.name if batch else None,
+                "batch_wave_number": batch.wave_number if batch else None,
                 "scenario_title": scenario.title if scenario else "Unknown",
                 "score": session.weighted_score or 0.0,
                 "pass_fail": session.pass_fail,
                 "attempt_number": session.attempt_number,
                 "audio_url": session.audio_url,
+                "audio_duration_seconds": session.audio_duration_seconds,
                 "transcript": session.transcript,
                 "transcript_log": session.transcript_log or [],
                 "turn_logs": session.turn_logs or [],
@@ -5907,6 +6036,7 @@ async def get_interaction_history(
                 "coaching_id": coaching_log.coaching_id if coaching_log else None,
                 "coaching_status": coaching_log.status if coaching_log else None,
                 "coaching_acknowledged_at": coaching_log.acknowledged_at.isoformat() if coaching_log and coaching_log.acknowledged_at else None,
+                "completed_at": session.completed_at.isoformat() if session.completed_at else None,
                 "created_at": session.created_at.isoformat() if session.created_at else None,
             }
         )
@@ -6664,6 +6794,7 @@ async def get_trainee_report(
                 "attempt_number": session.attempt_number,
                 "created_at": session.created_at.isoformat() if session.created_at else None,
                 "audio_url": session.audio_url,
+                "ai_feedback": session.ai_feedback,
                 "trainer_verdict_status": session.trainer_verdict_status or "pending",
                 "certificate_id": session.certificate_id,
                 "coaching_id": latest_coaching_logs.get(session.id).coaching_id if latest_coaching_logs.get(session.id) else None,

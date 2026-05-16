@@ -3,8 +3,6 @@
 import Link from 'next/link';
 import {
   Activity,
-  ArrowRight,
-  BarChart3,
   FileText,
   Loader2,
   MessageSquare,
@@ -13,10 +11,20 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { adminSidebarItems } from '@/app/admin/nav';
 import { DashboardLayout } from '@/app/components/DashboardLayout';
+import {
+  ActionCard,
+  DashboardHero,
+  EmptyStatePanel,
+  MetricCard,
+  NoticeBanner,
+  SectionPanel,
+  SoftStat,
+} from '@/app/components/ui/dashboard-kit';
+import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 
 type DashboardStats = {
@@ -57,24 +65,28 @@ const ADMIN_QUICK_LINKS = [
     label: 'Manage Users',
     description: 'Create and maintain admin, trainer, and trainee accounts.',
     icon: Users,
+    tone: 'blue' as const,
   },
   {
     href: '/admin/analytics',
     label: 'View Analytics',
     description: 'Review trainer-wide performance, trends, and live database signals.',
-    icon: BarChart3,
+    icon: Activity,
+    tone: 'violet' as const,
   },
   {
     href: '/admin/coaching',
     label: 'Audit Coaching',
     description: 'Inspect coaching activity, acknowledgement flow, and published logs.',
     icon: MessageSquare,
+    tone: 'amber' as const,
   },
   {
     href: '/admin/certification-settings',
     label: 'Certification Setup',
     description: 'Update certificate content, issuance rules, and compliance output.',
     icon: ShieldCheck,
+    tone: 'green' as const,
   },
 ] as const;
 
@@ -111,6 +123,19 @@ function getLoadErrorMessage(error: unknown, fallback: string) {
     return error.message;
   }
   return fallback;
+}
+
+function statusVariant(status: string) {
+  if (status === 'connected' || status === 'configured' || status === 'active') {
+    return 'success' as const;
+  }
+  if (status === 'error') {
+    return 'danger' as const;
+  }
+  if (status === 'fallback_only' || status === 'not_configured') {
+    return 'warning' as const;
+  }
+  return 'neutral' as const;
 }
 
 async function fetchJsonWithTimeout<T>(
@@ -209,313 +234,206 @@ export default function AdminDashboardPage() {
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
       <div className="space-y-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground">Administration Dashboard</h2>
-            <p className="text-sm text-muted-foreground">
-              Monitor real platform KPIs, system readiness, and recently saved admin activity.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2">
+        <DashboardHero
+          eyebrow="System Overview"
+          title="Administration Dashboard"
+          description="Monitor real platform KPIs, trainer and trainee activity, system readiness, and the latest database-backed admin events."
+          actions={
             <Button type="button" variant="outline" onClick={() => void loadData('refresh')} disabled={loading || refreshing}>
               {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
               Refresh
             </Button>
+          }
+        >
+          <div className="grid gap-3 sm:grid-cols-3">
+            <SoftStat label="Total Trainers" value={stats?.total_trainers ?? 0} tone="blue" />
+            <SoftStat label="Total Trainees" value={stats?.total_trainees ?? 0} tone="green" />
+            <SoftStat label="Audio Coverage" value={`${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}%`} tone="amber" />
           </div>
-        </div>
+        </DashboardHero>
 
         {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-            <div className="flex items-center gap-2">
+          <NoticeBanner tone="blue">
+            <span className="inline-flex items-center gap-2">
               <Loader2 className="size-4 animate-spin" />
               Loading admin dashboard data...
-            </div>
-          </div>
+            </span>
+          </NoticeBanner>
         ) : null}
 
-        {loadMessage && (
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            {loadMessage}
-          </div>
-        )}
+        {loadMessage ? <NoticeBanner tone="amber">{loadMessage}</NoticeBanner> : null}
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard
+          <MetricCard
             label="Total Users"
             value={loading && !stats ? '...' : stats?.total_users ?? 0}
-            caption={`${stats?.total_trainees ?? 0} trainees | ${stats?.total_trainers ?? 0} trainers`}
-            icon={<Users className="size-5 text-sky-600" />}
+            hint={`${stats?.total_trainees ?? 0} trainees | ${stats?.total_trainers ?? 0} trainers`}
+            icon={<Users className="size-5" />}
+            tone="blue"
           />
-          <StatCard
+          <MetricCard
             label="Training Scenarios"
             value={loading && !stats ? '...' : stats?.total_scenarios ?? 0}
-            caption={`${stats?.total_sessions ?? 0} saved sessions`}
-            icon={<FileText className="size-5 text-amber-600" />}
+            hint={`${stats?.total_sessions ?? 0} saved sessions`}
+            icon={<FileText className="size-5" />}
+            tone="amber"
           />
-          <StatCard
+          <MetricCard
             label="Active Batches"
             value={loading && !stats ? '...' : stats?.active_batches ?? 0}
-            caption="Trainer-managed trainee groups"
-            icon={<UserCheck className="size-5 text-emerald-600" />}
+            hint="Trainer-managed trainee groups"
+            icon={<UserCheck className="size-5" />}
+            tone="green"
           />
-          <StatCard
+          <MetricCard
             label="Average Completion"
-            value={loading && !stats ? '...' : typeof stats?.average_completion === 'number' ? `${stats.average_completion.toFixed(1)}%` : '0.0%'}
-            caption="Across saved course assignments"
-            icon={<Activity className="size-5 text-violet-600" />}
+            value={
+              loading && !stats
+                ? '...'
+                : typeof stats?.average_completion === 'number'
+                  ? `${stats.average_completion.toFixed(1)}%`
+                  : '0.0%'
+            }
+            hint="Across saved course assignments"
+            icon={<Activity className="size-5" />}
+            tone="violet"
           />
-          <StatCard
+          <MetricCard
             label="Average Score"
-            value={loading && !stats ? '...' : typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
-            caption="Current practice-session average"
-            icon={<Activity className="size-5 text-rose-600" />}
+            value={
+              loading && !stats
+                ? '...'
+                : typeof stats?.average_score === 'number'
+                  ? stats.average_score.toFixed(1)
+                  : '0.0'
+            }
+            hint="Current practice-session average"
+            icon={<Activity className="size-5" />}
+            tone="rose"
           />
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1.15fr,0.85fr]">
-          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-            <div className="relative mb-6">
-              <h3 className="text-xl font-bold text-slate-900">Admin Control Center</h3>
-              <p className="text-sm text-slate-600 mt-2">
-                Jump straight into the core admin workflows for user management, analytics, coaching oversight, and certification setup.
-              </p>
-            </div>
-
-            <div className="relative grid gap-4 md:grid-cols-2">
+        <div className="grid gap-6 xl:grid-cols-[1.12fr,0.88fr]">
+          <SectionPanel
+            title="Admin control center"
+            description="Jump into the core admin workflows for user management, analytics, coaching oversight, and certification setup."
+          >
+            <div className="grid gap-4 md:grid-cols-2">
               {ADMIN_QUICK_LINKS.map((item) => (
-                <QuickLinkCard
+                <ActionCard
                   key={item.href}
                   href={item.href}
-                  label={item.label}
+                  title={item.label}
                   description={item.description}
                   icon={<item.icon className="size-5" />}
+                  tone={item.tone}
                 />
               ))}
             </div>
-          </section>
+          </SectionPanel>
 
-          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-            <div className="relative mb-6">
-              <h3 className="text-xl font-bold text-slate-900">Platform Focus</h3>
-              <p className="text-sm text-slate-600 mt-2">
-                Snapshot of the admin checks that usually need a fast decision before deeper review.
-              </p>
-            </div>
-
-            <div className="relative grid gap-4 sm:grid-cols-2 xl:grid-cols-1">
-              <FocusTile
+          <SectionPanel
+            title="Platform focus"
+            description="Fast admin checks that usually need a decision before deeper review."
+          >
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <SoftStat
                 label="Database"
                 value={toDisplayLabel(stats?.system_status?.database?.status || 'unknown')}
-                hint={stats?.system_status?.database?.detail || 'No database status available yet.'}
+                tone="blue"
               />
-              <FocusTile
+              <SoftStat
                 label="Audio Coverage"
                 value={`${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}%`}
-                hint={`${stats?.system_status?.audio_storage?.utilization?.sessions_with_audio ?? 0} sessions currently have saved audio.`}
+                tone="amber"
               />
-              <FocusTile
+              <SoftStat
                 label="Average Completion"
                 value={`${typeof stats?.average_completion === 'number' ? stats.average_completion.toFixed(1) : '0.0'}%`}
-                hint="Across trainer-managed course assignments."
+                tone="green"
               />
-              <FocusTile
+              <SoftStat
                 label="Average Score"
                 value={typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
-                hint="Current practice-session average across the active database."
+                tone="violet"
               />
             </div>
-          </section>
+          </SectionPanel>
         </div>
 
         <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
-          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-            <div className="relative mb-6">
-              <h3 className="text-xl font-bold text-slate-900">System Status</h3>
-              <p className="text-sm text-slate-600 mt-2">
-                These checks reflect the currently configured database, ASR, NLP, and Supabase storage paths.
-              </p>
-            </div>
-
-            <div className="relative grid gap-4 md:grid-cols-2">
-              <StatusCard
-                label="ASR Engine"
-                status={stats?.system_status?.asr_engine?.status || 'unknown'}
-                detail={stats?.system_status?.asr_engine?.detail || 'No status available.'}
-              />
-              <StatusCard
-                label="NLP Processing"
-                status={stats?.system_status?.nlp_processing?.status || 'unknown'}
-                detail={stats?.system_status?.nlp_processing?.detail || 'No status available.'}
-              />
-              <StatusCard
-                label="Database"
-                status={stats?.system_status?.database?.status || 'unknown'}
-                detail={stats?.system_status?.database?.detail || 'No status available.'}
-              />
-              <StatusCard
-                label="Audio Storage"
-                status={stats?.system_status?.audio_storage?.status || 'unknown'}
-                detail={
-                  stats?.system_status?.audio_storage?.utilization
-                    ? `${stats?.system_status?.audio_storage?.detail || ''} ${stats?.system_status?.audio_storage?.utilization?.sessions_with_audio ?? 0} recording(s) saved, ${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}% session coverage.`
-                    : stats?.system_status?.audio_storage?.detail || 'No status available.'
-                }
-              />
-            </div>
-          </section>
-
-          <section className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-            <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-            <div className="relative mb-6">
-              <h3 className="text-xl font-bold text-slate-900">Recent Activity</h3>
-              <p className="text-sm text-slate-600 mt-2">
-                Admin actions below are loaded from the audit log and reflect database-backed updates only.
-              </p>
-            </div>
-
-            <div className="relative space-y-4">
-              {(stats?.recent_activity || []).map((activity) => (
-                <div key={activity.id} className="group/item rounded-3xl border bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="font-bold text-slate-900">{activity.label}</div>
-                      <div className="mt-2 text-sm text-slate-600">
-                        {activity.entity_type || 'System'} by {activity.actor_name || 'System'}
-                      </div>
-                    </div>
-                    <div className="text-xs font-medium text-slate-500">
-                      {formatTimestamp(activity.created_at)}
-                    </div>
+          <SectionPanel
+            title="System status"
+            description="These checks reflect the currently configured database, ASR, NLP, and Supabase storage paths."
+          >
+            <div className="grid gap-4 md:grid-cols-2">
+              {[
+                {
+                  label: 'ASR Engine',
+                  status: stats?.system_status?.asr_engine?.status || 'unknown',
+                  detail: stats?.system_status?.asr_engine?.detail || 'No status available.',
+                },
+                {
+                  label: 'NLP Processing',
+                  status: stats?.system_status?.nlp_processing?.status || 'unknown',
+                  detail: stats?.system_status?.nlp_processing?.detail || 'No status available.',
+                },
+                {
+                  label: 'Database',
+                  status: stats?.system_status?.database?.status || 'unknown',
+                  detail: stats?.system_status?.database?.detail || 'No status available.',
+                },
+                {
+                  label: 'Audio Storage',
+                  status: stats?.system_status?.audio_storage?.status || 'unknown',
+                  detail:
+                    stats?.system_status?.audio_storage?.utilization
+                      ? `${stats?.system_status?.audio_storage?.detail || ''} ${stats?.system_status?.audio_storage?.utilization?.sessions_with_audio ?? 0} recording(s) saved, ${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}% session coverage.`
+                      : stats?.system_status?.audio_storage?.detail || 'No status available.',
+                },
+              ].map((item) => (
+                <div key={item.label} className="data-card p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-foreground">{item.label}</h3>
+                    <Badge variant={statusVariant(item.status)}>{toDisplayLabel(item.status)}</Badge>
                   </div>
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">{item.detail}</p>
                 </div>
               ))}
-
-              {!stats?.recent_activity?.length && (
-                <div className="rounded-3xl border-2 border-dashed border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 p-8 text-center">
-                  <div className="text-sm font-medium text-slate-500">No admin activity has been recorded yet.</div>
-                </div>
-              )}
             </div>
-          </section>
+          </SectionPanel>
+
+          <SectionPanel
+            title="Recent activity"
+            description="Admin actions below are loaded from the audit log and reflect database-backed updates only."
+          >
+            {stats?.recent_activity?.length ? (
+              <div className="space-y-3">
+                {stats.recent_activity.map((activity) => (
+                  <div key={activity.id} className="data-card p-5">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div>
+                        <div className="font-semibold text-foreground">{activity.label}</div>
+                        <div className="mt-2 text-sm text-muted-foreground">
+                          {(activity.entity_type || 'System')} by {activity.actor_name || 'System'}
+                        </div>
+                      </div>
+                      <div className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                        {formatTimestamp(activity.created_at)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <EmptyStatePanel
+                title="No admin activity has been recorded yet"
+                description="Database-backed admin actions will appear here once the platform starts receiving changes."
+              />
+            )}
+          </SectionPanel>
         </div>
       </div>
     </DashboardLayout>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  caption,
-  icon,
-}: {
-  label: string;
-  value: number | string;
-  caption?: string;
-  icon: ReactNode;
-}) {
-  return (
-    <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative flex items-center justify-between gap-4">
-        <div>
-          <div className="text-sm font-medium text-slate-600">{label}</div>
-          <div className="mt-2 text-3xl font-bold text-slate-900">{value}</div>
-          {caption ? <div className="mt-2 text-xs text-slate-500">{caption}</div> : null}
-        </div>
-        <div className="rounded-2xl bg-gradient-to-br from-blue-500 to-teal-500 p-4 text-white shadow-lg transition-transform group-hover:scale-110">
-          {icon}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function FocusTile({
-  label,
-  value,
-  hint,
-}: {
-  label: string;
-  value: string;
-  hint: string;
-}) {
-  return (
-    <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-      <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative">
-        <div className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{label}</div>
-        <div className="mt-3 text-2xl font-bold text-slate-900">{value}</div>
-        <div className="mt-3 text-xs text-slate-600">{hint}</div>
-      </div>
-    </div>
-  );
-}
-
-function QuickLinkCard({
-  href,
-  label,
-  description,
-  icon,
-}: {
-  href: string;
-  label: string;
-  description: string;
-  icon: ReactNode;
-}) {
-  return (
-    <Link
-      href={href}
-      className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-blue-200"
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative flex items-start justify-between gap-4">
-        <div className="rounded-2xl bg-gradient-to-br from-blue-500 to-teal-500 p-4 text-white shadow-lg transition-transform group-hover:scale-110">
-          {icon}
-        </div>
-        <ArrowRight className="size-5 text-slate-400 transition-all group-hover:translate-x-1 group-hover:text-blue-500" />
-      </div>
-      <div className="relative mt-4 font-bold text-slate-900">{label}</div>
-      <div className="relative mt-2 text-sm text-slate-600">{description}</div>
-    </Link>
-  );
-}
-
-function StatusCard({
-  label,
-  status,
-  detail,
-}: {
-  label: string;
-  status: string;
-  detail: string;
-}) {
-  const getStatusStyle = (status: string) => {
-    if (status === 'connected' || status === 'configured' || status === 'active') {
-      return 'border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 text-emerald-800 shadow-emerald-100';
-    }
-    if (status === 'error') {
-      return 'border-rose-200 bg-gradient-to-br from-rose-50 to-red-50 text-rose-800 shadow-rose-100';
-    }
-    if (status === 'fallback_only' || status === 'not_configured') {
-      return 'border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50 text-amber-800 shadow-amber-100';
-    }
-    return 'border-slate-200 bg-gradient-to-br from-slate-50 to-gray-50 text-slate-700 shadow-slate-100';
-  };
-
-  return (
-    <div className={`group relative overflow-hidden rounded-3xl border p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 ${getStatusStyle(status)}`}>
-      <div className="relative flex items-center justify-between gap-3">
-        <div className="font-bold">{label}</div>
-        <div className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.16em] shadow-sm">
-          {status.replace(/_/g, ' ')}
-        </div>
-      </div>
-      <div className="relative mt-4 text-sm leading-6">{detail}</div>
-    </div>
   );
 }

@@ -48,7 +48,10 @@ Start the frontend:
 
 ## What The Launchers Do
 
+- The launchers reload the latest repo and feature env values from `.env` / `.env.local` by default
+- Set `ENV_FILE_OVERRIDE=0` if you intentionally want existing shell env vars to win instead
 - The backend launcher forces `USE_LOCAL_SQLITE=0`
+- The backend runs a Python compile preflight before serving traffic
 - The backend validates the Supabase database and auth configuration before serving traffic
 - The backend synchronizes local platform users into Supabase `auth.users` on every startup
 - The frontend launcher rebuilds the app and starts Next.js in production mode

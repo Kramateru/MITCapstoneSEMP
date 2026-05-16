@@ -174,7 +174,6 @@ def validate_environment():
         for key in (
             'SUPABASE_SERVICE_KEY',
             'SUPABASE_SERVICE_ROLE_KEY',
-            'SUPABASE_KEY',
         )
     ):
         logger.warning(
@@ -728,6 +727,14 @@ def ensure_call_simulation_session_schema() -> None:
         statements.append(
             text("ALTER TABLE sim_session ADD COLUMN certificate_id VARCHAR(36)")
         )
+    if "assignment_id" not in existing_columns:
+        statements.append(
+            text("ALTER TABLE sim_session ADD COLUMN assignment_id VARCHAR(36)")
+        )
+    if "assigned_by_id" not in existing_columns:
+        statements.append(
+            text("ALTER TABLE sim_session ADD COLUMN assigned_by_id VARCHAR(36)")
+        )
     if "sentiment_score" not in existing_columns:
         statements.append(
             text("ALTER TABLE sim_session ADD COLUMN sentiment_score FLOAT")
@@ -750,6 +757,47 @@ def ensure_call_simulation_session_schema() -> None:
 
 
 ensure_call_simulation_session_schema()
+
+
+def ensure_call_simulation_assignment_schema() -> None:
+    """Backfill Call Simulation assignment columns for existing databases."""
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception:
+        logger.exception("Unable to inspect Call Simulation assignment tables for schema backfill")
+        return
+
+    if "call_simulation_assignment" not in existing_tables:
+        return
+
+    try:
+        existing_columns = {
+            column["name"] for column in inspector.get_columns("call_simulation_assignment")
+        }
+    except Exception:
+        logger.exception("Unable to inspect call_simulation_assignment columns for schema backfill")
+        return
+
+    statements = []
+    if "max_attempts" not in existing_columns:
+        statements.append(
+            text("ALTER TABLE call_simulation_assignment ADD COLUMN max_attempts INTEGER DEFAULT 3")
+        )
+
+    if not statements:
+        return
+
+    try:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(statement)
+        logger.info("Applied Call Simulation assignment schema backfill")
+    except Exception:
+        logger.exception("Failed to backfill Call Simulation assignment schema")
+
+
+ensure_call_simulation_assignment_schema()
 
 
 def ensure_call_simulation_scenario_schema() -> None:

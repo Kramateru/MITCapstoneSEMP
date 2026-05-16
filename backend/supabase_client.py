@@ -53,7 +53,6 @@ class SupabaseClient:
         self.key = normalize_env_value(
             os.getenv("SUPABASE_SERVICE_ROLE_KEY")
             or os.getenv("SUPABASE_SERVICE_KEY")
-            or os.getenv("SUPABASE_KEY")
             or os.getenv("SUPABASE_SERVICE_ROLE")
         )
         self.bucket_name = os.getenv("STORAGE_BUCKET_NAME", "audio-records")

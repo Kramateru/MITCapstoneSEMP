@@ -1,0 +1,124 @@
+
+> frontend@0.1.0 build
+> next build --webpack
+
+▲ Next.js 16.1.6 (webpack)
+- Environments: .env.local
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 14.6s
+  Running TypeScript ...
+  Collecting page data using 11 workers ...
+  Generating static pages using 11 workers (0/70) ...
+  Generating static pages using 11 workers (17/70) 
+  Generating static pages using 11 workers (34/70) 
+  Generating static pages using 11 workers (52/70) 
+✓ Generating static pages using 11 workers (70/70) in 1269.5ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ○ /
+├ ○ /_not-found
+├ ○ /admin/analytics
+├ ○ /admin/assessment
+├ ○ /admin/certification-settings
+├ ○ /admin/coaching
+├ ○ /admin/configuration
+├ ○ /admin/dashboard
+├ ○ /admin/lob
+├ ○ /admin/overview
+├ ○ /admin/reports
+├ ○ /admin/scenario-flow
+├ ○ /admin/scenarios
+├ ○ /admin/settings
+├ ○ /admin/tree-builder
+├ ○ /admin/users
+├ ƒ /api/[...path]
+├ ƒ /api/assessment-module/trainee/assignments/[assignmentId]
+├ ƒ /api/assessment-module/trainee/attempts
+├ ƒ /api/assessment-module/trainee/dashboard
+├ ƒ /api/assessment-module/trainee/stream
+├ ƒ /api/assessment-module/trainer/assessments
+├ ƒ /api/assessment-module/trainer/assessments/[assessmentId]
+├ ƒ /api/assessment-module/trainer/assignments
+├ ƒ /api/assessment-module/trainer/assignments/[assignmentId]
+├ ƒ /api/assessment-module/trainer/bootstrap
+├ ƒ /api/assessment-module/trainer/categories
+├ ƒ /api/assessment-module/trainer/categories/[categoryId]
+├ ƒ /api/assessment-module/trainer/coach
+├ ƒ /api/assessment-module/trainer/export/csv
+├ ƒ /api/assessment-module/trainer/questions
+├ ƒ /api/assessment-module/trainer/questions/[questionId]
+├ ƒ /api/assessment-module/trainer/questions/bulk-upload
+├ ƒ /api/assessment-module/trainer/questions/template
+├ ƒ /api/assessment-module/trainer/stream
+├ ƒ /api/call-simulation/[...path]
+├ ƒ /api/call-simulation/implementation-prompt
+├ ƒ /api/call-simulation/kpi/sync
+├ ƒ /api/call-simulation/scenarios/sync
+├ ƒ /api/call-simulation/session/[sessionId]/feedback
+├ ƒ /api/call-simulation/stream
+├ ƒ /api/microlearning/audio-content/[moduleId]/signed-url
+├ ƒ /api/microlearning/audio-content/upload
+├ ƒ /api/microlearning/implementation-prompt
+├ ƒ /api/microlearning/modules/[moduleId]/asset/signed-url
+├ ƒ /api/microlearning/modules/[moduleId]/transcript
+├ ƒ /api/trainer/microlearning-assets/upload
+├ ○ /dashboard
+├ ○ /login
+├ ƒ /media/[...path]
+├ ○ /trainee/assessment
+├ ○ /trainee/call-simulation
+├ ƒ /trainee/call-simulation/[scenarioId]
+├ ○ /trainee/certificates
+├ ○ /trainee/coaching
+├ ○ /trainee/dashboard
+├ ○ /trainee/mcq
+├ ○ /trainee/microlearning
+├ ○ /trainee/overview
+├ ○ /trainee/progress
+├ ○ /trainee/reports
+├ ○ /trainee/settings
+├ ○ /trainee/status
+├ ○ /trainer/analytics
+├ ○ /trainer/assessment
+├ ○ /trainer/assessment-dashboard
+├ ○ /trainer/assessment-hub
+├ ○ /trainer/assessments
+├ ○ /trainer/assign
+├ ○ /trainer/authoring
+├ ○ /trainer/batches
+├ ○ /trainer/call-simulation
+├ ○ /trainer/coaching
+├ ○ /trainer/courses
+├ ○ /trainer/dashboard
+├ ○ /trainer/grading
+├ ○ /trainer/mcq
+├ ○ /trainer/mcq/assign
+├ ○ /trainer/mcq/manager
+├ ○ /trainer/mcq/progress
+├ ○ /trainer/microlearning
+├ ○ /trainer/realtime
+├ ○ /trainer/reports
+├ ○ /trainer/reviews
+├ ○ /trainer/settings
+├ ○ /trainer/status
+├ ○ /trainer/users
+├ ○ /trainer/workspace
+└ ƒ /workspace/[workspaceId]
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+
+> frontend@0.1.0 start
+> next start --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.6
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+
+✓ Starting...
+✓ Ready in 828ms

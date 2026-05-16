@@ -3461,11 +3461,6 @@ def get_trainee_workspace_session(
     maximum_attempts = _normalize_int(assignment.get("maximum_attempts")) if assignment.get("maximum_attempts") is not None else None
     status = _build_trainee_status(latest_attempt, len(attempts), maximum_attempts)
 
-    if latest_attempt and latest_attempt["status"] == "pass":
-        raise HTTPException(status_code=400, detail="Passed assessments cannot be reopened.")
-    elif maximum_attempts is not None and len(attempts) >= maximum_attempts:
-        raise HTTPException(status_code=400, detail="No assessment attempts remain for this assignment.")
-
     question_pool = _build_assignment_question_pool(
         assignment,
         question_map=question_map,
@@ -3474,7 +3469,7 @@ def get_trainee_workspace_session(
         selected_question_ids=selected_question_ids,
         randomize_subset=True,
     )
-    if not question_pool:
+    if not question_pool and not latest_attempt:
         raise HTTPException(status_code=400, detail="This assigned assessment does not have any active questions yet.")
 
     session_questions = [
@@ -3517,6 +3512,7 @@ def get_trainee_workspace_session(
         "attemptsRemaining": status["attemptsRemaining"],
         "maximumAttempts": maximum_attempts,
         "timeLimitMinutes": _normalize_int(assignment.get("time_limit_minutes")) if assignment.get("time_limit_minutes") is not None else None,
+        "canStart": status["canStart"],
         "canRetake": status["canRetake"],
         "isCompleted": status["isCompleted"],
         "latestAttempt": latest_attempt,

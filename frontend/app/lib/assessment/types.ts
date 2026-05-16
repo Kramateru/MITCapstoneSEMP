@@ -434,6 +434,7 @@ export interface TraineeAssessmentSession {
   attemptsRemaining?: number | null
   maximumAttempts?: number | null
   timeLimitMinutes?: number | null
+  canStart?: boolean
   canRetake: boolean
   isCompleted: boolean
   latestAttempt?: AttemptRecord

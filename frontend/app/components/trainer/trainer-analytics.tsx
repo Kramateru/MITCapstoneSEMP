@@ -9,6 +9,8 @@ import {
   Gauge,
   GraduationCap,
   Loader2,
+  MessageSquare,
+  Mic,
   RefreshCw,
   Target,
   TrendingUp,
@@ -57,6 +59,16 @@ function formatCount(value?: number | null) {
     return '0'
   }
   return value.toLocaleString()
+}
+
+function formatMetricValue(value?: number | null, unit?: string | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return unit === 'wpm' || unit === 'sec' ? `0 ${unit}` : '0.0%'
+  }
+  if (unit === 'wpm' || unit === 'sec') {
+    return `${value.toFixed(1)} ${unit}`
+  }
+  return `${value.toFixed(1)}%`
 }
 
 function formatDateTime(value?: string | null) {
@@ -164,8 +176,11 @@ export default function TrainerAnalytics() {
         const payload = await apiFetch<TrainerLearningInsightsResponse>(requestUrl)
         setData(payload)
         const syncMessage =
-          payload.summary.assigned_module_records || payload.summary.assigned_assessment_records
-            ? `Live analytics synced at ${new Date().toLocaleTimeString()} using real trainer-created modules, assigned assessments, and trainee results.`
+          payload.summary.assigned_module_records
+          || payload.summary.assigned_assessment_records
+          || payload.summary.assigned_call_simulation_records
+          || payload.summary.published_coaching_logs
+            ? `Live analytics synced at ${new Date().toLocaleTimeString()} using real microlearning, assessments, Call Simulation results, and coaching activity from the database.`
             : 'Live analytics are connected. Create assignments or wait for trainee activity to populate this dashboard.'
         setLiveStatus(syncMessage)
       } catch (loadError) {
@@ -194,7 +209,9 @@ export default function TrainerAnalytics() {
   const summary = data?.summary
   const hasAssignedLearning = Boolean(
     (summary?.assigned_module_records || 0) > 0
-      || (summary?.assigned_assessment_records || 0) > 0,
+      || (summary?.assigned_assessment_records || 0) > 0
+      || (summary?.assigned_call_simulation_records || 0) > 0
+      || (summary?.published_coaching_logs || 0) > 0,
   )
 
   const completionTrendRows = useMemo(
@@ -227,14 +244,29 @@ export default function TrainerAnalytics() {
     [data?.trainees_needing_improvement],
   )
 
+  const callSimulationRows = useMemo(
+    () => (data?.call_simulation_performance || []).slice(0, 8),
+    [data?.call_simulation_performance],
+  )
+
+  const callSimulationKpis = useMemo(
+    () => data?.call_simulation_kpi_breakdown || [],
+    [data?.call_simulation_kpi_breakdown],
+  )
+
+  const coachingNotes = useMemo(
+    () => (data?.coaching_notes_summary || []).slice(0, 6),
+    [data?.coaching_notes_summary],
+  )
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-foreground">Live Analytics Hub</h2>
           <p className="text-sm text-muted-foreground">
-            Professional trainer analytics based only on real trainer-created modules, trainer-assigned assessments,
-            and saved trainee results from the database.
+            Professional trainer analytics built from real microlearning, assessment, Call Simulation, and coaching
+            records saved in the database.
           </p>
         </div>
 
@@ -275,7 +307,7 @@ export default function TrainerAnalytics() {
             <CardTitle>No trainer-assigned learning data yet</CardTitle>
             <CardDescription>
               This live analytics view only counts real trainer-created microlearning modules, trainer-assigned
-              assessments, and the trainee results saved against them.
+              assessments, assigned Call Simulation work, coaching follow-up, and the trainee results saved against them.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -289,6 +321,12 @@ export default function TrainerAnalytics() {
               icon={<Users className="size-5 text-sky-600" />}
             />
             <SummaryCard
+              label="Active Trainees"
+              value={formatCount(summary?.active_trainees)}
+              helper="Trainees with recent saved activity in the current filter scope"
+              icon={<TrendingUp className="size-5 text-cyan-600" />}
+            />
+            <SummaryCard
               label="Assigned Modules"
               value={formatCount(summary?.assigned_module_records)}
               helper={`${formatCount(summary?.trainer_assigned_modules)} distinct modules across trainer assignments`}
@@ -297,13 +335,13 @@ export default function TrainerAnalytics() {
             <SummaryCard
               label="Completed Modules"
               value={formatCount(summary?.completed_modules)}
-              helper={`${formatCount(summary?.pending_modules)} still pending`}
+              helper={`${formatCount(summary?.pending_modules)} not yet completed`}
               icon={<CheckCircle2 className="size-5 text-emerald-600" />}
             />
             <SummaryCard
               label="Completion Rate"
               value={formatPercent(summary?.completion_rate)}
-              helper="Across modules and trainer-assigned assessments"
+              helper="Across modules, assessments, and assigned Call Simulation work"
               icon={<Target className="size-5 text-violet-600" />}
             />
             <SummaryCard
@@ -319,16 +357,40 @@ export default function TrainerAnalytics() {
               icon={<Gauge className="size-5 text-cyan-600" />}
             />
             <SummaryCard
+              label="Avg Call Sim"
+              value={formatPercent(summary?.average_call_simulation_score)}
+              helper={`${formatCount(summary?.completed_call_simulations)} completed mock calls`}
+              icon={<Mic className="size-5 text-violet-600" />}
+            />
+            <SummaryCard
               label="Pass Rate"
               value={formatPercent(summary?.pass_rate)}
-              helper="Completed learning items meeting the required score"
+              helper="Completed learning items meeting the required score across all tracked activities"
               icon={<GraduationCap className="size-5 text-indigo-600" />}
+            />
+            <SummaryCard
+              label="Call Pass Rate"
+              value={formatPercent(summary?.call_simulation_pass_rate)}
+              helper={`${formatCount(summary?.assigned_call_simulation_records)} assigned call simulations tracked`}
+              icon={<Mic className="size-5 text-fuchsia-600" />}
+            />
+            <SummaryCard
+              label="Coaching Completion"
+              value={formatPercent(summary?.coaching_completion_rate)}
+              helper={`${formatCount(summary?.pending_coaching_logs)} logs still waiting for acknowledgement`}
+              icon={<MessageSquare className="size-5 text-amber-600" />}
             />
             <SummaryCard
               label="Attempts"
               value={formatCount(summary?.total_attempts)}
-              helper={`${formatCount(summary?.assigned_assessment_records)} assigned assessments tracked`}
+              helper="Attempts recorded across modules, assessments, and Call Simulation"
               icon={<Activity className="size-5 text-rose-600" />}
+            />
+            <SummaryCard
+              label="Needs Intervention"
+              value={formatCount(summary?.intervention_needed_count)}
+              helper="Trainees currently flagged by low score, completion risk, or open coaching"
+              icon={<AlertTriangle className="size-5 text-amber-600" />}
             />
           </div>
 
@@ -337,7 +399,7 @@ export default function TrainerAnalytics() {
               <CardHeader>
                 <CardTitle>AI Analysis</CardTitle>
                 <CardDescription>
-                  Professional guidance generated from the current trainer-scoped module, exercise, and assessment results.
+                  Professional guidance generated from trainer-scoped microlearning, assessments, Call Simulation, and coaching records.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5">
@@ -414,20 +476,26 @@ export default function TrainerAnalytics() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={completionTrendRows} margin={{ top: 26, right: 10, left: 0, bottom: 60 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="label" interval={0} angle={-14} textAnchor="end" height={72} />
-                    <YAxis domain={[0, 100]} />
-                    <Tooltip />
-                    <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
-                      <ChartPercentLabelList />
-                    </Bar>
-                    <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
-                      <ChartPercentLabelList />
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                {completionTrendRows.length ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={completionTrendRows} margin={{ top: 26, right: 10, left: 0, bottom: 60 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="label" interval={0} angle={-14} textAnchor="end" height={72} />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip />
+                      <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                        <ChartPercentLabelList />
+                      </Bar>
+                      <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                        <ChartPercentLabelList />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
+                    Batch comparison will appear once the current trainer scope has saved trainee activity.
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -435,24 +503,138 @@ export default function TrainerAnalytics() {
               <CardHeader>
                 <CardTitle>Score Distribution</CardTitle>
                 <CardDescription>
-                  Combined spread of saved exercise and assessment scores for the selected trainer scope.
+                  Combined spread of saved exercise, assessment, and Call Simulation scores for the selected trainer scope.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="range_label" />
-                    <YAxis allowDecimals={false} />
-                    <Tooltip />
-                    <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
-                      <ChartCountLabelList />
-                      {(data?.score_distribution || []).map((row, index) => (
-                        <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+                {(data?.score_distribution || []).some((row) => row.count > 0) ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="range_label" />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip />
+                      <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                        <ChartCountLabelList />
+                        {(data?.score_distribution || []).map((row, index) => (
+                          <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
+                    Score distribution will appear once the current trainer scope has scored attempts to analyze.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <CardTitle>Call Simulation Scenario Performance</CardTitle>
+                <CardDescription>
+                  Average score and pass rate by assigned Call Simulation scenario.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {callSimulationRows.length ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={callSimulationRows} margin={{ top: 28, right: 12, left: 0, bottom: 70 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={92} />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip />
+                      <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
+                        <ChartPercentLabelList />
+                      </Bar>
+                      <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
+                        <ChartPercentLabelList />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
+                    Call Simulation analytics will appear after trainees start completing assigned mock calls.
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <CardTitle>Call and Coaching Follow-Up</CardTitle>
+                <CardDescription>
+                  KPI mix from completed calls and the latest coaching feedback that still needs action.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {callSimulationKpis.length ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {callSimulationKpis.slice(0, 6).map((metric) => (
+                      <div key={metric.metric} className="rounded-2xl border p-4">
+                        <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{metric.metric}</div>
+                        <div className="mt-2 text-xl font-semibold text-slate-950">
+                          {formatMetricValue(metric.value, metric.unit)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
+                    KPI averages will appear after trainees complete scored Call Simulation attempts.
+                  </div>
+                )}
+
+                {(data?.coaching_summary?.published_logs || 0) > 0 ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Published</div>
+                      <div className="mt-2 text-xl font-semibold text-slate-950">
+                        {formatCount(data?.coaching_summary?.published_logs)}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Pending Ack</div>
+                      <div className="mt-2 text-xl font-semibold text-amber-700">
+                        {formatCount(data?.coaching_summary?.pending_logs)}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Retake Coaching</div>
+                      <div className="mt-2 text-xl font-semibold text-rose-700">
+                        {formatCount(data?.coaching_summary?.retake_required_logs)}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {coachingNotes.length ? (
+                  <div className="space-y-3">
+                    {coachingNotes.map((note) => (
+                      <div key={note.id} className="rounded-2xl border p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                            </div>
+                          </div>
+                          <Badge variant="outline" className="border-slate-300 text-slate-700">
+                            {note.status.replace(/_/g, ' ')}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-2xl border border-dashed p-6 text-sm text-muted-foreground">
+                    Coaching follow-up notes will appear here after trainers publish coaching feedback.
+                  </div>
+                )}
               </CardContent>
             </Card>
           </div>
@@ -487,7 +669,7 @@ export default function TrainerAnalytics() {
               <CardHeader>
                 <CardTitle>Trainee Performance Ranking</CardTitle>
                 <CardDescription>
-                  Ranking reflects only trainer-scoped module and assessment outcomes.
+                  Ranking reflects trainer-scoped microlearning, assessments, Call Simulation, and coaching follow-up.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -592,8 +774,8 @@ export default function TrainerAnalytics() {
                     <InsightRow
                       key={row.trainee_id}
                       title={row.trainee_name}
-                      subtitle={`${row.batch_label} | Score ${formatPercent(row.overall_score)} | Pass ${formatPercent(row.pass_rate)}`}
-                      badge={row.module_completed || row.assessment_completed ? 'Needs focus' : 'Low activity'}
+                      subtitle={`${row.batch_label} | Score ${formatPercent(row.overall_score)} | Pass ${formatPercent(row.pass_rate)} | Coaching ${formatCount(row.pending_coaching)} open`}
+                      badge={row.call_simulation_completed || row.module_completed || row.assessment_completed ? 'Needs focus' : 'Low activity'}
                     />
                   ))
                 ) : (

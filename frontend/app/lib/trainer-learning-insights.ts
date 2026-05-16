@@ -58,18 +58,31 @@ export type TrainerLearningInsightsResponse = {
     trainer_created_modules: number
     trainer_assigned_modules: number
     total_trainees: number
+    active_trainees?: number
     assigned_module_records: number
     assigned_assessment_records: number
+    assigned_call_simulation_records?: number
     completed_modules: number
     pending_modules: number
+    completed_call_simulations?: number
+    pending_call_simulations?: number
+    in_progress_call_simulations?: number
     completion_rate: number
     average_assessment_score: number
     average_exercise_score: number
+    average_call_simulation_score?: number
     pass_rate: number
+    call_simulation_pass_rate?: number
     total_attempts: number
     passed_modules: number
     passed_assessments: number
+    passed_call_simulations?: number
     completed_assessments: number
+    published_coaching_logs?: number
+    pending_coaching_logs?: number
+    acknowledged_coaching_logs?: number
+    coaching_completion_rate?: number
+    intervention_needed_count?: number
   }
   batch_comparison: Array<{
     batch_id: string
@@ -81,6 +94,7 @@ export type TrainerLearningInsightsResponse = {
     pass_rate: number
     average_exercise_score: number
     average_assessment_score: number
+    average_call_simulation_score?: number
     overall_score: number
     total_attempts: number
   }>
@@ -92,13 +106,21 @@ export type TrainerLearningInsightsResponse = {
     overall_score: number
     average_exercise_score: number
     average_assessment_score: number
+    average_call_simulation_score?: number
     module_completion_rate: number
+    call_simulation_completion_rate?: number
     completion_rate: number
     pass_rate: number
     module_assigned: number
     module_completed: number
     assessment_assigned: number
     assessment_completed: number
+    call_simulation_assigned?: number
+    call_simulation_completed?: number
+    call_simulation_passed?: number
+    pending_coaching?: number
+    acknowledged_coaching?: number
+    retake_coaching?: number
     total_attempts: number
     latest_activity_at?: string | null
   }>
@@ -152,6 +174,86 @@ export type TrainerLearningInsightsResponse = {
     completion_rate: number
     average_score: number
   }>
+  call_simulation_performance?: Array<{
+    scenario_id: string
+    scenario_title: string
+    assigned_count: number
+    completed_count: number
+    in_progress_count: number
+    pending_count: number
+    pass_rate: number
+    average_score: number
+    average_attempts: number
+    latest_activity_at?: string | null
+  }>
+  call_simulation_kpi_breakdown?: Array<{
+    metric: string
+    value: number
+    unit: string
+  }>
+  call_simulation_results?: Array<{
+    id: string
+    assignment_id: string
+    scenario_id: string
+    scenario_title: string
+    trainee_id: string
+    trainee_name?: string | null
+    batch_id?: string | null
+    batch_label: string
+    assigned_by?: string | null
+    assigned_by_name?: string | null
+    assigned_at?: string | null
+    completion_status: string
+    status: string
+    score_value?: number | null
+    performance_level?: string | null
+    is_passed: boolean
+    attempt_count: number
+    latest_attempt_number: number
+    max_attempts: number
+    latest_session_id?: string | null
+    active_session_id?: string | null
+    activity_at?: string | null
+    completed_at?: string | null
+    audio_duration_seconds?: number | null
+    ai_feedback?: string | null
+    trainer_verdict_status?: string | null
+    coaching_id?: string | null
+    coaching_status?: string | null
+    coaching_acknowledged_at?: string | null
+    certificate_id?: string | null
+    speech_to_text_accuracy?: number | null
+    grammar_score?: number | null
+    pronunciation_score?: number | null
+    pacing_score?: number | null
+    sentiment_score?: number | null
+    rate_of_speech?: number | null
+    dead_air_seconds?: number | null
+    final_attempt_locked?: boolean
+  }>
+  coaching_summary?: {
+    total_logs: number
+    published_logs: number
+    acknowledged_logs: number
+    pending_logs: number
+    draft_logs: number
+    competent_logs: number
+    retake_required_logs: number
+    completion_rate: number
+    average_minutes: number
+  }
+  coaching_notes_summary?: Array<{
+    id: string
+    coaching_id: string
+    trainer_name?: string | null
+    trainee_name?: string | null
+    scenario_title: string
+    status: string
+    competency_status: string
+    feedback_summary: string
+    action_plan: string
+    activity_at?: string | null
+  }>
   trainees_needing_improvement: Array<{
     trainee_id: string
     trainee_name: string
@@ -160,13 +262,21 @@ export type TrainerLearningInsightsResponse = {
     overall_score: number
     average_exercise_score: number
     average_assessment_score: number
+    average_call_simulation_score?: number
     module_completion_rate: number
+    call_simulation_completion_rate?: number
     completion_rate: number
     pass_rate: number
     module_assigned: number
     module_completed: number
     assessment_assigned: number
     assessment_completed: number
+    call_simulation_assigned?: number
+    call_simulation_completed?: number
+    call_simulation_passed?: number
+    pending_coaching?: number
+    acknowledged_coaching?: number
+    retake_coaching?: number
     total_attempts: number
     latest_activity_at?: string | null
   }>

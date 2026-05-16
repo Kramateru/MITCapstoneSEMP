@@ -83,6 +83,10 @@ export default function MyCoaching() {
   }, [loadLogs]);
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      void loadLogs();
+    }, 60000);
+
     let stream: EventSource | null = null;
     try {
       stream = openCallSimulationRealtimeStream();
@@ -105,6 +109,7 @@ export default function MyCoaching() {
     }
 
     return () => {
+      window.clearInterval(intervalId);
       stream?.close();
     };
   }, [loadLogs]);

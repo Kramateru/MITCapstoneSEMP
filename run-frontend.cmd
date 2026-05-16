@@ -3,13 +3,14 @@ setlocal
 set "APP_ROOT=%~dp0"
 set "FRONTEND_DIR=%APP_ROOT%frontend"
 set "BACKEND_DIR=%APP_ROOT%backend"
+if not defined ENV_FILE_OVERRIDE set "ENV_FILE_OVERRIDE=1"
 
-call :load_env_file "%FRONTEND_DIR%\.env.local"
-call :load_env_file "%FRONTEND_DIR%\.env"
-call :load_env_file "%APP_ROOT%.env.local"
-call :load_env_file "%BACKEND_DIR%\.env.local"
-call :load_env_file "%BACKEND_DIR%\.env"
 call :load_env_file "%APP_ROOT%.env"
+call :load_env_file "%BACKEND_DIR%\.env"
+call :load_env_file "%BACKEND_DIR%\.env.local"
+call :load_env_file "%APP_ROOT%.env.local"
+call :load_env_file "%FRONTEND_DIR%\.env"
+call :load_env_file "%FRONTEND_DIR%\.env.local"
 
 cd /d "%FRONTEND_DIR%" || exit /b 1
 if defined HOST if not defined FRONTEND_HOST set "FRONTEND_HOST=%HOST%"
@@ -48,8 +49,7 @@ if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY (
 
 if not defined SUPABASE_SERVICE_ROLE_KEY if not defined SUPABASE_SERVICE_KEY if not defined SUPABASE_SERVICE_ROLE (
   echo No Supabase service-role key is configured for frontend server routes.
-  echo Set SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY, or SUPABASE_SERVICE_ROLE in backend\.env or .env.
-  exit /b 1
+  echo Public-key and backend-proxy flows will still start, but storage or privileged Supabase routes may fall back or be unavailable.
 )
 
 call :check_supabase_project_alignment
@@ -97,7 +97,7 @@ exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
   "$url = ($env:NEXT_PUBLIC_SUPABASE_URL, $env:SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
-  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY, $env:SUPABASE_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
   "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^
@@ -186,8 +186,19 @@ exit /b 0
 :load_env_file
 if not exist "%~1" exit /b 0
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~1") do (
-  if not "%%~A"=="" call :set_env_if_missing "%%~A" "%%~B"
+  if not "%%~A"=="" (
+    if /I "%ENV_FILE_OVERRIDE%"=="0" (
+      call :set_env_if_missing "%%~A" "%%~B"
+    ) else (
+      call :set_env_value "%%~A" "%%~B"
+    )
+  )
 )
+exit /b 0
+
+:set_env_value
+if "%~1"=="" exit /b 0
+set "%~1=%~2"
 exit /b 0
 
 :set_env_if_missing

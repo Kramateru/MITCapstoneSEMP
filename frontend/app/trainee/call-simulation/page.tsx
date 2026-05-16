@@ -10,7 +10,7 @@ import { cn } from '@/app/components/ui/utils';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
 import { traineeSidebarItems } from '@/app/trainee/nav';
-import { useSpeechToText } from '@/hooks/useSpeechToText';
+import { useSpeechToText, type SimFloorTurnResult } from '@/hooks/useSpeechToText';
 import { useWavCallRecorder } from '@/hooks/useWavCallRecorder';
 import {
     AlertTriangle,
@@ -75,6 +75,7 @@ interface ScenarioCard {
   latest_completed_at?: string | null;
   active_session_id?: string | null;
   latest_certificate_id?: string | null;
+  max_attempts?: number | null;
   can_retake?: boolean;
   remaining_attempts?: number | null;
   launch_blocked?: boolean;
@@ -94,6 +95,10 @@ interface ScenarioStep {
 
 interface SessionData {
   session_id: string;
+  assignment_id?: string | null;
+  assigned_by_id?: string | null;
+  attempt_number?: number | null;
+  max_attempts?: number | null;
   scenario_title: string;
   scenario_description?: string | null;
   current_step: number;
@@ -134,6 +139,8 @@ interface KeywordComplianceItem {
 
 interface SessionResult {
   id: string;
+  assignment_id?: string | null;
+  assigned_by_id?: string | null;
   status?: string;
   audio_url?: string | null;
   transcript?: string | null;
@@ -327,7 +334,7 @@ function getScenarioPriorityScore(scenario: ScenarioCard) {
 
 function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Start Call Module';
+    return 'Start Call';
   }
   if (scenario.active_session_id) {
     return 'Resume Active Call';
@@ -338,12 +345,12 @@ function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (scenario.can_retake) {
     return 'Start Retake';
   }
-  return 'Start Call Module';
+  return 'Start Call';
 }
 
 function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Select an assigned call simulation module to start the phone workflow.';
+    return 'Select an assigned call simulation scenario to start the phone workflow.';
   }
   if (scenario.launch_block_reason?.trim()) {
     return scenario.launch_block_reason.trim();
@@ -358,7 +365,10 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   if (scenario.competent) {
     return 'This Call Simulation is already complete and tied to your certificate history.';
   }
-  return 'The phone will ring first, then Accept Call will start the microphone, timer, and call workflow.';
+  const attemptWindow = typeof scenario.max_attempts === 'number'
+    ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
+    : '';
+  return `The phone will ring first, then Accept Call will start the microphone, timer, and guided call workflow.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -510,7 +520,7 @@ function TraineeSimFloorPageFallback() {
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
             <CardTitle>Loading Call Simulation</CardTitle>
-            <CardDescription>Preparing your assigned call modules and live floor workspace.</CardDescription>
+            <CardDescription>Preparing your assigned call scenarios and live floor workspace.</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-slate-600">
             Please wait while the session context is loaded.
@@ -539,6 +549,8 @@ function TraineeSimFloorPageContent() {
   const [showIncomingAudio, setShowIncomingAudio] = useState(false);
   const [showSilenceAlert, setShowSilenceAlert] = useState(false);
   const [isUploadingCall, setIsUploadingCall] = useState(false);
+  const [isStartingCall, setIsStartingCall] = useState(false);
+  const [isEndingCall, setIsEndingCall] = useState(false);
   const [activePlaybackScript, setActivePlaybackScript] = useState('');
   const [activePlaybackSpeaker, setActivePlaybackSpeaker] = useState<'member' | 'system' | null>(null);
   const [queuedMemberStepIndex, setQueuedMemberStepIndex] = useState<number | null>(null);
@@ -754,6 +766,8 @@ function TraineeSimFloorPageContent() {
 
     setSessionResult({
       id: payload.id,
+      assignment_id: payload.assignment_id,
+      assigned_by_id: payload.assigned_by_id,
       status: payload.status,
       audio_url: payload.audio_url,
       transcript: payload.transcript,
@@ -1142,11 +1156,12 @@ function TraineeSimFloorPageContent() {
   }, []);
 
   const finalizeSession = useCallback(async () => {
-    if (!sessionData?.session_id) {
+    if (!sessionData?.session_id || isEndingCall) {
       return;
     }
 
     const token = localStorage.getItem('token');
+    setIsEndingCall(true);
     setCallState('processing');
     stopBrowserTranscript();
 
@@ -1156,69 +1171,75 @@ function TraineeSimFloorPageContent() {
       toast.error(uploadError instanceof Error ? uploadError.message : 'Unable to upload the final call recording.');
     }
 
-    const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/finalize`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-    const payload = (await response.json().catch(() => null)) as SessionRealtimePayload | { detail?: string } | null;
-    if (!response.ok || !payload || !('id' in payload)) {
-      throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to finalize the mock call.');
-    }
+    try {
+      const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/finalize`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      const payload = (await response.json().catch(() => null)) as SessionRealtimePayload | { detail?: string } | null;
+      if (!response.ok || !payload || !('id' in payload)) {
+        throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to finalize the mock call.');
+      }
 
-    const nextResult: SessionResult = {
-      id: payload.id,
-      status: payload.status,
-      audio_url: payload.audio_url,
-      transcript: payload.transcript,
-      transcript_log: payload.transcript_log || [],
-      weighted_score: payload.weighted_score,
-      pass_fail: payload.pass_fail,
-      ai_feedback: payload.ai_feedback,
-      speech_to_text_accuracy: payload.speech_to_text_accuracy,
-      grammar_score: payload.grammar_score,
-      pronunciation_score: payload.pronunciation_score,
-      pacing_score: payload.pacing_score,
-      rate_of_speech: payload.rate_of_speech,
-      dead_air_seconds: payload.dead_air_seconds,
-      aht_actual: payload.aht_actual,
-      empathy_statements_count: payload.empathy_statements_count,
-      probing_questions_count: payload.probing_questions_count,
-      forbidden_words_count: payload.forbidden_words_count,
-      sentiment_score: payload.sentiment_score,
-      keyword_compliance: payload.keyword_compliance,
-      turn_logs: payload.turn_logs || [],
-      attempt_number: payload.attempt_number,
-      max_attempts: payload.max_attempts,
-      trainer_verdict_status: payload.trainer_verdict_status,
-      trainer_verdict_notes: payload.trainer_verdict_notes,
-      coaching_notes: payload.coaching_notes,
-      certificate_id: payload.certificate_id,
-      coaching_id: payload.coaching_id,
-      coaching_status: payload.coaching_status,
-      coaching_acknowledged_at: payload.coaching_acknowledged_at,
-      completed_at: payload.completed_at,
-    };
-    setSessionResult(nextResult);
-    setActivePlaybackScript('');
-    setActivePlaybackSpeaker(null);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback(null);
-    setMemberTurnState('idle');
-    setCallState('completed');
-    await fetchScenarios().catch(() => undefined);
-    const transcriptLog = Array.isArray((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log)
-      ? ((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log || [])
-      : [];
-    await fetchFeedbackReport({
-      result: nextResult,
-      transcriptLog,
-      turnLogs: nextResult.turn_logs,
-    });
+      const nextResult: SessionResult = {
+        id: payload.id,
+        assignment_id: payload.assignment_id,
+        assigned_by_id: payload.assigned_by_id,
+        status: payload.status,
+        audio_url: payload.audio_url,
+        transcript: payload.transcript,
+        transcript_log: payload.transcript_log || [],
+        weighted_score: payload.weighted_score,
+        pass_fail: payload.pass_fail,
+        ai_feedback: payload.ai_feedback,
+        speech_to_text_accuracy: payload.speech_to_text_accuracy,
+        grammar_score: payload.grammar_score,
+        pronunciation_score: payload.pronunciation_score,
+        pacing_score: payload.pacing_score,
+        rate_of_speech: payload.rate_of_speech,
+        dead_air_seconds: payload.dead_air_seconds,
+        aht_actual: payload.aht_actual,
+        empathy_statements_count: payload.empathy_statements_count,
+        probing_questions_count: payload.probing_questions_count,
+        forbidden_words_count: payload.forbidden_words_count,
+        sentiment_score: payload.sentiment_score,
+        keyword_compliance: payload.keyword_compliance,
+        turn_logs: payload.turn_logs || [],
+        attempt_number: payload.attempt_number,
+        max_attempts: payload.max_attempts,
+        trainer_verdict_status: payload.trainer_verdict_status,
+        trainer_verdict_notes: payload.trainer_verdict_notes,
+        coaching_notes: payload.coaching_notes,
+        certificate_id: payload.certificate_id,
+        coaching_id: payload.coaching_id,
+        coaching_status: payload.coaching_status,
+        coaching_acknowledged_at: payload.coaching_acknowledged_at,
+        completed_at: payload.completed_at,
+      };
+      setSessionResult(nextResult);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setCallState('completed');
+      await fetchScenarios().catch(() => undefined);
+      const transcriptLog = Array.isArray((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log)
+        ? ((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log || [])
+        : [];
+      await fetchFeedbackReport({
+        result: nextResult,
+        transcriptLog,
+        turnLogs: nextResult.turn_logs,
+      });
 
-    if (payload.certificate_id) {
-      toast.success('Competency certificate is now being tracked in your certificates tab.');
+      if (payload.certificate_id) {
+        toast.success('Competency certificate is now being tracked in your certificates tab.');
+      }
+    } finally {
+      setIsEndingCall(false);
     }
-  }, [fetchFeedbackReport, fetchScenarios, sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
+  }, [fetchFeedbackReport, fetchScenarios, isEndingCall, sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
 
   const moveToStep = useCallback(
     async (stepIndex: number) => {
@@ -1262,8 +1283,11 @@ function TraineeSimFloorPageContent() {
   const startSimulation = useCallback(async (scenarioOverride?: ScenarioCard | null) => {
     const targetScenario = scenarioOverride || selectedScenario;
     const targetScenarioId = targetScenario?.id || selectedScenarioId;
+    if (isStartingCall) {
+      return;
+    }
     if (!targetScenarioId || !isAvailable) {
-      toast.error('Select a scenario and set your status to Available first.');
+      toast.error('Select an assigned scenario and keep your status Available before starting the call.');
       return;
     }
     if (targetScenario?.launch_blocked) {
@@ -1273,49 +1297,54 @@ function TraineeSimFloorPageContent() {
 
     setSelectedScenarioId(targetScenarioId);
     const token = localStorage.getItem('token');
-    const response = await fetch('/api/call-simulation/start', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ scenario_id: targetScenarioId }),
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(payload?.detail || 'Unable to start the scenario.');
+    setIsStartingCall(true);
+    try {
+      const response = await fetch('/api/call-simulation/start', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ scenario_id: targetScenarioId }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail || 'Unable to start the scenario.');
+      }
+
+      const sessionPayload = payload as SessionData;
+      const startStepIndex = Array.isArray(sessionPayload.steps)
+        ? sessionPayload.steps.findIndex((step) => step.step_number === Number(sessionPayload.current_step || 1))
+        : -1;
+
+      setSessionData(sessionPayload);
+      setSessionResult(null);
+      setLiveTranscript('');
+      setCurrentStepIndex(startStepIndex >= 0 ? startStepIndex : 0);
+      setCallTimer(0);
+      setIsMuted(false);
+      setIsOnHold(false);
+      setShowIncomingAudio(false);
+      setShowSilenceAlert(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setFeedbackReport(null);
+      silenceStartRef.current = null;
+      setCallState('ringing');
+      startRingtone(sessionPayload.ringer_audio_url);
+
+      if (targetScenario?.active_session_id) {
+        toast.info('Resuming the in-progress call from your next pending scenario turn.');
+      } else if (targetScenario?.can_retake) {
+        toast.info('Retake attempt loaded. Accept the call to begin the next scored attempt.');
+      }
+    } finally {
+      setIsStartingCall(false);
     }
-
-    const sessionPayload = payload as SessionData;
-    const startStepIndex = Array.isArray(sessionPayload.steps)
-      ? sessionPayload.steps.findIndex((step) => step.step_number === Number(sessionPayload.current_step || 1))
-      : -1;
-
-    setSessionData(sessionPayload);
-    setSessionResult(null);
-    setLiveTranscript('');
-    setCurrentStepIndex(startStepIndex >= 0 ? startStepIndex : 0);
-    setCallTimer(0);
-    setIsMuted(false);
-    setIsOnHold(false);
-    setShowIncomingAudio(false);
-    setShowSilenceAlert(false);
-    setActivePlaybackScript('');
-    setActivePlaybackSpeaker(null);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback(null);
-    setMemberTurnState('idle');
-    setFeedbackReport(null);
-    silenceStartRef.current = null;
-    setCallState('ringing');
-    startRingtone(sessionPayload.ringer_audio_url);
-
-    if (targetScenario?.active_session_id) {
-      toast.info('Resuming the in-progress call from your next pending scenario turn.');
-    } else if (targetScenario?.can_retake) {
-      toast.info('Retake attempt loaded. Accept the call to begin the next scored attempt.');
-    }
-  }, [isAvailable, selectedScenario, selectedScenarioId, startRingtone]);
+  }, [isAvailable, isStartingCall, selectedScenario, selectedScenarioId, startRingtone]);
 
   const acceptCall = useCallback(async () => {
     try {
@@ -1335,8 +1364,138 @@ function TraineeSimFloorPageContent() {
     router.push('/trainee/call-simulation');
   }, [router]);
 
+  const playQueuedMemberResponse = useCallback(async (playback: QueuedMemberPlayback) => {
+    if (!playback.script.trim() && !playback.audioUrl) {
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setShowIncomingAudio(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      return;
+    }
+
+    setIsOnHold(true);
+    setMemberTurnState('playing');
+    if (typeof playback.sourceStepIndex === 'number') {
+      setCurrentStepIndex(playback.sourceStepIndex);
+    }
+    setShowIncomingAudio(true);
+    setCallState('member-speaking');
+
+    await playPlaybackPrompt({
+      script: playback.script,
+      audioUrl: playback.audioUrl,
+      speaker: 'member',
+    });
+
+    setMemberTurnState('awaiting-resume');
+    setCallState('connected');
+  }, [playPlaybackPrompt]);
+
+  const handleTurnSubmissionResult = useCallback(async (
+    result: SimFloorTurnResult,
+    options?: { autoPlayMemberResponse?: boolean },
+  ) => {
+    setLiveTranscript(result.transcript || '');
+    toast.success(
+      result.requires_repeat
+        ? `Turn ${result.step_number} saved. Repeat the spiel before the call can continue.`
+        : `Turn ${result.step_number} saved to Call Simulation.`,
+    );
+
+    if (result.requires_repeat) {
+      const repeatPrompt = getRepeatPromptMessage(result.repeat_prompt);
+      setShowSilenceAlert(false);
+      setShowIncomingAudio(true);
+      setCallState('member-speaking');
+      toast.error(result.repeat_reason ? `${repeatPrompt} ${result.repeat_reason}` : repeatPrompt);
+      await playPlaybackPrompt({
+        script: repeatPrompt,
+        speaker: 'system',
+      });
+      silenceStartRef.current = performance.now();
+      setCallState('connected');
+      return;
+    }
+
+    if (result.is_complete || result.next_step == null) {
+      await finalizeSession();
+      return;
+    }
+
+    const nextIndex = steps.findIndex((step) => step.step_number === result.next_step);
+    const resolvedNextIndex = nextIndex >= 0 ? nextIndex : currentStepIndex + 1;
+    const nextStep = steps[resolvedNextIndex];
+    const fallbackMemberResponse = currentDialerTurn?.member_response_text?.trim() || '';
+    const queuedScript = (nextStep?.actor === 'member' ? nextStep.script : '') || fallbackMemberResponse;
+    const queuedAudioUrl = (nextStep?.actor === 'member' ? nextStep.audio_url : null) || currentDialerTurn?.member_audio_url || null;
+
+    if (nextStep?.actor === 'member' || queuedScript) {
+      const resumeIndex = nextStep?.actor === 'member'
+        ? steps.findIndex((step, index) => index > resolvedNextIndex && step.actor === 'csr')
+        : resolvedNextIndex;
+      const nextPlayback: QueuedMemberPlayback = {
+        sourceStepIndex: nextStep?.actor === 'member' ? resolvedNextIndex : null,
+        resumeStepIndex: resumeIndex >= 0 ? resumeIndex : null,
+        script: queuedScript,
+        audioUrl: queuedAudioUrl,
+        speakerLabel: nextStep?.speaker_label || memberName,
+      };
+
+      setQueuedMemberStepIndex(nextStep?.actor === 'member' ? resolvedNextIndex : null);
+      setQueuedMemberPlayback(nextPlayback);
+
+      if (options?.autoPlayMemberResponse) {
+        await playQueuedMemberResponse(nextPlayback);
+        toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
+        return;
+      }
+
+      setMemberTurnState('awaiting-hold');
+      setShowIncomingAudio(false);
+      setCallState('connected');
+      toast.info('Turn saved. Click Hold to hear the member response, then click Unhold to continue.');
+      return;
+    }
+
+    await moveToStep(resolvedNextIndex);
+  }, [
+    currentDialerTurn,
+    currentStepIndex,
+    finalizeSession,
+    memberName,
+    moveToStep,
+    playPlaybackPrompt,
+    playQueuedMemberResponse,
+    steps,
+  ]);
+
   const handleHoldToggle = useCallback(async () => {
-    if (callState === 'ringing' || isRecording || memberTurnState === 'playing') {
+    if (callState === 'ringing' || memberTurnState === 'playing') {
+      return;
+    }
+
+    if (isRecording) {
+      if (!currentStep || currentStep.actor !== 'csr') {
+        return;
+      }
+
+      stopBrowserTranscript();
+      setCallState('processing');
+
+      try {
+        const result = await stopRecording({ stepNumber: currentStep.step_number, liveTranscript });
+        if (!result) {
+          setCallState('connected');
+          return;
+        }
+
+        await handleTurnSubmissionResult(result, { autoPlayMemberResponse: true });
+      } catch (recordError) {
+        toast.error(recordError instanceof Error ? recordError.message : 'Unable to process the recording.');
+        setCallState('connected');
+      }
       return;
     }
 
@@ -1369,38 +1528,21 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    if (!queuedMemberPlayback.script.trim() && !queuedMemberPlayback.audioUrl) {
-      setQueuedMemberStepIndex(null);
-      setQueuedMemberPlayback(null);
-      setMemberTurnState('idle');
-      return;
-    }
-
-    setIsOnHold(true);
-    setMemberTurnState('playing');
-    if (typeof queuedMemberPlayback.sourceStepIndex === 'number') {
-      setCurrentStepIndex(queuedMemberPlayback.sourceStepIndex);
-    }
-    setShowIncomingAudio(true);
-    setCallState('member-speaking');
-
-    await playPlaybackPrompt({
-      script: queuedMemberPlayback.script,
-      audioUrl: queuedMemberPlayback.audioUrl,
-      speaker: 'member',
-    });
-
-    setMemberTurnState('awaiting-resume');
-    setCallState('connected');
-    toast.success('Member response delivered. Click Resume to continue to the next CSR step.');
+    await playQueuedMemberResponse(queuedMemberPlayback);
+    toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
   }, [
     callState,
+    currentStep,
     finalizeSession,
     isOnHold,
     isRecording,
+    liveTranscript,
     memberTurnState,
-    playPlaybackPrompt,
+    playQueuedMemberResponse,
     queuedMemberPlayback,
+    handleTurnSubmissionResult,
+    stopBrowserTranscript,
+    stopRecording,
   ]);
 
   const handleMicClick = useCallback(async () => {
@@ -1444,60 +1586,7 @@ function TraineeSimFloorPageContent() {
         return;
       }
 
-      setLiveTranscript(result.transcript || '');
-      toast.success(
-        result.requires_repeat
-          ? `Turn ${result.step_number} saved. Repeat the spiel before the call can continue.`
-          : `Turn ${result.step_number} saved to Call Simulation.`,
-      );
-
-      if (result.requires_repeat) {
-        const repeatPrompt = getRepeatPromptMessage(result.repeat_prompt);
-        setShowSilenceAlert(false);
-        setShowIncomingAudio(true);
-        setCallState('member-speaking');
-        toast.error(result.repeat_reason ? `${repeatPrompt} ${result.repeat_reason}` : repeatPrompt);
-        await playPlaybackPrompt({
-          script: repeatPrompt,
-          speaker: 'system',
-        });
-        silenceStartRef.current = performance.now();
-        setCallState('connected');
-        return;
-      }
-
-      if (result.is_complete || result.next_step == null) {
-        await finalizeSession();
-        return;
-      }
-
-      const nextIndex = steps.findIndex((step) => step.step_number === result.next_step);
-      const resolvedNextIndex = nextIndex >= 0 ? nextIndex : currentStepIndex + 1;
-      const nextStep = steps[resolvedNextIndex];
-      const fallbackMemberResponse = currentDialerTurn?.member_response_text?.trim() || '';
-      const queuedScript = (nextStep?.actor === 'member' ? nextStep.script : '') || fallbackMemberResponse;
-      const queuedAudioUrl = (nextStep?.actor === 'member' ? nextStep.audio_url : null) || currentDialerTurn?.member_audio_url || null;
-
-      if (nextStep?.actor === 'member' || queuedScript) {
-        const resumeIndex = nextStep?.actor === 'member'
-          ? steps.findIndex((step, index) => index > resolvedNextIndex && step.actor === 'csr')
-          : resolvedNextIndex;
-        setQueuedMemberStepIndex(nextStep?.actor === 'member' ? resolvedNextIndex : null);
-        setQueuedMemberPlayback({
-          sourceStepIndex: nextStep?.actor === 'member' ? resolvedNextIndex : null,
-          resumeStepIndex: resumeIndex >= 0 ? resumeIndex : null,
-          script: queuedScript,
-          audioUrl: queuedAudioUrl,
-          speakerLabel: nextStep?.speaker_label || memberName,
-        });
-        setMemberTurnState('awaiting-hold');
-        setShowIncomingAudio(false);
-        setCallState('connected');
-        toast.info('Turn saved. Click Hold to hear the member response, then Resume to continue.');
-        return;
-      }
-
-      await moveToStep(resolvedNextIndex);
+      await handleTurnSubmissionResult(result);
     } catch (recordError) {
       toast.error(recordError instanceof Error ? recordError.message : 'Unable to process the recording.');
       setCallState('connected');
@@ -1505,21 +1594,15 @@ function TraineeSimFloorPageContent() {
   }, [
     callState,
     currentStep,
-    currentStepIndex,
-    currentDialerTurn,
-    finalizeSession,
+    handleTurnSubmissionResult,
     isMuted,
     isOnHold,
     isRecording,
     liveTranscript,
-    memberName,
-    moveToStep,
-    playPlaybackPrompt,
     startBrowserTranscript,
-    startRecording,
-    steps,
     stopBrowserTranscript,
     stopRecording,
+    startRecording,
   ]);
 
   const handleRetake = useCallback(async () => {
@@ -1538,7 +1621,14 @@ function TraineeSimFloorPageContent() {
     }
 
     await discardCapture();
-    setSessionData({ ...sessionData, session_id: payload.id || sessionData.session_id });
+    setSessionData({
+      ...sessionData,
+      session_id: payload.id || sessionData.session_id,
+      assignment_id: payload.assignment_id ?? sessionData.assignment_id,
+      assigned_by_id: payload.assigned_by_id ?? sessionData.assigned_by_id,
+      attempt_number: payload.attempt_number ?? sessionData.attempt_number,
+      max_attempts: payload.max_attempts ?? sessionData.max_attempts,
+    });
     setSessionResult(null);
     setCurrentStepIndex(0);
     setCallTimer(0);
@@ -1717,7 +1807,7 @@ function TraineeSimFloorPageContent() {
   }, [callState, showIncomingAudio]);
 
   useEffect(() => {
-    setCapturePaused(isOnHold);
+    setCapturePaused(false);
 
     if (!sessionData?.hold_audio_url) {
       if (holdAudioRef.current) {
@@ -1900,15 +1990,15 @@ function TraineeSimFloorPageContent() {
                     <div className="mt-3 grid gap-3 lg:grid-cols-3">
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">1. Incoming call</div>
-                        <div className="mt-1">The softphone rings, shows the customer card, and waits for Accept or Hang Up.</div>
+                        <div className="mt-1">The softphone rings, shows the customer card, and waits for Accept Call or End Call.</div>
                       </div>
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">2. Turn-taking</div>
-                        <div className="mt-1">You speak on the mic, the call saves your CSR turn, then member audio or TTS plays back.</div>
+                        <div className="mt-1">You speak as the CSR, then Hold saves your turn and plays the Member AI response.</div>
                       </div>
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">3. KPI assessment</div>
-                        <div className="mt-1">Hang Up finalizes the transcript, uploads the recording, scores the module, and updates certificates or retakes.</div>
+                        <div className="mt-1">End Call finalizes the transcript, uploads the recording, scores the scenario, and updates certificates or retakes.</div>
                       </div>
                     </div>
                   </div>
@@ -2021,8 +2111,11 @@ function TraineeSimFloorPageContent() {
                           <div className="mt-1 font-medium text-slate-900">{scenario.passing_score.toFixed(0)}%</div>
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Attempts</div>
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Attempts Used</div>
                           <div className="mt-1 font-medium text-slate-900">{scenario.attempt_count}</div>
+                          {typeof scenario.max_attempts === 'number' ? (
+                            <div className="mt-1 text-xs text-slate-500">of {scenario.max_attempts} allowed</div>
+                          ) : null}
                         </div>
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Latest Score</div>
@@ -2035,6 +2128,9 @@ function TraineeSimFloorPageContent() {
                         <span>Assigned by {scenario.assigned_by_name || 'your trainer'}</span>
                         {scenario.assigned_at ? <span>Assigned {new Date(scenario.assigned_at).toLocaleString()}</span> : null}
                         {scenario.latest_completed_at ? <span>Completed {new Date(scenario.latest_completed_at).toLocaleString()}</span> : null}
+                        {typeof scenario.max_attempts === 'number' ? (
+                          <span>{scenario.max_attempts} total attempt{scenario.max_attempts === 1 ? '' : 's'} allowed</span>
+                        ) : null}
                         {scenario.can_retake ? (
                           <span className="text-amber-700">
                             {typeof scenario.remaining_attempts === 'number'
@@ -2063,10 +2159,10 @@ function TraineeSimFloorPageContent() {
                           type="button"
                           className="bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                           onClick={() => void startSimulation(scenario)}
-                          disabled={!isAvailable || Boolean(scenario.launch_blocked)}
+                          disabled={!isAvailable || Boolean(scenario.launch_blocked) || isStartingCall}
                         >
                           <Phone className="mr-2 h-4 w-4" />
-                          {getScenarioLaunchLabel(scenario)}
+                          {isStartingCall && selectedScenarioId === scenario.id ? 'Starting Call...' : getScenarioLaunchLabel(scenario)}
                         </Button>
                       </div>
                     </div>
@@ -2113,6 +2209,9 @@ function TraineeSimFloorPageContent() {
                         <span>{selectedScenario.scenario_groups_count} scenarios</span>
                         <span>{selectedScenario.steps_count} turns</span>
                         <span>Pass at {selectedScenario.passing_score.toFixed(0)}%</span>
+                        {typeof selectedScenario.max_attempts === 'number' ? (
+                          <span>{selectedScenario.max_attempts} total attempt{selectedScenario.max_attempts === 1 ? '' : 's'}</span>
+                        ) : null}
                       </div>
                     </div>
                   ) : null}
@@ -2120,10 +2219,10 @@ function TraineeSimFloorPageContent() {
                     className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                     size="lg"
                     onClick={() => void startSimulation()}
-                    disabled={!selectedScenarioId || !isAvailable || selectedScenarioStartDisabled}
+                    disabled={!selectedScenarioId || !isAvailable || selectedScenarioStartDisabled || isStartingCall}
                   >
                     <Phone className="mr-2 h-4 w-4" />
-                    {selectedScenarioLaunchLabel}
+                    {isStartingCall ? 'Starting Call...' : selectedScenarioLaunchLabel}
                   </Button>
                   <div className="text-xs text-slate-400">
                     {selectedScenarioLaunchNote}
@@ -2194,12 +2293,12 @@ function TraineeSimFloorPageContent() {
                     variant="secondary"
                     className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
                     onClick={() => void handleHoldToggle()}
-                    disabled={isRecording || callState === 'ringing' || memberTurnState === 'playing'}
+                    disabled={callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
                       <span className="text-xs font-medium">
-                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Resume' : 'Hold'}
+                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold'}
                       </span>
                     </div>
                   </Button>
@@ -2222,11 +2321,11 @@ function TraineeSimFloorPageContent() {
                     variant="destructive"
                     className="mt-auto h-20 rounded-3xl"
                     onClick={() => void finalizeSession()}
-                    disabled={isRecording || isUploadingCall}
+                    disabled={isRecording || isUploadingCall || isEndingCall || callState === 'processing'}
                   >
                     <div className="flex flex-col items-center gap-1">
                       <PhoneOff className="h-6 w-6" />
-                      <span className="text-xs font-medium">Hang Up</span>
+                      <span className="text-xs font-medium">{isEndingCall || isUploadingCall ? 'Ending...' : 'End Call'}</span>
                     </div>
                   </Button>
                 </CardContent>
@@ -2246,7 +2345,7 @@ function TraineeSimFloorPageContent() {
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
                           <div>
                             <div className="text-sm font-semibold">Member (AI) is calling...</div>
-                            <div className="text-xs">Click Accept Call to start the call module and speak the first CSR spiel.</div>
+                            <div className="text-xs">Click Accept Call to start the scenario and speak the first CSR spiel.</div>
                           </div>
                         </div>
                         <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void acceptCall()}>
@@ -2275,7 +2374,7 @@ function TraineeSimFloorPageContent() {
                           <PauseCircle className="h-5 w-5 text-sky-600" />
                           <div>
                             <div className="font-semibold">Hold Required</div>
-                            <div>Save the caller turn, click Hold, let the AI Member respond, then click Resume for the next CSR script.</div>
+                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Unhold for the next CSR script.</div>
                           </div>
                         </div>
                       </div>
@@ -2457,13 +2556,13 @@ function TraineeSimFloorPageContent() {
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                             {isOnHold
                               ? canResumeMemberTurn
-                                ? 'The member response already played on hold. Click Resume to unlock the next CSR script.'
-                                : 'The call is on hold and recording remains paused until you resume.'
+                                ? 'The member response already played on hold. Click Unhold to unlock the next CSR script.'
+                                : 'The call is on hold while the full conversation recorder continues capturing the session.'
                               : needsHoldForMemberResponse
                                 ? 'The next member response is queued. Click Hold to play it before the next CSR turn.'
                               : activePlaybackSpeaker === 'system'
                                 ? 'If the saved turn does not match the scripted spiel closely enough, Call Simulation asks for a repeat and keeps the same CSR step active.'
-                                : 'Hanging up uploads the full call, finalizes the transcript, and calculates sentiment, keyword compliance, and AHT.'}
+                                : 'Ending the call uploads the full recording, finalizes the transcript, and calculates sentiment, keyword compliance, and AHT.'}
                           </div>
                         </CardContent>
                       </Card>
@@ -2497,7 +2596,7 @@ function TraineeSimFloorPageContent() {
                 <Card className="border-slate-200 bg-white shadow-sm">
                   <CardHeader>
                     <CardTitle>Session Signals</CardTitle>
-                    <CardDescription>Realism controls that directly affect the live call module.</CardDescription>
+                    <CardDescription>Realism controls that directly affect the live call scenario.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3 text-sm">
                     <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -2866,7 +2965,7 @@ function TraineeSimFloorPageContent() {
                             <div className="text-xs text-slate-500">
                               Attempt {sessionResult.attempt_number || 1}
                               {sessionResult?.max_attempts ? ` of ${sessionResult.max_attempts}` : ''}
-                              {sessionResult?.completed_at ? ` • Completed ${new Date(sessionResult.completed_at).toLocaleString()}` : ''}
+                              {sessionResult?.completed_at ? ` - Completed ${new Date(sessionResult.completed_at).toLocaleString()}` : ''}
                             </div>
                           </>
                         ) : (

@@ -22,6 +22,10 @@ from .microlearning import (
     refresh_assignment_progress,
     serialize_assignment_summary,
 )
+from .learning_activity_overview import (
+    collect_call_simulation_rows,
+    collect_coaching_rows,
+)
 from .trainer_learning_analytics import (
     _assessment_activity_at,
     _average,
@@ -95,6 +99,9 @@ def _build_admin_ai_analysis(
     pass_rate = float(summary.get("pass_rate") or 0.0)
     average_assessment_score = float(summary.get("average_assessment_score") or 0.0)
     average_exercise_score = float(summary.get("average_exercise_score") or 0.0)
+    average_call_simulation_score = float(summary.get("average_call_simulation_score") or 0.0)
+    coaching_completion_rate = float(summary.get("coaching_completion_rate") or 0.0)
+    pending_coaching_logs = int(summary.get("pending_coaching_logs") or 0)
 
     best_trainer = max(
         trainer_rows,
@@ -139,6 +146,8 @@ def _build_admin_ai_analysis(
 
     if average_assessment_score >= average_exercise_score and average_assessment_score >= 80:
         strongest_signal = "assessment retention"
+    elif average_call_simulation_score >= max(average_assessment_score, average_exercise_score) and average_call_simulation_score >= 80:
+        strongest_signal = "call simulation execution"
     elif average_exercise_score >= 80:
         strongest_signal = "exercise execution"
     elif completion_rate >= pass_rate:
@@ -212,6 +221,10 @@ def _build_admin_ai_analysis(
             f'with average score at {float(weakest_exercise.get("average_score") or 0.0):.1f}% and completion at '
             f'{float(weakest_exercise.get("completion_rate") or 0.0):.1f}%.'
         )
+    if average_call_simulation_score >= 80:
+        exercise_performance.append(
+            f"Call Simulation delivery is healthy at {average_call_simulation_score:.1f}%, which shows stronger transfer from knowledge work into applied practice."
+        )
     if average_exercise_score >= 80:
         exercise_performance.append(
             f'Exercise performance is otherwise healthy at {average_exercise_score:.1f}%, which suggests trainees can apply the trainer-authored practice tasks.'
@@ -235,6 +248,10 @@ def _build_admin_ai_analysis(
     if pass_rate < 75:
         weak_areas.append(
             "Pass performance is below the desired benchmark, which suggests current reinforcement is not yet closing the weakest skill gaps."
+        )
+    if pending_coaching_logs > 0:
+        weak_areas.append(
+            f"{pending_coaching_logs} coaching log(s) still need acknowledgement, which leaves follow-up actions open across the current scope."
         )
     if not weak_areas:
         weak_areas.append(
@@ -271,6 +288,10 @@ def _build_admin_ai_analysis(
     if completion_rate < 70:
         recommended_actions.append(
             "Recommended action: prioritize pending learners and unfinished assignments first, because improved completion will expand the scoring sample and reduce blind spots."
+        )
+    if coaching_completion_rate < 75 and pending_coaching_logs > 0:
+        recommended_actions.append(
+            "Recommended action: tighten coaching follow-through so acknowledged logs feed directly into remediation and retake scheduling."
         )
     if pass_rate < 75:
         recommended_actions.append(
@@ -736,6 +757,38 @@ def build_admin_learning_insights(
                     }
                 )
 
+    call_simulation_bundle = collect_call_simulation_rows(
+        db,
+        trainee_lookup=trainee_lookup,
+        trainee_batch_memberships=trainee_batch_memberships,
+        trainer_lookup=trainer_lookup,
+        batch_id=batch_id,
+        trainee_id=trainee_id,
+        trainer_id=trainer_id,
+        start_at=start_at,
+        end_at=end_at,
+        completion_status=completion_status,
+        performance_level_filter=performance_level,
+    )
+    call_simulation_rows: list[dict[str, Any]] = call_simulation_bundle["rows"]
+    recent_activity.extend(call_simulation_bundle["recent_activity"])
+
+    coaching_bundle = collect_coaching_rows(
+        db,
+        trainee_lookup=trainee_lookup,
+        trainee_batch_memberships=trainee_batch_memberships,
+        trainer_lookup=trainer_lookup,
+        batch_id=batch_id,
+        trainee_id=trainee_id,
+        trainer_id=trainer_id,
+        start_at=start_at,
+        end_at=end_at,
+    )
+    coaching_rows: list[dict[str, Any]] = coaching_bundle["rows"]
+    recent_activity.extend(coaching_bundle["recent_activity"])
+    coaching_summary = coaching_bundle["summary"]
+    coaching_notes_summary = coaching_bundle["notes_summary"]
+
     module_ids_in_scope = {row["module_id"] for row in module_assignment_rows if row.get("module_id")}
     assessment_ids_in_scope = {row["assessment_id"] for row in assessment_rows if row.get("assessment_id")}
     trainer_ids_in_scope = {
@@ -753,9 +806,21 @@ def build_admin_learning_insights(
         row["assigned_by"]
         for row in assessment_rows
         if row.get("assigned_by")
+    } | {
+        row["assigned_by"]
+        for row in call_simulation_rows
+        if row.get("assigned_by")
     }
-    batch_ids_in_scope = {row["batch_id"] for row in [*module_assignment_rows, *assessment_rows] if row.get("batch_id")}
-    trainee_ids_in_scope = {row["trainee_id"] for row in [*module_assignment_rows, *assessment_rows] if row.get("trainee_id")}
+    batch_ids_in_scope = {
+        row["batch_id"]
+        for row in [*module_assignment_rows, *assessment_rows, *call_simulation_rows]
+        if row.get("batch_id")
+    }
+    trainee_ids_in_scope = {
+        row["trainee_id"]
+        for row in [*module_assignment_rows, *assessment_rows, *call_simulation_rows]
+        if row.get("trainee_id")
+    }
 
     visible_trainers = [
         trainer
@@ -869,6 +934,10 @@ def build_admin_learning_insights(
         float(row["score_percentage"])
         for row in assessment_rows
         if row["score_percentage"] is not None
+    ] + [
+        float(row["score_value"])
+        for row in call_simulation_rows
+        if row["score_value"] is not None
     ]
 
     trainee_metric_map: dict[str, dict[str, Any]] = {}
@@ -886,12 +955,19 @@ def build_admin_learning_insights(
             "trainer_names": set(),
             "module_scores": [],
             "assessment_scores": [],
+            "call_scores": [],
             "module_assigned": 0,
             "module_completed": 0,
             "module_passed": 0,
             "assessment_assigned": 0,
             "assessment_completed": 0,
             "assessment_passed": 0,
+            "call_assigned": 0,
+            "call_completed": 0,
+            "call_passed": 0,
+            "pending_coaching": 0,
+            "acknowledged_coaching": 0,
+            "retake_coaching": 0,
             "total_attempts": 0,
             "latest_activity_at": None,
         }
@@ -907,12 +983,19 @@ def build_admin_learning_insights(
                 "trainer_names": set(),
                 "module_scores": [],
                 "assessment_scores": [],
+                "call_scores": [],
                 "module_assigned": 0,
                 "module_completed": 0,
                 "module_passed": 0,
                 "assessment_assigned": 0,
                 "assessment_completed": 0,
                 "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
+                "retake_coaching": 0,
                 "total_attempts": 0,
                 "latest_activity_at": None,
             },
@@ -945,12 +1028,19 @@ def build_admin_learning_insights(
                 "trainer_names": set(),
                 "module_scores": [],
                 "assessment_scores": [],
+                "call_scores": [],
                 "module_assigned": 0,
                 "module_completed": 0,
                 "module_passed": 0,
                 "assessment_assigned": 0,
                 "assessment_completed": 0,
                 "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
+                "retake_coaching": 0,
                 "total_attempts": 0,
                 "latest_activity_at": None,
             },
@@ -969,12 +1059,72 @@ def build_admin_learning_insights(
             if row["is_passed"]:
                 metrics["assessment_passed"] += 1
 
+    for row in call_simulation_rows:
+        metrics = trainee_metric_map.setdefault(
+            row["trainee_id"],
+            {
+                "trainee_id": row["trainee_id"],
+                "trainee_name": row["trainee_name"],
+                "batch_id": row["batch_id"],
+                "batch_label": row["batch_label"],
+                "trainer_names": set(),
+                "module_scores": [],
+                "assessment_scores": [],
+                "call_scores": [],
+                "module_assigned": 0,
+                "module_completed": 0,
+                "module_passed": 0,
+                "assessment_assigned": 0,
+                "assessment_completed": 0,
+                "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
+                "retake_coaching": 0,
+                "total_attempts": 0,
+                "latest_activity_at": None,
+            },
+        )
+        if row.get("assigned_by_name"):
+            metrics["trainer_names"].add(row["assigned_by_name"])
+        metrics["call_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_count"] or 0), 0)
+        if row["activity_at"] and (
+            metrics["latest_activity_at"] is None or str(row["activity_at"]) > str(metrics["latest_activity_at"])
+        ):
+            metrics["latest_activity_at"] = row["activity_at"]
+        if row["score_value"] is not None:
+            metrics["call_scores"].append(float(row["score_value"] or 0.0))
+        if row["completion_status"] == "completed":
+            metrics["call_completed"] += 1
+        if row["is_passed"]:
+            metrics["call_passed"] += 1
+
+    for row in coaching_rows:
+        metrics = trainee_metric_map.get(row["trainee_id"])
+        if not metrics:
+            continue
+        if row.get("trainer_name"):
+            metrics["trainer_names"].add(row["trainer_name"])
+        if row["status"] == "sent":
+            metrics["pending_coaching"] += 1
+        if row["status"] == "acknowledged":
+            metrics["acknowledged_coaching"] += 1
+        if row["competency_status"] == "not_competent":
+            metrics["retake_coaching"] += 1
+        if row["activity_at"] and (
+            metrics["latest_activity_at"] is None or str(row["activity_at"]) > str(metrics["latest_activity_at"])
+        ):
+            metrics["latest_activity_at"] = row["activity_at"]
+
     trainee_ranking = []
     for metrics in trainee_metric_map.values():
-        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"]
-        total_completed = metrics["module_completed"] + metrics["assessment_completed"]
-        total_passed = metrics["module_passed"] + metrics["assessment_passed"]
-        overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"])
+        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"] + metrics["call_assigned"]
+        total_completed = metrics["module_completed"] + metrics["assessment_completed"] + metrics["call_completed"]
+        total_passed = metrics["module_passed"] + metrics["assessment_passed"] + metrics["call_passed"]
+        overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])
         completion_rate = round((total_completed / total_assigned) * 100.0, 2) if total_assigned else 0.0
         pass_rate = round((total_passed / total_completed) * 100.0, 2) if total_completed else 0.0
         trainee_ranking.append(
@@ -988,11 +1138,18 @@ def build_admin_learning_insights(
                 "performance_level": _performance_level(overall_score),
                 "average_exercise_score": _average(metrics["module_scores"]),
                 "average_assessment_score": _average(metrics["assessment_scores"]),
+                "average_call_simulation_score": _average(metrics["call_scores"]),
                 "module_completion_rate": round(
                     (metrics["module_completed"] / metrics["module_assigned"]) * 100.0,
                     2,
                 )
                 if metrics["module_assigned"]
+                else 0.0,
+                "call_simulation_completion_rate": round(
+                    (metrics["call_completed"] / metrics["call_assigned"]) * 100.0,
+                    2,
+                )
+                if metrics["call_assigned"]
                 else 0.0,
                 "completion_rate": completion_rate,
                 "pass_rate": pass_rate,
@@ -1000,6 +1157,12 @@ def build_admin_learning_insights(
                 "module_completed": metrics["module_completed"],
                 "assessment_assigned": metrics["assessment_assigned"],
                 "assessment_completed": metrics["assessment_completed"],
+                "call_simulation_assigned": metrics["call_assigned"],
+                "call_simulation_completed": metrics["call_completed"],
+                "call_simulation_passed": metrics["call_passed"],
+                "pending_coaching": metrics["pending_coaching"],
+                "acknowledged_coaching": metrics["acknowledged_coaching"],
+                "retake_coaching": metrics["retake_coaching"],
                 "total_attempts": metrics["total_attempts"],
                 "latest_activity_at": metrics["latest_activity_at"],
             }
@@ -1011,6 +1174,9 @@ def build_admin_learning_insights(
         if (
             row["module_assigned"] > 0
             or row["assessment_assigned"] > 0
+            or row["call_simulation_assigned"] > 0
+            or row["pending_coaching"] > 0
+            or row["acknowledged_coaching"] > 0
             or row["latest_activity_at"] is not None
         )
     ]
@@ -1037,12 +1203,16 @@ def build_admin_learning_insights(
             },
             "module_scores": [],
             "assessment_scores": [],
+            "call_scores": [],
             "module_assigned": 0,
             "module_completed": 0,
             "module_passed": 0,
             "assessment_assigned": 0,
             "assessment_completed": 0,
             "assessment_passed": 0,
+            "call_assigned": 0,
+            "call_completed": 0,
+            "call_passed": 0,
             "total_attempts": 0,
         }
 
@@ -1073,11 +1243,25 @@ def build_admin_learning_insights(
             if row["is_passed"]:
                 metrics["assessment_passed"] += 1
 
+    for row in call_simulation_rows:
+        current_batch_id = _normalize_text(row.get("batch_id"))
+        if current_batch_id not in batch_metric_map:
+            continue
+        metrics = batch_metric_map[current_batch_id]
+        metrics["call_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_count"] or 0), 0)
+        if row["score_value"] is not None:
+            metrics["call_scores"].append(float(row["score_value"] or 0.0))
+        if row["completion_status"] == "completed":
+            metrics["call_completed"] += 1
+        if row["is_passed"]:
+            metrics["call_passed"] += 1
+
     batch_comparison = []
     for metrics in batch_metric_map.values():
-        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"]
-        total_completed = metrics["module_completed"] + metrics["assessment_completed"]
-        total_passed = metrics["module_passed"] + metrics["assessment_passed"]
+        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"] + metrics["call_assigned"]
+        total_completed = metrics["module_completed"] + metrics["assessment_completed"] + metrics["call_completed"]
+        total_passed = metrics["module_passed"] + metrics["assessment_passed"] + metrics["call_passed"]
         batch_comparison.append(
             {
                 "batch_id": metrics["batch_id"],
@@ -1095,8 +1279,9 @@ def build_admin_learning_insights(
                 else 0.0,
                 "average_exercise_score": _average(metrics["module_scores"]),
                 "average_assessment_score": _average(metrics["assessment_scores"]),
-                "overall_score": _average(metrics["module_scores"] + metrics["assessment_scores"]),
-                "performance_level": _performance_level(_average(metrics["module_scores"] + metrics["assessment_scores"])),
+                "average_call_simulation_score": _average(metrics["call_scores"]),
+                "overall_score": _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"]),
+                "performance_level": _performance_level(_average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])),
                 "total_attempts": metrics["total_attempts"],
             }
         )
@@ -1123,12 +1308,18 @@ def build_admin_learning_insights(
             },
             "module_scores": [],
             "assessment_scores": [],
+            "call_scores": [],
             "module_assigned": 0,
             "module_completed": 0,
             "module_passed": 0,
             "assessment_assigned": 0,
             "assessment_completed": 0,
             "assessment_passed": 0,
+            "call_assigned": 0,
+            "call_completed": 0,
+            "call_passed": 0,
+            "pending_coaching": 0,
+            "acknowledged_coaching": 0,
             "certificate_ids": set(),
             "total_attempts": 0,
         }
@@ -1146,12 +1337,18 @@ def build_admin_learning_insights(
                 "created_module_ids": set(),
                 "module_scores": [],
                 "assessment_scores": [],
+                "call_scores": [],
                 "module_assigned": 0,
                 "module_completed": 0,
                 "module_passed": 0,
                 "assessment_assigned": 0,
                 "assessment_completed": 0,
                 "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
                 "certificate_ids": set(),
                 "total_attempts": 0,
             }
@@ -1185,12 +1382,18 @@ def build_admin_learning_insights(
                 "created_module_ids": set(),
                 "module_scores": [],
                 "assessment_scores": [],
+                "call_scores": [],
                 "module_assigned": 0,
                 "module_completed": 0,
                 "module_passed": 0,
                 "assessment_assigned": 0,
                 "assessment_completed": 0,
                 "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
                 "certificate_ids": set(),
                 "total_attempts": 0,
             }
@@ -1203,16 +1406,70 @@ def build_admin_learning_insights(
         if row["score_percentage"] is not None:
             metrics["assessment_completed"] += 1
             metrics["assessment_scores"].append(float(row["score_percentage"] or 0.0))
-            if row["is_passed"]:
-                metrics["assessment_passed"] += 1
+        if row["is_passed"]:
+            metrics["assessment_passed"] += 1
         if row.get("certificate_id"):
             metrics["certificate_ids"].add(row["certificate_id"])
 
+    for row in call_simulation_rows:
+        current_trainer_id = row.get("assigned_by")
+        if current_trainer_id not in trainer_metric_map:
+            if not current_trainer_id or current_trainer_id not in trainer_lookup:
+                continue
+            trainer_metric_map[current_trainer_id] = {
+                "trainer_id": current_trainer_id,
+                "trainer_name": trainer_lookup[current_trainer_id].full_name,
+                "trainee_ids": set(),
+                "batch_ids": set(),
+                "created_module_ids": set(),
+                "module_scores": [],
+                "assessment_scores": [],
+                "call_scores": [],
+                "module_assigned": 0,
+                "module_completed": 0,
+                "module_passed": 0,
+                "assessment_assigned": 0,
+                "assessment_completed": 0,
+                "assessment_passed": 0,
+                "call_assigned": 0,
+                "call_completed": 0,
+                "call_passed": 0,
+                "pending_coaching": 0,
+                "acknowledged_coaching": 0,
+                "certificate_ids": set(),
+                "total_attempts": 0,
+            }
+        metrics = trainer_metric_map[current_trainer_id]
+        metrics["trainee_ids"].add(row["trainee_id"])
+        if row.get("batch_id"):
+            metrics["batch_ids"].add(row["batch_id"])
+        metrics["call_assigned"] += 1
+        metrics["total_attempts"] += max(int(row["attempt_count"] or 0), 0)
+        if row["score_value"] is not None:
+            metrics["call_scores"].append(float(row["score_value"] or 0.0))
+        if row["completion_status"] == "completed":
+            metrics["call_completed"] += 1
+        if row["is_passed"]:
+            metrics["call_passed"] += 1
+        if row.get("certificate_id"):
+            metrics["certificate_ids"].add(row["certificate_id"])
+
+    for row in coaching_rows:
+        current_trainer_id = row.get("trainer_id")
+        if not current_trainer_id or current_trainer_id not in trainer_metric_map:
+            continue
+        metrics = trainer_metric_map[current_trainer_id]
+        if row["status"] == "sent":
+            metrics["pending_coaching"] += 1
+        if row["status"] == "acknowledged":
+            metrics["acknowledged_coaching"] += 1
+
     trainer_comparison = []
     for metrics in trainer_metric_map.values():
-        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"]
-        total_completed = metrics["module_completed"] + metrics["assessment_completed"]
-        total_passed = metrics["module_passed"] + metrics["assessment_passed"]
+        total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"] + metrics["call_assigned"]
+        total_completed = metrics["module_completed"] + metrics["assessment_completed"] + metrics["call_completed"]
+        total_passed = metrics["module_passed"] + metrics["assessment_passed"] + metrics["call_passed"]
+        overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])
         trainer_comparison.append(
             {
                 "trainer_id": metrics["trainer_id"],
@@ -1230,10 +1487,19 @@ def build_admin_learning_insights(
                 else 0.0,
                 "average_exercise_score": _average(metrics["module_scores"]),
                 "average_assessment_score": _average(metrics["assessment_scores"]),
-                "overall_score": _average(metrics["module_scores"] + metrics["assessment_scores"]),
-                "performance_level": _performance_level(_average(metrics["module_scores"] + metrics["assessment_scores"])),
+                "average_call_simulation_score": _average(metrics["call_scores"]),
+                "overall_score": overall_score,
+                "performance_level": _performance_level(overall_score),
                 "certificates_issued": len(metrics["certificate_ids"]),
                 "total_attempts": metrics["total_attempts"],
+                "pending_coaching": metrics["pending_coaching"],
+                "acknowledged_coaching": metrics["acknowledged_coaching"],
+                "coaching_completion_rate": round(
+                    (metrics["acknowledged_coaching"] / (metrics["acknowledged_coaching"] + metrics["pending_coaching"])) * 100.0,
+                    2,
+                )
+                if (metrics["acknowledged_coaching"] + metrics["pending_coaching"])
+                else 0.0,
             }
         )
     trainer_comparison.sort(
@@ -1501,12 +1767,49 @@ def build_admin_learning_insights(
         if float(row["overall_score"] or 0.0) < 75.0
         or float(row["completion_rate"] or 0.0) < 65.0
         or float(row["pass_rate"] or 0.0) < 70.0
+        or int(row["pending_coaching"] or 0) > 0
+        or int(row["retake_coaching"] or 0) > 0
+        or (
+            int(row["call_simulation_completed"] or 0) > 0
+            and int(row["call_simulation_passed"] or 0) < int(row["call_simulation_completed"] or 0)
+        )
     ]
     trainees_needing_improvement.sort(
         key=lambda row: (
             float(row["overall_score"] or 0.0),
             float(row["completion_rate"] or 0.0),
             row["trainee_name"].lower(),
+        )
+    )
+
+    at_risk_trainers = [
+        row
+        for row in trainer_comparison
+        if float(row["overall_score"] or 0.0) < 75.0
+        or float(row["completion_rate"] or 0.0) < 65.0
+        or float(row["pass_rate"] or 0.0) < 70.0
+        or int(row.get("pending_coaching") or 0) > 0
+    ]
+    at_risk_trainers.sort(
+        key=lambda row: (
+            float(row["overall_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["trainer_name"].lower(),
+        )
+    )
+
+    at_risk_batches = [
+        row
+        for row in batch_comparison
+        if float(row["overall_score"] or 0.0) < 75.0
+        or float(row["completion_rate"] or 0.0) < 65.0
+        or float(row["pass_rate"] or 0.0) < 70.0
+    ]
+    at_risk_batches.sort(
+        key=lambda row: (
+            float(row["overall_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["batch_label"].lower(),
         )
     )
 
@@ -1517,16 +1820,20 @@ def build_admin_learning_insights(
     assessment_completed_count = sum(1 for row in assessment_rows if row["score_percentage"] is not None)
     assessment_pending_count = len(assessment_rows) - assessment_completed_count
     assessment_passed_count = sum(1 for row in assessment_rows if row["is_passed"])
+    call_simulation_completed_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "completed")
+    call_simulation_pending_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "pending")
+    call_simulation_in_progress_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "in_progress")
+    call_simulation_passed_count = sum(1 for row in call_simulation_rows if row["is_passed"])
 
-    total_assigned_items = len(module_assignment_rows) + len(assessment_rows)
-    total_completed_items = module_completed_count + assessment_completed_count
-    total_passed_items = module_passed_count + assessment_passed_count
+    total_assigned_items = len(module_assignment_rows) + len(assessment_rows) + len(call_simulation_rows)
+    total_completed_items = module_completed_count + assessment_completed_count + call_simulation_completed_count
+    total_passed_items = module_passed_count + assessment_passed_count + call_simulation_passed_count
     overall_score = _average(all_scores)
 
     completion_breakdown = [
-        {"label": "Pending", "count": module_pending_count + assessment_pending_count},
-        {"label": "In Progress", "count": module_in_progress_count},
-        {"label": "Completed", "count": module_completed_count + assessment_completed_count},
+        {"label": "Pending", "count": module_pending_count + assessment_pending_count + call_simulation_pending_count},
+        {"label": "In Progress", "count": module_in_progress_count + call_simulation_in_progress_count},
+        {"label": "Completed", "count": module_completed_count + assessment_completed_count + call_simulation_completed_count},
     ]
     performance_breakdown = []
     for level in ["excellent", "healthy", "developing", "at_risk"]:
@@ -1545,11 +1852,15 @@ def build_admin_learning_insights(
         "trainer_created_modules": len(module_ids_in_scope),
         "assigned_module_records": len(module_assignment_rows),
         "assigned_assessment_records": len(assessment_rows),
+        "assigned_call_simulation_records": len(call_simulation_rows),
         "completed_modules": module_completed_count,
         "in_progress_modules": module_in_progress_count,
         "pending_modules": module_pending_count,
         "completed_assessments": assessment_completed_count,
         "pending_assessments": assessment_pending_count,
+        "completed_call_simulations": call_simulation_completed_count,
+        "pending_call_simulations": call_simulation_pending_count,
+        "in_progress_call_simulations": call_simulation_in_progress_count,
         "completion_rate": round((total_completed_items / total_assigned_items) * 100.0, 2)
         if total_assigned_items
         else 0.0,
@@ -1559,25 +1870,47 @@ def build_admin_learning_insights(
         "average_exercise_score": _average(
             [float(row["score_value"]) for row in module_assignment_rows if row["score_value"] is not None]
         ),
+        "average_call_simulation_score": _average(
+            [float(row["score_value"]) for row in call_simulation_rows if row["score_value"] is not None]
+        ),
         "overall_score": overall_score,
         "pass_rate": round((total_passed_items / total_completed_items) * 100.0, 2)
         if total_completed_items
+        else 0.0,
+        "call_simulation_pass_rate": round(
+            (call_simulation_passed_count / call_simulation_completed_count) * 100.0,
+            2,
+        )
+        if call_simulation_completed_count
         else 0.0,
         "total_attempts": sum(max(int(row["attempt_number"] or 0), 0) for row in module_assignment_rows)
         + sum(max(int(row["attempt_count"] or 0), 0) for row in assessment_rows),
         "passed_modules": module_passed_count,
         "passed_assessments": assessment_passed_count,
+        "passed_call_simulations": call_simulation_passed_count,
+        "active_trainees": sum(
+            1
+            for row in trainee_ranking
+            if row["latest_activity_at"] is not None
+        ),
+        "published_coaching_logs": int(coaching_summary.get("published_logs") or 0),
+        "pending_coaching_logs": int(coaching_summary.get("pending_logs") or 0),
+        "acknowledged_coaching_logs": int(coaching_summary.get("acknowledged_logs") or 0),
+        "coaching_completion_rate": float(coaching_summary.get("completion_rate") or 0.0),
+        "intervention_needed_count": len(trainees_needing_improvement),
         "certificates_issued": len(
             {
                 certificate_id
                 for certificate_id in [
                     *[row.get("certificate_id") for row in module_assignment_rows],
                     *[row.get("certificate_id") for row in assessment_rows],
+                    *[row.get("certificate_id") for row in call_simulation_rows],
                 ]
                 if certificate_id
             }
         ),
     }
+    summary["total_attempts"] += sum(max(int(row["attempt_count"] or 0), 0) for row in call_simulation_rows)
 
     recent_activity.sort(
         key=lambda row: _normalize_text(row.get("activity_at")),
@@ -1632,24 +1965,10 @@ def build_admin_learning_insights(
         "performance_breakdown": performance_breakdown,
         "trainer_comparison": trainer_comparison,
         "top_trainers": trainer_comparison[:5],
-        "at_risk_trainers": sorted(
-            trainer_comparison,
-            key=lambda row: (
-                float(row["overall_score"] or 0.0),
-                float(row["completion_rate"] or 0.0),
-                row["trainer_name"].lower(),
-            ),
-        )[:5],
+        "at_risk_trainers": at_risk_trainers[:5],
         "batch_comparison": batch_comparison,
         "top_batches": batch_comparison[:5],
-        "at_risk_batches": sorted(
-            batch_comparison,
-            key=lambda row: (
-                float(row["overall_score"] or 0.0),
-                float(row["completion_rate"] or 0.0),
-                row["batch_label"].lower(),
-            ),
-        )[:5],
+        "at_risk_batches": at_risk_batches[:5],
         "trainee_ranking": trainee_ranking[:20],
         "score_distribution": _build_score_distribution(all_scores),
         "module_progress": sorted(
@@ -1665,6 +1984,15 @@ def build_admin_learning_insights(
         "assessment_performance": assessment_performance[:20],
         "weakest_assessment_areas": weakest_assessment_areas[:8],
         "exercise_performance": exercise_performance[:20],
+        "call_simulation_performance": call_simulation_bundle["scenario_performance"],
+        "call_simulation_kpi_breakdown": call_simulation_bundle["kpi_breakdown"],
+        "call_simulation_results": sorted(
+            call_simulation_rows,
+            key=lambda row: _normalize_text(row.get("activity_at")),
+            reverse=True,
+        )[:80],
+        "coaching_summary": coaching_summary,
+        "coaching_notes_summary": coaching_notes_summary,
         "trainees_needing_improvement": trainees_needing_improvement[:12],
         "recent_activity": recent_activity[:16],
         "module_assignments": sorted(

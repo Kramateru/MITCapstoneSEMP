@@ -121,6 +121,7 @@ function formatTotalScore(
 
 export function AssessmentPlayer({
   assessment,
+  displayMode = 'overview',
   onSubmitAssessment,
   onAttemptCommitted,
   onViewCertificates,
@@ -128,6 +129,7 @@ export function AssessmentPlayer({
   onModeChange,
 }: {
   assessment: TraineeAssessmentSession | null
+  displayMode?: 'overview' | 'review'
   onSubmitAssessment: (payload: {
     assignmentId: string
     assessmentId: string
@@ -165,17 +167,23 @@ export function AssessmentPlayer({
   const progressValue = totalQuestions > 0 ? Number(((answeredCount / totalQuestions) * 100).toFixed(2)) : 0
   const currentQuestion = assessment?.questions[currentQuestionIndex] || null
   const timeLimitSeconds = assessment?.timeLimitMinutes ? assessment.timeLimitMinutes * 60 : null
-
   useEffect(() => {
-    setMode('overview')
+    const nextSubmission = displayMode === 'review' && assessment?.latestAttempt
+      ? {
+          attempt: assessment.latestAttempt,
+          certificate: assessment.certificate ?? null,
+        }
+      : null
+
+    setMode(nextSubmission ? 'submitted' : 'overview')
     setCurrentQuestionIndex(0)
     setAnswers({})
     setSubmitting(false)
     setStartedAtMs(null)
     setRemainingSeconds(timeLimitSeconds)
-    setSubmission(null)
+    setSubmission(nextSubmission)
     setConfirmSubmitOpen(false)
-  }, [assessment?.assignmentId, timeLimitSeconds])
+  }, [assessment?.assignmentId, assessment?.certificate?.id, assessment?.latestAttempt?.id, displayMode, timeLimitSeconds])
 
   useEffect(() => {
     onModeChange?.(mode)
@@ -202,7 +210,7 @@ export function AssessmentPlayer({
       return
     }
 
-    if (!assessment.canRetake && (assessment.isCompleted || assessment.attemptsRemaining === 0)) {
+    if (assessment.canStart === false || (!assessment.canRetake && (assessment.isCompleted || assessment.attemptsRemaining === 0))) {
       toast.error('This assigned assessment is already locked.')
       return
     }
@@ -304,11 +312,16 @@ export function AssessmentPlayer({
   }
 
   const latestAttempt = submission?.attempt || assessment?.latestAttempt || null
+  const hasSavedReview = Boolean(latestAttempt?.questionResults?.length)
   const correctAnswers = latestAttempt?.correctAnswers ?? latestAttempt?.questionResults.filter((result) => result.isCorrect).length ?? 0
   const incorrectAnswers = latestAttempt?.incorrectAnswers ?? latestAttempt?.questionResults.filter((result) => !result.isCorrect).length ?? 0
   const remainingAttempts = submission?.attempt.attemptsRemaining ?? assessment?.attemptsRemaining ?? null
   const passingScore = submission?.attempt.passingScore ?? assessment?.passingScore ?? 0
-  const hasAttemptsAvailable = assessment?.attemptsRemaining === null || typeof assessment?.attemptsRemaining === 'undefined' || assessment.attemptsRemaining > 0
+  const canStartAssessment = assessment?.canStart ?? (
+    assessment?.attemptsRemaining === null
+      || typeof assessment?.attemptsRemaining === 'undefined'
+      || assessment.attemptsRemaining > 0
+  )
   const canRetakeAfterSubmission = Boolean(
     submission
       && submission.attempt.status === 'fail'
@@ -336,7 +349,7 @@ export function AssessmentPlayer({
     )
   }
 
-  if (!assessment.questions.length) {
+  if (!assessment.questions.length && !hasSavedReview) {
     return (
       <Card className="border-dashed">
         <CardHeader>
@@ -413,7 +426,7 @@ export function AssessmentPlayer({
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-3">
-                  {!assessment.isCompleted && hasAttemptsAvailable ? (
+                  {canStartAssessment && !assessment.isCompleted ? (
                     <Button type="button" onClick={handleStartAssessment}>
                       {assessment.canRetake ? <RotateCcw className="size-4" /> : <PlayCircle className="size-4" />}
                       {assessment.canRetake ? 'Start Retake' : 'Start Assessment'}

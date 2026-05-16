@@ -18,13 +18,14 @@ import {
 import { LogOut, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 interface SidebarItem {
   label: string;
   icon: React.ReactNode;
   href: string;
   badge?: number;
+  section?: string;
 }
 
 export function DashboardLayout({
@@ -51,6 +52,21 @@ export function DashboardLayout({
   const isMinifiedSidebar = dashboardSettings.minifyNavigation && !isTopNavigation;
   const isHiddenSidebar = dashboardSettings.hideNavigation && !isTopNavigation;
   const desktopMenuEnabled = isHiddenSidebar;
+  const roleLabelMap = {
+    trainee: 'Trainee Workspace',
+    trainer: 'Trainer Workspace',
+    admin: 'Admin Console',
+  } as const;
+  const roleDescriptionMap = {
+    trainee: 'Assigned lessons, assessments, call practice, and coaching in one place.',
+    trainer: 'Monitor trainee performance, batch health, and coaching follow-through.',
+    admin: 'Oversee platform activity, training operations, and system readiness.',
+  } as const;
+  const roleWorkspaceHintMap = {
+    trainee: 'Stay on top of your modules, mock calls, and coaching tasks.',
+    trainer: 'Manage learning flow, reviews, and follow-up across your trainees.',
+    admin: 'Track system readiness, learning delivery, and organization-wide signals.',
+  } as const;
   const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-7xl xl:max-w-[1500px]' : 'max-w-none';
   const contentOuterSpacingClass = dashboardSettings.boxedLayout
     ? 'px-3 py-3 sm:px-5 sm:py-5 lg:px-7 lg:py-7 xl:px-8 xl:py-8'
@@ -215,6 +231,21 @@ export function DashboardLayout({
     ...item,
     badge: sidebarBadgeMap[item.href] ?? item.badge,
   }));
+  const groupedSidebarItems = useMemo(() => {
+    const groups = new Map<string, typeof resolvedSidebarItems>();
+
+    resolvedSidebarItems.forEach((item) => {
+      const section = item.section || 'Workspace';
+      const items = groups.get(section);
+      if (items) {
+        items.push(item);
+      } else {
+        groups.set(section, [item]);
+      }
+    });
+
+    return Array.from(groups.entries()).map(([section, items]) => ({ section, items }));
+  }, [resolvedSidebarItems]);
   const isActivePath = useMemo(
     () => (href: string) => pathname === href || pathname.startsWith(`${href}/`),
     [pathname],
@@ -260,7 +291,7 @@ export function DashboardLayout({
         className="absolute inset-0"
         style={{
           backgroundImage:
-            'linear-gradient(180deg, #fcfdff 0%, var(--background) 34%, #eef2f6 100%)',
+            'radial-gradient(circle at top right, rgba(29,86,216,0.11), transparent 26%), radial-gradient(circle at bottom left, rgba(17,144,111,0.07), transparent 24%), linear-gradient(180deg, #fbfdff 0%, var(--background) 36%, #eef3f9 100%)',
         }}
       />
       <Toaster position="top-right" richColors />
@@ -275,15 +306,19 @@ export function DashboardLayout({
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] border-r border-sidebar-border bg-white/94 text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[17rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[18rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={{
+          backgroundImage:
+            'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)), radial-gradient(circle at top, rgba(59,130,246,0.18), transparent 22%)',
+        }}
       >
         <div className="h-full flex flex-col">
           {/* Logo Section */}
           <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6">
             <div className={`flex items-center gap-3 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-card ring-1 ring-border shadow-sm">
+              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-white/92 ring-1 ring-white/15 shadow-sm">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
@@ -291,42 +326,62 @@ export function DashboardLayout({
                 />
               </div>
               <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
-                <h1 className="text-base font-bold text-sidebar-foreground">Speech-Enabled BPO Platform</h1>
-                <p className="text-xs leading-5 text-muted-foreground capitalize">St. Peter Velle - {resolvedUserRole}</p>
+                <h1 className="text-[0.98rem] font-bold text-white">Speech-Enabled BPO Platform</h1>
+                <p className="mt-1 text-xs leading-5 text-sidebar-foreground/72">St. Peter Velle Technical Training Center</p>
+                <div className="mt-3 inline-flex rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/88">
+                  {roleLabelMap[resolvedUserRole]}
+                </div>
+                <p className="mt-3 max-w-[15rem] text-xs leading-5 text-sidebar-foreground/68">
+                  {roleWorkspaceHintMap[resolvedUserRole]}
+                </p>
               </div>
             </div>
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 space-y-2 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
-            {resolvedSidebarItems.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                prefetch={true}
-                onClick={handleSidebarLinkClick}
-                className={`flex items-center gap-3 rounded-2xl px-4 py-3.5 transition-[background-color,color,transform,box-shadow] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
-                  isActivePath(item.href)
-                    ? 'bg-sidebar-primary text-sidebar-primary-foreground font-medium shadow-sm'
-                    : 'text-sidebar-foreground/85 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                }`}
-              >
-                {item.icon}
-                <span className={`flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
-                  {item.badge && !isMinifiedSidebar ? (
-                    <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
-                      {item.badge}
-                    </Badge>
-                  ) : null}
-              </Link>
+          <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
+            {groupedSidebarItems.map((group) => (
+              <div key={group.section} className="space-y-2">
+                {!isMinifiedSidebar ? (
+                  <div className="px-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/50">
+                    {group.section}
+                  </div>
+                ) : null}
+                {group.items.map((item) => (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    prefetch={true}
+                    onClick={handleSidebarLinkClick}
+                    className={`group relative flex items-center gap-3 rounded-2xl px-4 py-3 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
+                      isActivePath(item.href)
+                        ? 'border border-white/10 bg-white/11 text-white font-medium shadow-[0_18px_34px_-24px_rgba(0,0,0,0.55)] ring-1 ring-white/10'
+                        : 'border border-transparent text-sidebar-foreground/82 hover:border-white/6 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                    }`}
+                  >
+                    {isActivePath(item.href) ? (
+                      <span className="absolute left-1 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-white/80" />
+                    ) : null}
+                    <span className={isActivePath(item.href) ? 'text-white' : 'text-sidebar-foreground/82'}>
+                      {item.icon}
+                    </span>
+                    <span className={`flex-1 text-sm ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
+                    {item.badge && !isMinifiedSidebar ? (
+                      <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
+                        {item.badge}
+                      </Badge>
+                    ) : null}
+                  </Link>
+                ))}
+              </div>
             ))}
           </nav>
 
           {/* Logout Button */}
-          <div className="p-4 border-t border-sidebar-border">
+          <div className="border-t border-sidebar-border p-4">
             <button
               onClick={handleLogout}
-              className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sidebar-foreground/85 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              className="flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3 text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <LogOut size={20} />
               <span>Logout</span>
@@ -338,27 +393,42 @@ export function DashboardLayout({
       {/* Main Content */}
       <div className="relative z-10 flex-1 flex flex-col min-w-0">
         {/* Top Navigation Bar */}
-        <header className={`flex items-center justify-between gap-3 border-b border-border bg-white/92 px-3 py-3 shadow-sm backdrop-blur sm:px-5 sm:py-4 lg:px-6 ${
+        <header className={`workspace-topbar flex items-center justify-between gap-3 border-b border-border/80 px-3 py-3 shadow-sm sm:px-5 sm:py-4 lg:px-6 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen((prev) => !prev)}
-            className={`inline-flex items-center justify-center rounded-lg border border-border bg-background p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${
-              desktopMenuEnabled ? 'lg:inline-flex' : 'lg:hidden'
-            }`}
-            aria-label={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
-            title={sidebarOpen ? 'Close menu' : 'Open menu'}
-          >
-            {sidebarOpen ? <X size={24} /> : <Menu size={24} />}
-          </button>
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen((prev) => !prev)}
+              className={`inline-flex items-center justify-center rounded-xl border border-border bg-background p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${
+                desktopMenuEnabled ? 'lg:inline-flex' : 'lg:hidden'
+              }`}
+              aria-label={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              title={sidebarOpen ? 'Close menu' : 'Open menu'}
+            >
+              {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
+            </button>
 
-          <h1 className="hidden text-lg font-bold text-foreground lg:block xl:text-xl">
-            {currentPageLabel}
-          </h1>
+            <div className="min-w-0">
+              <div className="hidden items-center gap-2 md:flex">
+                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-primary">
+                  {roleLabelMap[resolvedUserRole]}
+                </span>
+                <Badge variant="info" className="text-[0.7rem]">
+                  Live Workspace
+                </Badge>
+              </div>
+              <h1 className="truncate text-lg font-bold text-foreground lg:text-xl">
+                {currentPageLabel}
+              </h1>
+              <p className="hidden text-xs text-muted-foreground md:block">
+                {roleDescriptionMap[resolvedUserRole]}
+              </p>
+            </div>
+          </div>
 
           {/* Right Section */}
-          <div className="flex items-center gap-3 sm:gap-4 lg:gap-6">
+          <div className="flex items-center gap-3 rounded-2xl border border-border/70 bg-white/72 px-3 py-2 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:gap-4 lg:gap-5">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>
@@ -376,7 +446,7 @@ export function DashboardLayout({
                       className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
                         isActivePath(item.href)
                           ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
                       }`}
                     >
                       {item.icon}
@@ -398,8 +468,7 @@ export function DashboardLayout({
         <main className="flex-1 overflow-auto">
           <div className={`dashboard-page mx-auto w-full ${contentOuterSpacingClass} ${contentWidthClass}`}>
             <div
-              className={`rounded-[1.35rem] sm:rounded-[1.55rem] lg:rounded-[1.75rem] border border-border/80 bg-card/98 text-card-foreground ${contentInnerSpacingClass}`}
-              style={{ boxShadow: 'var(--dashboard-shell-shadow)' }}
+              className={`workspace-shell rounded-[1.25rem] sm:rounded-[1.45rem] lg:rounded-[1.55rem] text-card-foreground ${contentInnerSpacingClass}`}
             >
               {children}
             </div>

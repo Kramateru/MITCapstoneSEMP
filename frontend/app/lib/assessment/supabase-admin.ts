@@ -143,7 +143,6 @@ function resolveSupabaseApiKey() {
   const serviceRoleKey = normalizeEnvValue(getConfigValue([
     'SUPABASE_SERVICE_KEY',
     'SUPABASE_SERVICE_ROLE_KEY',
-    'SUPABASE_KEY',
     'SUPABASE_SERVICE_ROLE',
   ], ''))
 
@@ -159,8 +158,8 @@ function resolveSupabasePublicApiKey() {
   const publicKey = normalizeEnvValue(getConfigValue([
     'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
+    'SUPABASE_ANON_KEY',
     'REACT_APP_ANON_KEY',
-    'SUPABASE_KEY',
   ], ''))
 
   const publicKeyKind = getSupabasePublicKeyKind(publicKey)

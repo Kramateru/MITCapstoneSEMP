@@ -1,16 +1,17 @@
 import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
-import { handleAssessmentRouteError } from '@/app/lib/assessment/route-utils'
+import { handleAssessmentRouteError, withAssessmentRequestContext } from '@/app/lib/assessment/route-utils'
 import { createSupabaseAdminClient } from '@/app/lib/assessment/supabase-admin'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 export async function GET(request: Request) {
-  try {
-    const sessionUser = await requireBackendSessionUser(request, ['trainee', 'trainer', 'admin'])
-    const supabase = createSupabaseAdminClient()
-    const requestUrl = new URL(request.url)
-    const batchId = requestUrl.searchParams.get('batchId')?.trim() || ''
+  return withAssessmentRequestContext(request, async () => {
+    try {
+      const sessionUser = await requireBackendSessionUser(request, ['trainee', 'trainer', 'admin'])
+      const supabase = createSupabaseAdminClient()
+      const requestUrl = new URL(request.url)
+      const batchId = requestUrl.searchParams.get('batchId')?.trim() || ''
 
     const stream = new TransformStream()
     const writer = stream.writable.getWriter()
@@ -159,14 +160,15 @@ export async function GET(request: Request) {
       batchId: batchId || null,
     })
 
-    return new Response(stream.readable, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-      },
-    })
-  } catch (error) {
-    return handleAssessmentRouteError(error)
-  }
+      return new Response(stream.readable, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          Connection: 'keep-alive',
+        },
+      })
+    } catch (error) {
+      return handleAssessmentRouteError(error)
+    }
+  })
 }

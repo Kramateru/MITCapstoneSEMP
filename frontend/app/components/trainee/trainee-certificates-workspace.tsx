@@ -199,6 +199,10 @@ export default function TraineeCertificatesWorkspace() {
       return;
     }
 
+    const intervalId = window.setInterval(() => {
+      void loadCertificates('refresh');
+    }, 60000);
+
     let stream: EventSource | null = null;
     try {
       stream = openCallSimulationRealtimeStream();
@@ -217,6 +221,7 @@ export default function TraineeCertificatesWorkspace() {
     }
 
     return () => {
+      window.clearInterval(intervalId);
       stream?.close();
     };
   }, [isAuthenticated, isLoading, loadCertificates, token]);

@@ -7,7 +7,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "./utils";
 
 const badgeVariants = cva(
-  "inline-flex items-center justify-center rounded-full border px-3 py-1 text-[0.78rem] font-semibold leading-5 w-fit whitespace-nowrap shrink-0 [&>svg]:size-3 gap-1.5 [&>svg]:pointer-events-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive transition-[color,background-color,box-shadow] overflow-hidden",
+  "inline-flex items-center justify-center rounded-full border px-3 py-1 text-[0.78rem] font-semibold leading-5 w-fit whitespace-nowrap shrink-0 [&>svg]:size-3 gap-1.5 [&>svg]:pointer-events-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive transition-[color,background-color,box-shadow] overflow-hidden shadow-[0_10px_22px_-20px_rgba(15,23,42,0.25)]",
   {
     variants: {
       variant: {
@@ -18,17 +18,17 @@ const badgeVariants = cva(
         destructive:
           "border-transparent bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
         outline:
-          "text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+          "border-border/80 bg-white text-foreground [a&]:hover:bg-secondary [a&]:hover:text-primary",
         success:
-          "border-transparent bg-emerald-100 text-emerald-700 [a&]:hover:bg-emerald-200",
+          "border-emerald-200 bg-emerald-50 text-emerald-700 [a&]:hover:bg-emerald-100",
         warning:
-          "border-transparent bg-amber-100 text-amber-700 [a&]:hover:bg-amber-200",
+          "border-amber-200 bg-amber-50 text-amber-700 [a&]:hover:bg-amber-100",
         danger:
-          "border-transparent bg-rose-100 text-rose-700 [a&]:hover:bg-rose-200",
+          "border-rose-200 bg-rose-50 text-rose-700 [a&]:hover:bg-rose-100",
         info:
-          "border-transparent bg-sky-100 text-sky-700 [a&]:hover:bg-sky-200",
+          "border-sky-200 bg-sky-50 text-sky-700 [a&]:hover:bg-sky-100",
         neutral:
-          "border-transparent bg-slate-100 text-slate-700 [a&]:hover:bg-slate-200",
+          "border-slate-200 bg-slate-50 text-slate-700 [a&]:hover:bg-slate-100",
       },
     },
     defaultVariants: {

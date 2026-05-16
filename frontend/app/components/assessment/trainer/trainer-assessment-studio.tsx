@@ -77,7 +77,6 @@ import {
     deleteAssessmentQuestion,
     downloadTrainerAssessmentCsv,
     fetchTrainerAssessmentBootstrap,
-    openTrainerAssessmentStream,
     updateAssessmentDefinition,
     updateAssessmentAssignment,
     updateAssessmentCategory,
@@ -553,42 +552,14 @@ export function TrainerAssessmentStudio({
       return
     }
 
-    let stream: EventSource | null = null
-    try {
-      stream = openTrainerAssessmentStream()
-      stream.onmessage = (event) => {
-        try {
-          const payload = JSON.parse(event.data) as { type?: string; status?: string }
-          if (payload.type === 'status' && payload.status) {
-            setLiveStatus(`Supabase realtime: ${payload.status.toLowerCase().replace(/_/g, ' ')}`)
-            return
-          }
-
-          if (
-            payload.type === 'category_changed'
-            || payload.type === 'question_changed'
-            || payload.type === 'assignment_changed'
-            || payload.type === 'attempt_changed'
-            || payload.type === 'coaching_changed'
-            || payload.type === 'certificate_changed'
-          ) {
-            setLiveStatus('Live update received. Refreshing the assessment studio...')
-            void refreshWorkspace('refresh')
-          }
-        } catch {
-          setLiveStatus('Assessment update received.')
-        }
-      }
-      stream.onerror = () => {
-        setLiveStatus('Realtime stream disconnected. Manual refresh is still available.')
-      }
-    } catch (streamError) {
-      console.error(streamError)
-      setLiveStatus('Realtime stream unavailable. Manual refresh is still available.')
-    }
+    setLiveStatus('Auto-refresh is active. Manual refresh is still available.')
+    const intervalId = window.setInterval(() => {
+      setLiveStatus('Checking for saved assessment updates...')
+      void refreshWorkspace('refresh')
+    }, 45000)
 
     return () => {
-      stream?.close()
+      window.clearInterval(intervalId)
     }
   }, [refreshWorkspace, workspace])
 

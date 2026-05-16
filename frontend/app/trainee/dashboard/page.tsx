@@ -1,21 +1,34 @@
 'use client';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
+import {
+  ActionCard,
+  DashboardHero,
+  EmptyStatePanel,
+  MetricCard,
+  NoticeBanner,
+  SectionPanel,
+  SoftStat,
+} from '@/app/components/ui/dashboard-kit';
+import { Badge } from '@/app/components/ui/badge';
+import { Button } from '@/app/components/ui/button';
+import { Input } from '@/app/components/ui/input';
 import { useAuth } from '@/app/context/AuthContext';
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import {
-    BookOpen,
-    ClipboardList,
-    Clock,
-    GraduationCap,
-    Medal,
-    MessageSquare,
-    Play,
-    Target,
-    TrendingUp
+  BookOpen,
+  ClipboardList,
+  Clock,
+  GraduationCap,
+  Medal,
+  MessageSquare,
+  Mic,
+  Play,
+  Target,
+  TrendingUp,
 } from 'lucide-react';
 import Link from 'next/link';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -87,6 +100,34 @@ function verdictLabel(status?: string) {
   return 'Pending';
 }
 
+function verdictVariant(status?: string) {
+  const normalized = (status || '').toLowerCase();
+  if (normalized === 'competent') return 'success' as const;
+  if (normalized === 'retake') return 'warning' as const;
+  return 'neutral' as const;
+}
+
+function scoreVariant(score: number) {
+  if (score >= 80) return 'success' as const;
+  if (score >= 60) return 'warning' as const;
+  return 'danger' as const;
+}
+
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.max(0, Math.round((totalSeconds || 0) / 60));
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours}h ${mins}m`;
+}
+
+function formatDate(value?: string | null) {
+  if (!value) return 'Date unavailable';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString();
+}
+
 export default function TraineeDashboard() {
   const { user, updateUser } = useAuth();
   const [stats, setStats] = useState<TraineeStats | null>(null);
@@ -153,12 +194,12 @@ export default function TraineeDashboard() {
       ]);
 
       if (reportResponse.ok) {
-        const payload = await reportResponse.json() as SimFloorDashboardReport;
+        const payload = (await reportResponse.json()) as SimFloorDashboardReport;
         setSimFloorReport(payload);
       }
 
       if (availableResponse.ok) {
-        const payload = await availableResponse.json() as { scenarios?: SimFloorAssignedScenario[] };
+        const payload = (await availableResponse.json()) as { scenarios?: SimFloorAssignedScenario[] };
         setAssignedSimFloorScenarios(payload.scenarios || []);
       }
     } catch (error) {
@@ -180,39 +221,38 @@ export default function TraineeDashboard() {
     setMustChangePassword(!!user?.must_change_password);
   }, [user]);
 
-  const sidebarItems = traineeSidebarItems;
-
   const coachingSummary = {
     pending: coachingLogs.filter((log) => log.status === 'sent').length,
     acknowledged: coachingLogs.filter((log) => log.status === 'acknowledged').length,
     retake: coachingLogs.filter((log) => log.competency_status === 'not_competent').length,
   };
 
-  const prioritizedSimFloorScenario = assignedSimFloorScenarios
-    .sort((left, right) => {
-      const leftPriority = left.retake_required ? 0 : left.attempt_count === 0 ? 1 : left.competent ? 3 : 2;
-      const rightPriority = right.retake_required ? 0 : right.attempt_count === 0 ? 1 : right.competent ? 3 : 2;
-      if (leftPriority !== rightPriority) {
-        return leftPriority - rightPriority;
-      }
-      const leftAssignedAt = left.assigned_at ? new Date(left.assigned_at).getTime() : 0;
-      const rightAssignedAt = right.assigned_at ? new Date(right.assigned_at).getTime() : 0;
-      if (leftAssignedAt !== rightAssignedAt) {
-        return rightAssignedAt - leftAssignedAt;
-      }
-      return left.title.localeCompare(right.title);
-    })[0] || null;
+  const prioritizedSimFloorScenario =
+    assignedSimFloorScenarios
+      .sort((left, right) => {
+        const leftPriority = left.retake_required ? 0 : left.attempt_count === 0 ? 1 : left.competent ? 3 : 2;
+        const rightPriority = right.retake_required ? 0 : right.attempt_count === 0 ? 1 : right.competent ? 3 : 2;
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+        const leftAssignedAt = left.assigned_at ? new Date(left.assigned_at).getTime() : 0;
+        const rightAssignedAt = right.assigned_at ? new Date(right.assigned_at).getTime() : 0;
+        if (leftAssignedAt !== rightAssignedAt) {
+          return rightAssignedAt - leftAssignedAt;
+        }
+        return left.title.localeCompare(right.title);
+      })[0] || null;
 
   const simFloorHref = prioritizedSimFloorScenario
     ? `/trainee/call-simulation/${encodeURIComponent(prioritizedSimFloorScenario.id)}`
     : '/trainee/call-simulation';
   const simFloorDescription = prioritizedSimFloorScenario
     ? prioritizedSimFloorScenario.retake_required
-      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest Call Simulation verdict.`
-      : `Open "${prioritizedSimFloorScenario.title}" and launch your assigned mock call right away.`
+      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest verdict.`
+      : `Open "${prioritizedSimFloorScenario.title}" and start your assigned mock call.`
     : simFloorReport?.summary.retakes
-      ? `${simFloorReport.summary.retakes} retake${simFloorReport.summary.retakes === 1 ? '' : 's'} still need completion.`
-      : 'Resume mock calls, record your CSR turns, and view trainer coaching results.';
+      ? `${simFloorReport.summary.retakes} call simulation retake${simFloorReport.summary.retakes === 1 ? '' : 's'} are still pending.`
+      : 'Resume assigned call scenarios, record your CSR responses, and review saved results.';
 
   const strengthChecks = {
     length: newPassword.length >= 8,
@@ -229,519 +269,424 @@ export default function TraineeDashboard() {
   };
 
   return (
-    <DashboardLayout sidebarItems={sidebarItems} userRole="trainee">
-      {/* Header */}
-      <div className="mb-8">
-        <h2 className="text-3xl font-bold text-foreground mb-2">
-          Welcome{user?.user_name ? `, ${user.user_name}` : ''} to Your Training Portal
-        </h2>
-        <p className="text-muted-foreground">
-          Review assigned learning, coaching updates, and your saved performance records.
-        </p>
-      </div>
+    <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
+      <div className="space-y-6">
+        <DashboardHero
+          eyebrow="Learning Overview"
+          title={`Welcome${user?.user_name ? `, ${user.user_name}` : ''}`}
+          description="Review your assigned learning, continue mock calls, and keep up with the latest coaching and progress updates."
+        >
+          {stats ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              <SoftStat label="Completed Today" value={stats.completed_today} tone="blue" />
+              <SoftStat label="Coaching Pending" value={coachingSummary.pending} tone="amber" />
+              <SoftStat label="Certificates" value={stats.certifications} tone="green" />
+            </div>
+          ) : null}
+        </DashboardHero>
 
-      {/* Password Change Prompt */}
-      {mustChangePassword && (
-        <div className="mb-8 rounded-xl border border-yellow-200 bg-yellow-50 p-6">
-          <div className="mb-4">
-            <h3 className="text-lg font-semibold text-yellow-900">
-              Update your password
-            </h3>
-            <p className="text-sm text-yellow-800">
-              You are currently using the default trainee password. Please set a new password.
-            </p>
-          </div>
-
-          <form
-            className="grid gap-3 md:grid-cols-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              setChangeError('');
-              setChangeSuccess('');
-
-              if (!oldPassword || !newPassword || !confirmPassword) {
-                setChangeError('Please fill in all password fields.');
-                return;
-              }
-              if (newPassword !== confirmPassword) {
-                setChangeError('New password and confirmation do not match.');
-                return;
-              }
-              if (newPassword.length < 8) {
-                setChangeError('New password must be at least 8 characters.');
-                return;
-              }
-              if (oldPassword === newPassword) {
-                setChangeError('New password must be different from the old password.');
-                return;
-              }
-
-              const token = localStorage.getItem('token');
-              if (!token) {
-                setChangeError('Missing session. Please log in again.');
-                return;
-              }
-
-              setIsChanging(true);
-              try {
-                const res = await fetch('/api/users/change-password', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({
-                    old_password: oldPassword,
-                    new_password: newPassword,
-                  }),
-                });
-
-                if (!res.ok) {
-                  const data = await res.json().catch(() => ({}));
-                  throw new Error(data?.detail || 'Password change failed.');
-                }
-
-                setChangeSuccess('Password updated successfully.');
-                setOldPassword('');
-                setNewPassword('');
-                setConfirmPassword('');
-                setMustChangePassword(false);
-                updateUser({ must_change_password: false });
-              } catch (err) {
-                const message = err instanceof Error ? err.message : 'Password change failed.';
-                setChangeError(message);
-              } finally {
-                setIsChanging(false);
-              }
-            }}
+        {mustChangePassword ? (
+          <SectionPanel
+            title="Update your password"
+            description="You are still using the default trainee password. Set a new one before continuing with the rest of your workspace."
           >
-            <div>
-              <label className="block text-xs font-semibold text-yellow-900 mb-1">
-                Current password
-              </label>
-              <input
-                type="password"
-                value={oldPassword}
-                onChange={(e) => setOldPassword(e.target.value)}
-                placeholder="Current password"
-                className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-yellow-900 mb-1">
-                New password
-              </label>
-              <input
-                type="password"
-                value={newPassword}
-                onChange={(e) => {
-                  setNewPassword(e.target.value);
-                  setStrengthTouched(true);
+            <div className="space-y-4">
+              <NoticeBanner tone="amber">
+                Use at least 8 characters and include both a number and a symbol.
+              </NoticeBanner>
+
+              <form
+                className="grid gap-4 md:grid-cols-3"
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setChangeError('');
+                  setChangeSuccess('');
+
+                  if (!oldPassword || !newPassword || !confirmPassword) {
+                    setChangeError('Please fill in all password fields.');
+                    return;
+                  }
+                  if (newPassword !== confirmPassword) {
+                    setChangeError('New password and confirmation do not match.');
+                    return;
+                  }
+                  if (newPassword.length < 8) {
+                    setChangeError('New password must be at least 8 characters.');
+                    return;
+                  }
+                  if (oldPassword === newPassword) {
+                    setChangeError('New password must be different from the old password.');
+                    return;
+                  }
+
+                  const token = localStorage.getItem('token');
+                  if (!token) {
+                    setChangeError('Missing session. Please log in again.');
+                    return;
+                  }
+
+                  setIsChanging(true);
+                  try {
+                    const res = await fetch('/api/users/change-password', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                      },
+                      body: JSON.stringify({
+                        old_password: oldPassword,
+                        new_password: newPassword,
+                      }),
+                    });
+
+                    if (!res.ok) {
+                      const data = await res.json().catch(() => ({}));
+                      throw new Error(data?.detail || 'Password change failed.');
+                    }
+
+                    setChangeSuccess('Password updated successfully.');
+                    setOldPassword('');
+                    setNewPassword('');
+                    setConfirmPassword('');
+                    setMustChangePassword(false);
+                    updateUser({ must_change_password: false });
+                  } catch (err) {
+                    const message = err instanceof Error ? err.message : 'Password change failed.';
+                    setChangeError(message);
+                  } finally {
+                    setIsChanging(false);
+                  }
                 }}
-                placeholder="New password"
-                className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none"
-              />
-              {strengthTouched && (
-                <div className="mt-2 space-y-1 text-xs text-yellow-900">
-                  <div className="font-semibold">Strength: {strengthLabel()}</div>
-                  <div className="flex flex-wrap gap-2 text-yellow-800">
-                    <span className={strengthChecks.length ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.length ? 'OK' : '-'} 8+ chars
-                    </span>
-                    <span className={strengthChecks.number ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.number ? 'OK' : '-'} number
-                    </span>
-                    <span className={strengthChecks.symbol ? 'text-green-700' : 'text-yellow-800'}>
-                      {strengthChecks.symbol ? 'OK' : '-'} symbol
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-yellow-900 mb-1">
-                Confirm new password
-              </label>
-              <input
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm new password"
-                className="w-full rounded-lg border border-yellow-200 bg-white px-3 py-2 text-sm focus:border-yellow-400 focus:outline-none"
-              />
-            </div>
-
-            <div className="md:col-span-3 flex flex-wrap items-center gap-3">
-              <button
-                type="submit"
-                disabled={
-                  isChanging ||
-                  !strengthChecks.length ||
-                  !strengthChecks.number ||
-                  !strengthChecks.symbol
-                }
-                className="rounded-lg bg-yellow-600 px-4 py-2 text-sm font-semibold text-white hover:bg-yellow-700 disabled:opacity-60"
               >
-                {isChanging ? 'Updating...' : 'Update Password'}
-              </button>
-              {changeError && (
-                <span className="text-sm text-red-700">{changeError}</span>
-              )}
-              {changeSuccess && (
-                <span className="text-sm text-green-700">{changeSuccess}</span>
-              )}
+                <div className="space-y-2">
+                  <label htmlFor="current-password">Current password</label>
+                  <Input
+                    id="current-password"
+                    type="password"
+                    value={oldPassword}
+                    onChange={(e) => setOldPassword(e.target.value)}
+                    placeholder="Enter current password"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="new-password">New password</label>
+                  <Input
+                    id="new-password"
+                    type="password"
+                    value={newPassword}
+                    onChange={(e) => {
+                      setNewPassword(e.target.value);
+                      setStrengthTouched(true);
+                    }}
+                    placeholder="Create a new password"
+                  />
+                  {strengthTouched ? (
+                    <div className="soft-panel space-y-2 px-3 py-3 text-xs text-muted-foreground">
+                      <div className="font-semibold text-foreground">Strength: {strengthLabel()}</div>
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={strengthChecks.length ? 'success' : 'neutral'}>8+ chars</Badge>
+                        <Badge variant={strengthChecks.number ? 'success' : 'neutral'}>Number</Badge>
+                        <Badge variant={strengthChecks.symbol ? 'success' : 'neutral'}>Symbol</Badge>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="confirm-password">Confirm new password</label>
+                  <Input
+                    id="confirm-password"
+                    type="password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Confirm new password"
+                  />
+                </div>
+
+                <div className="md:col-span-3 flex flex-wrap items-center gap-3">
+                  <Button
+                    type="submit"
+                    disabled={
+                      isChanging ||
+                      !strengthChecks.length ||
+                      !strengthChecks.number ||
+                      !strengthChecks.symbol
+                    }
+                  >
+                    {isChanging ? 'Updating...' : 'Update Password'}
+                  </Button>
+                  {changeError ? <span className="text-sm text-rose-700">{changeError}</span> : null}
+                  {changeSuccess ? <span className="text-sm text-emerald-700">{changeSuccess}</span> : null}
+                </div>
+              </form>
             </div>
-          </form>
-        </div>
-      )}
+          </SectionPanel>
+        ) : null}
 
-      <div className={mustChangePassword ? 'pointer-events-none opacity-60' : ''}>
-        {/* Stats Cards */}
-        {stats && (
-          <div className="mb-8 rounded-2xl border border-blue-200 bg-[linear-gradient(135deg,rgba(219,234,254,0.85),rgba(240,249,255,0.98))] p-6">
-            <div className="flex flex-col gap-4">
-              <div>
-                <div className="text-sm font-semibold uppercase tracking-[0.16em] text-blue-700">
-                  Training Snapshot
-                </div>
-                <div className="mt-2 text-3xl font-bold text-slate-900">{stats.total_sessions}</div>
-                <div className="mt-2 text-sm text-slate-700">
-                  Recorded activity sessions saved in the database
-                </div>
-              </div>
+        <div className={mustChangePassword ? 'pointer-events-none opacity-60' : 'space-y-6'}>
+          {stats ? (
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+              <MetricCard
+                label="Activity Sessions"
+                value={stats.total_sessions}
+                hint="Saved speech and practice records"
+                icon={<Play className="size-5" />}
+                tone="blue"
+              />
+              <MetricCard
+                label="Average Score"
+                value={`${stats.average_score.toFixed(1)}%`}
+                hint="Across completed trainee activity"
+                icon={<Target className="size-5" />}
+                tone="green"
+              />
+              <MetricCard
+                label="Completed Scenarios"
+                value={stats.completed_scenarios}
+                hint="Finished practice or assessment items"
+                icon={<Medal className="size-5" />}
+                tone="violet"
+              />
+              <MetricCard
+                label="Recorded Time"
+                value={formatDuration(stats.total_practice_time)}
+                hint="Total guided speaking time"
+                icon={<Clock className="size-5" />}
+                tone="amber"
+              />
+              <MetricCard
+                label="Certificates"
+                value={stats.certifications}
+                hint="Issued training completions"
+                icon={<GraduationCap className="size-5" />}
+                tone="green"
+              />
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-xl border border-blue-200 bg-white/80 px-4 py-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700">
-                  Completed Today
-                </div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{stats.completed_today}</div>
-              </div>
-              <div className="rounded-xl border border-blue-200 bg-white/80 px-4 py-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700">
-                  Coaching Pending
-                </div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{coachingSummary.pending}</div>
-              </div>
-              <div className="rounded-xl border border-blue-200 bg-white/80 px-4 py-3">
-                <div className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700">
-                  Certificates
-                </div>
-                <div className="mt-1 text-2xl font-bold text-slate-900">{stats.certifications}</div>
-              </div>
-            </div>
-          </div>
-        )}
+          ) : null}
 
-        {stats && (
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-5 mb-8">
-            <StatCard
-              label="Activity Sessions"
-              value={stats.total_sessions}
-              icon={<Play size={24} />}
-              color="blue"
-            />
-            <StatCard
-              label="Average Score"
-              value={stats.average_score.toFixed(1) + '%'}
-              icon={<Target size={24} />}
-              color="green"
-            />
-            <StatCard
-              label="Completed Scenarios"
-              value={stats.completed_scenarios}
-              icon={<Medal size={24} />}
-              color="purple"
-            />
-            <StatCard
-              label="Recorded Hours"
-              value={formatDuration(stats.total_practice_time)}
-              icon={<Clock size={24} />}
-              color="orange"
-            />
-            <StatCard
-              label="Certifications"
-              value={stats.certifications}
-              icon={<GraduationCap size={24} />}
-              color="green"
-            />
-          </div>
-        )}
-
-        {/* Two Column Layout */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Main Content - Assigned Learning */}
-          <div className="lg:col-span-2">
-            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-              <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-              <div className="relative">
-                <h3 className="text-xl font-bold text-slate-900 mb-6">
-                  Assigned Learning
-                </h3>
-
-                <div className="relative grid gap-4 md:grid-cols-2">
-                  <QuickLinkCard
-                    title="Microlearning"
-                    description="Continue your assigned learning modules and save exercise progress."
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
+            <div className="space-y-6">
+              <SectionPanel
+                title="Assigned learning"
+                description="Continue only the items your trainer has assigned and keep your progress moving."
+              >
+                <div className="grid gap-4 md:grid-cols-2">
+                  <ActionCard
                     href="/trainee/microlearning"
-                    icon={<BookOpen size={20} />}
-                    accent="sky"
+                    title="Microlearning Hub"
+                    description="Continue assigned learning modules and save your exercise progress."
+                    icon={<BookOpen className="size-5" />}
+                    tone="blue"
                   />
-                  <QuickLinkCard
-                    title="Assessments"
-                    description="Open only your saved trainer assignments, take one question at a time, and review the latest pass or fail results."
+                  <ActionCard
                     href="/trainee/assessment"
-                    icon={<ClipboardList size={20} />}
-                    accent="emerald"
+                    title="Assessments"
+                    description="Take saved trainer assignments one question at a time and review your latest results."
+                    icon={<ClipboardList className="size-5" />}
+                    tone="green"
                   />
-                  <QuickLinkCard
-                    title="My Progress"
-                    description="Review score history, coaching notes, and category-level performance trends."
-                    href="/trainee/progress"
-                    icon={<TrendingUp size={20} />}
-                    accent="emerald"
+                  <ActionCard
+                    href={simFloorHref}
+                    title="Call Simulation"
+                    description={simFloorDescription}
+                    icon={<Mic className="size-5" />}
+                    tone="amber"
                   />
-                  <QuickLinkCard
+                  <ActionCard
+                    href="/trainee/coaching"
                     title="My Coaching"
                     description={
                       coachingSummary.pending
                         ? `${coachingSummary.pending} coaching item${coachingSummary.pending === 1 ? '' : 's'} still need acknowledgement.`
                         : 'Review your latest coaching guidance and competency updates.'
                     }
-                    href="/trainee/coaching"
-                    icon={<MessageSquare size={20} />}
-                    accent="amber"
+                    icon={<MessageSquare className="size-5" />}
+                    tone="amber"
+                  />
+                  <ActionCard
+                    href="/trainee/progress"
+                    title="My Progress"
+                    description="Check completed work, current performance, and what to focus on next."
+                    icon={<TrendingUp className="size-5" />}
+                    tone="violet"
+                    className="md:col-span-2"
                   />
                 </div>
-              </div>
-            </div>
-          </div>
+              </SectionPanel>
 
-          {/* Sidebar - Coaching and Recent Sessions */}
-          <div className="space-y-6">
-            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-              <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-orange-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-              <div className="relative">
-                <h3 className="text-xl font-bold text-slate-900 mb-6">Coaching Snapshot</h3>
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <div className="group/item rounded-3xl border border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-amber-700">Pending Ack</div>
-                    <div className="mt-3 text-2xl font-bold text-amber-900">{coachingSummary.pending}</div>
+              <SectionPanel
+                title="Call simulation progress"
+                description="Track your latest mock call outcomes and the scenario your trainer wants you to tackle next."
+                action={
+                  <Button asChild variant="outline">
+                    <Link href="/trainee/call-simulation">Open Call Simulation</Link>
+                  </Button>
+                }
+              >
+                <div className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <SoftStat
+                      label="Call Sessions"
+                      value={simFloorReport?.summary.total_sessions ?? 0}
+                      tone="blue"
+                    />
+                    <SoftStat
+                      label="Average Score"
+                      value={`${(simFloorReport?.summary.average_score ?? 0).toFixed(1)}%`}
+                      tone="green"
+                    />
+                    <SoftStat
+                      label="Retakes Pending"
+                      value={simFloorReport?.summary.retakes ?? 0}
+                      tone="amber"
+                    />
                   </div>
-                  <div className="group/item rounded-3xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-green-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-emerald-700">Acknowledged</div>
-                    <div className="mt-3 text-2xl font-bold text-emerald-900">{coachingSummary.acknowledged}</div>
-                  </div>
-                  <div className="group/item rounded-3xl border border-rose-200 bg-gradient-to-br from-rose-50 to-red-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
-                    <div className="text-xs font-bold uppercase tracking-[0.14em] text-rose-700">Retake</div>
-                    <div className="mt-3 text-2xl font-bold text-rose-900">{coachingSummary.retake}</div>
-                  </div>
-                </div>
 
-                {coachingLogs.slice(0, 2).map((log) => (
-                  <div key={log.id} className="group/item rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 mb-4 last:mb-0">
-                    <div className="font-bold text-slate-900 text-sm">{log.coaching_id}</div>
-                    <div className="text-xs text-slate-600 mt-2">
-                      {log.scenario_title || 'General coaching'}
-                    </div>
-                    <div className="text-xs text-slate-600 mt-3">
-                      {log.status === 'sent' ? 'Needs acknowledgement' : 'Acknowledged'} | {log.competency_status.replace('_', ' ')}
-                    </div>
-                  </div>
-                ))}
-
-                {!coachingLogs.length && (
-                  <div className="text-sm text-slate-500 font-medium">No coaching logs yet.</div>
-                )}
-              </div>
-            </div>
-
-            <div className="group relative overflow-hidden rounded-3xl border bg-gradient-to-br from-white to-slate-50 p-8 shadow-xl transition-all duration-300 hover:shadow-2xl">
-              <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-emerald-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-              <div className="relative">
-                <h3 className="text-xl font-bold text-slate-900 mb-6">
-                  Recent Activity
-                </h3>
-
-                {sessions.length > 0 ? (
-                  <div className="space-y-4">
-                    {sessions.slice(0, 5).map((session) => (
-                      <div
-                        key={session.id}
-                        className="group/item relative overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-r from-white to-slate-50 p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1"
-                      >
-                        <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-                        <div className="relative flex justify-between items-start mb-3">
-                          <h4 className="font-bold text-slate-900 text-sm">
-                            {session.scenario_title}
-                          </h4>
-                          <span
-                            className={`text-sm font-bold px-3 py-1 rounded-full ${
-                              session.overall_score >= 80
-                                ? 'bg-gradient-to-r from-green-100 to-emerald-100 text-green-800'
-                                : session.overall_score >= 60
-                                  ? 'bg-gradient-to-r from-amber-100 to-orange-100 text-amber-800'
-                                  : 'bg-gradient-to-r from-red-100 to-rose-100 text-red-800'
-                            }`}
-                          >
-                            {session.overall_score.toFixed(0)}%
-                          </span>
+                  {prioritizedSimFloorScenario ? (
+                    <div className="data-card p-5">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={prioritizedSimFloorScenario.retake_required ? 'warning' : 'info'}>
+                              {prioritizedSimFloorScenario.retake_required ? 'Needs retake' : 'Assigned next'}
+                            </Badge>
+                            {prioritizedSimFloorScenario.competent ? (
+                              <Badge variant="success">Passed</Badge>
+                            ) : null}
+                          </div>
+                          <h3 className="text-base font-semibold text-foreground">
+                            {prioritizedSimFloorScenario.title}
+                          </h3>
+                          <p className="text-sm leading-6 text-muted-foreground">
+                            {prioritizedSimFloorScenario.description || simFloorDescription}
+                          </p>
                         </div>
-                        <div className="relative text-xs text-slate-600 space-y-2">
-                          <div className="flex justify-between">
-                            <span>Accuracy:</span>
-                            <span className="font-medium">{session.accuracy.toFixed(0)}%</span>
+                        <Button asChild>
+                          <Link href={simFloorHref}>
+                            {prioritizedSimFloorScenario.retake_required ? 'Resume Retake' : 'Start Call'}
+                          </Link>
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <EmptyStatePanel
+                      title="No assigned call simulation yet"
+                      description="Once your trainer assigns a mock call scenario, it will appear here with a direct start button."
+                    />
+                  )}
+
+                  {simFloorReport?.recent_sessions?.length ? (
+                    <div className="space-y-3">
+                      {simFloorReport.recent_sessions.slice(0, 3).map((session) => (
+                        <div key={session.session_id} className="data-card p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                            <div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <h4 className="text-sm font-semibold text-foreground">{session.scenario_title}</h4>
+                                <Badge variant={verdictVariant(session.trainer_verdict_status)}>
+                                  {verdictLabel(session.trainer_verdict_status)}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-sm text-muted-foreground">
+                                Attempt {session.attempt_number} · {formatDate(session.created_at)}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Badge variant={scoreVariant(session.score)}>{session.score.toFixed(1)}%</Badge>
+                              {session.certificate_id ? <Badge variant="success">Certified</Badge> : null}
+                            </div>
                           </div>
-                          <div className="flex justify-between">
-                            <span>Fluency:</span>
-                            <span className="font-medium">{session.fluency.toFixed(0)}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              </SectionPanel>
+            </div>
+
+            <div className="space-y-6">
+              <SectionPanel
+                title="Coaching snapshot"
+                description="Stay on top of the feedback items that still need your attention."
+                action={
+                  <Button asChild variant="outline">
+                    <Link href="/trainee/coaching">View Coaching</Link>
+                  </Button>
+                }
+              >
+                <div className="space-y-4">
+                  <div className="grid grid-cols-3 gap-3">
+                    <SoftStat label="Pending" value={coachingSummary.pending} tone="amber" />
+                    <SoftStat label="Acknowledged" value={coachingSummary.acknowledged} tone="green" />
+                    <SoftStat label="Retake" value={coachingSummary.retake} tone="rose" />
+                  </div>
+
+                  {coachingLogs.length ? (
+                    <div className="space-y-3">
+                      {coachingLogs.slice(0, 3).map((log) => (
+                        <div key={log.id} className="data-card p-4">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={log.status === 'sent' ? 'warning' : 'success'}>
+                              {log.status === 'sent' ? 'Needs acknowledgement' : 'Acknowledged'}
+                            </Badge>
+                            <Badge variant={log.competency_status === 'not_competent' ? 'danger' : log.competency_status === 'competent' ? 'success' : 'neutral'}>
+                              {log.competency_status.replace(/_/g, ' ')}
+                            </Badge>
                           </div>
-                          <div className="flex justify-between">
-                            <span>Date:</span>
-                            <span className="font-medium">{new Date(session.created_at).toLocaleDateString()}</span>
+                          <h4 className="mt-3 text-sm font-semibold text-foreground">{log.coaching_id}</h4>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {log.scenario_title || 'General coaching'} · {formatDate(log.created_at)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <EmptyStatePanel
+                      title="No coaching logs yet"
+                      description="Trainer coaching notes and acknowledgements will appear here once they are published."
+                    />
+                  )}
+                </div>
+              </SectionPanel>
+
+              <SectionPanel
+                title="Recent activity"
+                description="Your most recent saved practice sessions and scores."
+              >
+                {sessions.length ? (
+                  <div className="space-y-3">
+                    {sessions.slice(0, 5).map((session) => (
+                      <div key={session.id} className="data-card p-4">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                          <div>
+                            <h4 className="text-sm font-semibold text-foreground">{session.scenario_title}</h4>
+                            <p className="mt-1 text-sm text-muted-foreground">
+                              {formatDate(session.created_at)} · {formatDuration(session.duration)}
+                            </p>
                           </div>
+                          <Badge variant={scoreVariant(session.overall_score)}>
+                            {session.overall_score.toFixed(0)}%
+                          </Badge>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-3">
+                          <SoftStat label="Accuracy" value={`${session.accuracy.toFixed(0)}%`} tone="blue" />
+                          <SoftStat label="Fluency" value={`${session.fluency.toFixed(0)}%`} tone="green" />
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-8">
-                    <p className="text-slate-500 text-sm font-medium">
-                      No recorded activity yet.
-                    </p>
-                  </div>
+                  <EmptyStatePanel
+                    title="No recorded activity yet"
+                    description="When you complete practice or speaking activities, your latest saved results will show up here."
+                  />
                 )}
-              </div>
+              </SectionPanel>
             </div>
           </div>
         </div>
       </div>
     </DashboardLayout>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  icon,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  icon: React.ReactNode;
-  color: string;
-}) {
-  const colorMap: Record<
-    string,
-    { bg: string; border: string; text: string; iconBg: string; iconColor: string }
-  > = {
-    blue: {
-      bg: 'bg-gradient-to-br from-blue-50 to-slate-50',
-      border: 'border-blue-200',
-      text: 'text-blue-900',
-      iconBg: 'bg-gradient-to-br from-blue-500 to-teal-500',
-      iconColor: 'text-white',
-    },
-    green: {
-      bg: 'bg-gradient-to-br from-green-50 to-emerald-50',
-      border: 'border-green-200',
-      text: 'text-green-900',
-      iconBg: 'bg-gradient-to-br from-green-500 to-emerald-500',
-      iconColor: 'text-white',
-    },
-    purple: {
-      bg: 'bg-gradient-to-br from-purple-50 to-violet-50',
-      border: 'border-purple-200',
-      text: 'text-purple-900',
-      iconBg: 'bg-gradient-to-br from-purple-500 to-violet-500',
-      iconColor: 'text-white',
-    },
-    orange: {
-      bg: 'bg-gradient-to-br from-orange-50 to-amber-50',
-      border: 'border-orange-200',
-      text: 'text-orange-900',
-      iconBg: 'bg-gradient-to-br from-orange-500 to-amber-500',
-      iconColor: 'text-white',
-    },
-  };
-
-  const styles = colorMap[color];
-
-  return (
-    <div className={`group relative overflow-hidden rounded-3xl border ${styles.border} ${styles.bg} p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1`}>
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative flex items-start justify-between">
-        <div>
-          <p className="text-sm font-bold text-slate-600 mb-3 uppercase tracking-[0.14em]">{label}</p>
-          <p className={`text-3xl font-bold ${styles.text}`}>{value}</p>
-        </div>
-        <div className={`rounded-2xl ${styles.iconBg} p-3 shadow-lg transition-transform group-hover:scale-110`}>
-          <div className={styles.iconColor}>{icon}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function formatDuration(totalSeconds: number): string {
-  const minutes = Math.max(0, Math.round((totalSeconds || 0) / 60));
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const mins = minutes % 60;
-  return `${hours}h ${mins}m`;
-}
-
-function QuickLinkCard({
-  title,
-  description,
-  href,
-  icon,
-  accent,
-}: {
-  title: string;
-  description: string;
-  href: string;
-  icon: React.ReactNode;
-  accent: 'sky' | 'amber' | 'emerald' | 'violet';
-}) {
-  const accentStyles: Record<string, { bg: string; text: string; iconBg: string }> = {
-    sky: {
-      bg: 'bg-gradient-to-br from-sky-50 to-blue-50',
-      text: 'text-sky-900',
-      iconBg: 'bg-gradient-to-br from-sky-500 to-blue-500',
-    },
-    amber: {
-      bg: 'bg-gradient-to-br from-amber-50 to-orange-50',
-      text: 'text-amber-900',
-      iconBg: 'bg-gradient-to-br from-amber-500 to-orange-500',
-    },
-    emerald: {
-      bg: 'bg-gradient-to-br from-emerald-50 to-green-50',
-      text: 'text-emerald-900',
-      iconBg: 'bg-gradient-to-br from-emerald-500 to-green-500',
-    },
-    violet: {
-      bg: 'bg-gradient-to-br from-violet-50 to-purple-50',
-      text: 'text-violet-900',
-      iconBg: 'bg-gradient-to-br from-violet-500 to-purple-500',
-    },
-  };
-
-  const styles = accentStyles[accent];
-
-  return (
-    <Link
-      href={href}
-      className={`group relative overflow-hidden rounded-3xl border border-slate-200 ${styles.bg} p-6 shadow-lg transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-blue-300`}
-    >
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-teal-500/5 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative">
-        <div className={`inline-flex rounded-2xl ${styles.iconBg} p-3 shadow-lg transition-transform group-hover:scale-110`}>
-          <div className="text-white">{icon}</div>
-        </div>
-        <div className="mt-4 text-lg font-bold text-slate-900">{title}</div>
-        <div className="mt-2 text-sm text-slate-600">{description}</div>
-      </div>
-    </Link>
   );
 }

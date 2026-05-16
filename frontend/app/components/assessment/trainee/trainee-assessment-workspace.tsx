@@ -1,16 +1,20 @@
 'use client'
 
 import {
+  ArrowRight,
   Award,
   BookOpenCheck,
   CheckCircle2,
+  Clock3,
   Loader2,
+  PlayCircle,
   RefreshCw,
   RotateCcw,
   Search,
   Target,
   XCircle,
 } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -47,6 +51,7 @@ import type {
 import { AssessmentPlayer } from './assessment-player'
 
 type AssessmentFilter = 'all' | 'assigned' | 'retake' | 'passed' | 'failed'
+type PlayerDisplayMode = 'overview' | 'review'
 
 function getAssessmentState(assessment: TraineeAssessmentCard) {
   if (assessment.latestAttempt?.status === 'pass') {
@@ -84,6 +89,47 @@ function getAssessmentState(assessment: TraineeAssessmentCard) {
   }
 }
 
+function getAssessmentPriority(assessment: TraineeAssessmentCard) {
+  if (assessment.canStart && !assessment.latestAttempt) {
+    return 4
+  }
+  if (assessment.canRetake) {
+    return 3
+  }
+  if (assessment.latestAttempt?.status === 'fail') {
+    return 2
+  }
+  if (assessment.latestAttempt?.status === 'pass') {
+    return 1
+  }
+  return 0
+}
+
+function getSortableDate(value?: string | null, fallback = Number.MAX_SAFE_INTEGER) {
+  if (!value) {
+    return fallback
+  }
+
+  const parsed = new Date(value).getTime()
+  return Number.isNaN(parsed) ? fallback : parsed
+}
+
+function sortAssessments(assessments: TraineeAssessmentCard[]) {
+  return [...assessments].sort((left, right) => {
+    const priorityDifference = getAssessmentPriority(right) - getAssessmentPriority(left)
+    if (priorityDifference !== 0) {
+      return priorityDifference
+    }
+
+    const dueDifference = getSortableDate(left.targetDueAt) - getSortableDate(right.targetDueAt)
+    if (dueDifference !== 0) {
+      return dueDifference
+    }
+
+    return (right.attemptCount || 0) - (left.attemptCount || 0)
+  })
+}
+
 function matchesFilter(assessment: TraineeAssessmentCard, filter: AssessmentFilter) {
   if (filter === 'all') {
     return true
@@ -113,6 +159,7 @@ export function TraineeAssessmentWorkspace() {
   const [sessionLoading, setSessionLoading] = useState(false)
   const [sessionError, setSessionError] = useState('')
   const [activeSession, setActiveSession] = useState<TraineeAssessmentSession | null>(null)
+  const [playerDisplayMode, setPlayerDisplayMode] = useState<PlayerDisplayMode>('overview')
   const [playerMode, setPlayerMode] = useState<'overview' | 'in_progress' | 'submitted'>('overview')
 
   const refreshDashboard = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
@@ -139,23 +186,28 @@ export function TraineeAssessmentWorkspace() {
     void refreshDashboard()
   }, [refreshDashboard])
 
+  const prioritizedAssessments = useMemo(
+    () => sortAssessments(dashboard?.availableAssessments || []),
+    [dashboard?.availableAssessments],
+  )
+
   useEffect(() => {
-    if (!dashboard?.availableAssessments.length) {
+    if (!prioritizedAssessments.length) {
       setSelectedAssignmentId('')
       return
     }
 
     setSelectedAssignmentId((current) =>
-      dashboard.availableAssessments.some((assessment) => assessment.assignmentId === current)
+      prioritizedAssessments.some((assessment) => assessment.assignmentId === current)
         ? current
-        : dashboard.availableAssessments[0].assignmentId,
+        : prioritizedAssessments[0].assignmentId,
     )
-  }, [dashboard?.availableAssessments])
+  }, [prioritizedAssessments])
 
   const filteredAssessments = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
 
-    return (dashboard?.availableAssessments || []).filter((assessment) => {
+    return prioritizedAssessments.filter((assessment) => {
       if (!matchesFilter(assessment, filter)) {
         return false
       }
@@ -175,12 +227,31 @@ export function TraineeAssessmentWorkspace() {
 
       return haystack.includes(normalizedSearch)
     })
-  }, [dashboard?.availableAssessments, filter, search])
+  }, [filter, prioritizedAssessments, search])
 
-  const loadAssessmentSession = useCallback(async (assignmentId: string) => {
+  useEffect(() => {
+    if (playerMode === 'in_progress') {
+      return
+    }
+
+    if (!filteredAssessments.length) {
+      setSelectedAssignmentId('')
+      return
+    }
+
+    if (!filteredAssessments.some((assessment) => assessment.assignmentId === selectedAssignmentId)) {
+      setSelectedAssignmentId(filteredAssessments[0].assignmentId)
+    }
+  }, [filteredAssessments, playerMode, selectedAssignmentId])
+
+  const loadAssessmentSession = useCallback(async (
+    assignmentId: string,
+    options: { displayMode?: PlayerDisplayMode } = {},
+  ) => {
     try {
       setSessionLoading(true)
       setSessionError('')
+      setPlayerDisplayMode(options.displayMode || 'overview')
       const payload = await fetchTraineeAssessmentSession(assignmentId)
       setActiveSession(payload)
       setSelectedAssignmentId(assignmentId)
@@ -191,6 +262,18 @@ export function TraineeAssessmentWorkspace() {
       setSessionLoading(false)
     }
   }, [])
+
+  useEffect(() => {
+    if (!selectedAssignmentId || playerMode === 'in_progress') {
+      return
+    }
+
+    if (activeSession?.assignmentId === selectedAssignmentId) {
+      return
+    }
+
+    void loadAssessmentSession(selectedAssignmentId, { displayMode: 'overview' })
+  }, [activeSession?.assignmentId, loadAssessmentSession, playerMode, selectedAssignmentId])
 
   const focusAssessmentPlayer = useCallback(() => {
     if (typeof document === 'undefined') {
@@ -206,6 +289,14 @@ export function TraineeAssessmentWorkspace() {
   const handleAttemptCommitted = useCallback(async () => {
     await refreshDashboard('refresh')
   }, [refreshDashboard])
+
+  const selectedAssessment = useMemo(
+    () =>
+      prioritizedAssessments.find((assessment) => assessment.assignmentId === selectedAssignmentId)
+      || filteredAssessments[0]
+      || null,
+    [filteredAssessments, prioritizedAssessments, selectedAssignmentId],
+  )
 
   if (loading) {
     return (
@@ -291,9 +382,9 @@ export function TraineeAssessmentWorkspace() {
 
       <Card className="border-slate-200 shadow-sm">
         <CardHeader>
-          <CardTitle>Assessment Queue</CardTitle>
+          <CardTitle>Assigned Module Navigation</CardTitle>
           <CardDescription>
-            Each card below is a real trainer assignment from the database. Only assigned items appear here, and failed items can only be retaken while attempts remain.
+            Navigate between trainer-assigned modules here. The focused assignment opens below, with a clear Start, Retake, or View Result action based on your saved progress.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -327,162 +418,64 @@ export function TraineeAssessmentWorkspace() {
               description="Only saved trainer assignments appear here. Adjust the filters or wait for a trainer to assign a new assessment."
             />
           ) : (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {filteredAssessments.map((assessment) => {
-                const state = getAssessmentState(assessment)
-                const isSelected = assessment.assignmentId === selectedAssignmentId
-                const isCurrentPlayerAssignment = activeSession?.assignmentId === assessment.assignmentId
-                const showContinue = isCurrentPlayerAssignment && playerMode === 'in_progress' && !state.disabled
-                const primaryActionLabel = showContinue
-                  ? 'Continue'
-                  : assessment.canRetake
-                    ? 'Retake'
-                    : state.actionLabel
-                const handlePrimaryAction = () => {
-                  if (showContinue) {
-                    focusAssessmentPlayer()
-                    return
-                  }
+            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+              <div className="space-y-3">
+                {filteredAssessments.map((assessment) => {
+                  const state = getAssessmentState(assessment)
+                  const isSelected = assessment.assignmentId === selectedAssessment?.assignmentId
 
-                  void loadAssessmentSession(assessment.assignmentId)
-                }
-
-                return (
-                  <div
-                    key={assessment.assignmentId}
-                    onClick={() => setSelectedAssignmentId(assessment.assignmentId)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault()
-                        setSelectedAssignmentId(assessment.assignmentId)
-                      }
-                    }}
-                    role="button"
-                    tabIndex={0}
-                    className={`rounded-3xl border p-5 text-left transition ${
-                      isSelected
-                        ? 'border-sky-400 bg-sky-50 shadow-sm'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
-                    }`}
-                  >
-                    <div className="flex flex-col gap-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
+                  return (
+                    <button
+                      key={assessment.assignmentId}
+                      type="button"
+                      onClick={() => setSelectedAssignmentId(assessment.assignmentId)}
+                      className={`w-full rounded-3xl border p-4 text-left transition ${
+                        isSelected
+                          ? 'border-sky-400 bg-sky-50 shadow-sm'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <Badge variant="outline">{assessment.categoryTitle}</Badge>
                             <Badge className={state.tone}>{assessment.statusLabel || state.label}</Badge>
                           </div>
-                          <div className="mt-3 text-xl font-semibold text-slate-950">
+                          <div className="mt-3 font-semibold text-slate-950">
                             {assessment.assignmentTitle || assessment.assessmentTitle}
                           </div>
                           <div className="mt-2 text-sm text-slate-600">
-                            {assessment.assessmentDescription || 'No description was saved for this assigned assessment.'}
+                            {assessment.latestAttempt
+                              ? `Latest score ${assessment.latestAttempt.score.toFixed(2)}%`
+                              : 'Ready for first attempt'}
                           </div>
                         </div>
-                        {assessment.certificate ? (
-                          <Badge variant="outline">{assessment.certificate.certificateCode}</Badge>
-                        ) : null}
+                        <ArrowRight className={`mt-1 size-4 shrink-0 ${isSelected ? 'text-sky-700' : 'text-slate-400'}`} />
                       </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                        <DetailChip label="Passing Rate" value={`${assessment.passingScore}%`} />
-                        <DetailChip
-                          label="Attempts"
-                          value={
-                            assessment.maximumAttempts
-                              ? `${assessment.attemptCount || 0}/${assessment.maximumAttempts}`
-                              : `${assessment.attemptCount || 0}/Unlimited`
-                          }
-                        />
+                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                        <DetailChip label="Questions" value={String(assessment.questionCount)} />
                         <DetailChip
                           label="Attempts Left"
                           value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
                         />
-                        <DetailChip
-                          label="Status"
-                          value={assessment.statusLabel || state.label}
-                        />
                       </div>
+                    </button>
+                  )
+                })}
+              </div>
 
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                        <DetailChip label="Target" value={assessment.targetLabel} />
-                        <DetailChip label="Due Date" value={formatDateLabel(assessment.targetDueAt)} />
-                        <DetailChip label="Questions" value={String(assessment.questionCount)} />
-                        <DetailChip
-                          label="Latest Score"
-                          value={assessment.latestAttempt ? `${assessment.latestAttempt.score.toFixed(2)}%` : 'Not started'}
-                        />
-                      </div>
-
-                      {assessment.latestAttempt ? (
-                        <div className={`rounded-2xl border px-4 py-3 text-sm ${getAttemptTone(assessment.latestAttempt.status)}`}>
-                          Latest submission: Attempt #{assessment.latestAttempt.attemptNo} on{' '}
-                          {formatDateTimeLabel(assessment.latestAttempt.completedAt || assessment.latestAttempt.submittedAt)}.
-                        </div>
-                      ) : null}
-
-                      <div className="flex flex-wrap gap-3">
-                        {state.disabled ? (
-                          <>
-                            <Button type="button" variant="outline" disabled>
-                              {assessment.latestAttempt?.status === 'pass' ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
-                              {state.actionLabel}
-                            </Button>
-                            {assessment.latestAttempt ? (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                onClick={(event) => {
-                                  event.stopPropagation()
-                                  void loadAssessmentSession(assessment.assignmentId)
-                                }}
-                              >
-                                View Result
-                              </Button>
-                            ) : null}
-                          </>
-                        ) : (
-                          <Button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handlePrimaryAction()
-                            }}
-                          >
-                            {showContinue ? <BookOpenCheck className="size-4" /> : assessment.canRetake ? <RotateCcw className="size-4" /> : <BookOpenCheck className="size-4" />}
-                            {primaryActionLabel}
-                          </Button>
-                        )}
-                        {!state.disabled && assessment.latestAttempt ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              void loadAssessmentSession(assessment.assignmentId)
-                            }}
-                          >
-                            View Result
-                          </Button>
-                        ) : null}
-                        {assessment.certificate ? (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              router.push('/trainee/certificates')
-                            }}
-                          >
-                            <Award className="size-4" />
-                            Certificates
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })}
+              {selectedAssessment ? (
+                <FocusedAssessmentCard
+                  assessment={selectedAssessment}
+                  activeSession={activeSession}
+                  playerDisplayMode={playerDisplayMode}
+                  playerMode={playerMode}
+                  onContinue={focusAssessmentPlayer}
+                  onOpenOverview={(assignmentId) => void loadAssessmentSession(assignmentId, { displayMode: 'overview' })}
+                  onOpenReview={(assignmentId) => void loadAssessmentSession(assignmentId, { displayMode: 'review' })}
+                  onOpenCertificates={() => router.push('/trainee/certificates')}
+                />
+              ) : null}
             </div>
           )}
         </CardContent>
@@ -503,11 +496,12 @@ export function TraineeAssessmentWorkspace() {
         <div id="trainee-assessment-player">
           <AssessmentPlayer
             assessment={activeSession}
+            displayMode={playerDisplayMode}
             onSubmitAssessment={submitAssessmentAttemptRequest}
             onAttemptCommitted={handleAttemptCommitted}
             onViewCertificates={() => router.push('/trainee/certificates')}
             onRetakeRequested={async (assignmentId) => {
-              await loadAssessmentSession(assignmentId)
+              await loadAssessmentSession(assignmentId, { displayMode: 'overview' })
             }}
             onModeChange={setPlayerMode}
           />
@@ -562,6 +556,176 @@ export function TraineeAssessmentWorkspace() {
           description="Only assessments assigned by a trainer or batch will appear here. Unassigned assessments are hidden from the trainee role."
         />
       ) : null}
+    </div>
+  )
+}
+
+function FocusedAssessmentCard({
+  assessment,
+  activeSession,
+  playerDisplayMode,
+  playerMode,
+  onContinue,
+  onOpenOverview,
+  onOpenReview,
+  onOpenCertificates,
+}: {
+  assessment: TraineeAssessmentCard
+  activeSession: TraineeAssessmentSession | null
+  playerDisplayMode: PlayerDisplayMode
+  playerMode: 'overview' | 'in_progress' | 'submitted'
+  onContinue: () => void
+  onOpenOverview: (assignmentId: string) => void
+  onOpenReview: (assignmentId: string) => void
+  onOpenCertificates: () => void
+}) {
+  const state = getAssessmentState(assessment)
+  const isCurrentSession = activeSession?.assignmentId === assessment.assignmentId
+  const isReviewing = isCurrentSession && playerDisplayMode === 'review'
+  const showContinue = isCurrentSession && playerMode === 'in_progress' && !state.disabled
+  const showFocusPlayer = isCurrentSession && playerMode === 'overview' && !state.disabled
+  const primaryActionLabel = showContinue
+    ? 'Continue Assessment'
+    : showFocusPlayer
+      ? assessment.canRetake
+        ? 'Go to Retake'
+        : 'Go to Start'
+      : assessment.canRetake
+        ? 'Open Retake'
+        : 'Open Assessment'
+
+  const handlePrimaryAction = () => {
+    if (showContinue || showFocusPlayer) {
+      onContinue()
+      return
+    }
+
+    onOpenOverview(assessment.assignmentId)
+  }
+
+  return (
+    <div className="rounded-[28px] border border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(224,242,254,0.7),transparent_32%),linear-gradient(160deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))] p-6 shadow-sm">
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{assessment.categoryTitle}</Badge>
+              <Badge className={state.tone}>{assessment.statusLabel || state.label}</Badge>
+              <Badge variant="outline">Pass at {assessment.passingScore}%</Badge>
+            </div>
+            <div>
+              <div className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-700">Focused Assignment</div>
+              <div className="mt-2 text-2xl font-bold tracking-tight text-slate-950">
+                {assessment.assignmentTitle || assessment.assessmentTitle}
+              </div>
+              <div className="mt-2 max-w-3xl text-sm leading-7 text-slate-600">
+                {assessment.assessmentDescription || 'This trainer-assigned assessment is ready in the navigation flow below. Questions open one at a time, and the final item reveals the Submit button.'}
+              </div>
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <FocusSnapshot
+              label="Due Date"
+              value={formatDateLabel(assessment.targetDueAt)}
+              icon={<Clock3 className="size-4 text-sky-700" />}
+            />
+            <FocusSnapshot
+              label="Target"
+              value={assessment.targetLabel}
+              icon={<Target className="size-4 text-slate-700" />}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DetailChip label="Questions" value={String(assessment.questionCount)} />
+          <DetailChip label="Attempts Used" value={assessment.maximumAttempts ? `${assessment.attemptCount || 0}/${assessment.maximumAttempts}` : `${assessment.attemptCount || 0}/Unlimited`} />
+          <DetailChip
+            label="Attempts Left"
+            value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
+          />
+          <DetailChip
+            label="Latest Score"
+            value={assessment.latestAttempt ? `${assessment.latestAttempt.score.toFixed(2)}%` : 'Not started'}
+          />
+        </div>
+
+        <div className="rounded-3xl border border-slate-200 bg-white/80 p-5">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-2">
+              <div className="text-sm font-semibold text-slate-950">
+                {assessment.latestAttempt?.status === 'pass'
+                  ? 'This assigned module is complete and locked after passing.'
+                  : assessment.latestAttempt?.status === 'fail' && !assessment.canRetake
+                    ? 'All allowed attempts were used. The last saved score is now the final result for this assignment.'
+                    : assessment.canRetake
+                      ? 'The last score was below the passing rate. A retake is available while attempts remain.'
+                      : 'This assigned module is ready to start.'}
+              </div>
+              <div className="text-sm text-slate-600">
+                {isReviewing
+                  ? 'Saved review is currently open below.'
+                  : 'Open the assignment, answer each question one at a time, and submit on the final question to save the result.'}
+              </div>
+              {assessment.latestAttempt ? (
+                <div className={`inline-flex rounded-2xl border px-4 py-2 text-sm ${getAttemptTone(assessment.latestAttempt.status)}`}>
+                  Attempt #{assessment.latestAttempt.attemptNo} saved on {formatDateTimeLabel(assessment.latestAttempt.completedAt || assessment.latestAttempt.submittedAt)}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              {!state.disabled ? (
+                <Button type="button" onClick={handlePrimaryAction}>
+                  {showContinue ? <BookOpenCheck className="size-4" /> : assessment.canRetake ? <RotateCcw className="size-4" /> : <PlayCircle className="size-4" />}
+                  {primaryActionLabel}
+                </Button>
+              ) : (
+                <Button type="button" variant="outline" disabled>
+                  {assessment.latestAttempt?.status === 'pass' ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+                  {state.actionLabel}
+                </Button>
+              )}
+              {assessment.latestAttempt ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => onOpenReview(assessment.assignmentId)}
+                >
+                  <BookOpenCheck className="size-4" />
+                  View Saved Result
+                </Button>
+              ) : null}
+              {assessment.certificate ? (
+                <Button type="button" variant="outline" onClick={onOpenCertificates}>
+                  <Award className="size-4" />
+                  Certificates
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function FocusSnapshot({
+  label,
+  value,
+  icon,
+}: {
+  label: string
+  value: string
+  icon: ReactNode
+}) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm">
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+        {icon}
+        <span>{label}</span>
+      </div>
+      <div className="mt-2 text-sm font-semibold text-slate-950">{value}</div>
     </div>
   )
 }

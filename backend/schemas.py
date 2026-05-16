@@ -856,6 +856,7 @@ class CallSimulationAssignmentCreate(BaseModel):
     scenario_id: str
     batch_id: str
     trainee_ids: List[str] = Field(default_factory=list)
+    max_attempts: Optional[int] = Field(default=None, ge=1)
 
 
 class CallSimulationAssignmentTargetResponse(BaseModel):
@@ -871,6 +872,7 @@ class CallSimulationAssignmentTargetResponse(BaseModel):
     is_assigned: bool = False
     assignment_id: Optional[str] = None
     assigned_at: Optional[datetime] = None
+    max_attempts: Optional[int] = None
 
 
 class CallSimulationAssignmentResponse(BaseModel):
@@ -879,6 +881,7 @@ class CallSimulationAssignmentResponse(BaseModel):
     scenario_id: str
     batch_id: str
     assigned_trainee_ids: List[str] = Field(default_factory=list)
+    max_attempts: Optional[int] = None
     assignments_created: int = 0
     assignments_updated: int = 0
     assignments_deactivated: int = 0
@@ -1040,6 +1043,8 @@ class SimSessionResponse(BaseModel):
     id: str
     trainee_id: str
     scenario_id: str
+    assignment_id: Optional[str] = None
+    assigned_by_id: Optional[str] = None
     scenario_variation_id: Optional[str]
     batch_id: Optional[str]
 
@@ -1112,6 +1117,10 @@ class SimSessionStartResponse(BaseModel):
     """Response when starting a simulation session"""
 
     session_id: str
+    assignment_id: Optional[str] = None
+    assigned_by_id: Optional[str] = None
+    attempt_number: int = 1
+    max_attempts: int = 1
     scenario_title: str
     scenario_description: Optional[str]
     opening_prompt: str

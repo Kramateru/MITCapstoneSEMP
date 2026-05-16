@@ -8,8 +8,11 @@ import {
   Gauge,
   GraduationCap,
   Loader2,
+  MessageSquare,
+  Mic,
   RefreshCw,
   Target,
+  TrendingUp,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -56,6 +59,16 @@ function formatCount(value?: number | null) {
     return '0'
   }
   return value.toLocaleString()
+}
+
+function formatMetricValue(value?: number | null, unit?: string | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return unit === 'wpm' || unit === 'sec' ? `0 ${unit}` : '0.0%'
+  }
+  if (unit === 'wpm' || unit === 'sec') {
+    return `${value.toFixed(1)} ${unit}`
+  }
+  return `${value.toFixed(1)}%`
 }
 
 function formatDateTime(value?: string | null) {
@@ -219,9 +232,15 @@ export default function AnalyticsDashboard() {
   const summary = data?.summary
   const hasLearningData = Boolean(
     (summary?.assigned_module_records || 0) > 0
-      || (summary?.assigned_assessment_records || 0) > 0,
+      || (summary?.assigned_assessment_records || 0) > 0
+      || (summary?.assigned_call_simulation_records || 0) > 0
+      || (summary?.published_coaching_logs || 0) > 0,
   )
   const scopeLabel = data?.scope.label || 'All Admin Learning Data'
+  const totalTrackedAssigned =
+    (summary?.assigned_module_records || 0)
+    + (summary?.assigned_assessment_records || 0)
+    + (summary?.assigned_call_simulation_records || 0)
 
   const trainerRows = useMemo(() => data?.trainer_comparison || [], [data?.trainer_comparison])
   const batchRows = useMemo(() => data?.batch_comparison || [], [data?.batch_comparison])
@@ -234,6 +253,9 @@ export default function AnalyticsDashboard() {
   const weakestAreas = useMemo(() => data?.weakest_assessment_areas || [], [data?.weakest_assessment_areas])
   const atRiskTrainers = useMemo(() => data?.at_risk_trainers || [], [data?.at_risk_trainers])
   const atRiskBatches = useMemo(() => data?.at_risk_batches || [], [data?.at_risk_batches])
+  const callSimulationRows = useMemo(() => data?.call_simulation_performance || [], [data?.call_simulation_performance])
+  const callSimulationKpis = useMemo(() => data?.call_simulation_kpi_breakdown || [], [data?.call_simulation_kpi_breakdown])
+  const coachingNotes = useMemo(() => data?.coaching_notes_summary || [], [data?.coaching_notes_summary])
 
   return (
     <div className="space-y-6">
@@ -241,8 +263,8 @@ export default function AnalyticsDashboard() {
         <div>
           <h2 className="text-3xl font-bold text-foreground">Admin Analytics</h2>
           <p className="text-sm text-muted-foreground">
-            Professional analytics built only from saved trainer-owned modules, assigned assessments,
-            exercise attempts, trainee results, and batch-linked learning records.
+            Professional analytics built from real microlearning, assessments, Call Simulation results,
+            coaching records, and batch-linked learning activity.
           </p>
         </div>
 
@@ -290,8 +312,8 @@ export default function AnalyticsDashboard() {
           <CardHeader>
             <CardTitle>No admin learning analytics yet</CardTitle>
             <CardDescription>
-              Analytics will populate after trainers assign modules or assessments and trainees start producing
-              saved exercise or assessment results.
+              Analytics will populate after trainers assign learning activities and trainees start producing
+              saved microlearning, assessment, Call Simulation, or coaching results.
             </CardDescription>
           </CardHeader>
         </Card>
@@ -317,15 +339,21 @@ export default function AnalyticsDashboard() {
               icon={Users}
             />
             <SummaryCard
+              title="Active Trainees"
+              value={formatCount(summary?.active_trainees)}
+              helper="Trainees with recent saved activity in the current scope"
+              icon={TrendingUp}
+            />
+            <SummaryCard
               title="Overall Score"
               value={formatPercent(summary?.overall_score)}
-              helper="Combined exercise and assessment result average"
+              helper="Combined microlearning, assessment, and Call Simulation result average"
               icon={Target}
             />
             <SummaryCard
               title="Completion Rate"
               value={formatPercent(summary?.completion_rate)}
-              helper="Completed modules and assessments across assigned items"
+              helper="Completed modules, assessments, and Call Simulation work across assigned items"
               icon={CheckCircle2}
             />
             <SummaryCard
@@ -346,13 +374,37 @@ export default function AnalyticsDashboard() {
               helper={`${formatCount(summary?.completed_modules)} completed module outcomes`}
               icon={Gauge}
             />
+            <SummaryCard
+              title="Avg Call Sim"
+              value={formatPercent(summary?.average_call_simulation_score)}
+              helper={`${formatCount(summary?.completed_call_simulations)} completed mock calls`}
+              icon={Mic}
+            />
+            <SummaryCard
+              title="Call Pass Rate"
+              value={formatPercent(summary?.call_simulation_pass_rate)}
+              helper={`${formatCount(summary?.assigned_call_simulation_records)} assigned call simulations tracked`}
+              icon={Mic}
+            />
+            <SummaryCard
+              title="Coaching Completion"
+              value={formatPercent(summary?.coaching_completion_rate)}
+              helper={`${formatCount(summary?.pending_coaching_logs)} published coaching logs still waiting for acknowledgement`}
+              icon={MessageSquare}
+            />
+            <SummaryCard
+              title="Support Needed"
+              value={formatCount(summary?.intervention_needed_count)}
+              helper="Trainees currently flagged for low performance, completion risk, or open coaching"
+              icon={AlertTriangle}
+            />
           </div>
 
           <Card className="border-slate-200 shadow-sm">
             <CardHeader>
               <CardTitle>AI Analysis</CardTitle>
               <CardDescription>
-                Management-focused notes generated from real batch, trainer, module, assessment, and exercise outcomes.
+                Management-focused notes generated from real batch, trainer, microlearning, assessment, Call Simulation, coaching, and exercise outcomes.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -469,7 +521,7 @@ export default function AnalyticsDashboard() {
               <CardHeader>
                 <CardTitle>Score Distribution</CardTitle>
                 <CardDescription>
-                  Combined spread of saved exercise and assessment scores in the current admin filter scope.
+                  Combined spread of saved exercise, assessment, and Call Simulation scores in the current admin filter scope.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -489,7 +541,109 @@ export default function AnalyticsDashboard() {
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <SectionEmpty message="Score distribution will populate once trainees complete exercises or assessments in this scope." />
+                  <SectionEmpty message="Score distribution will populate once trainees complete scored exercises, assessments, or mock calls in this scope." />
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <CardTitle>Call Simulation Scenario Performance</CardTitle>
+                <CardDescription>
+                  Average score and pass rate by assigned Call Simulation scenario in the current admin scope.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {callSimulationRows.length ? (
+                  <ResponsiveContainer width="100%" height={320}>
+                    <BarChart data={callSimulationRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 68 }}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={90} />
+                      <YAxis domain={[0, 100]} />
+                      <Tooltip />
+                      <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
+                        <ChartPercentLabelList />
+                      </Bar>
+                      <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
+                        <ChartPercentLabelList />
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <SectionEmpty message="Call Simulation scenario analytics will appear after scoped mock call results are saved." />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <CardTitle>Call and Coaching Overview</CardTitle>
+                <CardDescription>
+                  KPI quality from completed calls and the latest coaching follow-up signals in the current scope.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {callSimulationKpis.length ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {callSimulationKpis.slice(0, 6).map((metric) => (
+                      <div key={metric.metric} className="rounded-2xl border p-4">
+                        <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{metric.metric}</div>
+                        <div className="mt-2 text-xl font-semibold text-slate-950">
+                          {formatMetricValue(metric.value, metric.unit)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <SectionEmpty message="Call Simulation KPI trends will appear after scoped mock calls receive scored outcomes." />
+                )}
+
+                {(data?.coaching_summary?.published_logs || 0) > 0 ? (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Published</div>
+                      <div className="mt-2 text-xl font-semibold text-slate-950">
+                        {formatCount(data?.coaching_summary?.published_logs)}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Pending Ack</div>
+                      <div className="mt-2 text-xl font-semibold text-amber-700">
+                        {formatCount(data?.coaching_summary?.pending_logs)}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border p-4">
+                      <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Retake Coaching</div>
+                      <div className="mt-2 text-xl font-semibold text-rose-700">
+                        {formatCount(data?.coaching_summary?.retake_required_logs)}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {coachingNotes.length ? (
+                  <div className="space-y-3">
+                    {coachingNotes.slice(0, 5).map((note) => (
+                      <div key={note.id} className="rounded-2xl border p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                            </div>
+                          </div>
+                          <Badge variant="outline" className="border-slate-300 text-slate-700">
+                            {note.status.replace(/_/g, ' ')}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <SectionEmpty message="Coaching summaries will appear after trainers publish coaching feedback for the current scope." />
                 )}
               </CardContent>
             </Card>
@@ -513,10 +667,7 @@ export default function AnalyticsDashboard() {
                     <div className="mt-3">
                       <Progress
                         value={
-                          (row.count / Math.max(
-                            (summary?.assigned_module_records || 0) + (summary?.assigned_assessment_records || 0),
-                            1,
-                          )) * 100
+                          (row.count / Math.max(totalTrackedAssigned, 1)) * 100
                         }
                       />
                     </div>
@@ -574,7 +725,7 @@ export default function AnalyticsDashboard() {
             </Card>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-3">
+          <div className="grid gap-6 xl:grid-cols-4">
             <Card className="border-slate-200 shadow-sm">
               <CardHeader>
                 <CardTitle>Top Trainers</CardTitle>
@@ -592,6 +743,27 @@ export default function AnalyticsDashboard() {
                   ))
                 ) : (
                   <SectionEmpty message="Top trainer rankings will appear when trainer-owned results are available." />
+                )}
+              </CardContent>
+            </Card>
+
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <CardTitle>At-Risk Trainers</CardTitle>
+                <CardDescription>Trainers currently showing low score, low completion, or open coaching risk.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {atRiskTrainers.length ? (
+                  atRiskTrainers.map((row) => (
+                    <InsightRow
+                      key={row.trainer_id}
+                      title={row.trainer_name}
+                      subtitle={`${formatPercent(row.overall_score)} overall | ${formatPercent(row.completion_rate)} completion`}
+                      badge={`${formatCount(row.pending_coaching)} coaching open`}
+                    />
+                  ))
+                ) : (
+                  <SectionEmpty message="At-risk trainers will appear once weak performance signals emerge." />
                 )}
               </CardContent>
             </Card>
@@ -620,7 +792,7 @@ export default function AnalyticsDashboard() {
             <Card className="border-slate-200 shadow-sm">
               <CardHeader>
                 <CardTitle>Trainee Ranking</CardTitle>
-                <CardDescription>Top trainee results across modules and assessments in the current admin scope.</CardDescription>
+                <CardDescription>Top trainee results across microlearning, assessments, Call Simulation, and coaching follow-up.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {traineeRows.length ? (
@@ -755,7 +927,7 @@ export default function AnalyticsDashboard() {
             <Card className="border-slate-200 shadow-sm">
               <CardHeader>
                 <CardTitle>Recent Activity</CardTitle>
-                <CardDescription>Latest module and assessment events contributing to the current analytics scope.</CardDescription>
+                <CardDescription>Latest microlearning, assessment, Call Simulation, and coaching events contributing to the current analytics scope.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {recentRows.length ? (
@@ -776,7 +948,7 @@ export default function AnalyticsDashboard() {
                     </div>
                   ))
                 ) : (
-                  <SectionEmpty message="Recent activity will appear after the current scope produces module or assessment events." />
+                  <SectionEmpty message="Recent activity will appear after the current scope produces saved learning or coaching events." />
                 )}
               </CardContent>
             </Card>
@@ -799,10 +971,11 @@ export default function AnalyticsDashboard() {
                         </div>
                         <AlertTriangle className="size-5 text-amber-600" />
                       </div>
-                      <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-3">
+                      <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
                         <div>Score: {formatPercent(row.overall_score)}</div>
                         <div>Completion: {formatPercent(row.completion_rate)}</div>
                         <div>Pass: {formatPercent(row.pass_rate)}</div>
+                        <div>Open Coaching: {formatCount(row.pending_coaching)}</div>
                       </div>
                     </div>
                   ))

@@ -2,11 +2,13 @@
 setlocal
 set "APP_ROOT=%~dp0"
 set "BACKEND_DIR=%APP_ROOT%backend"
+if not defined ENV_FILE_OVERRIDE set "ENV_FILE_OVERRIDE=1"
+if not defined BACKEND_PRESTART_COMPILE set "BACKEND_PRESTART_COMPILE=1"
 
-call :load_env_file "%BACKEND_DIR%\.env.local"
-call :load_env_file "%BACKEND_DIR%\.env"
-call :load_env_file "%APP_ROOT%.env.local"
 call :load_env_file "%APP_ROOT%.env"
+call :load_env_file "%APP_ROOT%.env.local"
+call :load_env_file "%BACKEND_DIR%\.env"
+call :load_env_file "%BACKEND_DIR%\.env.local"
 
 if defined HOST if not defined BACKEND_HOST set "BACKEND_HOST=%HOST%"
 if defined PORT if not defined BACKEND_PORT set "BACKEND_PORT=%PORT%"
@@ -46,6 +48,12 @@ if not exist "%PYTHON_EXE%" (
 call :check_supabase_project_alignment
 if errorlevel 1 exit /b 1
 
+if /I not "%BACKEND_PRESTART_COMPILE%"=="0" (
+  echo Verifying backend Python files before startup...
+  "%PYTHON_EXE%" -m compileall -q "%BACKEND_DIR%"
+  if errorlevel 1 exit /b 1
+)
+
 call :restart_listener "%BACKEND_PORT%" "backend"
 if errorlevel 1 exit /b 1
 
@@ -60,7 +68,7 @@ exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
   "$url = ($env:SUPABASE_URL, $env:NEXT_PUBLIC_SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
-  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:SUPABASE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
   "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^
@@ -118,8 +126,19 @@ exit /b %errorlevel%
 :load_env_file
 if not exist "%~1" exit /b 0
 for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%~1") do (
-  if not "%%~A"=="" call :set_env_if_missing "%%~A" "%%~B"
+  if not "%%~A"=="" (
+    if /I "%ENV_FILE_OVERRIDE%"=="0" (
+      call :set_env_if_missing "%%~A" "%%~B"
+    ) else (
+      call :set_env_value "%%~A" "%%~B"
+    )
+  )
 )
+exit /b 0
+
+:set_env_value
+if "%~1"=="" exit /b 0
+set "%~1=%~2"
 exit /b 0
 
 :set_env_if_missing

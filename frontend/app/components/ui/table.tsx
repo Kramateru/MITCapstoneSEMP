@@ -8,7 +8,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full overflow-x-auto"
+      className="relative w-full overflow-x-auto rounded-[1.2rem] border border-border/80 bg-white/95 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)]"
     >
       <table
         data-slot="table"
@@ -23,7 +23,7 @@ function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
   return (
     <thead
       data-slot="table-header"
-      className={cn("[&_tr]:border-b", className)}
+      className={cn("sticky top-0 z-[1] bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(244,247,251,0.94))] backdrop-blur [&_tr]:border-b", className)}
       {...props}
     />
   );
@@ -57,7 +57,7 @@ function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
     <tr
       data-slot="table-row"
       className={cn(
-        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
+        "hover:bg-slate-50/92 data-[state=selected]:bg-muted border-b border-border/70 transition-colors",
         className,
       )}
       {...props}
@@ -70,7 +70,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "text-muted-foreground h-11 px-3 text-left align-middle text-[0.78rem] font-semibold uppercase tracking-[0.12em] whitespace-normal [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
+        "text-muted-foreground h-12 px-4 text-left align-middle text-[0.77rem] font-semibold uppercase tracking-[0.14em] whitespace-normal [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}
@@ -83,7 +83,7 @@ function TableCell({ className, ...props }: React.ComponentProps<"td">) {
     <td
       data-slot="table-cell"
       className={cn(
-        "p-3 align-middle whitespace-normal break-words text-sm text-foreground [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
+        "px-4 py-3.5 align-middle whitespace-normal break-words text-[0.95rem] leading-6 text-foreground [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}

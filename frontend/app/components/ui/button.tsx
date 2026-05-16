@@ -11,23 +11,23 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-gradient-to-r from-blue-500 to-teal-500 text-white shadow-[0_14px_28px_-18px_rgba(59,130,246,0.55)] hover:from-blue-600 hover:to-teal-600 hover:shadow-[0_18px_32px_-18px_rgba(59,130,246,0.62)]",
-        success: "bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-[0_14px_28px_-18px_rgba(34,197,94,0.45)] hover:from-green-600 hover:to-emerald-600 hover:shadow-[0_18px_32px_-18px_rgba(34,197,94,0.55)]",
+        default: "border border-primary bg-[linear-gradient(180deg,color-mix(in_srgb,var(--primary)_94%,white_6%),var(--primary))] text-white shadow-[0_18px_34px_-22px_rgba(29,86,216,0.5)] hover:bg-[linear-gradient(180deg,color-mix(in_srgb,var(--primary)_88%,white_12%),color-mix(in_srgb,var(--primary)_96%,#153a91_4%))] hover:shadow-[0_22px_40px_-22px_rgba(29,86,216,0.58)]",
+        success: "border border-emerald-600 bg-[linear-gradient(180deg,#14a87a,#0f8f68)] text-white shadow-[0_16px_32px_-22px_rgba(5,150,105,0.46)] hover:bg-[linear-gradient(180deg,#119c72,#0d7f5d)] hover:shadow-[0_18px_36px_-22px_rgba(5,150,105,0.54)]",
         destructive:
-          "bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-500/20 dark:focus-visible:ring-red-500/40 dark:bg-red-500/60",
+          "border border-red-500 bg-red-500 text-white hover:bg-red-600 focus-visible:ring-red-500/20 dark:focus-visible:ring-red-500/40 dark:bg-red-500/60",
         outline:
-          "border-2 border-blue-200 bg-white text-blue-700 hover:bg-blue-50 hover:border-blue-300 dark:border-blue-700 dark:bg-slate-900 dark:text-blue-300 dark:hover:bg-slate-800",
+          "border border-border/90 bg-white/95 text-foreground shadow-[0_10px_24px_-22px_rgba(15,23,42,0.28)] hover:border-primary/25 hover:bg-secondary hover:text-primary dark:border-blue-700 dark:bg-slate-900 dark:text-blue-300 dark:hover:bg-slate-800",
         secondary:
-          "bg-gradient-to-r from-slate-100 to-slate-200 text-slate-700 hover:from-slate-200 hover:to-slate-300 dark:from-slate-700 dark:to-slate-600 dark:text-slate-200 dark:hover:from-slate-600 dark:hover:to-slate-500",
+          "border border-transparent bg-secondary text-secondary-foreground shadow-[0_10px_24px_-22px_rgba(15,23,42,0.22)] hover:bg-[#e3ebf8] dark:from-slate-700 dark:to-slate-600 dark:text-slate-200 dark:hover:from-slate-600 dark:hover:to-slate-500",
         ghost:
-          "text-slate-600 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300",
+          "text-muted-foreground hover:bg-secondary hover:text-foreground dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300",
         link: "text-blue-600 underline-offset-4 hover:underline hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
       },
       size: {
-        default: "h-10 px-4 py-2.5 has-[>svg]:px-3",
-        sm: "h-9 rounded-lg gap-1.5 px-3.5 has-[>svg]:px-3",
-        lg: "h-11 rounded-xl px-6 has-[>svg]:px-4.5",
-        icon: "size-10 rounded-xl",
+        default: "h-11 px-4 py-2.5 text-[0.95rem] has-[>svg]:px-3",
+        sm: "h-9 rounded-lg gap-1.5 px-3.5 text-[0.88rem] has-[>svg]:px-3",
+        lg: "h-12 rounded-xl px-6 text-[0.98rem] has-[>svg]:px-4.5",
+        icon: "size-11 rounded-xl",
       },
     },
     defaultVariants: {

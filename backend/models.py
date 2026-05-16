@@ -1060,6 +1060,7 @@ class CallSimulationAssignment(Base):
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     assigned_by = Column(String(36), ForeignKey("user.id"), nullable=False)
     batch_id = Column(String(36), ForeignKey("batch.id"), nullable=True)
+    max_attempts = Column(Integer, default=3)
     trainer_notes = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True)
     assigned_at = Column(DateTime, default=datetime.utcnow)
@@ -1130,6 +1131,8 @@ class SimSession(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     trainee_id = Column(String(36), ForeignKey("user.id"), nullable=False)
     scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=False)
+    assignment_id = Column(String(36), ForeignKey("call_simulation_assignment.id"), nullable=True)
+    assigned_by_id = Column(String(36), ForeignKey("user.id"), nullable=True)
     scenario_variation_id = Column(
         String(36), ForeignKey("scenario_variation.id"), nullable=True
     )
@@ -1199,9 +1202,11 @@ class SimSession(Base):
 
     # Relationships
     trainee = relationship("User", foreign_keys=[trainee_id])
+    assignment = relationship("CallSimulationAssignment")
     scenario = relationship("Scenario")
     batch = relationship("Batch")
     variation = relationship("ScenarioVariation")
+    assigned_by = relationship("User", foreign_keys=[assigned_by_id])
     trainer = relationship("User", foreign_keys=[trainer_evaluated_by])
     certificate = relationship("CertificateRecord")
 
