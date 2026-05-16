@@ -13,6 +13,8 @@ function clearBrowserSession() {
   try {
     window.localStorage.removeItem('token');
     window.localStorage.removeItem('refresh_token');
+    window.localStorage.removeItem('supabase_access_token');
+    window.localStorage.removeItem('supabase_refresh_token');
     window.localStorage.removeItem('user');
     window.localStorage.removeItem('user-dashboard-settings');
     window.sessionStorage.clear();

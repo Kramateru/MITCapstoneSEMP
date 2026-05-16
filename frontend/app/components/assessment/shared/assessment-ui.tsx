@@ -161,13 +161,13 @@ export function AssessmentSectionNav<TSection extends string>({
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Workspace Navigation</div>
-            <div className="mt-1 text-sm text-slate-600">Move between the core workflow sections for this assessment workspace.</div>
+            <div className="mt-1 text-sm text-slate-600">Jump between the core workflow cards on this one-page assessment workspace.</div>
           </div>
           <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
             {sections.length} Sections
           </div>
         </div>
-        <div className="grid gap-3 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {sections.map((section) => {
             const isActive = section.id === activeSection
             return (

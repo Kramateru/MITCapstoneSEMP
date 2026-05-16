@@ -17,7 +17,10 @@ from ..models import (
     MicrolearningModule,
     ScenarioDifficulty,
 )
-from .gemini_evaluation import score_microlearning_open_response
+from .gemini_evaluation import (
+    score_microlearning_open_response,
+    summarize_microlearning_assignment_performance,
+)
 from .microlearning_catalog import (
     build_type_specific_exercises,
     normalize_module_type,
@@ -63,6 +66,7 @@ MICROLEARNING_FLASHCARD_STUDY_SECONDS = 30
 MICROLEARNING_FLASHCARD_BLANK_SECONDS = 0
 MICROLEARNING_FLASHCARD_ANSWER_SECONDS = 60
 MICROLEARNING_FLASHCARD_RUNTIME_KEY = "flashcard_runtime"
+MICROLEARNING_RESULT_SUMMARY_KEY = "__result_summary__"
 
 
 def _normalize_text_value(value: Any) -> str:
@@ -261,7 +265,7 @@ def filter_current_assignments(
     return filtered
 
 
-_SPECIAL_RESPONSE_KEYS = {"__meta__"}
+_SPECIAL_RESPONSE_KEYS = {"__meta__", MICROLEARNING_RESULT_SUMMARY_KEY}
 _KEYWORD_STOP_WORDS = {
     "a",
     "an",
@@ -1055,6 +1059,21 @@ def _replace_assignment_meta(assignment: MicrolearningAssignment, meta: dict[str
     assignment.responses = responses
 
 
+def _assignment_result_summary(assignment: MicrolearningAssignment) -> dict[str, Any]:
+    responses = dict(assignment.responses or {})
+    summary = responses.get(MICROLEARNING_RESULT_SUMMARY_KEY)
+    return dict(summary) if isinstance(summary, dict) else {}
+
+
+def _set_assignment_result_summary(assignment: MicrolearningAssignment, summary: dict[str, Any]) -> None:
+    responses = dict(assignment.responses or {})
+    if summary:
+        responses[MICROLEARNING_RESULT_SUMMARY_KEY] = summary
+    else:
+        responses.pop(MICROLEARNING_RESULT_SUMMARY_KEY, None)
+    assignment.responses = responses
+
+
 def _parse_datetime_value(value: Any) -> Optional[datetime]:
     if isinstance(value, datetime):
         return value
@@ -1825,6 +1844,153 @@ def _coerce_attempt_points(
     return legacy_points, points_possible
 
 
+def _exercise_result_label(
+    exercise: dict[str, Any],
+    attempt: dict[str, Any],
+) -> str:
+    if not attempt.get("is_completed"):
+        return "incorrect"
+
+    exercise_type = str(exercise.get("type") or "").strip().lower()
+    if exercise_type == "multiple_choice":
+        correct_option = str(exercise.get("correct_option") or "").strip()
+        selected_option = str(attempt.get("selected_option") or "").strip()
+        return "correct" if correct_option and selected_option == correct_option else "incorrect"
+
+    response_text = str(attempt.get("response_text") or "").strip()
+    return "needs_review" if response_text else "incorrect"
+
+
+def _exercise_correct_answer(
+    exercise: dict[str, Any],
+    attempt: Optional[dict[str, Any]] = None,
+) -> str:
+    exercise_type = str(exercise.get("type") or "").strip().lower()
+    if exercise_type == "multiple_choice":
+        return str(exercise.get("correct_option") or "").strip()
+    if exercise_type == "flashcard_recall":
+        revealed_side = str((attempt or {}).get("revealed_side") or "").strip().lower()
+        if revealed_side == "front":
+            return str(exercise.get("front") or "").strip()
+        if revealed_side == "back":
+            return str(exercise.get("back") or "").strip()
+        return str(exercise.get("sample_answer") or exercise.get("back") or exercise.get("front") or "").strip()
+    return str(exercise.get("sample_answer") or "").strip()
+
+
+def build_assignment_result_breakdown(
+    assignment: MicrolearningAssignment,
+) -> list[dict[str, Any]]:
+    exercises = (assignment.module.exercises or []) if assignment.module else []
+    responses = dict(assignment.responses or {})
+    breakdown: list[dict[str, Any]] = []
+
+    for index, exercise in enumerate(exercises):
+        exercise_id = str(exercise.get("id") or "")
+        attempt = responses.get(exercise_id)
+        if not isinstance(attempt, dict):
+            continue
+
+        points_earned, points_possible = _coerce_attempt_points(exercise, attempt)
+        trainee_answer = str(attempt.get("selected_option") or attempt.get("response_text") or "").strip()
+        breakdown.append(
+            {
+                "question_number": index + 1,
+                "question_id": exercise_id,
+                "title": str(exercise.get("title") or "").strip(),
+                "prompt": str(exercise.get("prompt") or "").strip(),
+                "type": str(exercise.get("type") or "").strip().lower(),
+                "trainee_answer": trainee_answer,
+                "correct_answer": str(attempt.get("correct_answer") or _exercise_correct_answer(exercise, attempt)).strip(),
+                "question_result": str(attempt.get("result_status") or _exercise_result_label(exercise, attempt)).strip().lower(),
+                "score": float(attempt.get("score") or 0.0),
+                "points_earned": points_earned,
+                "points_possible": points_possible,
+                "feedback": str(attempt.get("feedback") or "").strip(),
+                "submitted_at": attempt.get("submitted_at"),
+                "matched_keywords": [
+                    str(keyword or "").strip()
+                    for keyword in (attempt.get("matched_keywords") or [])
+                    if str(keyword or "").strip()
+                ],
+                "missing_keywords": [
+                    str(keyword or "").strip()
+                    for keyword in (attempt.get("missing_keywords") or [])
+                    if str(keyword or "").strip()
+                ],
+            }
+        )
+
+    return breakdown
+
+
+def ensure_assignment_result_summary(
+    assignment: MicrolearningAssignment,
+) -> dict[str, Any]:
+    module = getattr(assignment, "module", None)
+    exercises = (module.exercises or []) if module else []
+    if not module or not exercises:
+        return {}
+
+    if int(assignment.completed_exercises or 0) < len(exercises):
+        return {}
+
+    attempt_number = _current_attempt_number(assignment)
+    existing_summary = _assignment_result_summary(assignment)
+    if existing_summary.get("attempt_number") == attempt_number:
+        return existing_summary
+
+    breakdown = build_assignment_result_breakdown(assignment)
+    percentage_score = _assignment_average_score(assignment)
+    points_earned, points_possible = _assignment_point_totals(assignment)
+    passing_score = float(getattr(module, "passing_score", 0) or 0)
+    passed = _assignment_is_passed(assignment)
+    ai_summary = summarize_microlearning_assignment_performance(
+        module_title=str(getattr(module, "title", None) or "Microlearning Module"),
+        module_type=str(normalize_module_type(getattr(module, "type", None)) or "module"),
+        percentage_score=percentage_score,
+        passing_score=passing_score,
+        passed=passed,
+        breakdown=breakdown,
+    )
+
+    summary = {
+        "attempt_number": attempt_number,
+        "module_id": getattr(module, "id", None),
+        "module_title": getattr(module, "title", None),
+        "module_type": normalize_module_type(getattr(module, "type", None)),
+        "total_score": points_earned,
+        "points_earned": points_earned,
+        "points_possible": points_possible,
+        "percentage_score": percentage_score,
+        "passing_score": passing_score,
+        "status": "passed" if passed else "failed",
+        "submitted_at": (
+            assignment.completed_at.isoformat()
+            if isinstance(assignment.completed_at, datetime)
+            else datetime.utcnow().isoformat()
+        ),
+        "overall_summary": str(ai_summary.get("overallSummary") or "").strip(),
+        "strengths": [str(item or "").strip() for item in (ai_summary.get("strengths") or []) if str(item or "").strip()],
+        "weak_areas": [str(item or "").strip() for item in (ai_summary.get("weakAreas") or []) if str(item or "").strip()],
+        "improvement_opportunities": [
+            str(item or "").strip()
+            for item in (ai_summary.get("improvementOpportunities") or [])
+            if str(item or "").strip()
+        ],
+        "recommended_next_steps": [
+            str(item or "").strip()
+            for item in (ai_summary.get("recommendedNextSteps") or [])
+            if str(item or "").strip()
+        ],
+        "explanation": str(ai_summary.get("explanation") or "").strip(),
+        "provider": str(ai_summary.get("provider") or "fallback"),
+        "breakdown": breakdown,
+    }
+    _set_assignment_result_summary(assignment, summary)
+    return summary
+
+
 def _exercise_options_for_current_attempt(
     assignment: MicrolearningAssignment,
     exercise: dict[str, Any],
@@ -2083,13 +2249,27 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
     }
 
 
-def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str, Any]:
+def serialize_assignment_detail(
+    assignment: MicrolearningAssignment,
+    *,
+    include_exercises: bool = True,
+) -> dict[str, Any]:
     module = assignment.module
     media_state = get_module_media_state(module)
+    result_summary = _assignment_result_summary(assignment) or None
+    content_data = dict(module.content_data or {}) if module else {}
+    question_payload_keys = {
+        "questions",
+        "quiz_questions",
+        "video_questions",
+        "video_timestamp_questions",
+        "infographic_questions",
+        "practice_prompt",
+    }
     exercises = []
     responses = dict(assignment.responses or {})
 
-    for exercise in ((module.exercises or []) if module else []):
+    for exercise in ((module.exercises or []) if module and include_exercises else []):
         attempt = responses.get(exercise.get("id"))
         exercise_type = exercise.get("type")
         exercises.append(
@@ -2102,7 +2282,7 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
                 if exercise_type == "multiple_choice"
                 else (exercise.get("options") or []),
                 "required_keywords": exercise.get("required_keywords") or [],
-                "tips": exercise.get("tips") or [],
+                "tips": [],
                 "explanation": exercise.get("explanation"),
                 "option_feedback": exercise.get("option_feedback") or {},
                 "sample_answer": exercise.get("sample_answer"),
@@ -2126,7 +2306,11 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
             "id": module.id if module else None,
             "module_type": normalize_module_type(getattr(module, "type", None)) if module else None,
             "category": _feedback_category_value(module.category) if module else None,
-            "content_data": module.content_data or {} if module else {},
+            "content_data": {
+                key: value
+                for key, value in content_data.items()
+                if key not in question_payload_keys
+            } if module else {},
             "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
             "content_url": (module.content_url or module.audio_url) if module else None,
             "audio_url": module.audio_url if module else None,
@@ -2143,6 +2327,7 @@ def serialize_assignment_detail(assignment: MicrolearningAssignment) -> dict[str
         },
         "flashcard_session": get_flashcard_session_state(assignment),
         "exercises": exercises,
+        "result_summary": result_summary,
     }
 
 
@@ -2179,6 +2364,8 @@ def evaluate_exercise_submission(
             "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
             "response_text": response_text,
             "selected_option": selected_option,
+            "correct_answer": correct_option,
+            "result_status": "correct" if score == 100.0 else "incorrect",
             "input_mode": input_mode or "selection",
             "score": score,
             "points_earned": points_earned,
@@ -2272,6 +2459,7 @@ def evaluate_exercise_submission(
             "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
             "response_text": response_text,
             "selected_option": selected_option,
+            "correct_answer": flashcard_sample_answer,
             "input_mode": input_mode or "typed",
             "revealed_side": revealed or None,
             "status": completed_answer_status,
@@ -2292,6 +2480,7 @@ def evaluate_exercise_submission(
             "expected_answer_length": len(flashcard_sample_answer),
             "sample_similarity": similarity_score,
             "ai_provider": ai_provider,
+            "result_status": "needs_review" if normalized_text else "incorrect",
             "is_completed": is_completed,
             "submitted_at": resolved_answered_at.isoformat(),
         }
@@ -2355,6 +2544,7 @@ def evaluate_exercise_submission(
         "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
         "response_text": response_text,
         "selected_option": selected_option,
+        "correct_answer": sample_answer,
         "input_mode": input_mode or "typed",
         "matched_keywords": matched_keywords,
         "missing_keywords": missing_keywords,
@@ -2364,6 +2554,7 @@ def evaluate_exercise_submission(
         "feedback": feedback,
         "sample_similarity": similarity_score,
         "ai_provider": ai_provider,
+        "result_status": "needs_review" if normalized_text else "incorrect",
         "is_completed": bool(normalized_text),
         "submitted_at": datetime.utcnow().isoformat(),
     }

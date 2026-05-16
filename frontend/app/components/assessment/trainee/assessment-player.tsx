@@ -4,13 +4,10 @@ import confetti from 'canvas-confetti'
 import {
   Award,
   CheckCircle2,
-  CircleAlert,
   Clock3,
-  ListChecks,
   Loader2,
   PlayCircle,
   RotateCcw,
-  Sparkles,
   XCircle,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
@@ -18,15 +15,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 
 import { Badge } from '@/app/components/ui/badge'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/app/components/ui/alert-dialog'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/app/components/ui/dialog'
 import { Input } from '@/app/components/ui/input'
 import { Label } from '@/app/components/ui/label'
 import { Progress } from '@/app/components/ui/progress'
@@ -105,12 +105,27 @@ function getQuestionAnswerMap(assessment: TraineeAssessmentSession | null) {
   ) satisfies Record<string, string[]>
 }
 
+function formatTotalScore(
+  submission: SubmitAssessmentResponse | null,
+  correctAnswers: number,
+  totalQuestions: number,
+) {
+  const earnedPoints = submission?.attempt.analysis?.earnedPoints
+  const totalPoints = submission?.attempt.analysis?.totalPoints
+  if (typeof earnedPoints === 'number' && typeof totalPoints === 'number' && totalPoints > 0) {
+    return `${earnedPoints}/${totalPoints}`
+  }
+
+  return `${correctAnswers}/${totalQuestions}`
+}
+
 export function AssessmentPlayer({
   assessment,
   onSubmitAssessment,
   onAttemptCommitted,
   onViewCertificates,
   onRetakeRequested,
+  onModeChange,
 }: {
   assessment: TraineeAssessmentSession | null
   onSubmitAssessment: (payload: {
@@ -125,16 +140,16 @@ export function AssessmentPlayer({
   onAttemptCommitted: (result: SubmitAssessmentResponse) => Promise<void>
   onViewCertificates: () => void
   onRetakeRequested: (assignmentId: string) => Promise<void>
+  onModeChange?: (mode: 'overview' | 'in_progress' | 'submitted') => void
 }) {
   const [mode, setMode] = useState<'overview' | 'in_progress' | 'submitted'>('overview')
-  const [viewMode, setViewMode] = useState<'single' | 'full'>('single')
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0)
   const [answers, setAnswers] = useState<QuestionAnswerMap>({})
   const [submitting, setSubmitting] = useState(false)
   const [startedAtMs, setStartedAtMs] = useState<number | null>(null)
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null)
   const [submission, setSubmission] = useState<SubmitAssessmentResponse | null>(null)
-  const [summaryOpen, setSummaryOpen] = useState(false)
+  const [confirmSubmitOpen, setConfirmSubmitOpen] = useState(false)
 
   const questionIds = useMemo(
     () => assessment?.questions.map((question) => question.id) || [],
@@ -159,8 +174,12 @@ export function AssessmentPlayer({
     setStartedAtMs(null)
     setRemainingSeconds(timeLimitSeconds)
     setSubmission(null)
-    setSummaryOpen(false)
+    setConfirmSubmitOpen(false)
   }, [assessment?.assignmentId, timeLimitSeconds])
+
+  useEffect(() => {
+    onModeChange?.(mode)
+  }, [mode, onModeChange])
 
   useEffect(() => {
     if (mode !== 'in_progress' || !timeLimitSeconds || !startedAtMs) {
@@ -183,8 +202,8 @@ export function AssessmentPlayer({
       return
     }
 
-    if (assessment.isCompleted && !assessment.canRetake) {
-      toast.error('This assessment is already completed.')
+    if (!assessment.canRetake && (assessment.isCompleted || assessment.attemptsRemaining === 0)) {
+      toast.error('This assigned assessment is already locked.')
       return
     }
 
@@ -192,7 +211,6 @@ export function AssessmentPlayer({
     setCurrentQuestionIndex(0)
     setAnswers({})
     setSubmission(null)
-    setSummaryOpen(false)
     setStartedAtMs(Date.now())
     setRemainingSeconds(timeLimitSeconds)
   }
@@ -231,7 +249,6 @@ export function AssessmentPlayer({
 
       setSubmission(result)
       setMode('submitted')
-      setSummaryOpen(true)
 
       if (result.attempt.status === 'pass') {
         void confetti({
@@ -239,9 +256,11 @@ export function AssessmentPlayer({
           spread: 72,
           origin: { y: 0.6 },
         })
-        toast.success('Passing score achieved. Your certificate is now available.')
+        toast.success('Passing score achieved. The assessment is now locked as completed.')
+      } else if (result.attempt.canRetake) {
+        toast.error('Passing score not reached yet. Your result is saved, and you can retake while attempts remain.')
       } else {
-        toast.error('Passing score not reached yet. Review the summary and try again.')
+        toast.error('The final allowed attempt has been used. The saved result is now locked.')
       }
 
       await onAttemptCommitted(result)
@@ -279,29 +298,38 @@ export function AssessmentPlayer({
     await onRetakeRequested(assessment.assignmentId)
   }
 
-  const canRetakeAfterSubmission = useMemo(() => {
-    if (!assessment || !submission || submission.attempt.status === 'pass') {
-      return false
-    }
+  const handleConfirmSubmit = async () => {
+    setConfirmSubmitOpen(false)
+    await handleSubmitAssessment(false)
+  }
 
-    if (!assessment.maximumAttempts) {
-      return true
-    }
-
-    return submission.attempt.attemptNo < assessment.maximumAttempts
-  }, [assessment, submission])
-
-  const attempt = submission?.attempt || assessment?.latestAttempt || null
-  const correctAnswers = attempt?.correctAnswers ?? attempt?.questionResults.filter((result) => result.isCorrect).length ?? 0
-  const incorrectAnswers = attempt?.incorrectAnswers ?? attempt?.questionResults.filter((result) => !result.isCorrect).length ?? 0
+  const latestAttempt = submission?.attempt || assessment?.latestAttempt || null
+  const correctAnswers = latestAttempt?.correctAnswers ?? latestAttempt?.questionResults.filter((result) => result.isCorrect).length ?? 0
+  const incorrectAnswers = latestAttempt?.incorrectAnswers ?? latestAttempt?.questionResults.filter((result) => !result.isCorrect).length ?? 0
+  const remainingAttempts = submission?.attempt.attemptsRemaining ?? assessment?.attemptsRemaining ?? null
+  const passingScore = submission?.attempt.passingScore ?? assessment?.passingScore ?? 0
+  const hasAttemptsAvailable = assessment?.attemptsRemaining === null || typeof assessment?.attemptsRemaining === 'undefined' || assessment.attemptsRemaining > 0
+  const canRetakeAfterSubmission = Boolean(
+    submission
+      && submission.attempt.status === 'fail'
+      && (submission.attempt.canRetake || remainingAttempts === null || remainingAttempts > 0),
+  )
+  const overviewStatusLabel = mode === 'in_progress'
+    ? 'In Progress'
+    : assessment?.statusLabel || (assessment?.isCompleted ? 'Passed' : assessment?.canRetake ? 'Failed' : 'Not Started')
+  const latestAttemptStatusLabel = assessment?.statusLabel === 'Attempts Used'
+    ? 'Attempts Used'
+    : latestAttempt?.status === 'pass'
+      ? 'Passed'
+      : 'Failed'
 
   if (!assessment) {
     return (
       <Card className="border-dashed">
         <CardHeader>
-          <CardTitle>Open an assigned assessment</CardTitle>
+          <CardTitle>Choose an assigned assessment</CardTitle>
           <CardDescription>
-            Pick an item from your assigned queue to load the live assessment session.
+            Select one of your saved assessment assignments to open the question flow.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -312,9 +340,9 @@ export function AssessmentPlayer({
     return (
       <Card className="border-dashed">
         <CardHeader>
-          <CardTitle>Question set unavailable</CardTitle>
+          <CardTitle>No active questions were found</CardTitle>
           <CardDescription>
-            This assessment does not currently have an active question set. Please contact your trainer.
+            This assigned assessment does not currently have a saved question set. Please contact your trainer.
           </CardDescription>
         </CardHeader>
       </Card>
@@ -322,437 +350,322 @@ export function AssessmentPlayer({
   }
 
   return (
-    <>
-      <Card className="border-slate-200 bg-white/95 shadow-sm">
-        <CardHeader className="space-y-4">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{assessment.categoryTitle}</Badge>
-                <Badge variant="outline">{assessment.questionCount} questions</Badge>
-                <Badge variant="outline">Pass at {assessment.passingScore}%</Badge>
-                {assessment.timeLimitMinutes ? (
-                  <Badge variant="outline">{assessment.timeLimitMinutes} min timer</Badge>
-                ) : (
-                  <Badge variant="outline">Untimed</Badge>
-                )}
-              </div>
-              <CardTitle className="text-2xl text-slate-950">{assessment.assignmentTitle || assessment.assessmentTitle}</CardTitle>
-              <CardDescription className="max-w-3xl text-sm text-slate-600">
-                {assessment.description || 'Complete the served question set to record your score and update your assessment progress.'}
-              </CardDescription>
+    <Card className="border-slate-200 bg-white/95 shadow-sm">
+      <CardHeader className="space-y-4">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{assessment.categoryTitle}</Badge>
+              <Badge variant="outline">{assessment.questionCount} questions</Badge>
+              <Badge variant="outline">Pass at {assessment.passingScore}%</Badge>
+              {assessment.maximumAttempts ? (
+                <Badge variant="outline">{assessment.attemptCount || 0}/{assessment.maximumAttempts} attempts used</Badge>
+              ) : (
+                <Badge variant="outline">Unlimited attempts</Badge>
+              )}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <SnapshotTile label="Due Date" value={formatDate(assessment.targetDueAt)} icon={<Clock3 className="size-4 text-sky-700" />} />
-              <SnapshotTile label="Attempts" value={assessment.attemptCount ? String(assessment.attemptCount) : '0'} icon={<ListChecks className="size-4 text-slate-700" />} />
-            </div>
+            <CardTitle className="text-2xl text-slate-950">{assessment.assignmentTitle || assessment.assessmentTitle}</CardTitle>
+            <CardDescription className="max-w-3xl text-sm text-slate-600">
+              {assessment.description || 'Open the assigned question set, answer one question at a time, and submit to save your result in the database.'}
+            </CardDescription>
           </div>
-        </CardHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <SnapshotTile label="Due Date" value={formatDate(assessment.targetDueAt)} icon={<Clock3 className="size-4 text-sky-700" />} />
+            <SnapshotTile label="Status" value={overviewStatusLabel} icon={<CheckCircle2 className="size-4 text-slate-700" />} />
+          </div>
+        </div>
+      </CardHeader>
 
-        <CardContent className="space-y-6">
-          {mode === 'overview' ? (
-            <>
-              <div className="grid gap-4 md:grid-cols-4">
-                <ResultTile label="Question Count" value={String(assessment.questionCount)} />
-                <ResultTile label="Passing Score" value={`${assessment.passingScore}%`} />
-                <ResultTile
-                  label="Attempts Remaining"
-                  value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
-                />
-                <ResultTile
-                  label="Latest Result"
-                  value={assessment.latestAttempt ? `${assessment.latestAttempt.score.toFixed(2)}%` : 'Not started'}
-                />
-              </div>
+      <CardContent className="space-y-6">
+        {mode === 'overview' ? (
+          <>
+            <div className="grid gap-4 md:grid-cols-4">
+              <ResultTile label="Question Count" value={String(assessment.questionCount)} />
+              <ResultTile label="Passing Rate" value={`${assessment.passingScore}%`} />
+              <ResultTile
+                label="Attempts Left"
+                value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
+              />
+              <ResultTile
+                label="Current Attempt"
+                value={assessment.attemptCount ? String(assessment.attemptCount) : '0'}
+              />
+            </div>
 
-              {assessment.latestAttempt ? (
-                <div className={`rounded-2xl border px-4 py-3 text-sm ${getStatusTone(assessment.latestAttempt.status)}`}>
-                  <div className="font-semibold">
-                    Latest result: {assessment.latestAttempt.status === 'pass' ? 'Passed' : 'Needs retake'}
-                  </div>
-                  <div className="mt-1">
-                    Attempt #{assessment.latestAttempt.attemptNo} scored {assessment.latestAttempt.score.toFixed(2)}% on{' '}
-                    {formatDateTime(assessment.latestAttempt.completedAt || assessment.latestAttempt.submittedAt)}.
-                  </div>
+            {assessment.latestAttempt ? (
+              <div className={`rounded-2xl border px-4 py-3 text-sm ${getStatusTone(assessment.latestAttempt.status)}`}>
+                <div className="font-semibold">
+                  Latest saved result: {latestAttemptStatusLabel}
                 </div>
-              ) : null}
-
-              <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.95))] p-5">
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                  <div className="space-y-2">
-                    <div className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-700">Assessment Flow</div>
-                    <div className="text-sm text-slate-700">
-                      Your session is served from the live assignment, including randomized answer choices and any trainer-configured timer or attempt cap.
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    {!assessment.isCompleted || assessment.canRetake ? (
-                      <Button type="button" onClick={handleStartAssessment}>
-                        <PlayCircle className="size-4" />
-                        {assessment.canRetake ? 'Start Retake' : 'Start Assessment'}
-                      </Button>
-                    ) : null}
-                    {assessment.certificate ? (
-                      <Button type="button" variant="outline" onClick={onViewCertificates}>
-                        <Award className="size-4" />
-                        Open Certificate
-                      </Button>
-                    ) : null}
-                  </div>
+                <div className="mt-1">
+                  Attempt #{assessment.latestAttempt.attemptNo} scored {assessment.latestAttempt.score.toFixed(2)}% on{' '}
+                  {formatDateTime(assessment.latestAttempt.completedAt || assessment.latestAttempt.submittedAt)}.
                 </div>
               </div>
-            </>
-          ) : null}
+            ) : null}
 
-          {mode === 'in_progress' ? (
-            <>
-              <div className="space-y-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="space-y-1">
-                    <div className="text-sm font-semibold text-slate-900">
-                      {answeredCount} of {totalQuestions} answered
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      Submit only when every item is complete. The final score is calculated automatically after submission.
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      variant={viewMode === 'single' ? 'default' : 'outline'}
-                      onClick={() => setViewMode('single')}
-                    >
-                      One Question
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={viewMode === 'full' ? 'default' : 'outline'}
-                      onClick={() => setViewMode('full')}
-                    >
-                      Full Page
-                    </Button>
+            <div className="rounded-3xl border border-slate-200 bg-[linear-gradient(135deg,rgba(240,249,255,0.95),rgba(255,255,255,0.95))] p-5">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-700">Assessment Flow</div>
+                  <div className="text-sm text-slate-700">
+                    Questions are shown one at a time. Use Next to move forward, then Submit on the final question to save your result.
                   </div>
                 </div>
-                <Progress value={progressValue} className="h-2.5" />
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-4">
-                <SnapshotTile label="Progress" value={`${progressValue.toFixed(0)}%`} icon={<ListChecks className="size-4 text-slate-700" />} />
-                <SnapshotTile label="Answered" value={`${answeredCount}/${totalQuestions}`} icon={<CheckCircle2 className="size-4 text-emerald-700" />} />
-                <SnapshotTile
-                  label="Time Left"
-                  value={remainingSeconds === null ? 'Untimed' : formatDuration(remainingSeconds)}
-                  icon={<Clock3 className="size-4 text-amber-700" />}
-                />
-                <SnapshotTile label="Due Date" value={formatDate(assessment.targetDueAt)} icon={<CircleAlert className="size-4 text-sky-700" />} />
-              </div>
-
-              {viewMode === 'single' && currentQuestion ? (
-                <div className="space-y-5">
-                  <QuestionCard
-                    question={currentQuestion}
-                    index={currentQuestionIndex}
-                    totalQuestions={totalQuestions}
-                    answer={answers[currentQuestion.id] || ''}
-                    onAnswerChange={handleAnswerChange}
-                  />
-
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled={currentQuestionIndex === 0}
-                      onClick={() => setCurrentQuestionIndex((current) => Math.max(current - 1, 0))}
-                    >
-                      Previous
+                <div className="flex flex-wrap gap-3">
+                  {!assessment.isCompleted && hasAttemptsAvailable ? (
+                    <Button type="button" onClick={handleStartAssessment}>
+                      {assessment.canRetake ? <RotateCcw className="size-4" /> : <PlayCircle className="size-4" />}
+                      {assessment.canRetake ? 'Start Retake' : 'Start Assessment'}
                     </Button>
-                    <div className="flex flex-wrap gap-2">
-                      {assessment.questions.map((question, index) => {
-                        const isAnswered = normalizeAssessmentAnswer(answers[question.id] || '') !== ''
-                        return (
-                          <button
-                            key={question.id}
-                            type="button"
-                            onClick={() => setCurrentQuestionIndex(index)}
-                            className={`inline-flex size-10 items-center justify-center rounded-2xl border text-sm font-semibold transition ${
-                              currentQuestionIndex === index
-                                ? 'border-sky-400 bg-sky-50 text-sky-700'
-                                : isAnswered
-                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                  : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
-                            }`}
-                          >
-                            {index + 1}
-                          </button>
-                        )
-                      })}
-                    </div>
-                    <Button
-                      type="button"
-                      variant={currentQuestionIndex === totalQuestions - 1 ? 'default' : 'outline'}
-                      onClick={() =>
-                        currentQuestionIndex === totalQuestions - 1
-                          ? void handleSubmitAssessment(false)
-                          : setCurrentQuestionIndex((current) => Math.min(current + 1, totalQuestions - 1))
-                      }
-                      disabled={submitting}
-                    >
-                      {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
-                      {currentQuestionIndex === totalQuestions - 1 ? 'Submit Assessment' : 'Next'}
+                  ) : (
+                    <Button type="button" variant="outline" disabled>
+                      {assessment.latestAttempt?.status === 'pass' ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+                      {assessment.latestAttempt?.status === 'pass' ? 'Completed' : 'Attempts Used'}
                     </Button>
+                  )}
+                  {assessment.certificate ? (
+                    <Button type="button" variant="outline" onClick={onViewCertificates}>
+                      <Award className="size-4" />
+                      Open Certificate
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {mode === 'in_progress' && currentQuestion ? (
+          <>
+            <div className="space-y-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="space-y-1">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Question {currentQuestionIndex + 1} of {totalQuestions}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {answeredCount} answered so far. The final question will show the Submit button.
                   </div>
                 </div>
-              ) : null}
+                <div className="flex flex-wrap gap-3 text-sm text-slate-600">
+                  <span>Progress {progressValue.toFixed(0)}%</span>
+                  <span>{remainingSeconds === null ? 'Untimed' : `${formatDuration(remainingSeconds)} left`}</span>
+                </div>
+              </div>
+              <Progress value={progressValue} className="h-2.5" />
+            </div>
 
-              {viewMode === 'full' ? (
-                <div className="space-y-6">
-                  {assessment.questions.map((question, index) => (
-                    <QuestionCard
+            <div className="grid gap-4 md:grid-cols-4">
+              <SnapshotTile label="Answered" value={`${answeredCount}/${totalQuestions}`} icon={<CheckCircle2 className="size-4 text-emerald-700" />} />
+              <SnapshotTile label="Passing Rate" value={`${assessment.passingScore}%`} icon={<CheckCircle2 className="size-4 text-sky-700" />} />
+              <SnapshotTile
+                label="Time Left"
+                value={remainingSeconds === null ? 'Untimed' : formatDuration(remainingSeconds)}
+                icon={<Clock3 className="size-4 text-amber-700" />}
+              />
+              <SnapshotTile label="Due Date" value={formatDate(assessment.targetDueAt)} icon={<Clock3 className="size-4 text-slate-700" />} />
+            </div>
+
+            <QuestionCard
+              question={currentQuestion}
+              index={currentQuestionIndex}
+              totalQuestions={totalQuestions}
+              answer={answers[currentQuestion.id] || ''}
+              onAnswerChange={handleAnswerChange}
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={currentQuestionIndex === 0}
+                onClick={() => setCurrentQuestionIndex((current) => Math.max(current - 1, 0))}
+              >
+                Previous
+              </Button>
+              <div className="flex flex-wrap gap-2">
+                {assessment.questions.map((question, index) => {
+                  const isAnswered = normalizeAssessmentAnswer(answers[question.id] || '') !== ''
+                  return (
+                    <button
                       key={question.id}
-                      question={question}
-                      index={index}
-                      totalQuestions={totalQuestions}
-                      answer={answers[question.id] || ''}
-                      onAnswerChange={handleAnswerChange}
-                    />
-                  ))}
+                      type="button"
+                      onClick={() => setCurrentQuestionIndex(index)}
+                      className={`inline-flex size-10 items-center justify-center rounded-2xl border text-sm font-semibold transition ${
+                        currentQuestionIndex === index
+                          ? 'border-sky-400 bg-sky-50 text-sky-700'
+                          : isAnswered
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                      }`}
+                    >
+                      {index + 1}
+                    </button>
+                  )
+                })}
+              </div>
+              <Button
+                type="button"
+                onClick={() =>
+                  currentQuestionIndex === totalQuestions - 1
+                    ? setConfirmSubmitOpen(true)
+                    : setCurrentQuestionIndex((current) => Math.min(current + 1, totalQuestions - 1))
+                }
+                disabled={submitting}
+              >
+                {submitting ? <Loader2 className="size-4 animate-spin" /> : null}
+                {currentQuestionIndex === totalQuestions - 1 ? 'Submit' : 'Next'}
+              </Button>
+            </div>
+          </>
+        ) : null}
 
-                  <div className="flex justify-end">
-                    <Button type="button" onClick={() => void handleSubmitAssessment(false)} disabled={submitting}>
-                      {submitting ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                      Submit Assessment
-                    </Button>
-                  </div>
-                </div>
-              ) : null}
-            </>
-          ) : null}
-
-          {mode === 'submitted' && submission ? (
-            <>
-              <div className={`rounded-3xl border px-5 py-5 ${getStatusTone(submission.attempt.status)}`}>
-                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      {submission.attempt.status === 'pass' ? (
-                        <CheckCircle2 className="size-8 text-emerald-600" />
-                      ) : (
-                        <XCircle className="size-8 text-amber-600" />
-                      )}
-                      <div>
-                        <div className="text-2xl font-bold text-slate-950">
-                          {submission.attempt.status === 'pass' ? 'Assessment passed' : 'Retake available'}
-                        </div>
-                        <div className="text-sm text-slate-600">
-                          Attempt #{submission.attempt.attemptNo} saved on {formatDateTime(submission.attempt.completedAt || submission.attempt.submittedAt)}
-                        </div>
+        {mode === 'submitted' && submission ? (
+          <>
+            <div className={`rounded-3xl border px-5 py-5 ${getStatusTone(submission.attempt.status)}`}>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-3">
+                    {submission.attempt.status === 'pass' ? (
+                      <CheckCircle2 className="size-8 text-emerald-600" />
+                    ) : (
+                      <XCircle className="size-8 text-amber-600" />
+                    )}
+                    <div>
+                      <div className="text-2xl font-bold text-slate-950">
+                        {submission.attempt.status === 'pass' ? 'Assessment passed' : 'Assessment failed'}
+                      </div>
+                      <div className="text-sm text-slate-600">
+                        Attempt #{submission.attempt.attemptNo} saved on {formatDateTime(submission.attempt.completedAt || submission.attempt.submittedAt)}
                       </div>
                     </div>
-                    <div className="text-sm text-slate-700">
-                      {submission.attempt.feedback || 'Your assessment attempt has been saved successfully.'}
-                    </div>
                   </div>
-
-                  <div className="grid gap-3 sm:grid-cols-4">
-                    <ResultTile label="Score" value={`${submission.attempt.score.toFixed(2)}%`} />
-                    <ResultTile label="Correct" value={String(correctAnswers)} />
-                    <ResultTile label="Incorrect" value={String(incorrectAnswers)} />
-                    <ResultTile label="Time Spent" value={formatDuration(submission.attempt.timeSpentSeconds)} />
+                  <div className="text-sm text-slate-700">
+                    {submission.attempt.feedback || 'Your assessment attempt has been saved successfully.'}
                   </div>
                 </div>
+
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  <ResultTile label="Total Score" value={formatTotalScore(submission, correctAnswers, submission.attempt.totalQuestions || totalQuestions)} />
+                  <ResultTile label="Percentage" value={`${submission.attempt.score.toFixed(2)}%`} />
+                  <ResultTile label="Passing Rate" value={`${passingScore.toFixed(2)}%`} />
+                  <ResultTile label="Status" value={submission.attempt.statusLabel || (submission.attempt.status === 'pass' ? 'Passed' : 'Failed')} />
+                  <ResultTile label="Remaining Attempts" value={remainingAttempts === null ? 'Unlimited' : String(remainingAttempts)} />
+                  <ResultTile label="Time Spent" value={formatDuration(submission.attempt.timeSpentSeconds)} />
+                </div>
               </div>
+            </div>
 
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Attempt Analysis</CardTitle>
-                  <CardDescription>
-                    Strengths, missed areas, and coaching recommendations from the saved result.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-6 xl:grid-cols-3">
-                  <AnalysisList
-                    title="Strengths"
-                    items={submission.attempt.analysis?.strengths || []}
-                    tone="emerald"
-                  />
-                  <AnalysisList
-                    title="Areas for Improvement"
-                    items={submission.attempt.analysis?.improvements || []}
-                    tone="amber"
-                  />
-                  <AnalysisList
-                    title="Recommendations"
-                    items={submission.attempt.analysis?.recommendations || []}
-                    tone="sky"
-                  />
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200">
-                <CardHeader>
-                  <CardTitle>Detailed Review</CardTitle>
-                  <CardDescription>Each answer below matches the saved attempt data in Supabase.</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <ScrollArea className="h-[420px] pr-4">
-                    <div className="space-y-4">
-                      {submission.attempt.questionResults.map((result, index) => (
-                        <div
-                          key={result.questionId}
-                          className={`rounded-2xl border p-4 ${
-                            result.isCorrect
-                              ? 'border-emerald-200 bg-emerald-50/60'
-                              : 'border-amber-200 bg-amber-50/60'
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            {result.isCorrect ? (
-                              <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" />
-                            ) : (
-                              <XCircle className="mt-0.5 size-5 text-amber-600" />
-                            )}
-                            <div className="space-y-3">
-                              <div className="font-semibold text-slate-950">
-                                Q{index + 1}. {result.questionText}
-                              </div>
-                              <div className="text-sm text-slate-700">
-                                Your answer: <span className="font-semibold">{result.userAnswer || 'No answer submitted'}</span>
-                              </div>
-                              <div className="text-sm text-slate-700">
-                                Correct answer: <span className="font-semibold">{result.correctAnswer}</span>
-                              </div>
-                              {result.options?.length ? (
-                                <div className="space-y-2">
-                                  {result.options.map((option, optionIndex) => {
-                                    const isCorrectAnswer =
-                                      normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.correctAnswer)
-                                    const isSelectedAnswer =
-                                      normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.userAnswer)
-
-                                    return (
-                                      <div
-                                        key={`${result.questionId}-${optionIndex}`}
-                                        className={`rounded-xl border px-3 py-2 text-sm ${
-                                          isCorrectAnswer
-                                            ? 'border-emerald-200 bg-emerald-50'
-                                            : isSelectedAnswer
-                                              ? 'border-amber-200 bg-amber-50'
-                                              : 'border-slate-200 bg-white'
-                                        }`}
-                                      >
-                                        {option}
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              ) : null}
-                              {result.explanation ? (
-                                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                                  {result.explanation}
-                                </div>
-                              ) : null}
+            <Card className="border-slate-200">
+              <CardHeader>
+                <CardTitle>Saved Review</CardTitle>
+                <CardDescription>
+                  This review is based on the exact answers and choices saved for your attempt.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ScrollArea className="h-[420px] pr-4">
+                  <div className="space-y-4">
+                    {submission.attempt.questionResults.map((result, index) => (
+                      <div
+                        key={result.questionId}
+                        className={`rounded-2xl border p-4 ${
+                          result.isCorrect
+                            ? 'border-emerald-200 bg-emerald-50/60'
+                            : 'border-amber-200 bg-amber-50/60'
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          {result.isCorrect ? (
+                            <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" />
+                          ) : (
+                            <XCircle className="mt-0.5 size-5 text-amber-600" />
+                          )}
+                          <div className="space-y-3">
+                            <div className="font-semibold text-slate-950">
+                              Q{index + 1}. {result.questionText}
                             </div>
+                            <div className="text-sm text-slate-700">
+                              Your answer: <span className="font-semibold">{result.userAnswer || 'No answer submitted'}</span>
+                            </div>
+                            <div className="text-sm text-slate-700">
+                              Correct answer: <span className="font-semibold">{result.correctAnswer}</span>
+                            </div>
+                            {result.options?.length ? (
+                              <div className="space-y-2">
+                                {result.options.map((option, optionIndex) => {
+                                  const isCorrectAnswer =
+                                    normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.correctAnswer)
+                                  const isSelectedAnswer =
+                                    normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.userAnswer)
+
+                                  return (
+                                    <div
+                                      key={`${result.questionId}-${optionIndex}`}
+                                      className={`rounded-xl border px-3 py-2 text-sm ${
+                                        isCorrectAnswer
+                                          ? 'border-emerald-200 bg-emerald-50'
+                                          : isSelectedAnswer
+                                            ? 'border-amber-200 bg-amber-50'
+                                            : 'border-slate-200 bg-white'
+                                      }`}
+                                    >
+                                      {option}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : null}
+                            {result.explanation ? (
+                              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+                                {result.explanation}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  </ScrollArea>
-                </CardContent>
-              </Card>
-
-              <div className="flex flex-wrap gap-3">
-                {canRetakeAfterSubmission ? (
-                  <Button type="button" onClick={() => void handleRetake()}>
-                    <RotateCcw className="size-4" />
-                    Start Fresh Retake
-                  </Button>
-                ) : null}
-                {submission.certificate ? (
-                  <Button type="button" variant="outline" onClick={onViewCertificates}>
-                    <Award className="size-4" />
-                    Open Certificate
-                  </Button>
-                ) : null}
-              </div>
-            </>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Sparkles className="size-5 text-sky-600" />
-              Post-Assessment Summary
-            </DialogTitle>
-            <DialogDescription>
-              Immediate scoring, coaching highlights, and certificate outcome for the most recent attempt.
-            </DialogDescription>
-          </DialogHeader>
-
-          {submission ? (
-            <div className="space-y-6">
-              <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
-                <ResultTile label="Score" value={`${submission.attempt.score.toFixed(2)}%`} />
-                <ResultTile label="Status" value={submission.attempt.status.toUpperCase()} />
-                <ResultTile label="Correct" value={String(correctAnswers)} />
-                <ResultTile label="Incorrect" value={String(incorrectAnswers)} />
-                <ResultTile label="Target" value={`${submission.attempt.passingScore || assessment.passingScore}%`} />
-                <ResultTile label="Time Spent" value={formatDuration(submission.attempt.timeSpentSeconds)} />
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-4">
-                <div className="text-sm font-semibold text-slate-900">
-                  {submission.attempt.analysis?.summary || submission.attempt.feedback || 'Assessment result saved.'}
-                </div>
-                {submission.certificate ? (
-                  <div className="mt-2 text-sm text-emerald-700">
-                    Certificate unlocked: <span className="font-semibold">{submission.certificate.certificateCode}</span>
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="grid gap-6 xl:grid-cols-3">
-                <AnalysisList
-                  title="Strengths"
-                  items={submission.attempt.analysis?.strengths || []}
-                  tone="emerald"
-                />
-                <AnalysisList
-                  title="Areas for Improvement"
-                  items={submission.attempt.analysis?.improvements || []}
-                  tone="amber"
-                />
-                <AnalysisList
-                  title="Recommendations"
-                  items={submission.attempt.analysis?.recommendations || []}
-                  tone="sky"
-                />
-              </div>
-
-              <div className="space-y-3">
-                <div className="text-sm font-semibold text-slate-900">Category Performance Breakdown</div>
-                {(submission.attempt.analysis?.categoryBreakdown || []).map((entry) => (
-                  <div key={`${entry.categoryId}-${entry.categoryTitle}`} className="rounded-2xl border border-slate-200 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <div className="font-semibold text-slate-900">{entry.categoryTitle}</div>
-                        <div className="text-sm text-slate-600">
-                          {entry.correctAnswers} correct of {entry.totalQuestions} questions
-                        </div>
                       </div>
-                      <Badge variant="outline">{entry.score.toFixed(2)}%</Badge>
-                    </div>
-                    <Progress value={entry.score} className="mt-3 h-2" />
+                    ))}
                   </div>
-                ))}
-              </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
+
+            <div className="flex flex-wrap gap-3">
+              {canRetakeAfterSubmission ? (
+                <Button type="button" onClick={() => void handleRetake()}>
+                  <RotateCcw className="size-4" />
+                  Retake Assessment
+                </Button>
+              ) : null}
+              {submission.certificate ? (
+                <Button type="button" variant="outline" onClick={onViewCertificates}>
+                  <Award className="size-4" />
+                  Open Certificate
+                </Button>
+              ) : null}
             </div>
-          ) : null}
-        </DialogContent>
-      </Dialog>
-    </>
+          </>
+        ) : null}
+      </CardContent>
+
+      <AlertDialog open={confirmSubmitOpen} onOpenChange={setConfirmSubmitOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Submit assessment now?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will save attempt #{(assessment.attemptCount || 0) + 1} to the database and calculate your final result for this submission.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={submitting}>Review Answers</AlertDialogCancel>
+            <AlertDialogAction disabled={submitting} onClick={() => void handleConfirmSubmit()}>
+              {submitting ? 'Submitting...' : 'Confirm Submit'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Card>
   )
 }
 
@@ -858,40 +771,6 @@ function ResultTile({
     <div className="rounded-2xl border border-white/70 bg-white/95 px-4 py-3 text-center shadow-sm">
       <div className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">{label}</div>
       <div className="mt-1 text-xl font-bold text-slate-950">{value}</div>
-    </div>
-  )
-}
-
-function AnalysisList({
-  title,
-  items,
-  tone,
-}: {
-  title: string
-  items: string[]
-  tone: 'emerald' | 'amber' | 'sky'
-}) {
-  const toneClassName =
-    tone === 'emerald'
-      ? 'border-emerald-200 bg-emerald-50/80'
-      : tone === 'amber'
-        ? 'border-amber-200 bg-amber-50/80'
-        : 'border-sky-200 bg-sky-50/80'
-
-  return (
-    <div className={`rounded-2xl border p-4 ${toneClassName}`}>
-      <div className="font-semibold text-slate-950">{title}</div>
-      {items.length ? (
-        <div className="mt-3 space-y-2">
-          {items.map((item) => (
-            <div key={item} className="rounded-xl border border-white/70 bg-white/80 px-3 py-2 text-sm text-slate-700">
-              {item}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-3 text-sm text-slate-600">No notes recorded for this section yet.</div>
-      )}
     </div>
   )
 }

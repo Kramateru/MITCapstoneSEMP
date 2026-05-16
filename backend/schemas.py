@@ -30,6 +30,10 @@ class LoginResponse(BaseModel):
 
     access_token: str
     refresh_token: Optional[str] = None
+    supabase_access_token: Optional[str] = None
+    supabase_refresh_token: Optional[str] = None
+    supabase_expires_at: Optional[int] = None
+    supabase_expires_in: Optional[int] = None
     token_type: str = "bearer"
     user: "UserResponse"
     must_change_password: bool = False

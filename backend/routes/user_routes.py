@@ -4,6 +4,7 @@ Handles user CRUD operations, authentication, and profile management
 """
 
 import uuid
+import logging
 from typing import List, Optional
 
 from sqlalchemy import func
@@ -20,6 +21,7 @@ from ..services.supabase_auth_service import (
     SupabaseAuthServiceError,
     SupabaseUserSyncError,
     authenticate_supabase_credentials,
+    issue_supabase_session,
     sync_user_to_supabase_auth,
 )
 from ..supabase_client import get_supabase_client
@@ -34,6 +36,7 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+logger = logging.getLogger(__name__)
 ALLOWED_PROFILE_IMAGE_TYPES = {
     "image/jpeg": "jpg",
     "image/jpg": "jpg",
@@ -229,10 +232,20 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     # Update last login
     user.last_login = __import__('datetime').datetime.utcnow()
     db.commit()
+
+    supabase_session = {}
+    try:
+        supabase_session = issue_supabase_session(normalized_email, credentials.password)
+    except SupabaseAuthServiceError as exc:
+        logger.warning("Unable to issue Supabase session for %s: %s", normalized_email, exc)
     
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        supabase_access_token=supabase_session.get("access_token"),
+        supabase_refresh_token=supabase_session.get("refresh_token"),
+        supabase_expires_at=supabase_session.get("expires_at"),
+        supabase_expires_in=supabase_session.get("expires_in"),
         user=UserResponse.from_orm(user),
         must_change_password=(
             user.role == UserRole.TRAINEE

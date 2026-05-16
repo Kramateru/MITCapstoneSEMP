@@ -38,6 +38,7 @@ import { apiFetch } from '@/app/utils/api'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
+import { ChartCountLabelList, ChartPercentLabelList } from '../ui/chart-data-labels'
 import { Progress } from '../ui/progress'
 
 const AUTO_REFRESH_MS = 60_000
@@ -385,13 +386,17 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {trainerRows.length ? (
                   <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={trainerRows.slice(0, 10)} margin={{ top: 12, right: 12, left: 0, bottom: 64 }}>
+                    <BarChart data={trainerRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={84} />
                       <YAxis domain={[0, 100]} />
                       <Tooltip />
-                      <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score" />
-                      <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate" />
+                      <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                        <ChartPercentLabelList />
+                      </Bar>
+                      <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                        <ChartPercentLabelList />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -410,13 +415,17 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {batchRows.length ? (
                   <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={batchRows.slice(0, 10)} margin={{ top: 12, right: 12, left: 0, bottom: 64 }}>
+                    <BarChart data={batchRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={80} />
                       <YAxis domain={[0, 100]} />
                       <Tooltip />
-                      <Bar dataKey="overall_score" fill="#2563eb" radius={[8, 8, 0, 0]} name="Overall Score" />
-                      <Bar dataKey="completion_rate" fill="#f59e0b" radius={[8, 8, 0, 0]} name="Completion Rate" />
+                      <Bar dataKey="overall_score" fill="#2563eb" radius={[8, 8, 0, 0]} name="Overall Score">
+                        <ChartPercentLabelList />
+                      </Bar>
+                      <Bar dataKey="completion_rate" fill="#f59e0b" radius={[8, 8, 0, 0]} name="Completion Rate">
+                        <ChartPercentLabelList />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -437,13 +446,17 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {moduleRows.length ? (
                   <ResponsiveContainer width="100%" height={340}>
-                    <LineChart data={moduleRows.slice(0, 12)} margin={{ top: 12, right: 16, left: 0, bottom: 84 }}>
+                    <LineChart data={moduleRows.slice(0, 12)} margin={{ top: 28, right: 16, left: 0, bottom: 84 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={100} />
                       <YAxis domain={[0, 100]} />
                       <Tooltip />
-                      <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate" />
-                      <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score" />
+                      <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                        <ChartPercentLabelList position="top" />
+                      </Line>
+                      <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                        <ChartPercentLabelList position="bottom" />
+                      </Line>
                     </LineChart>
                   </ResponsiveContainer>
                 ) : (
@@ -462,12 +475,13 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {(data?.score_distribution || []).some((row) => row.count > 0) ? (
                   <ResponsiveContainer width="100%" height={340}>
-                    <BarChart data={data?.score_distribution || []}>
+                    <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="range_label" />
                       <YAxis allowDecimals={false} />
                       <Tooltip />
                       <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                        <ChartCountLabelList />
                         {(data?.score_distribution || []).map((row, index) => (
                           <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
                         ))}
@@ -519,12 +533,14 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {(data?.performance_breakdown || []).some((row) => row.count > 0) ? (
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={data?.performance_breakdown || []}>
+                    <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="label" />
                       <YAxis allowDecimals={false} />
                       <Tooltip />
-                      <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results" />
+                      <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
+                        <ChartCountLabelList />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
@@ -541,12 +557,14 @@ export default function AnalyticsDashboard() {
               <CardContent>
                 {assessmentRows.length ? (
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={assessmentRows.slice(0, 8)} margin={{ top: 12, right: 10, left: 0, bottom: 72 }}>
+                    <BarChart data={assessmentRows.slice(0, 8)} margin={{ top: 28, right: 10, left: 0, bottom: 72 }}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="assessment_title" interval={0} angle={-18} textAnchor="end" height={92} />
                       <YAxis domain={[0, 100]} />
                       <Tooltip />
-                      <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score" />
+                      <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score">
+                        <ChartPercentLabelList />
+                      </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (

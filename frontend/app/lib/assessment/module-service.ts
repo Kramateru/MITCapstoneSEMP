@@ -269,6 +269,7 @@ type TargetMembershipContext = {
 
 const QUESTION_TEMPLATE_HEADER = [
   'Question Number',
+  'Assessment Title',
   'Category',
   'Question',
   'Choice 1',
@@ -276,7 +277,26 @@ const QUESTION_TEMPLATE_HEADER = [
   'Choice 3',
   'Choice 4',
   'Correct Answer',
+  'Difficulty Level',
+  'Points',
+  'Explanation',
 ]
+
+const REQUIRED_QUESTION_TEMPLATE_COLUMNS = QUESTION_TEMPLATE_HEADER.filter((column) => column !== 'Explanation')
+const CSV_COLUMN_ALIASES: Record<string, string[]> = {
+  'Question Number': ['Question Number', 'Question No', 'QuestionNo'],
+  'Assessment Title': ['Assessment Title', 'Assessment', 'Assessment Name'],
+  Category: ['Category', 'Category Name'],
+  Question: ['Question', 'Question Text', 'Question Prompt'],
+  'Choice 1': ['Choice 1', 'Choice1', 'Option 1', 'Option1', 'Option A', 'Choice A'],
+  'Choice 2': ['Choice 2', 'Choice2', 'Option 2', 'Option2', 'Option B', 'Choice B'],
+  'Choice 3': ['Choice 3', 'Choice3', 'Option 3', 'Option3', 'Option C', 'Choice C'],
+  'Choice 4': ['Choice 4', 'Choice4', 'Option 4', 'Option4', 'Option D', 'Choice D'],
+  'Correct Answer': ['Correct Answer', 'CorrectAnswer', 'Answer Key', 'Answer'],
+  'Difficulty Level': ['Difficulty Level', 'Difficulty', 'DifficultyLevel'],
+  Points: ['Points', 'Point Value', 'PointValue'],
+  Explanation: ['Explanation', 'Rationale', 'Notes'],
+}
 
 const DEFAULT_ASSESSMENT_PASSING_SCORE = 90
 
@@ -288,13 +308,44 @@ function notEmpty<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined
 }
 
-function toNumber(value: unknown, fallback = 0) {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : fallback
+function normalizeCsvColumnName(value: string) {
+  return value
+    .replace(/^\uFEFF/, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '')
+}
+
+function buildCanonicalCsvColumnIndex(header: string[]) {
+  const normalizedHeader = header.map((column) => normalizeCsvColumnName(column.trim()))
+  const index = new Map<string, number>()
+
+  for (const canonicalColumn of QUESTION_TEMPLATE_HEADER) {
+    const aliases = (CSV_COLUMN_ALIASES[canonicalColumn] || [canonicalColumn]).map(normalizeCsvColumnName)
+    const matchingIndex = normalizedHeader.findIndex((columnName) => aliases.includes(columnName))
+    if (matchingIndex >= 0) {
+      index.set(canonicalColumn, matchingIndex)
+    }
+  }
+
+  return index
 }
 
 function sanitizeChoiceValues(options: string[]) {
   return options.map((option) => option.trim())
+}
+
+function sanitizeTextValue(value: string) {
+  return value
+    .replace(/\u0000/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function getQuestionPointValue(metadata?: Record<string, unknown> | null) {
+  const rawValue = metadata?.points
+  const parsed = Number(rawValue)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
 function validateMultipleChoicePayload(
@@ -311,12 +362,23 @@ function validateMultipleChoicePayload(
     throw new AssessmentHttpError(400, 'Each answer choice must be unique.')
   }
 
-  const matchedChoice = sanitizedChoices.find(
-    (choice) => normalizeAssessmentAnswer(choice) === normalizeAssessmentAnswer(correctAnswer),
+  const normalizedCorrectAnswer = normalizeAssessmentAnswer(correctAnswer)
+  const answerKeyMatch = normalizedCorrectAnswer.match(/^(a|b|c|d|choice\s*[1-4])$/i)
+
+  let matchedChoice = sanitizedChoices.find(
+    (choice) => normalizeAssessmentAnswer(choice) === normalizedCorrectAnswer,
   )
 
+  if (!matchedChoice && answerKeyMatch) {
+    const normalizedKey = answerKeyMatch[1].replace(/\s+/g, '')
+    const answerIndex = normalizedKey.startsWith('choice')
+      ? Number(normalizedKey.replace('choice', '')) - 1
+      : normalizedKey.toUpperCase().charCodeAt(0) - 65
+    matchedChoice = sanitizedChoices[answerIndex]
+  }
+
   if (!matchedChoice) {
-    throw new AssessmentHttpError(400, 'Correct answer must exactly match one of the four answer choices.')
+    throw new AssessmentHttpError(400, 'Correct answer must be A, B, C, D, Choice 1-4, or exactly match one of the four answer choices.')
   }
 
   return {
@@ -401,6 +463,7 @@ function buildQuestionRecord(
   question: TrainingQuestionRow,
   categoryName?: string | null,
   usageStats?: QuestionReportRecord | null,
+  assessmentTitle?: string | null,
 ): AssessmentQuestionRecord {
   const choices = Array.isArray(question.options) ? question.options.filter((option) => typeof option === 'string') : []
   const answerCount = usageStats?.answerCount || 0
@@ -411,6 +474,7 @@ function buildQuestionRecord(
   return {
     id: question.id,
     assessmentId: question.assessment_id,
+    assessmentTitle: assessmentTitle || null,
     categoryId: question.category_id,
     categoryName: categoryName || null,
     trainerId: question.created_by || null,
@@ -422,6 +486,7 @@ function buildQuestionRecord(
     correctAnswer: question.correct_answer,
     difficulty: question.difficulty,
     explanation: question.explanation,
+    pointValue: getQuestionPointValue(question.metadata),
     orderIndex: question.order_index,
     activeStatus: question.active_status,
     createdAt: question.created_at,
@@ -487,6 +552,12 @@ function parseStoredAnalysis(
     strengths,
     improvements,
     recommendations,
+    earnedPoints: Number.isFinite(Number(rawAnalysis.earnedPoints))
+      ? Number(rawAnalysis.earnedPoints)
+      : fallback.earnedPoints,
+    totalPoints: Number.isFinite(Number(rawAnalysis.totalPoints))
+      ? Number(rawAnalysis.totalPoints)
+      : fallback.totalPoints,
     categoryBreakdown,
   }
 }
@@ -497,6 +568,7 @@ function buildAttemptRecord(attempt: TrainingAttemptFeedRow): AttemptRecord {
     categoryId: attempt.category_id,
     categoryTitle: attempt.category_title,
     score: Number(attempt.score || 0),
+    passingScore: Number(attempt.passing_score || 90),
     questionResults,
   })
 
@@ -651,7 +723,7 @@ async function getTrainerBatches(sessionUser: BackendSessionUser) {
 
 async function ensurePrimaryAssessment(categoryId: string, category: TrainingCategoryRow) {
   const supabase = createSupabaseAdminClient()
-  const existing = await assertSupabaseResult(
+  const existingPrimary = await assertSupabaseResult(
     supabase
       .from('training_assessments')
       .select('*')
@@ -661,8 +733,37 @@ async function ensurePrimaryAssessment(categoryId: string, category: TrainingCat
     'Unable to load the category assessment shell.',
   ) as TrainingAssessmentRow | null
 
-  if (existing) {
-    return existing
+  if (existingPrimary) {
+    return existingPrimary
+  }
+
+  const existingAssessments = (((await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .select('*')
+      .eq('category_id', categoryId)
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true }),
+    'Unable to load the category assessment shells.',
+  )) as TrainingAssessmentRow[] | null) || [])
+
+  if (existingAssessments.length) {
+    const promotedAssessment = await assertSupabaseResult(
+      supabase
+        .from('training_assessments')
+        .update({
+          title: category.title,
+          description: category.description || null,
+          is_primary: true,
+          active_status: true,
+        })
+        .eq('id', existingAssessments[0].id)
+        .select('*')
+        .single(),
+      'Unable to restore the category assessment shell.',
+    ) as TrainingAssessmentRow | null
+
+    return expectSupabaseRow(promotedAssessment, 'Unable to restore the category assessment shell.')
   }
 
   const inserted = await assertSupabaseResult(
@@ -729,6 +830,25 @@ async function getOwnedAssessment(assessmentId: string, sessionUser: BackendSess
     assessment,
     category,
   }
+}
+
+async function loadAssessmentsByCategoryIds(categoryIds: string[]) {
+  const supabase = createSupabaseAdminClient()
+  if (!categoryIds.length) {
+    return [] as TrainingAssessmentRow[]
+  }
+
+  return (((await assertSupabaseResult(
+    supabase
+      .from('training_assessments')
+      .select('*')
+      .in('category_id', categoryIds)
+      .neq('active_status', false)
+      .order('is_primary', { ascending: false })
+      .order('sort_order', { ascending: true })
+      .order('created_at', { ascending: true }),
+    'Unable to load the assessment definitions.',
+  )) as TrainingAssessmentRow[] | null) || [])
 }
 
 async function getOwnedQuestion(questionId: string, sessionUser: BackendSessionUser) {
@@ -888,7 +1008,10 @@ function selectAssignmentQuestions(
   allQuestions: TrainingQuestionRow[],
   assignmentQuestionRows: TrainingAssignmentQuestionRow[],
 ) {
-  const activeQuestions = allQuestions.filter((question) => question.active_status)
+  const activeQuestions = allQuestions.filter((question) =>
+    question.active_status
+    && (!assignment.assessment_id || question.assessment_id === assignment.assessment_id),
+  )
   const byId = new Map(activeQuestions.map((question) => [question.id, question]))
   const explicitQuestions = assignmentQuestionRows
     .filter((row) => row.assignment_id === assignment.id)
@@ -1631,13 +1754,17 @@ function buildTrainerOwnerReports(
 export async function getAssessmentCsvTemplate() {
   const sampleRow = [
     '1',
+    'Product Knowledge Readiness Check',
     'Product Knowledge',
     'Which statement best describes the product escalation path?',
     'Transfer to Tier 2 after validating the account details.',
     'End the call and ask the customer to email support.',
     'Skip verification if the customer sounds upset.',
     'Promise a refund immediately.',
-    'Transfer to Tier 2 after validating the account details.',
+    'A',
+    'medium',
+    '5',
+    'Validate the account before escalating to protect customer data and route the issue correctly.',
   ]
 
   return [
@@ -1652,18 +1779,7 @@ export async function getTrainerAssessmentBootstrap(
   const supabase = createSupabaseAdminClient()
   const { categories: rawCategories, categoryIds, questions: rawQuestions, batchOptions, traineeOptions, batchMembershipRows } =
     await buildTrainerAssignmentContext(sessionUser)
-
-  const assessments = categoryIds.length
-    ? (((await assertSupabaseResult(
-        supabase
-          .from('training_assessments')
-          .select('*')
-          .in('category_id', categoryIds)
-          .eq('is_primary', true)
-          .order('created_at', { ascending: true }),
-        'Unable to load assessment shells.',
-      )) as TrainingAssessmentRow[] | null) || [])
-    : []
+  const assessments = await loadAssessmentsByCategoryIds(categoryIds)
 
   const assignmentRows = categoryIds.length
     ? (((await assertSupabaseResult(
@@ -1715,6 +1831,7 @@ export async function getTrainerAssessmentBootstrap(
 
   const batchMap = new Map(batchOptions.map((batch) => [batch.id, batch]))
   const traineeMap = new Map(traineeOptions.map((trainee) => [trainee.id, trainee]))
+  const assessmentRowMap = new Map(assessments.map((assessment) => [assessment.id, assessment]))
   const questionReportMap = new Map(
     questionReportRows.map((row) => [
       row.question_id,
@@ -1736,26 +1853,45 @@ export async function getTrainerAssessmentBootstrap(
 
   const categoryMap = new Map(rawCategories.map((category) => [category.id, category]))
   const questionRecords = rawQuestions.map((question) =>
-    buildQuestionRecord(question, categoryMap.get(question.category_id)?.title || null, questionReportMap.get(question.id) || null),
+    buildQuestionRecord(
+      question,
+      categoryMap.get(question.category_id)?.title || null,
+      questionReportMap.get(question.id) || null,
+      assessmentRowMap.get(question.assessment_id)?.title || null,
+    ),
   )
 
   const questionsByCategory = new Map<string, AssessmentQuestionRecord[]>()
+  const questionsByAssessment = new Map<string, AssessmentQuestionRecord[]>()
   for (const question of questionRecords) {
     const current = questionsByCategory.get(question.categoryId || '') || []
     current.push(question)
     questionsByCategory.set(question.categoryId || '', current)
+
+    const assessmentQuestions = questionsByAssessment.get(question.assessmentId) || []
+    assessmentQuestions.push(question)
+    questionsByAssessment.set(question.assessmentId, assessmentQuestions)
   }
 
   const assessmentsById = new Map<string, AssessmentRecord>()
   for (const assessment of assessments) {
     assessmentsById.set(
       assessment.id,
-      buildAssessmentRecord(assessment, questionsByCategory.get(assessment.category_id) || []),
+      buildAssessmentRecord(assessment, questionsByAssessment.get(assessment.id) || []),
     )
   }
 
+  const assessmentsByCategory = new Map<string, AssessmentRecord[]>()
+  for (const assessment of assessments) {
+    const current = assessmentsByCategory.get(assessment.category_id) || []
+    const record = assessmentsById.get(assessment.id)
+    if (record) {
+      current.push(record)
+      assessmentsByCategory.set(assessment.category_id, current)
+    }
+  }
+
   const baseCategories: CategoryRecord[] = rawCategories.map((category) => {
-    const assessment = assessments.find((item) => item.category_id === category.id)
     return {
       id: category.id,
       title: category.title,
@@ -1778,7 +1914,7 @@ export async function getTrainerAssessmentBootstrap(
       retakeRate: 0,
       highestScore: 0,
       lowestScore: 0,
-      assessments: assessment ? [assessmentsById.get(assessment.id)!] : [],
+      assessments: assessmentsByCategory.get(category.id) || [],
     }
   })
 
@@ -1806,6 +1942,7 @@ export async function getTrainerAssessmentBootstrap(
 
   const assignments: AssignmentRecord[] = assignmentRows.map((assignment) => {
     const category = categoriesById.get(assignment.category_id)
+    const linkedAssessment = assignment.assessment_id ? assessmentsById.get(assignment.assessment_id) : null
     const targetCounts = buildTargetCounts(assignment, batchMap, traineeMap, categoriesById, batchMembershipRows)
     const latestByTrainee = latestAttemptsByAssignment.get(assignment.id) || new Map<string, AttemptRecord>()
     const latestAttempts = Array.from(latestByTrainee.values())
@@ -1826,14 +1963,22 @@ export async function getTrainerAssessmentBootstrap(
     const questionCount = assignment.question_count
       || (assignment.assignment_mode === 'selected_questions' && selectedQuestionIds.length
         ? selectedQuestionIds.length
-        : questionsByCategory.get(assignment.category_id)?.length || 0)
+        : linkedAssessment?.questions.length
+          || questionsByCategory.get(assignment.category_id)?.length
+          || 0)
     const targetType = getAssignmentTargetType(assignment)
 
-    const statusLabel = passedTrainees >= targetCounts.assignedTrainees && targetCounts.assignedTrainees > 0
-      ? 'Completed'
-      : completedTrainees > 0
-        ? 'In Progress'
-        : 'Pending'
+    const statusLabel = targetCounts.assignedTrainees <= 0
+      ? 'Assigned'
+      : passedTrainees >= targetCounts.assignedTrainees
+        ? 'Passed'
+        : failedTrainees >= targetCounts.assignedTrainees
+          ? 'Failed'
+          : completedTrainees >= targetCounts.assignedTrainees
+            ? 'Completed'
+            : completedTrainees > 0
+              ? 'In Progress'
+              : 'Assigned'
 
     return {
       id: assignment.id,
@@ -1847,7 +1992,7 @@ export async function getTrainerAssessmentBootstrap(
       isActive: assignment.is_active,
       categoryTitle: category?.title || 'Assessment Category',
       categoryName: category?.title || 'Assessment Category',
-      assessmentTitle: assignment.title || category?.title || 'Assessment',
+      assessmentTitle: linkedAssessment?.title || category?.title || 'Assessment',
       title: assignment.title || `${category?.title || 'Assessment'} Assessment`,
       description: assignment.description,
       targetLabel: getAssignmentTargetLabel(assignment, assignmentTargetContext),
@@ -2107,42 +2252,42 @@ export async function createAssessment(
   payload: CreateAssessmentPayload,
 ) {
   const category = await getOwnedCategory(payload.categoryId, sessionUser)
-  const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
   const supabase = createSupabaseAdminClient()
-  const normalizedTitle = payload.title.trim()
-  const normalizedDescription = payload.description?.trim() || null
+  const normalizedTitle = sanitizeTextValue(payload.title)
+  const normalizedDescription = payload.description?.trim() ? sanitizeTextValue(payload.description) : null
+  const existingAssessments = await loadAssessmentsByCategoryIds([category.id])
+  const duplicate = existingAssessments.find((assessment) =>
+    normalizeAssessmentAnswer(assessment.title) === normalizeAssessmentAnswer(normalizedTitle),
+  )
 
-  const updatedCategory = await assertSupabaseResult(
-    supabase
-      .from('training_assessment_categories')
-      .update({
-        title: normalizedTitle,
-        description: normalizedDescription,
-      })
-      .eq('id', category.id)
-      .select('*')
-      .single(),
-    'Unable to update the linked assessment category.',
-  ) as TrainingCategoryRow | null
+  if (duplicate) {
+    throw new AssessmentHttpError(400, 'An assessment with this title already exists in the selected category.')
+  }
 
-  const updatedAssessment = await assertSupabaseResult(
+  const nextSortOrder = existingAssessments.length
+    ? Math.max(...existingAssessments.map((assessment) => assessment.sort_order || 0)) + 1
+    : 0
+
+  const insertedAssessment = await assertSupabaseResult(
     supabase
       .from('training_assessments')
-      .update({
+      .insert({
+        category_id: category.id,
         title: normalizedTitle,
         description: normalizedDescription,
         type: payload.type,
         is_published: payload.isPublished ?? true,
+        instant_feedback: true,
+        sort_order: nextSortOrder,
+        is_primary: false,
         active_status: true,
       })
-      .eq('id', primaryAssessment.id)
       .select('*')
       .single(),
-    'Unable to update the category assessment shell.',
+    'Unable to create the assessment definition.',
   ) as TrainingAssessmentRow | null
 
-  expectSupabaseRow(updatedCategory, 'Unable to update the linked assessment category.')
-  return expectSupabaseRow(updatedAssessment, 'Unable to update the category assessment shell.')
+  return expectSupabaseRow(insertedAssessment, 'Unable to create the assessment definition.')
 }
 
 export async function updateAssessment(
@@ -2152,8 +2297,17 @@ export async function updateAssessment(
 ) {
   const { assessment, category } = await getOwnedAssessment(assessmentId, sessionUser)
   const supabase = createSupabaseAdminClient()
-  const normalizedTitle = payload.title.trim()
-  const normalizedDescription = payload.description?.trim() || null
+  const normalizedTitle = sanitizeTextValue(payload.title)
+  const normalizedDescription = payload.description?.trim() ? sanitizeTextValue(payload.description) : null
+  const siblingAssessments = await loadAssessmentsByCategoryIds([category.id])
+  const duplicate = siblingAssessments.find((candidate) =>
+    candidate.id !== assessmentId
+    && normalizeAssessmentAnswer(candidate.title) === normalizeAssessmentAnswer(normalizedTitle),
+  )
+
+  if (duplicate) {
+    throw new AssessmentHttpError(400, 'Another assessment in this category already uses that title.')
+  }
 
   if (assessment.is_primary) {
     await assertSupabaseResult(
@@ -2193,6 +2347,35 @@ export async function deleteAssessment(
 ) {
   const { assessment, category } = await getOwnedAssessment(assessmentId, sessionUser)
   const supabase = createSupabaseAdminClient()
+  const activeAssignments = (((await assertSupabaseResult(
+    supabase
+      .from('training_assessment_assignments')
+      .select('id')
+      .eq('assessment_id', assessmentId)
+      .eq('is_active', true),
+    'Unable to verify active assessment assignments.',
+  )) as Array<{ id: string }> | null) || [])
+  const attemptHistory = (((await assertSupabaseResult(
+    supabase
+      .from('training_assessment_attempts')
+      .select('id')
+      .eq('assessment_id', assessmentId)
+      .limit(1),
+    'Unable to verify recorded assessment attempts.',
+  )) as Array<{ id: string }> | null) || [])
+  const categoryAssessments = await loadAssessmentsByCategoryIds([category.id])
+
+  if (activeAssignments.length) {
+    throw new AssessmentHttpError(400, 'Remove or deactivate assessment assignments before deleting this assessment.')
+  }
+
+  if (attemptHistory.length) {
+    throw new AssessmentHttpError(400, 'This assessment already has recorded trainee attempts and can no longer be deleted.')
+  }
+
+  if (assessment.is_primary && categoryAssessments.length <= 1) {
+    throw new AssessmentHttpError(400, 'Each category requires at least one assessment definition. Create another assessment first or archive the category instead.')
+  }
 
   await assertSupabaseResult(
     supabase
@@ -2203,7 +2386,22 @@ export async function deleteAssessment(
   )
 
   if (assessment.is_primary) {
-    await ensurePrimaryAssessment(category.id, category)
+    const remainingAssessments = await loadAssessmentsByCategoryIds([category.id])
+    const fallbackAssessment = remainingAssessments.find((candidate) => candidate.id !== assessmentId)
+    if (fallbackAssessment) {
+      await assertSupabaseResult(
+        supabase
+          .from('training_assessments')
+          .update({
+            title: category.title,
+            description: category.description || null,
+            is_primary: true,
+            active_status: true,
+          })
+          .eq('id', fallbackAssessment.id),
+        'Unable to restore the primary assessment definition.',
+      )
+    }
   }
 }
 
@@ -2215,6 +2413,29 @@ async function resolveQuestionCategoryAndAssessment(
   sessionUser: BackendSessionUser,
   payload: Pick<CreateQuestionPayload, 'assessmentId' | 'categoryId'>,
 ) {
+  if (payload.assessmentId) {
+    const supabase = createSupabaseAdminClient()
+    const assessment = await assertSupabaseResult(
+      supabase
+        .from('training_assessments')
+        .select('*')
+        .eq('id', payload.assessmentId)
+        .maybeSingle(),
+      'Unable to load the linked assessment shell.',
+    ) as TrainingAssessmentRow | null
+
+    if (!assessment) {
+      throw new AssessmentHttpError(404, 'Assessment shell not found.')
+    }
+
+    const category = await getOwnedCategory(assessment.category_id, sessionUser)
+    if (payload.categoryId && payload.categoryId !== category.id) {
+      throw new AssessmentHttpError(400, 'The selected assessment does not belong to the selected category.')
+    }
+
+    return { category, assessment }
+  }
+
   if (payload.categoryId) {
     const category = await getOwnedCategory(payload.categoryId, sessionUser)
     const assessment = await ensurePrimaryAssessment(category.id, category)
@@ -2224,26 +2445,7 @@ async function resolveQuestionCategoryAndAssessment(
     }
   }
 
-  if (!payload.assessmentId) {
-    throw new AssessmentHttpError(400, 'Category is required before creating a question.')
-  }
-
-  const supabase = createSupabaseAdminClient()
-  const assessment = await assertSupabaseResult(
-    supabase
-      .from('training_assessments')
-      .select('*')
-      .eq('id', payload.assessmentId)
-      .maybeSingle(),
-    'Unable to load the linked assessment shell.',
-  ) as TrainingAssessmentRow | null
-
-  if (!assessment) {
-    throw new AssessmentHttpError(404, 'Assessment shell not found.')
-  }
-
-  const category = await getOwnedCategory(assessment.category_id, sessionUser)
-  return { category, assessment }
+  throw new AssessmentHttpError(400, 'Category is required before creating a question.')
 }
 
 async function getNextQuestionNumber(categoryId: string) {
@@ -2287,11 +2489,12 @@ export async function createQuestion(
   const nextQuestionNumber = payload.questionNumber || await getNextQuestionNumber(category.id)
   const nextOrderIndex = payload.orderIndex || nextQuestionNumber - 1
   const questionType = payload.questionType || questionTypeFromChoices(payload.options)
+  const pointValue = Number(payload.points || 1)
   const validatedQuestion = questionType === 'multiple_choice'
     ? validateMultipleChoicePayload(payload.options, payload.correctAnswer)
     : {
         choices: [] as string[],
-        correctAnswer: payload.correctAnswer.trim(),
+        correctAnswer: sanitizeTextValue(payload.correctAnswer),
       }
 
   const inserted = await assertSupabaseResult(
@@ -2301,17 +2504,20 @@ export async function createQuestion(
         assessment_id: assessment.id,
         category_id: category.id,
         question_number: nextQuestionNumber,
-        question_text: payload.questionText.trim(),
+        question_text: sanitizeTextValue(payload.questionText),
         question_type: questionType,
         options: questionType === 'multiple_choice'
           ? validatedQuestion.choices
           : [],
         correct_answer: validatedQuestion.correctAnswer,
         difficulty: payload.difficulty || null,
-        explanation: payload.explanation?.trim() || null,
+        explanation: payload.explanation?.trim() ? sanitizeTextValue(payload.explanation) : null,
         order_index: nextOrderIndex,
         active_status: true,
         created_by: sessionUser.userId,
+        metadata: {
+          points: Number.isFinite(pointValue) && pointValue > 0 ? pointValue : 1,
+        },
       })
       .select('*')
       .single(),
@@ -2333,11 +2539,12 @@ export async function updateQuestion(
   })
   const supabase = createSupabaseAdminClient()
   const questionType = payload.questionType || questionTypeFromChoices(payload.options)
+  const pointValue = Number(payload.points || getQuestionPointValue(currentQuestion.metadata))
   const validatedQuestion = questionType === 'multiple_choice'
     ? validateMultipleChoicePayload(payload.options, payload.correctAnswer)
     : {
         choices: [] as string[],
-        correctAnswer: payload.correctAnswer.trim(),
+        correctAnswer: sanitizeTextValue(payload.correctAnswer),
       }
 
   const updated = await assertSupabaseResult(
@@ -2347,15 +2554,19 @@ export async function updateQuestion(
         assessment_id: assessment.id,
         category_id: category.id,
         question_number: payload.questionNumber || currentQuestion.question_number,
-        question_text: payload.questionText.trim(),
+        question_text: sanitizeTextValue(payload.questionText),
         question_type: questionType,
         options: questionType === 'multiple_choice'
           ? validatedQuestion.choices
           : [],
         correct_answer: validatedQuestion.correctAnswer,
         difficulty: payload.difficulty || null,
-        explanation: payload.explanation?.trim() || null,
+        explanation: payload.explanation?.trim() ? sanitizeTextValue(payload.explanation) : null,
         order_index: payload.orderIndex,
+        metadata: {
+          ...(currentQuestion.metadata || {}),
+          points: Number.isFinite(pointValue) && pointValue > 0 ? pointValue : 1,
+        },
       })
       .eq('id', questionId)
       .select('*')
@@ -2391,8 +2602,9 @@ export async function bulkUploadQuestions(
     throw new AssessmentHttpError(400, 'The uploaded CSV file is empty.')
   }
 
-  const header = rows[0].map((value) => value.trim())
-  const missingColumns = QUESTION_TEMPLATE_HEADER.filter((column) => !header.includes(column))
+  const header = rows[0].map((value) => value.trim().replace(/^\uFEFF/, ''))
+  const columnIndex = buildCanonicalCsvColumnIndex(header)
+  const missingColumns = REQUIRED_QUESTION_TEMPLATE_COLUMNS.filter((column) => !columnIndex.has(column))
   if (missingColumns.length) {
     throw new AssessmentHttpError(
       400,
@@ -2402,9 +2614,19 @@ export async function bulkUploadQuestions(
 
   const categoryRows = await getVisibleCategories(sessionUser)
   const categoryMap = new Map(categoryRows.map((category) => [normalizeAssessmentAnswer(category.title), category]))
-  const assessmentMap = new Map<string, TrainingAssessmentRow>()
+  const assessmentRows = await loadAssessmentsByCategoryIds(categoryRows.map((category) => category.id))
+  const assessmentMap = new Map(
+    assessmentRows.map((assessment) => [
+      `${assessment.category_id}::${normalizeAssessmentAnswer(assessment.title)}`,
+      assessment,
+    ]),
+  )
   for (const category of categoryRows) {
-    assessmentMap.set(category.id, await ensurePrimaryAssessment(category.id, category))
+    const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
+    assessmentMap.set(
+      `${category.id}::${normalizeAssessmentAnswer(primaryAssessment.title)}`,
+      primaryAssessment,
+    )
   }
   const existingQuestions = await loadQuestionsByCategoryIds(categoryRows.map((category) => category.id))
   const existingQuestionNumbersByCategory = new Map<string, Set<number>>()
@@ -2420,7 +2642,6 @@ export async function bulkUploadQuestions(
     existingQuestionTextsByCategory.set(question.category_id, questionTextSet)
   }
 
-  const columnIndex = new Map(header.map((column, index) => [column, index]))
   const errors: BulkUploadErrorRecord[] = []
   const importedQuestions: AssessmentQuestionRecord[] = []
   const createdCategories: string[] = []
@@ -2430,11 +2651,15 @@ export async function bulkUploadQuestions(
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex]
-    const getValue = (column: string) => row[columnIndex.get(column) || 0]?.trim() || ''
+    const getValue = (column: string) => {
+      const index = columnIndex.get(column)
+      return index === undefined ? '' : row[index]?.trim() || ''
+    }
     const getOptionalValue = (column: string) => {
       const index = columnIndex.get(column)
       return index === undefined ? '' : row[index]?.trim() || ''
     }
+    const assessmentTitle = getValue('Assessment Title')
     const categoryName = getValue('Category')
     const questionNumberValue = getValue('Question Number')
     const questionText = getValue('Question')
@@ -2445,9 +2670,21 @@ export async function bulkUploadQuestions(
       getValue('Choice 4'),
     ]
     const correctAnswer = getValue('Correct Answer')
-    const difficulty = getOptionalValue('Difficulty').toLowerCase() as 'easy' | 'medium' | 'hard' | ''
+    const difficulty = (getOptionalValue('Difficulty Level') || getOptionalValue('Difficulty')).toLowerCase() as 'easy' | 'medium' | 'hard' | ''
+    const pointsValue = getValue('Points')
     const explanation = getOptionalValue('Explanation')
     const rowNumber = rowIndex + 1
+
+    if (!assessmentTitle) {
+      errors.push({
+        rowNumber,
+        category: categoryName,
+        questionNumber: questionNumberValue,
+        question: questionText,
+        error: 'Assessment Title is required.',
+      })
+      continue
+    }
 
     if (!categoryName) {
       errors.push({
@@ -2479,6 +2716,18 @@ export async function bulkUploadQuestions(
         questionNumber: questionNumberValue,
         question: questionText,
         error: 'Question text is required.',
+      })
+      continue
+    }
+
+    const parsedPoints = Number(pointsValue)
+    if (!Number.isFinite(parsedPoints) || parsedPoints <= 0) {
+      errors.push({
+        rowNumber,
+        category: categoryName,
+        questionNumber: questionNumberValue,
+        question: questionText,
+        error: 'Points must be a positive number.',
       })
       continue
     }
@@ -2517,7 +2766,11 @@ export async function bulkUploadQuestions(
           passingScore: DEFAULT_ASSESSMENT_PASSING_SCORE,
         })
         categoryMap.set(normalizeAssessmentAnswer(category.title), category)
-        assessmentMap.set(category.id, await ensurePrimaryAssessment(category.id, category))
+        const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
+        assessmentMap.set(
+          `${category.id}::${normalizeAssessmentAnswer(primaryAssessment.title)}`,
+          primaryAssessment,
+        )
         existingQuestionNumbersByCategory.set(category.id, new Set<number>())
         existingQuestionTextsByCategory.set(category.id, new Set<string>())
         pendingQuestionNumbersByCategory.set(category.id, new Set<number>())
@@ -2562,7 +2815,33 @@ export async function bulkUploadQuestions(
       continue
     }
 
-    const assessment = assessmentMap.get(category.id)!
+    const assessmentKey = `${category.id}::${normalizeAssessmentAnswer(assessmentTitle)}`
+    let assessment = assessmentMap.get(assessmentKey)
+    if (!assessment) {
+      try {
+        if (normalizeAssessmentAnswer(assessmentTitle) === normalizeAssessmentAnswer(category.title)) {
+          assessment = await ensurePrimaryAssessment(category.id, category)
+        } else {
+          assessment = await createAssessment(sessionUser, {
+            categoryId: category.id,
+            title: assessmentTitle,
+            description: category.description || undefined,
+            type: 'multiple_choice',
+            isPublished: true,
+          })
+        }
+        assessmentMap.set(assessmentKey, assessment)
+      } catch (error) {
+        errors.push({
+          rowNumber,
+          category: categoryName,
+          questionNumber: questionNumberValue,
+          question: questionText,
+          error: error instanceof Error ? error.message : 'Unable to create the missing assessment shell.',
+        })
+        continue
+      }
+    }
 
     try {
       const inserted = await assertSupabaseResult(
@@ -2572,15 +2851,20 @@ export async function bulkUploadQuestions(
             assessment_id: assessment.id,
             category_id: category.id,
             question_number: parsedQuestionNumber,
-            question_text: questionText,
+            question_text: sanitizeTextValue(questionText),
             question_type: 'multiple_choice',
             options: validatedChoices.choices,
             correct_answer: validatedChoices.correctAnswer,
             difficulty: difficulty || null,
-            explanation: explanation || null,
+            explanation: explanation ? sanitizeTextValue(explanation) : null,
             order_index: parsedQuestionNumber - 1,
             active_status: true,
             created_by: sessionUser.userId,
+            metadata: {
+              points: parsedPoints,
+              imported_from_csv: true,
+              assessment_title: assessment.title,
+            },
           })
           .select('*')
           .single(),
@@ -2588,7 +2872,7 @@ export async function bulkUploadQuestions(
       ) as TrainingQuestionRow | null
 
       if (inserted) {
-        importedQuestions.push(buildQuestionRecord(inserted, category.title))
+        importedQuestions.push(buildQuestionRecord(inserted, category.title, null, assessment.title))
         pendingQuestionNumbers.add(parsedQuestionNumber)
         pendingQuestionTexts.add(normalizedQuestionText)
         pendingQuestionNumbersByCategory.set(category.id, pendingQuestionNumbers)
@@ -2689,7 +2973,11 @@ export async function createAssignment(
 
   const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
   const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
-  const questionPoolIds = new Set(categoryQuestions.filter((question) => question.active_status).map((question) => question.id))
+  const questionPool = categoryQuestions.filter((question) =>
+    question.active_status
+    && (!payload.assessmentId || question.assessment_id === payload.assessmentId),
+  )
+  const questionPoolIds = new Set(questionPool.map((question) => question.id))
   const mode = payload.assignmentMode || 'entire_category'
 
   if (mode === 'selected_questions' && !selectedQuestionIds.length) {
@@ -2729,7 +3017,7 @@ export async function createAssignment(
         question_count:
           mode === 'random_subset'
             ? payload.randomQuestionCount || null
-            : selectedQuestionIds.length || categoryQuestions.filter((question) => question.active_status).length,
+            : selectedQuestionIds.length || questionPool.length,
         passing_score: payload.passingScore || category.passing_score,
         maximum_attempts: payload.maximumAttempts || null,
         time_limit_minutes: payload.timeLimitMinutes || null,
@@ -2772,7 +3060,11 @@ export async function updateAssignment(
   const supabase = createSupabaseAdminClient()
   const category = await getOwnedCategory(payload.categoryId, sessionUser)
   const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
-  const activeCategoryQuestionCount = categoryQuestions.filter((question) => question.active_status).length
+  const scopedCategoryQuestions = categoryQuestions.filter((question) =>
+    question.active_status
+    && (!payload.assessmentId || question.assessment_id === payload.assessmentId),
+  )
+  const activeCategoryQuestionCount = scopedCategoryQuestions.length
   const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
   const assignmentMode = payload.assignmentMode || 'entire_category'
   const { batchOptions, traineeOptions } = await getTrainerBatches(sessionUser)
@@ -2841,7 +3133,18 @@ async function createAssignmentValidationOnly(
   const target = resolveAssignmentTargetFields(category, batchOptions, traineeOptions, payload)
 
   const categoryQuestions = await loadQuestionsByCategoryIds([category.id])
-  const poolIds = new Set(categoryQuestions.filter((question) => question.active_status).map((question) => question.id))
+  if (payload.assessmentId) {
+    const { assessment } = await getOwnedAssessment(payload.assessmentId, sessionUser)
+    if (assessment.category_id !== category.id) {
+      throw new AssessmentHttpError(400, 'The selected assessment does not belong to the selected category.')
+    }
+  }
+
+  const scopedCategoryQuestions = categoryQuestions.filter((question) =>
+    question.active_status
+    && (!payload.assessmentId || question.assessment_id === payload.assessmentId),
+  )
+  const poolIds = new Set(scopedCategoryQuestions.map((question) => question.id))
   const selectedQuestionIds = unique((payload.questionIds || []).filter(Boolean))
 
   if (payload.assignmentMode === 'selected_questions' && !selectedQuestionIds.length) {
@@ -2876,6 +3179,7 @@ async function createAssignmentValidationOnly(
     .eq('title', payload.title.trim())
     .eq('is_active', true)
 
+  duplicateQuery = applyNullableFilter(duplicateQuery, 'assessment_id', payload.assessmentId || null)
   duplicateQuery = applyNullableFilter(duplicateQuery, 'batch_id', target.batchId)
   duplicateQuery = applyNullableFilter(duplicateQuery, 'wave_number', target.waveNumber)
   duplicateQuery = applyNullableFilter(duplicateQuery, 'trainee_id', target.traineeId)
@@ -2950,6 +3254,7 @@ function buildSessionQuestionRecord(
     questionType: question.question_type,
     difficulty: question.difficulty,
     choices,
+    pointValue: getQuestionPointValue(question.metadata),
   }
 }
 
@@ -3058,25 +3363,25 @@ export async function getTraineeAssessmentDashboard(
   })
   const categoryMap = new Map(activeCategories.map((category) => [category.id, category]))
 
-  const primaryAssessments = activeCategories.length
-    ? (((await assertSupabaseResult(
-        supabase
-          .from('training_assessments')
-          .select('*')
-          .in('category_id', activeCategories.map((category) => category.id))
-          .eq('is_primary', true),
-        'Unable to load assessment shells.',
-      )) as TrainingAssessmentRow[] | null) || [])
-    : []
-
-  const assessmentMap = new Map(primaryAssessments.map((assessment) => [assessment.category_id, assessment]))
+  const activeAssessments = await loadAssessmentsByCategoryIds(activeCategories.map((category) => category.id))
+  const assessmentMap = new Map(activeAssessments.map((assessment) => [assessment.id, assessment]))
+  const primaryAssessmentByCategory = new Map(
+    activeAssessments
+      .filter((assessment) => assessment.is_primary)
+      .map((assessment) => [assessment.category_id, assessment]),
+  )
 
   const questionRows = await loadQuestionsByCategoryIds(activeCategories.map((category) => category.id))
   const questionsByCategory = new Map<string, TrainingQuestionRow[]>()
+  const questionsByAssessment = new Map<string, TrainingQuestionRow[]>()
   for (const question of questionRows) {
     const current = questionsByCategory.get(question.category_id) || []
     current.push(question)
     questionsByCategory.set(question.category_id, current)
+
+    const assessmentQuestions = questionsByAssessment.get(question.assessment_id) || []
+    assessmentQuestions.push(question)
+    questionsByAssessment.set(question.assessment_id, assessmentQuestions)
   }
 
   const attemptFeedRows = (((await assertSupabaseResult(
@@ -3157,17 +3462,17 @@ export async function getTraineeAssessmentDashboard(
   }))
   const categoriesById = new Map(categoriesForCertificates.map((category) => [category.id, category]))
   const assessmentsById = new Map<string, AssessmentRecord>()
-  for (const category of categoriesForCertificates) {
-    const assessment = assessmentMap.get(category.id)
-    if (!assessment) {
+  for (const assessment of activeAssessments) {
+    const category = categoriesById.get(assessment.category_id)
+    if (!category) {
       continue
     }
     assessmentsById.set(
       assessment.id,
       buildAssessmentRecord(
         assessment,
-        (questionsByCategory.get(category.id) || []).map((question) =>
-          buildQuestionRecord(question, category.title, questionReportMap.get(question.id) || null),
+        (questionsByAssessment.get(assessment.id) || []).map((question) =>
+          buildQuestionRecord(question, category.title, questionReportMap.get(question.id) || null, assessment.title),
         ),
       ),
     )
@@ -3216,7 +3521,9 @@ export async function getTraineeAssessmentDashboard(
       isActive: assignment.is_active,
       categoryTitle: categoryMap.get(assignment.category_id)?.title || 'Assessment Category',
       categoryName: categoryMap.get(assignment.category_id)?.title || 'Assessment Category',
-      assessmentTitle: assignment.title || categoryMap.get(assignment.category_id)?.title || 'Assessment',
+      assessmentTitle: (assignment.assessment_id ? assessmentMap.get(assignment.assessment_id)?.title : null)
+        || categoryMap.get(assignment.category_id)?.title
+        || 'Assessment',
       title: assignment.title || categoryMap.get(assignment.category_id)?.title || 'Assessment',
       targetLabel: getAssignmentTargetLabel(assignment, traineeAssignmentContext),
       targetType,
@@ -3265,7 +3572,8 @@ export async function getTraineeAssessmentDashboard(
     const isCompleted = latestAttempt?.status === 'pass'
     const canRetake = latestAttempt?.status === 'fail' && (maximumAttempts ? attemptCount < maximumAttempts : true)
     const canStart = !isCompleted && (!latestAttempt || canRetake || latestAttempt.status !== 'fail')
-    const assessment = assessmentMap.get(category.id)
+    const assessment = (assignment.assessment_id ? assessmentMap.get(assignment.assessment_id) : null)
+      || primaryAssessmentByCategory.get(category.id)
     const targetType = getAssignmentTargetType(assignment)
     const card: TraineeAssessmentCard = {
       assignmentId: assignment.id,
@@ -3275,8 +3583,8 @@ export async function getTraineeAssessmentDashboard(
       targetType,
       waveNumber: assignment.wave_number ?? null,
       assignmentTitle: assignment.title || category.title,
-      assessmentTitle: assignment.title || category.title,
-      assessmentDescription: assignment.description || category.description,
+      assessmentTitle: assessment?.title || assignment.title || category.title,
+      assessmentDescription: assessment?.description || assignment.description || category.description,
       type: assessment?.type || 'multiple_choice',
       passingScore: assignment.passing_score || category.passing_score,
       targetDueAt: assignment.due_at,
@@ -3352,7 +3660,17 @@ export async function getTraineeAssessmentSession(
     throw new AssessmentHttpError(404, 'This assessment category is no longer available.')
   }
 
-  const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
+  const assessment = assignment.assessment_id
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('training_assessments')
+          .select('*')
+          .eq('id', assignment.assessment_id)
+          .maybeSingle(),
+        'Unable to load the linked assessment definition.',
+      )) as TrainingAssessmentRow | null) || null)
+    : null
+  const primaryAssessment = assessment || await ensurePrimaryAssessment(category.id, category)
   const attempts = (((await assertSupabaseResult(
     supabase
       .from('training_assessment_attempt_feed')
@@ -3436,8 +3754,8 @@ export async function getTraineeAssessmentSession(
     targetType: getAssignmentTargetType(assignment),
     waveNumber: assignment.wave_number ?? null,
     assignmentTitle: assignment.title || category.title,
-    assessmentTitle: assignment.title || category.title,
-    description: assignment.description || category.description,
+    assessmentTitle: primaryAssessment.title,
+    description: primaryAssessment.description || assignment.description || category.description,
     passingScore: assignment.passing_score || category.passing_score,
     targetDueAt: assignment.due_at,
     targetLabel: getAssignmentTargetLabel(assignment, targetContext),
@@ -3597,7 +3915,17 @@ export async function submitAssessmentAttempt(
     throw new AssessmentHttpError(404, 'Assessment category is no longer available.')
   }
 
-  const primaryAssessment = await ensurePrimaryAssessment(category.id, category)
+  const assessment = assignment.assessment_id
+    ? (((await assertSupabaseResult(
+        supabase
+          .from('training_assessments')
+          .select('*')
+          .eq('id', assignment.assessment_id)
+          .maybeSingle(),
+        'Unable to load the linked assessment definition.',
+      )) as TrainingAssessmentRow | null) || null)
+    : null
+  const primaryAssessment = assessment || await ensurePrimaryAssessment(category.id, category)
   const priorAttempts = (((await assertSupabaseResult(
     supabase
       .from('training_assessment_attempt_feed')
@@ -3659,7 +3987,7 @@ export async function submitAssessmentAttempt(
     throw new AssessmentHttpError(400, 'This assessment does not have any active questions right now.')
   }
 
-  const questionRecords = questionRows.map((question) => buildQuestionRecord(question, category.title))
+  const questionRecords = questionRows.map((question) => buildQuestionRecord(question, category.title, null, primaryAssessment.title))
   const choiceMap = payload.choiceMap || {}
   const scoring = scoreAssessmentSubmission(questionRecords, payload.answers, choiceMap)
   const passingScore = assignment.passing_score || category.passing_score
@@ -3670,6 +3998,7 @@ export async function submitAssessmentAttempt(
     categoryId: category.id,
     categoryTitle: category.title,
     score: scoring.score,
+    passingScore,
     questionResults: scoring.questionResults,
   })
   const analysis = await buildAiNarrativeSummary(
@@ -3685,6 +4014,7 @@ export async function submitAssessmentAttempt(
     questionNumber: question.question_number,
     questionText: question.question_text,
     difficulty: question.difficulty,
+    points: getQuestionPointValue(question.metadata),
     options: choiceMap[question.id] || question.options || [],
   }))
 

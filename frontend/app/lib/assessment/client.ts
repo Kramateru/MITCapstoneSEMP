@@ -22,9 +22,14 @@ import type {
 
 const DEFAULT_RETRY_COUNT = 3
 const DEFAULT_RETRY_DELAY_MS = 1000
+const DIRECT_ASSESSMENT_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || 'http://127.0.0.1:8000'
 
 function getToken() {
   return window.localStorage.getItem('token')
+}
+
+function getSupabaseAccessToken() {
+  return window.localStorage.getItem('supabase_access_token')
 }
 
 function getJsonErrorMessage(payload: unknown) {
@@ -38,10 +43,15 @@ async function sleep(ms: number) {
 
 async function request<T>(input: string, init?: RequestInit, retryCount = 0): Promise<T> {
   const token = getToken()
+  const supabaseAccessToken = getSupabaseAccessToken()
   const headers = new Headers(init?.headers || undefined)
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
+  }
+
+  if (supabaseAccessToken) {
+    headers.set('X-Supabase-Access-Token', supabaseAccessToken)
   }
 
   const isFormDataBody = typeof FormData !== 'undefined' && init?.body instanceof FormData
@@ -76,11 +86,21 @@ async function request<T>(input: string, init?: RequestInit, retryCount = 0): Pr
   return payload as T
 }
 
+function toDirectAssessmentBackendUrl(path: string) {
+  const normalizedBaseUrl = DIRECT_ASSESSMENT_BACKEND_URL.replace(/\/+$/, '')
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${normalizedBaseUrl}${normalizedPath}`
+}
+
 async function downloadBlob(input: string, fallbackFileName: string) {
   const token = getToken()
+  const supabaseAccessToken = getSupabaseAccessToken()
   const headers = new Headers()
   if (token) {
     headers.set('Authorization', `Bearer ${token}`)
+  }
+  if (supabaseAccessToken) {
+    headers.set('X-Supabase-Access-Token', supabaseAccessToken)
   }
 
   const response = await fetch(input, {
@@ -109,7 +129,7 @@ async function downloadBlob(input: string, fallbackFileName: string) {
 }
 
 export function fetchTrainerAssessmentBootstrap() {
-  return request<TrainerBootstrapResponse>('/api/assessment-module/trainer/bootstrap')
+  return request<TrainerBootstrapResponse>(toDirectAssessmentBackendUrl('/api/assessment-module/trainer/bootstrap'))
 }
 
 export function fetchTraineeAssessmentDashboard() {
@@ -218,7 +238,7 @@ export function bulkUploadAssessmentQuestions(file: File) {
   const formData = new FormData()
   formData.append('file', file)
 
-  return request<BulkUploadQuestionsResponse>('/api/assessment-module/trainer/questions/bulk-upload', {
+  return request<BulkUploadQuestionsResponse>(toDirectAssessmentBackendUrl('/api/assessment-module/trainer/questions/bulk-upload'), {
     method: 'POST',
     body: formData,
   })
@@ -234,18 +254,30 @@ export function downloadTrainerAssessmentCsv() {
 
 export function openTrainerAssessmentStream() {
   const token = getToken()
+  const supabaseAccessToken = getSupabaseAccessToken()
   if (!token) {
     throw new Error('Missing session token.')
   }
 
-  return new EventSource(`/api/assessment-module/trainer/stream?token=${encodeURIComponent(token)}`)
+  const params = new URLSearchParams({ token })
+  if (supabaseAccessToken) {
+    params.set('supabase_token', supabaseAccessToken)
+  }
+
+  return new EventSource(`/api/assessment-module/trainer/stream?${params.toString()}`)
 }
 
 export function openTraineeAssessmentStream() {
   const token = getToken()
+  const supabaseAccessToken = getSupabaseAccessToken()
   if (!token) {
     throw new Error('Missing session token.')
   }
 
-  return new EventSource(`/api/assessment-module/trainee/stream?token=${encodeURIComponent(token)}`)
+  const params = new URLSearchParams({ token })
+  if (supabaseAccessToken) {
+    params.set('supabase_token', supabaseAccessToken)
+  }
+
+  return new EventSource(`/api/assessment-module/trainee/stream?${params.toString()}`)
 }

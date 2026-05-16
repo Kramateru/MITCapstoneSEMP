@@ -46,7 +46,8 @@ function getSupabaseUrl() {
 
 function getSupabaseAnonKey() {
   return (
-    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
+    || normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
     || normalizeEnvValue(process.env.REACT_APP_ANON_KEY)
   )
 }

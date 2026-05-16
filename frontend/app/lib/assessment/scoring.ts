@@ -47,11 +47,13 @@ export function buildAttemptAnalysisSummary({
   categoryId,
   categoryTitle,
   score,
+  passingScore = 90,
   questionResults,
 }: {
   categoryId: string
   categoryTitle: string
   score: number
+  passingScore?: number
   questionResults: AttemptQuestionResult[]
 }): AttemptAnalysisSummary {
   const strengths: string[] = []
@@ -60,6 +62,8 @@ export function buildAttemptAnalysisSummary({
 
   const missedQuestions = questionResults.filter((result) => !result.isCorrect)
   const correctQuestions = questionResults.filter((result) => result.isCorrect)
+  const earnedPoints = questionResults.reduce((sum, result) => sum + Number(result.earnedPoints || 0), 0)
+  const totalPoints = questionResults.reduce((sum, result) => sum + Number(result.points || 0), 0)
 
   const difficultyStats = new Map<
     string,
@@ -85,7 +89,7 @@ export function buildAttemptAnalysisSummary({
   if (score >= 95) {
     strengths.push('Consistently accurate responses across the assigned question set.')
     strengths.push('Ready for certification-level follow-through with minimal coaching.')
-  } else if (score >= 90) {
+  } else if (score >= passingScore) {
     strengths.push('Passed the category threshold with strong answer accuracy.')
     strengths.push('Demonstrated reliable recall on most assessed topics.')
   } else if (correctQuestions.length) {
@@ -120,11 +124,11 @@ export function buildAttemptAnalysisSummary({
     recommendations.push('Use the explanations from missed items to build a short coaching or review checklist.')
   }
 
-  if (score < 90) {
-    recommendations.push('Schedule a retake after targeted review to reach the 90% passing requirement.')
+  if (score < passingScore) {
+    recommendations.push(`Schedule a retake after targeted review to reach the ${passingScore}% passing requirement.`)
   }
 
-  const summary = score >= 90
+  const summary = score >= passingScore
     ? `${categoryTitle} was passed with a score of ${score.toFixed(2)}%.`
     : `${categoryTitle} needs additional review after a score of ${score.toFixed(2)}%.`
 
@@ -134,6 +138,8 @@ export function buildAttemptAnalysisSummary({
     strengths,
     improvements,
     recommendations,
+    earnedPoints,
+    totalPoints,
     categoryBreakdown: [
       {
         categoryId,
@@ -155,6 +161,7 @@ export function scoreAssessmentSubmission(
     const userAnswer = answers[question.id] || ''
     const isCorrect = compareAnswers(question.questionType, userAnswer, question.correctAnswer)
     const orderedChoices = optionsByQuestionId?.[question.id] || question.options || question.choices || []
+    const pointValue = Number(question.pointValue || 1)
 
     return {
       questionId: question.id,
@@ -168,18 +175,24 @@ export function scoreAssessmentSubmission(
       correctAnswer: question.correctAnswer,
       isCorrect,
       explanation: question.explanation,
+      points: Number.isFinite(pointValue) && pointValue > 0 ? pointValue : 1,
+      earnedPoints: isCorrect ? (Number.isFinite(pointValue) && pointValue > 0 ? pointValue : 1) : 0,
     }
   })
 
   const correctAnswers = questionResults.filter((result) => result.isCorrect).length
   const totalQuestions = questionResults.length
   const incorrectAnswers = Math.max(totalQuestions - correctAnswers, 0)
-  const score = totalQuestions > 0 ? Number(((correctAnswers / totalQuestions) * 100).toFixed(2)) : 0
+  const totalPoints = questionResults.reduce((sum, result) => sum + Number(result.points || 0), 0)
+  const earnedPoints = questionResults.reduce((sum, result) => sum + Number(result.earnedPoints || 0), 0)
+  const score = totalPoints > 0 ? Number(((earnedPoints / totalPoints) * 100).toFixed(2)) : 0
 
   return {
     correctAnswers,
     incorrectAnswers,
     totalQuestions,
+    totalPoints,
+    earnedPoints,
     score,
     questionResults,
   }

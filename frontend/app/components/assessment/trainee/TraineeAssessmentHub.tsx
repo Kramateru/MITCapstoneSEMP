@@ -2,6 +2,6 @@
 
 import { TraineeAssessmentWorkspace } from './trainee-assessment-workspace'
 
-export function TraineeAssessmentView() {
+export function TraineeAssessmentHub() {
   return <TraineeAssessmentWorkspace />
 }

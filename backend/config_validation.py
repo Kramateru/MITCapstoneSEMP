@@ -87,6 +87,44 @@ def _decode_jwt_payload(token: str) -> Optional[dict[str, Any]]:
         return None
 
 
+def extract_supabase_project_ref_from_key(value: Optional[str]) -> Optional[str]:
+    normalized = normalize_env_value(value)
+    if not normalized or is_placeholder_value(normalized):
+        return None
+
+    payload = _decode_jwt_payload(normalized)
+    ref = payload.get("ref") if isinstance(payload, dict) else None
+    return ref if isinstance(ref, str) and ref.strip() else None
+
+
+def extract_supabase_project_ref_from_url(value: Optional[str]) -> Optional[str]:
+    normalized = normalize_env_value(value)
+    if not normalized or is_placeholder_value(normalized):
+        return None
+
+    try:
+        parsed = urlparse(normalized)
+    except Exception:
+        return None
+
+    hostname = (parsed.hostname or "").strip().lower()
+    if not hostname:
+        return None
+
+    return hostname.split(".")[0] or None
+
+
+def supabase_key_matches_url(url: Optional[str], key: Optional[str]) -> bool:
+    url_ref = extract_supabase_project_ref_from_url(url)
+    key_ref = extract_supabase_project_ref_from_key(key)
+    if not url_ref:
+        return False
+    if not key_ref:
+        return True
+
+    return url_ref == key_ref
+
+
 def classify_supabase_api_key(value: Optional[str]) -> Optional[str]:
     normalized = normalize_env_value(value)
     if not normalized or is_placeholder_value(normalized):

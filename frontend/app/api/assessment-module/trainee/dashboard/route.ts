@@ -1,42 +1,7 @@
-import { NextResponse } from 'next/server'
-
-import { requireBackendSessionUser } from '@/app/lib/assessment/backend-auth'
-import { getTraineeAssessmentDashboard } from '@/app/lib/assessment/backend-module-service'
-import {
-  handleAssessmentRouteError,
-  isAssessmentServiceUnavailableError,
-} from '@/app/lib/assessment/route-utils'
-import type { TraineeDashboardResponse } from '@/app/lib/assessment/types'
+import { proxyRequestToBackend } from '@/app/lib/backend-proxy'
 
 export const runtime = 'nodejs'
 
-function buildEmptyTraineeDashboard(): TraineeDashboardResponse {
-  return {
-    availableAssessments: [],
-    attempts: [],
-    coachingNotes: [],
-    certificates: [],
-    stats: {
-      assignedCount: 0,
-      completedCount: 0,
-      passedCount: 0,
-      averageScore: 0,
-      retakeCount: 0,
-      certificateCount: 0,
-    },
-  }
-}
-
 export async function GET(request: Request) {
-  try {
-    const sessionUser = await requireBackendSessionUser(request, ['trainee'])
-    const payload = await getTraineeAssessmentDashboard(request, sessionUser)
-    return NextResponse.json(payload)
-  } catch (error) {
-    if (isAssessmentServiceUnavailableError(error)) {
-      return NextResponse.json(buildEmptyTraineeDashboard())
-    }
-
-    return handleAssessmentRouteError(error)
-  }
+  return proxyRequestToBackend(request)
 }

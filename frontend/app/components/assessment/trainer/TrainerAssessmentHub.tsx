@@ -2,6 +2,6 @@
 
 import { TrainerAssessmentStudio } from './trainer-assessment-studio'
 
-export function TrainerAssessmentDashboard() {
+export function TrainerAssessmentHub() {
   return <TrainerAssessmentStudio role="trainer" />
 }

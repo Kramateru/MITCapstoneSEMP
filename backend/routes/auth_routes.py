@@ -4,6 +4,7 @@ Handles login, JWT tokens, and session management
 """
 
 from datetime import datetime
+import logging
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -23,10 +24,13 @@ from ..services.supabase_auth_service import (
     SupabaseAuthServiceError,
     authenticate_supabase_credentials,
     get_auth_provider_status,
+    issue_supabase_session,
+    refresh_supabase_session,
 )
 from ..services.lob_catalog import list_active_lobs, serialize_lobs
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 # JWT configuration
 SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -82,10 +86,20 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
         user.role == UserRole.TRAINEE
         and auth_utils.verify_password(DEFAULT_TRAINEE_PASSWORD, user.password_hash)
     )
+
+    supabase_session: dict[str, Any] = {}
+    try:
+        supabase_session = issue_supabase_session(normalized_email, credentials.password)
+    except SupabaseAuthServiceError as exc:
+        logger.warning("Unable to issue Supabase session for %s: %s", normalized_email, exc)
     
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        supabase_access_token=supabase_session.get("access_token"),
+        supabase_refresh_token=supabase_session.get("refresh_token"),
+        supabase_expires_at=supabase_session.get("expires_at"),
+        supabase_expires_in=supabase_session.get("expires_in"),
         user=UserResponse.from_orm(user),
         must_change_password=must_change_password,
     )
@@ -115,6 +129,7 @@ async def get_current_user_profile(
 @router.post("/refresh-token")
 async def refresh_token(
     authorization: Optional[str] = Header(None),
+    x_supabase_refresh_token: Optional[str] = Header(None),
     db: Session = Depends(get_db),
     request: Request = None,
 ):
@@ -176,10 +191,21 @@ async def refresh_token(
         user.role == UserRole.TRAINEE
         and auth_utils.verify_password(DEFAULT_TRAINEE_PASSWORD, user.password_hash)
     )
+
+    supabase_session: dict[str, Any] = {}
+    if x_supabase_refresh_token:
+        try:
+            supabase_session = refresh_supabase_session(x_supabase_refresh_token)
+        except SupabaseAuthServiceError as exc:
+            logger.warning("Unable to refresh Supabase session for %s: %s", user.email, exc)
     
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token_new,
+        supabase_access_token=supabase_session.get("access_token"),
+        supabase_refresh_token=supabase_session.get("refresh_token"),
+        supabase_expires_at=supabase_session.get("expires_at"),
+        supabase_expires_in=supabase_session.get("expires_in"),
         user=UserResponse.from_orm(user),
         must_change_password=must_change_password,
     )

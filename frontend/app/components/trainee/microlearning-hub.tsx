@@ -83,6 +83,8 @@ interface ExerciseAttempt {
   id: string;
   response_text?: string | null;
   selected_option?: string | null;
+  correct_answer?: string | null;
+  result_status?: 'correct' | 'incorrect' | 'needs_review' | string | null;
   input_mode?: 'typed' | 'speech' | 'selection' | string | null;
   status?: 'answered' | 'unanswered' | 'timed_out' | string | null;
   study_time_seconds?: number | null;
@@ -124,6 +126,46 @@ interface AssignmentExercise {
   attempt?: ExerciseAttempt | null;
   enable_stt?: boolean;
   timestamp?: number;
+}
+
+interface ModuleResultBreakdownItem {
+  question_number: number;
+  question_id: string;
+  title: string;
+  prompt: string;
+  type?: string | null;
+  trainee_answer?: string | null;
+  correct_answer?: string | null;
+  question_result?: 'correct' | 'incorrect' | 'needs_review' | string | null;
+  score?: number | null;
+  points_earned?: number | null;
+  points_possible?: number | null;
+  feedback?: string | null;
+  submitted_at?: string | null;
+  matched_keywords?: string[];
+  missing_keywords?: string[];
+}
+
+interface ModuleResultSummary {
+  attempt_number?: number | null;
+  module_id?: string | null;
+  module_title?: string | null;
+  module_type?: string | null;
+  total_score?: number | null;
+  points_earned?: number | null;
+  points_possible?: number | null;
+  percentage_score?: number | null;
+  passing_score?: number | null;
+  status?: 'passed' | 'failed' | string | null;
+  submitted_at?: string | null;
+  overall_summary?: string | null;
+  strengths?: string[];
+  weak_areas?: string[];
+  improvement_opportunities?: string[];
+  recommended_next_steps?: string[];
+  explanation?: string | null;
+  provider?: string | null;
+  breakdown?: ModuleResultBreakdownItem[];
 }
 
 interface FlashcardSessionState {
@@ -172,6 +214,7 @@ interface AssignmentDetailResponse {
   };
   flashcard_session?: FlashcardSessionState | null;
   exercises: AssignmentExercise[];
+  result_summary?: ModuleResultSummary | null;
 }
 
 interface SubmitExerciseResponse {
@@ -179,6 +222,7 @@ interface SubmitExerciseResponse {
   attempt: ExerciseAttempt;
   assignment: AssignmentSummary;
   flashcard_session?: FlashcardSessionState | null;
+  result_summary?: ModuleResultSummary | null;
 }
 
 interface SubmitExerciseOptions {
@@ -198,6 +242,10 @@ interface ExerciseResponseState {
 interface LoadAssignmentsOptions {
   preferredAssignmentId?: string;
   refreshDetail?: boolean;
+}
+
+interface LoadAssignmentDetailOptions {
+  includeExercises?: boolean;
 }
 
 interface SpeechRecognitionLike {
@@ -707,42 +755,22 @@ function getKeywordCoverage(responseText: string, keywords?: string[]) {
   return { matched, missing };
 }
 
-function getExerciseActionLabel(moduleType: ModuleType, exercise: AssignmentExercise) {
-  if (moduleType === 'video') {
-    return 'Submit Practice Response';
-  }
-  if (moduleType === 'quiz') {
-    return 'Submit Quiz Answer';
-  }
-  if (moduleType === 'flashcard') {
-    return 'Submit Flashcard Answer';
-  }
-  if (moduleType === 'infographic') {
-    return 'Submit Infographic Answer';
-  }
-  if (moduleType === 'case_study' && exercise.type === 'multiple_choice') {
-    return 'Submit Root Cause Answer';
-  }
-  if (moduleType === 'case_study') {
-    return 'Complete Analysis';
-  }
-  if (moduleType === 'audio' && exercise.type === 'multiple_choice') {
-    return 'Submit Listening Answer';
-  }
-  if (moduleType === 'audio') {
-    return 'Submit Listening Response';
-  }
-  return 'Save Exercise';
+function isCompletedAssignment(status?: AssignmentStatus | null) {
+  return status === 'completed' || status === 'certified';
 }
 
-function getInputModeLabel(inputMode?: string | null) {
-  if (inputMode === 'speech') {
-    return 'Speech-to-Text';
+function getQuestionResultBadgeClass(result?: string | null) {
+  if (result === 'correct') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
   }
-  if (inputMode === 'selection') {
-    return 'Option Selection';
+  if (result === 'incorrect') {
+    return 'border-rose-200 bg-rose-50 text-rose-700';
   }
-  return 'Typed Response';
+  return 'border-amber-200 bg-amber-50 text-amber-700';
+}
+
+function getObservationTitle(provider?: string | null) {
+  return provider === 'gemini' ? 'Gemini AI Observation' : 'AI Performance Observation';
 }
 
 interface ModuleMediaGateState {
@@ -883,7 +911,6 @@ interface AudioPlaybackCardProps {
   captionsUrl?: string | null;
   captionData?: unknown;
   transcriptText?: string | null;
-  summaryText?: string | null;
   ttsUrl?: string | null;
   languageLabel?: string | null;
   durationSeconds?: number | null;
@@ -932,7 +959,6 @@ function AudioPlaybackCard({
   captionsUrl,
   captionData,
   transcriptText,
-  summaryText,
   ttsUrl,
   languageLabel,
   durationSeconds,
@@ -956,7 +982,6 @@ function AudioPlaybackCard({
   const [ttsPlaybackUrl, setTtsPlaybackUrl] = useState<string | null>(null);
   const [loadingMode, setLoadingMode] = useState<'primary' | 'tts' | null>(null);
   const [resolvedTranscriptText, setResolvedTranscriptText] = useState(() => transcriptText?.trim() || '');
-  const [resolvedSummaryText, setResolvedSummaryText] = useState(() => summaryText?.trim() || '');
   const [resolvedCaptionsUrl, setResolvedCaptionsUrl] = useState(() => captionsUrl || '');
 
   const revokeTtsPlaybackUrl = useCallback(() => {
@@ -1035,14 +1060,8 @@ function AudioPlaybackCard({
           : typeof transcriptPayload?.transcript === 'string'
             ? transcriptPayload.transcript.trim()
             : '';
-      const generatedSummary = typeof transcriptPayload?.summary_text === 'string'
-        ? transcriptPayload.summary_text.trim()
-        : '';
       const generatedDuration = Number(transcriptPayload?.duration_seconds);
 
-      if (generatedSummary) {
-        setResolvedSummaryText(generatedSummary);
-      }
       if (Number.isFinite(generatedDuration) && generatedDuration > 0) {
         setResolvedDuration((current) => (current > 0 ? Math.max(current, generatedDuration) : generatedDuration));
       }
@@ -1086,7 +1105,6 @@ function AudioPlaybackCard({
               : typeof payload?.transcript === 'string'
                 ? payload.transcript.trim()
                 : '';
-          const hydratedSummary = typeof payload?.summary_text === 'string' ? payload.summary_text.trim() : '';
           const hydratedCaptionsUrl = typeof payload?.captions_url === 'string' ? payload.captions_url : '';
           const hydratedDuration = Number(payload?.duration_seconds);
 
@@ -1096,9 +1114,6 @@ function AudioPlaybackCard({
 
           if (hydratedTranscript) {
             setResolvedTranscriptText(hydratedTranscript);
-          }
-          if (hydratedSummary) {
-            setResolvedSummaryText(hydratedSummary);
           }
           if (hydratedCaptionsUrl) {
             setResolvedCaptionsUrl(hydratedCaptionsUrl);
@@ -1210,7 +1225,6 @@ function AudioPlaybackCard({
     setLoadingMode(null);
     setPrimaryPlaybackUrl(null);
     setResolvedTranscriptText(transcriptText?.trim() || '');
-    setResolvedSummaryText(summaryText?.trim() || '');
     setResolvedCaptionsUrl(captionsUrl || '');
     setCaptionCues(normalizeCaptionCueList(captionData));
     revokeTtsPlaybackUrl();
@@ -1227,7 +1241,7 @@ function AudioPlaybackCard({
       ttsAudioRef.current.pause();
       ttsAudioRef.current.currentTime = 0;
     }
-  }, [audioUrl, cancelBrowserSpeech, captionData, captionsUrl, moduleId, revokeTtsPlaybackUrl, summaryText, transcriptText, ttsUrl]);
+  }, [audioUrl, cancelBrowserSpeech, captionData, captionsUrl, moduleId, revokeTtsPlaybackUrl, transcriptText, ttsUrl]);
 
   useEffect(() => {
     if (!(hasPrimaryAudio ?? Boolean(audioUrl))) {
@@ -1256,7 +1270,6 @@ function AudioPlaybackCard({
 
   const transcriptBody =
     resolvedTranscriptText || captionCues.map((cue) => cue.text).join('\n').trim() || '';
-  const lessonSummary = resolvedSummaryText || '';
   const canPlayPrimaryAudio = hasPrimaryAudio ?? Boolean(audioUrl);
   const shouldShowBrowserTtsFallback = false;
   const resolvedCaptionCues = captionCues.length
@@ -1490,13 +1503,6 @@ function AudioPlaybackCard({
           ) : null}
         </div>
       </div>
-
-      {lessonSummary ? (
-        <div className="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 p-3">
-          <p className="text-xs uppercase tracking-[0.18em] text-cyan-700">AI Lesson Summary</p>
-          <p className="mt-2 text-sm text-slate-700">{lessonSummary}</p>
-        </div>
-      ) : null}
 
       {canPlayPrimaryAudio ? (
         <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
@@ -1867,9 +1873,6 @@ function TimedFlashcardSessionCard({
       ? Math.max(0, Math.min(100, ((phaseDurationSeconds - secondsRemaining) / phaseDurationSeconds) * 100))
       : 0;
   const autoSubmitKey = `${assignmentId}:${exercise?.id || 'done'}:${session?.answer_deadline_at || 'na'}`;
-  const latestAttempt = exercise?.attempt || null;
-  const latestAttemptStatus = latestAttempt?.status ? formatLabel(latestAttempt.status) : 'Completed';
-
   useEffect(() => {
     if (!exercise) {
       return;
@@ -2066,26 +2069,6 @@ function TimedFlashcardSessionCard({
         )}
       </div>
 
-      {latestAttempt ? (
-        <div
-          className={`rounded-xl border p-4 ${
-            latestAttempt.status === 'timed_out'
-              ? 'border-amber-200 bg-amber-50 text-amber-900'
-              : latestAttempt.status === 'unanswered'
-                ? 'border-rose-200 bg-rose-50 text-rose-900'
-                : 'border-emerald-200 bg-emerald-50 text-emerald-900'
-          }`}
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium">Latest saved result: {latestAttemptStatus}</p>
-            <Badge className="border-white/60 bg-white/80 text-current">Score: {formatAttemptScore(latestAttempt)}</Badge>
-          </div>
-          <p className="mt-2">{latestAttempt.feedback || 'Flashcard result saved.'}</p>
-          {latestAttempt.answered_at ? (
-            <p className="mt-2 text-xs opacity-80">Saved at: {formatDate(latestAttempt.answered_at)}</p>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -2098,6 +2081,7 @@ export default function MicrolearningHub() {
   const [queueFilter, setQueueFilter] = useState<ModuleQueueFilter>('all');
   const [assignmentDetail, setAssignmentDetail] = useState<AssignmentDetailResponse | null>(null);
   const [exerciseResponses, setExerciseResponses] = useState<Record<string, ExerciseResponseState>>({});
+  const [activeExerciseIndexes, setActiveExerciseIndexes] = useState<Record<string, number>>({});
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [refreshingAssignments, setRefreshingAssignments] = useState(false);
@@ -2105,11 +2089,7 @@ export default function MicrolearningHub() {
   const [submittingExerciseId, setSubmittingExerciseId] = useState('');
   const [videoCompleted, setVideoCompleted] = useState<Record<string, boolean>>({});
   const [moduleAssetPlaybackUrls, setModuleAssetPlaybackUrls] = useState<Record<string, string>>({});
-  const [quizIndexes, setQuizIndexes] = useState<Record<string, number>>({});
-  const [quizAnswers, setQuizAnswers] = useState<Record<string, Record<number, number>>>({});
   const [quizReadingConfirmed, setQuizReadingConfirmed] = useState<Record<string, boolean>>({});
-  const [speechResults, setSpeechResults] = useState<Record<string, Record<string | number, string>>>({});
-  const [isListening, setIsListening] = useState(false);
   const [activeSpeechExerciseId, setActiveSpeechExerciseId] = useState('');
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const speechSeedTextRef = useRef('');
@@ -2169,18 +2149,22 @@ export default function MicrolearningHub() {
     return nextUrl;
   }, [apiRequest, moduleAssetPlaybackUrls]);
 
-  const loadAssignmentDetail = useCallback(async (assignmentId: string) => {
+  const loadAssignmentDetail = useCallback(async (
+    assignmentId: string,
+    options: LoadAssignmentDetailOptions = {},
+  ) => {
     if (!assignmentId) {
       setAssignmentDetail(null);
       setExerciseResponses({});
       return;
     }
 
+    const includeExercises = options.includeExercises ?? true;
     setIsLoadingDetail(true);
 
     try {
       const detail = await apiRequest<AssignmentDetailResponse>(
-        `/api/trainee/microlearning-assignments/${assignmentId}`,
+        `/api/trainee/microlearning-assignments/${assignmentId}${includeExercises ? '' : '?include_exercises=false'}`,
       );
 
       const nextResponses: Record<string, ExerciseResponseState> = {};
@@ -2216,12 +2200,24 @@ export default function MicrolearningHub() {
                 || (isActiveFlashcard ? 'back' : '')
               )
               : '',
-        };
+          };
       });
+
+      const firstIncompleteExerciseIndex = detail.exercises.findIndex(
+        (exercise) => exercise.type !== 'flashcard_recall' && !exercise.attempt?.is_completed,
+      );
+      const nextExerciseIndex =
+        firstIncompleteExerciseIndex >= 0
+          ? firstIncompleteExerciseIndex
+          : Math.max(0, detail.exercises.findIndex((exercise) => exercise.type !== 'flashcard_recall'));
 
       startTransition(() => {
         setAssignmentDetail(detail);
         setExerciseResponses(nextResponses);
+        setActiveExerciseIndexes((current) => ({
+          ...current,
+          [detail.assignment.id]: nextExerciseIndex >= 0 ? nextExerciseIndex : 0,
+        }));
         if (detail.assignment.completed_exercises && detail.assignment.completed_exercises > 0) {
           setVideoCompleted((current) => ({ ...current, [assignmentId]: true }));
         }
@@ -2270,12 +2266,16 @@ export default function MicrolearningHub() {
       });
 
       if (nextActiveId) {
+        const nextActiveAssignment =
+          nextAssignments.find((assignment) => assignment.id === nextActiveId) || null;
         const shouldReloadDetail =
           refreshDetail ||
           !assignmentDetail ||
           assignmentDetail.assignment.id !== nextActiveId;
         if (shouldReloadDetail) {
-          await loadAssignmentDetail(nextActiveId);
+          await loadAssignmentDetail(nextActiveId, {
+            includeExercises: hasStartedAssignment(nextActiveAssignment),
+          });
         }
       } else {
         setAssignmentDetail(null);
@@ -2506,8 +2506,11 @@ export default function MicrolearningHub() {
   const handleSelectAssignment = useCallback(async (assignmentId: string) => {
     recognitionRef.current?.stop();
     setActiveAssignmentId(assignmentId);
-    await loadAssignmentDetail(assignmentId);
-  }, [loadAssignmentDetail]);
+    const selectedAssignment = assignments.find((assignment) => assignment.id === assignmentId) || null;
+    await loadAssignmentDetail(assignmentId, {
+      includeExercises: hasStartedAssignment(selectedAssignment),
+    });
+  }, [assignments, loadAssignmentDetail]);
 
   async function handleRetakeAssignment() {
     if (!activeAssignmentId) {
@@ -2529,73 +2532,6 @@ export default function MicrolearningHub() {
     } finally {
       setStartingAssignment(false);
     }
-  }
-
-  function changeQuizQuestion(assignmentId: string, questionCount: number, direction: -1 | 1) {
-    setQuizIndexes((current) => {
-      const currentIndex = current[assignmentId] || 0;
-      const nextIndex = Math.max(0, Math.min(questionCount - 1, currentIndex + direction));
-      return {
-        ...current,
-        [assignmentId]: nextIndex,
-      };
-    });
-  }
-
-  function selectQuizAnswer(assignmentId: string, questionIndex: number, answerIndex: number) {
-    setQuizAnswers((current) => ({
-      ...current,
-      [assignmentId]: {
-        ...current[assignmentId],
-        [questionIndex]: answerIndex,
-      },
-    }));
-  }
-
-  function startSpeechRecognition(assignmentId: string, questionIndex: string | number) {
-    const RecognitionCtor =
-      typeof window !== 'undefined'
-        ? window.SpeechRecognition || window.webkitSpeechRecognition
-        : undefined;
-
-    if (!RecognitionCtor) {
-      toast.error('Speech-to-text is not available in this browser.');
-      return;
-    }
-
-    if (isListening) {
-      recognitionRef.current?.stop();
-      return;
-    }
-
-    recognitionRef.current?.stop();
-
-    const recognition = new RecognitionCtor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'en-US';
-    recognition.onresult = (event) => {
-      const transcript = collectSpeechTranscript(event);
-      setSpeechResults((current) => ({
-        ...current,
-        [assignmentId]: {
-          ...current[assignmentId],
-          [questionIndex]: transcript,
-        },
-      }));
-    };
-    recognition.onerror = () => {
-      setIsListening(false);
-      toast.error('Speech capture stopped unexpectedly.');
-    };
-    recognition.onend = () => {
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-    recognition.start();
-    setIsListening(true);
-    toast.success('Speech-to-text is listening.');
   }
 
   function handleSpeechCapture(exerciseId: string) {
@@ -2669,22 +2605,22 @@ export default function MicrolearningHub() {
   async function handleSubmitExercise(
     exercise: AssignmentExercise,
     options: SubmitExerciseOptions = {},
-  ) {
+  ): Promise<SubmitExerciseResponse | null> {
     if (!activeAssignmentId) {
       toast.error('Choose a module before saving an exercise.');
-      return;
+      return null;
     }
     if (!hasStartedAssignment(activeAssignment)) {
       toast.error('Start the module first before submitting the assessment.');
-      return;
+      return null;
     }
     if (activeModuleGateState?.assessmentUnavailable) {
       toast.error(activeModuleGateState.lockMessage);
-      return;
+      return null;
     }
     if (activeModuleGateState?.videoReviewLocked && !exercise.attempt) {
       toast.error(activeModuleGateState.lockMessage);
-      return;
+      return null;
     }
 
     const response = exerciseResponses[exercise.id] || {
@@ -2695,7 +2631,7 @@ export default function MicrolearningHub() {
 
     if (exercise.type === 'multiple_choice' && !response.selectedOption) {
       toast.error('Choose an answer before submitting.');
-      return;
+      return null;
     }
 
     if (
@@ -2704,17 +2640,17 @@ export default function MicrolearningHub() {
       !response.responseText.trim()
     ) {
       toast.error('Type your answer before submitting.');
-      return;
+      return null;
     }
 
     if (exercise.type === 'flashcard_recall' && !response.revealedSide) {
       toast.error('Wait for Answer Mode to begin before the flashcard response is saved.');
-      return;
+      return null;
     }
 
     if (exercise.type === 'flashcard_recall' && !options.timerExpired) {
       toast.error('Flashcard answers are saved automatically when the 60-second answer timer reaches zero.');
-      return;
+      return null;
     }
 
     setSubmittingExerciseId(exercise.id);
@@ -2760,6 +2696,7 @@ export default function MicrolearningHub() {
         toast.success('Exercise saved successfully.');
       }
       await loadAssignments({ preferredAssignmentId: activeAssignmentId });
+      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save this exercise.';
       if (exercise.type === 'flashcard_recall' && options.timerExpired) {
@@ -2772,6 +2709,7 @@ export default function MicrolearningHub() {
       } else {
         toast.error(message);
       }
+      return null;
     } finally {
       setSubmittingExerciseId('');
     }
@@ -2859,6 +2797,94 @@ export default function MicrolearningHub() {
       inputMode: 'typed' as const,
       revealedSide: '' as const,
     };
+  const standardExercises = !isFlashcardModule
+    ? assignmentDetail?.exercises.filter((exercise) => exercise.type !== 'flashcard_recall') || []
+    : [];
+  const activeStandardExerciseIndex = activeAssignmentId
+    ? Math.max(
+      0,
+      Math.min(
+        activeExerciseIndexes[activeAssignmentId] ?? 0,
+        Math.max(standardExercises.length - 1, 0),
+      ),
+    )
+    : 0;
+  const activeStandardExercise = standardExercises[activeStandardExerciseIndex] || null;
+  const activeStandardResponse = activeStandardExercise
+    ? (
+      exerciseResponses[activeStandardExercise.id] || {
+        responseText: '',
+        selectedOption: '',
+        inputMode: activeStandardExercise.type === 'multiple_choice' ? 'selection' : 'typed',
+        revealedSide: '' as const,
+      }
+    )
+    : {
+      responseText: '',
+      selectedOption: '',
+      inputMode: 'typed' as const,
+      revealedSide: '' as const,
+    };
+  const assignmentResultSummary = assignmentDetail?.result_summary || null;
+  const shouldShowModuleResultSummary = Boolean(
+    assignmentResultSummary
+      && activeAssignment
+      && isCompletedAssignment(activeAssignment.status)
+      && activeAssignment.completed_exercises >= activeAssignment.exercise_count,
+  );
+  const canMoveToPreviousExercise = activeStandardExerciseIndex > 0;
+  const isLastStandardExercise = activeStandardExerciseIndex >= Math.max(standardExercises.length - 1, 0);
+
+  function setActiveExerciseIndex(assignmentId: string, nextIndex: number) {
+    setActiveExerciseIndexes((current) => ({
+      ...current,
+      [assignmentId]: Math.max(0, nextIndex),
+    }));
+  }
+
+  function moveStandardExercise(direction: -1 | 1) {
+    if (!activeAssignmentId || !standardExercises.length) {
+      return;
+    }
+
+    const nextIndex = Math.max(
+      0,
+      Math.min(standardExercises.length - 1, activeStandardExerciseIndex + direction),
+    );
+    setActiveExerciseIndex(activeAssignmentId, nextIndex);
+  }
+
+  async function handleAdvanceStandardExercise() {
+    if (!activeStandardExercise) {
+      return;
+    }
+
+    if (activeStandardExercise.attempt?.is_completed) {
+      moveStandardExercise(1);
+      return;
+    }
+
+    const result = await handleSubmitExercise(activeStandardExercise, {
+      suppressSuccessToast: true,
+    });
+    if (result && activeAssignmentId && !isLastStandardExercise) {
+      setActiveExerciseIndex(activeAssignmentId, activeStandardExerciseIndex + 1);
+    }
+  }
+
+  async function handleSubmitStandardModule() {
+    if (!activeStandardExercise) {
+      return;
+    }
+
+    if (activeStandardExercise.attempt?.is_completed) {
+      return;
+    }
+
+    await handleSubmitExercise(activeStandardExercise, {
+      suppressSuccessToast: true,
+    });
+  }
 
   useEffect(() => {
     if (!activeAssignmentId || assignmentDetail?.module.module_type !== 'flashcard') {
@@ -2916,7 +2942,10 @@ export default function MicrolearningHub() {
     startTransition(() => {
       setActiveAssignmentId(nextAssignmentId);
     });
-    void loadAssignmentDetail(nextAssignmentId);
+    const nextAssignment = filteredAssignments.find((assignment) => assignment.id === nextAssignmentId) || null;
+    void loadAssignmentDetail(nextAssignmentId, {
+      includeExercises: hasStartedAssignment(nextAssignment),
+    });
   }, [activeAssignmentId, filteredAssignments, loadAssignmentDetail]);
 
   function renderModuleContent() {
@@ -2927,7 +2956,6 @@ export default function MicrolearningHub() {
     const moduleDetail = assignmentDetail.module;
     const content = moduleDetail.content_data || {};
     const moduleType = moduleDetail.module_type;
-    const rawAssetUrl = activeModuleGateState.rawAssetUrl;
     const assetUrl = activeModuleGateState.assetUrl;
     const transcriptText =
       moduleDetail.audio_transcript ||
@@ -2936,7 +2964,6 @@ export default function MicrolearningHub() {
       content.transcript ||
       content.content ||
       '';
-    const summaryText = content.summary_text || content.audio_summary || content.summary || '';
     const ttsUrl = moduleDetail.audio_tts_url || content.tts_url || '';
     const captionsUrl = moduleDetail.captions_url || content.captions_url || '';
     const captionData = content.caption_data;
@@ -2944,7 +2971,6 @@ export default function MicrolearningHub() {
     const assetKind = activeModuleGateState.assetKind;
 
     if (moduleType === 'video') {
-      const lessonQuestions = getFirstContentArray(content, ['video_timestamp_questions', 'questions', 'video_questions']);
       const unlocked = !activeModuleGateState.isAssessmentLocked;
 
       return (
@@ -2979,7 +3005,7 @@ export default function MicrolearningHub() {
           {assetKind === 'external' && assetUrl && !activeModuleGateState.assessmentUnavailable ? (
             <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
               <p className="text-sm text-slate-600">
-                This lesson uses an external media reference. Open it in a new tab, review it, then confirm below to unlock the practice prompt.
+                This lesson uses an external media reference. Open it in a new tab, review it, then confirm below to unlock the guided question flow.
               </p>
               <Button asChild className="mt-3" variant="outline">
                 <a href={assetUrl} target="_blank" rel="noreferrer">
@@ -2997,7 +3023,7 @@ export default function MicrolearningHub() {
           {assetKind !== 'none' && assetKind !== 'file' && !activeModuleGateState.assessmentUnavailable && !videoCompleted[activeAssignment.id] ? (
             <div className="mt-3 flex flex-col gap-3 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-sky-800">
-                Review the lesson reference, then confirm so your practice activity unlocks.
+                Review the lesson reference, then confirm so the assessment unlocks below.
               </p>
               <Button
                 type="button"
@@ -3012,46 +3038,14 @@ export default function MicrolearningHub() {
             {activeModuleGateState.assessmentUnavailable
               ? activeModuleGateState.lockMessage
               : unlocked
-              ? 'The practice prompt is unlocked. Submit your response below.'
+              ? 'The lesson requirement is complete. Answer the assessment one question at a time below.'
               : assetKind === 'file'
-                ? 'Finish the video first to unlock the practice prompt and complete the activity.'
-                : 'Review the lesson reference first, then confirm it to unlock the practice prompt and complete the activity.'}
+                ? 'Finish the video first to unlock the assessment.'
+                : 'Review the lesson reference first, then confirm it to unlock the assessment.'}
           </p>
           {unlocked ? (
-            <div className="mt-4 space-y-4">
-              {lessonQuestions.length ? (
-                lessonQuestions.map((question: any, index: number) => (
-                  <div key={index} className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs uppercase tracking-[0.18em] text-sky-700">
-                        Video Question {index + 1}
-                      </p>
-                      {question.stt_enabled ? (
-                        <Badge variant="outline" className="text-xs">
-                          Voice Enabled
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 text-sm text-slate-700">{question.question}</p>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Practice Prompt</p>
-                  <p className="mt-2 text-sm text-slate-700">
-                    {content.practice_prompt || assignmentDetail.exercises[0]?.prompt || 'Respond using the coaching model from the lesson.'}
-                  </p>
-                  {(content.required_keywords || []).length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {(content.required_keywords || []).map((phrase: string) => (
-                        <Badge key={phrase} variant="outline">
-                          {phrase}
-                        </Badge>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              )}
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+              The assessment is ready. Use the activity panel below to answer each question one at a time and submit the final question when you finish.
             </div>
           ) : null}
         </div>
@@ -3080,47 +3074,27 @@ export default function MicrolearningHub() {
     }
 
     if (moduleType === 'quiz') {
-      const questions = getFirstContentArray(content, ['questions', 'quiz_questions']);
       const readingContent = getQuizReadingContent(content);
       const readingGateKey = getQuizReadingGateKey(activeAssignment);
       const readingUnlocked = !readingContent || Boolean(quizReadingConfirmed[readingGateKey]);
-      const currentQuestionIndex = quizIndexes[activeAssignment.id] || 0;
-      const currentQuestion = questions[currentQuestionIndex];
-      const selectedAnswer = quizAnswers[activeAssignment.id]?.[currentQuestionIndex];
 
       return (
         <div className="rounded-xl border bg-white p-4">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-slate-700">Quiz Module</p>
-              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">
-                Question {currentQuestionIndex + 1} of {questions.length}
+              <p className="mt-1 text-sm text-slate-500">
+                {readingContent
+                  ? 'Complete the reading requirement first, then answer the assigned questions one at a time below.'
+                  : 'Answer the assigned questions one at a time below.'}
               </p>
             </div>
-            {questions.length > 1 ? (
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => changeQuizQuestion(activeAssignment.id, questions.length, -1)}
-                  disabled={currentQuestionIndex === 0 || !readingUnlocked}
-                >
-                  <ChevronLeft className="mr-1 size-4" />
-                  Previous
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => changeQuizQuestion(activeAssignment.id, questions.length, 1)}
-                  disabled={currentQuestionIndex >= questions.length - 1 || !readingUnlocked}
-                >
-                  Next
-                  <ChevronRight className="ml-1 size-4" />
-                </Button>
-              </div>
-            ) : null}
+            <Badge
+              variant="outline"
+              className={readingUnlocked ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}
+            >
+              {readingUnlocked ? 'Assessment unlocked' : 'Reading required'}
+            </Badge>
           </div>
 
           {readingContent ? (
@@ -3160,124 +3134,50 @@ export default function MicrolearningHub() {
             </div>
           ) : null}
 
-          {currentQuestion && readingUnlocked ? (
-            <div className="mt-4">
-              <p className="text-base font-medium text-slate-800">{currentQuestion.question}</p>
-              <div className="mt-3 space-y-2">
-                {currentQuestion.options?.map((option: string, index: number) => (
-                  <button
-                    key={index}
-                    type="button"
-                    className={`w-full rounded-lg border p-3 text-left transition hover:border-sky-200 ${
-                      selectedAnswer === index ? 'border-sky-500 bg-sky-50' : 'border-slate-200 bg-white'
-                    }`}
-                    onClick={() => selectQuizAnswer(activeAssignment.id, currentQuestionIndex, index)}
-                  >
-                    <span className="text-sm font-medium text-slate-700">
-                      {String.fromCharCode(65 + index)}. {option}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {currentQuestion.stt_enabled ? (
-                <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <p className="text-xs uppercase tracking-[0.18em] text-sky-700">Voice Response</p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    This question supports voice responses. Click the microphone to speak your answer.
-                  </p>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="mt-2"
-                    onClick={() => startSpeechRecognition(activeAssignment.id, currentQuestionIndex)}
-                    disabled={isListening}
-                  >
-                    <Mic className="mr-2 size-4" />
-                    {isListening ? 'Listening...' : 'Start Voice Response'}
-                  </Button>
-                  {speechResults[activeAssignment.id]?.[currentQuestionIndex] && (
-                    <p className="mt-2 text-sm text-slate-700">
-                      <strong>Voice Response:</strong> {speechResults[activeAssignment.id][currentQuestionIndex]}
-                    </p>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          ) : readingContent && !readingUnlocked ? (
+          {readingContent && !readingUnlocked ? (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-              Read the passage above, then confirm it to preview the quiz flow and unlock the answer cards.
+              Finish the reading requirement above to unlock the quiz questions below.
             </div>
           ) : (
-            <p className="mt-4 text-sm text-slate-500">No questions available for this quiz.</p>
+            <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+              The quiz is ready. The question flow below will present one question at a time until you submit the last one.
+            </div>
           )}
         </div>
       );
     }
 
     if (moduleType === 'infographic') {
-      const infographicQuestions = getFirstContentArray(content, ['questions', 'infographic_questions']);
       return (
         <div className="rounded-xl border bg-white p-4">
           <p className="text-sm font-medium text-slate-700">Infographic Module</p>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           {assetUrl ? <img src={assetUrl} alt={activeAssignment.title} className="mt-3 max-h-72 rounded-lg border object-contain" /> : null}
-          {infographicQuestions.length ? (
-            <div className="mt-4 space-y-4">
-              {infographicQuestions.map((question: any, index: number) => (
-                <div key={index} className="rounded-lg border border-sky-200 bg-sky-50 p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs uppercase tracking-[0.18em] text-sky-700">
-                      {question.type === 'multiple_choice' ? 'Multiple Choice Assessment' : 'Open-Ended Assessment'}
-                    </p>
-                    <Badge variant="outline" className="text-xs">
-                      {question.type === 'multiple_choice' ? 'Choose Below' : 'Respond Below'}
-                    </Badge>
-                  </div>
-                  <p className="mt-2 text-sm text-slate-700">{question.question}</p>
-                  {question.type === 'multiple_choice' && Array.isArray(question.options) && question.options.length ? (
-                    <div className="mt-3 space-y-2">
-                      {question.options.map((option: string, optionIndex: number) => (
-                        <div key={`${question.question}-${optionIndex}`} className="rounded-lg border bg-white px-3 py-2 text-sm text-slate-700">
-                          <span className="font-medium text-slate-500">{String.fromCharCode(65 + optionIndex)}.</span>{' '}
-                          {option}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="mt-3 text-sm text-slate-500">
-                      {question.type === 'multiple_choice'
-                        ? 'This infographic uses the multiple-choice exercise cards below.'
-                        : 'Read the infographic carefully, then answer in your own words in the exercise card below.'}
-                    </p>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-emerald-600">Power Phrases</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(content.power_phrases || []).map((item: string) => (
-                    <Badge key={item} variant="outline">
-                      {item}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-rose-600">Wall Phrases</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {(content.wall_phrases || []).map((item: string) => (
-                    <Badge key={item} variant="outline">
-                      {item}
-                    </Badge>
-                  ))}
-                </div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-emerald-600">Power Phrases</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(content.power_phrases || []).map((item: string) => (
+                  <Badge key={item} variant="outline">
+                    {item}
+                  </Badge>
+                ))}
               </div>
             </div>
-          )}
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-rose-600">Wall Phrases</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {(content.wall_phrases || []).map((item: string) => (
+                  <Badge key={item} variant="outline">
+                    {item}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            Review the infographic first, then use the activity panel below to answer each assigned question one at a time.
+          </div>
         </div>
       );
     }
@@ -3296,7 +3196,6 @@ export default function MicrolearningHub() {
               captionsUrl={captionsUrl}
               captionData={captionData}
               transcriptText={transcriptText}
-              summaryText={summaryText}
               ttsUrl={ttsUrl}
               languageLabel={moduleDetail.audio_language || content.audio_language || 'en-US'}
               durationSeconds={moduleDetail.audio_duration_seconds || content.audio_duration_seconds}
@@ -3318,7 +3217,6 @@ export default function MicrolearningHub() {
         moduleDetail.audio_url ||
         content.audio_url ||
         (isDirectAudioFile(assetUrl) ? assetUrl : '');
-      const caseStudySummary = content.summary_text || content.audio_summary || content.summary || '';
       return (
         <div className="rounded-xl border bg-white p-4">
           <p className="text-sm font-medium text-slate-700">Case Study</p>
@@ -3331,7 +3229,6 @@ export default function MicrolearningHub() {
               captionsUrl={captionsUrl}
               captionData={captionData}
               transcriptText={caseStudyNarrative}
-              summaryText={caseStudySummary}
               ttsUrl={ttsUrl}
               languageLabel={moduleDetail.audio_language || content.audio_language || 'en-US'}
               durationSeconds={moduleDetail.audio_duration_seconds || content.audio_duration_seconds}
@@ -3349,6 +3246,441 @@ export default function MicrolearningHub() {
     }
 
     return null;
+  }
+
+  function renderAssignmentResultSummary() {
+    if (!assignmentResultSummary || !activeAssignment) {
+      return null;
+    }
+
+    const breakdown = assignmentResultSummary.breakdown || [];
+    const isPassed =
+      String(assignmentResultSummary.status || '').toLowerCase() === 'passed'
+      || Boolean(activeAssignment.is_passed);
+    const percentageScore = Number(
+      assignmentResultSummary.percentage_score ?? activeAssignment.average_score ?? 0,
+    );
+    const passingScore = Number(
+      assignmentResultSummary.passing_score ?? activeAssignment.passing_score ?? assignmentDetail?.module.passing_score ?? 0,
+    );
+    const scoreLabel =
+      formatPoints(
+        assignmentResultSummary.points_earned,
+        assignmentResultSummary.points_possible,
+      )
+      || formatPoints(activeAssignment.points_earned, activeAssignment.points_possible)
+      || `${Number(assignmentResultSummary.total_score || 0).toFixed(1)} total points`;
+
+    const insightSections = [
+      {
+        title: 'Strengths',
+        items: assignmentResultSummary.strengths || [],
+      },
+      {
+        title: 'Weak Areas',
+        items: assignmentResultSummary.weak_areas || [],
+      },
+      {
+        title: 'Improvement Opportunities',
+        items: assignmentResultSummary.improvement_opportunities || [],
+      },
+      {
+        title: 'Recommended Next Steps',
+        items: assignmentResultSummary.recommended_next_steps || [],
+      },
+    ];
+
+    return (
+      <Card className="border-slate-200">
+        <CardHeader>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <CardTitle>Module Result Summary</CardTitle>
+              <CardDescription>
+                Review your final score, the saved answer breakdown, and the end-of-module observation.
+              </CardDescription>
+            </div>
+            <Badge
+              className={
+                isPassed
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                  : 'border-rose-200 bg-rose-50 text-rose-700'
+              }
+            >
+              {isPassed ? 'Passed' : 'Failed'}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Final Score</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{scoreLabel}</p>
+            </div>
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Percentage</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{percentageScore.toFixed(1)}%</p>
+            </div>
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Passing Score</p>
+              <p className="mt-2 text-2xl font-semibold text-slate-900">{passingScore.toFixed(1)}%</p>
+            </div>
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Submitted</p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                {formatDate(assignmentResultSummary.submitted_at || activeAssignment.completed_at)}
+              </p>
+            </div>
+          </div>
+
+          {assignmentResultSummary.overall_summary ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-sky-700">Overall Summary</p>
+              <p className="mt-2 text-sm leading-6 text-slate-700">{assignmentResultSummary.overall_summary}</p>
+            </div>
+          ) : null}
+
+          <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-cyan-700">
+                  {getObservationTitle(assignmentResultSummary.provider)}
+                </p>
+                <p className="mt-1 text-sm text-slate-600">
+                  This summary is available only after the full module has been submitted.
+                </p>
+              </div>
+              {assignmentResultSummary.provider ? (
+                <Badge variant="outline">{assignmentResultSummary.provider === 'gemini' ? 'Gemini' : 'Saved breakdown insight'}</Badge>
+              ) : null}
+            </div>
+            {assignmentResultSummary.explanation ? (
+              <p className="mt-3 text-sm leading-6 text-slate-700">{assignmentResultSummary.explanation}</p>
+            ) : null}
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              {insightSections.map((section) => (
+                <div key={section.title} className="rounded-lg border bg-white p-4">
+                  <p className="text-sm font-semibold text-slate-800">{section.title}</p>
+                  {section.items.length ? (
+                    <ul className="mt-3 space-y-2 text-sm text-slate-600">
+                      {section.items.map((item) => (
+                        <li key={`${section.title}-${item}`}>{item}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-3 text-sm text-slate-500">No additional notes available.</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="text-sm font-semibold text-slate-900">Question Breakdown</p>
+                <p className="text-sm text-slate-500">
+                  Each saved answer includes your response, the correct answer, and the question result.
+                </p>
+              </div>
+              <Badge variant="outline">{breakdown.length} question{breakdown.length === 1 ? '' : 's'}</Badge>
+            </div>
+
+            {breakdown.length ? breakdown.map((item) => {
+              const perQuestionScore =
+                formatPoints(item.points_earned, item.points_possible)
+                || `${Math.round(Number(item.score || 0))}%`;
+
+              return (
+                <div key={item.question_id || `${item.question_number}-${item.title}`} className="rounded-xl border bg-white p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">
+                        Question {item.question_number}: {item.title || 'Untitled Question'}
+                      </p>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">{item.prompt}</p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge className={getQuestionResultBadgeClass(item.question_result)}>
+                        {formatLabel(item.question_result || 'needs_review')}
+                      </Badge>
+                      <Badge variant="outline">{perQuestionScore}</Badge>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-lg border bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Your Answer</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">
+                        {item.trainee_answer?.trim() || 'No answer submitted.'}
+                      </p>
+                    </div>
+                    <div className="rounded-lg border bg-slate-50 p-3">
+                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Correct Answer</p>
+                      <p className="mt-2 text-sm leading-6 text-slate-700">
+                        {item.correct_answer?.trim() || 'No correct answer was provided.'}
+                      </p>
+                    </div>
+                  </div>
+
+                  {item.feedback ? (
+                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                      {item.feedback}
+                    </div>
+                  ) : null}
+
+                  {(item.matched_keywords?.length || item.missing_keywords?.length) ? (
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-lg border bg-emerald-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Matched Keywords</p>
+                        <p className="mt-2 text-sm text-emerald-900">
+                          {item.matched_keywords?.length ? item.matched_keywords.join(', ') : 'None recorded.'}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border bg-amber-50 p-3">
+                        <p className="text-xs uppercase tracking-[0.16em] text-amber-700">Missing Keywords</p>
+                        <p className="mt-2 text-sm text-amber-900">
+                          {item.missing_keywords?.length ? item.missing_keywords.join(', ') : 'None recorded.'}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            }) : (
+              <div className="rounded-lg border border-dashed p-6 text-sm text-slate-500">
+                The question breakdown will appear here after the module is fully submitted.
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  function renderStandardExerciseFlow() {
+    if (shouldShowModuleResultSummary) {
+      return renderAssignmentResultSummary();
+    }
+
+    if (!activeStandardExercise || !standardExercises.length) {
+      return (
+        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
+          No assessment questions are available for this module yet.
+        </div>
+      );
+    }
+
+    const exercise = activeStandardExercise;
+    const response = activeStandardResponse;
+    const isSaving = submittingExerciseId === exercise.id;
+    const videoAssetKind = activeModuleGateState?.assetKind || 'none';
+    const isVideoLocked = Boolean(activeModuleGateState?.videoReviewLocked && !exercise.attempt);
+    const isMediaUnavailable = Boolean(activeModuleGateState?.assessmentUnavailable);
+    const isExerciseLocked = isMediaUnavailable || isVideoLocked || isQuizReadingLocked;
+    const isReadOnly = Boolean(exercise.attempt?.is_completed);
+    const inputDisabled = isExerciseLocked || isReadOnly;
+    const keywordCoverage = getKeywordCoverage(response.responseText, exercise.required_keywords);
+    const speechEnabled = exercise.enable_stt || false;
+    const progressValue = standardExercises.length
+      ? ((activeStandardExerciseIndex + 1) / standardExercises.length) * 100
+      : 0;
+
+    return (
+      <Card className="border-slate-200">
+        <CardHeader>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.16em] text-sky-700">
+                Question {activeStandardExerciseIndex + 1} of {standardExercises.length}
+              </p>
+              <CardTitle className="mt-2 text-lg">{exercise.title}</CardTitle>
+              <CardDescription className="mt-2 text-sm leading-6 text-slate-600">
+                {exercise.prompt}
+              </CardDescription>
+            </div>
+            <Badge variant="outline">{formatLabel(exercise.type)}</Badge>
+          </div>
+          <div className="space-y-2 pt-2">
+            <div className="flex items-center justify-between text-xs text-slate-500">
+              <span>Question progress</span>
+              <span>{activeStandardExerciseIndex + 1}/{standardExercises.length}</span>
+            </div>
+            <Progress value={progressValue} />
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {exercise.required_keywords && exercise.required_keywords.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-slate-700">Target keywords</p>
+              <div className="flex flex-wrap gap-2">
+                {exercise.required_keywords.map((keyword) => (
+                  <Badge key={keyword} variant="outline">
+                    {keyword}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {exercise.type === 'multiple_choice' ? (
+            <div className="space-y-3">
+              <RadioGroup
+                value={response.selectedOption}
+                disabled={inputDisabled}
+                onValueChange={(value) =>
+                  updateExerciseResponse(exercise.id, {
+                    selectedOption: value,
+                    inputMode: 'selection',
+                  })
+                }
+              >
+                {(exercise.options || []).map((option, optionIndex) => {
+                  const optionId = `${exercise.id}-option-${optionIndex}`;
+
+                  return (
+                    <label
+                      key={option}
+                      htmlFor={optionId}
+                      className={`flex items-start gap-3 rounded-lg border p-3 ${
+                        inputDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'
+                      }`}
+                    >
+                      <RadioGroupItem id={optionId} value={option} disabled={inputDisabled} />
+                      <span className="text-sm text-slate-700">{option}</span>
+                    </label>
+                  );
+                })}
+              </RadioGroup>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label htmlFor={exercise.id}>Your response</Label>
+              <Textarea
+                id={exercise.id}
+                value={response.responseText}
+                disabled={inputDisabled}
+                placeholder={
+                  speechEnabled
+                    ? 'Type your response here, or use Speech-to-Text to capture your delivery.'
+                    : 'Type your response here.'
+                }
+                onChange={(event) =>
+                  updateExerciseResponse(exercise.id, {
+                    responseText: event.target.value,
+                    inputMode: 'typed',
+                  })
+                }
+              />
+              <div className="flex flex-wrap gap-2">
+                {speechEnabled ? (
+                  <Button
+                    type="button"
+                    variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
+                    onClick={() => handleSpeechCapture(exercise.id)}
+                    disabled={inputDisabled}
+                  >
+                    {activeSpeechExerciseId === exercise.id ? (
+                      <>
+                        <Square className="mr-2 size-4" />
+                        Stop Speech Capture
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="mr-2 size-4" />
+                        Start Speech-to-Text
+                      </>
+                    )}
+                  </Button>
+                ) : null}
+                {!isReadOnly ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => resetExerciseDraft(exercise)}
+                    disabled={inputDisabled}
+                  >
+                    <RotateCcw className="mr-2 size-4" />
+                    Reset Draft
+                  </Button>
+                ) : null}
+              </div>
+              {exercise.required_keywords && exercise.required_keywords.length > 0 ? (
+                <div className="rounded-lg border bg-slate-50 p-3">
+                  <p className="text-sm font-medium text-slate-700">
+                    {speechEnabled ? 'Power phrase tracker' : 'Keyword tracker'}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {exercise.required_keywords.map((keyword) => {
+                      const isMatched = keywordCoverage.matched.includes(keyword.toLowerCase());
+
+                      return (
+                        <Badge
+                          key={keyword}
+                          className={
+                            isMatched
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                              : 'border-slate-200 bg-white text-slate-600'
+                          }
+                        >
+                          {keyword}
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Matched {keywordCoverage.matched.length} of {exercise.required_keywords.length} target phrases before submission.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          {isReadOnly ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              This answer has already been recorded. Use Previous or Next to review the guided flow.
+            </div>
+          ) : null}
+
+          {isExerciseLocked ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+              {isQuizReadingLocked
+                ? 'Read the trainer story or mock call scenario above, then confirm it to unlock the quiz questions.'
+                : isMediaUnavailable
+                ? activeModuleGateState?.lockMessage || 'The required module media is not available yet.'
+                : videoAssetKind === 'file'
+                  ? 'Complete the video first to unlock this question.'
+                  : 'Review the lesson reference and confirm it first to unlock this question.'}
+            </div>
+          ) : null}
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => moveStandardExercise(-1)}
+              disabled={!canMoveToPreviousExercise || isSaving}
+            >
+              <ChevronLeft className="mr-2 size-4" />
+              Previous
+            </Button>
+
+            <div className="flex flex-wrap gap-2 sm:justify-end">
+              {!isLastStandardExercise ? (
+                <Button type="button" onClick={() => void handleAdvanceStandardExercise()} disabled={isSaving || isExerciseLocked}>
+                  {isSaving ? 'Saving...' : 'Next Question'}
+                  <ChevronRight className="ml-2 size-4" />
+                </Button>
+              ) : (
+                <Button type="button" onClick={() => void handleSubmitStandardModule()} disabled={isSaving || isExerciseLocked || isReadOnly}>
+                  {isSaving ? 'Submitting...' : 'Submit Module'}
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    );
   }
 
   if (!isAuthLoading && !token) {
@@ -3731,337 +4063,37 @@ export default function MicrolearningHub() {
                 {moduleStarted ? renderModuleContent() : null}
 
                 {moduleStarted ? (
-                isFlashcardModule ? (
-                  <TimedFlashcardSessionCard
-                    assignmentId={activeAssignmentId}
-                    assignment={activeAssignment}
-                    exercise={activeFlashcardExercise}
-                    response={activeFlashcardResponse}
-                    session={flashcardSession}
-                    isSaving={Boolean(activeFlashcardExercise && submittingExerciseId === activeFlashcardExercise.id)}
-                    onDraftChange={(patch) => {
-                      if (!activeFlashcardExercise) {
-                        return;
-                      }
-                      updateExerciseResponse(activeFlashcardExercise.id, patch);
-                    }}
-                    onPersistDraft={(responseText, revealedSide) => persistFlashcardSessionDraft(responseText, revealedSide)}
-                    onAutoSubmit={(status) => {
-                      if (!activeFlashcardExercise) {
-                        return;
-                      }
-                      void handleSubmitExercise(activeFlashcardExercise, {
-                        timerExpired: true,
-                        allowBlank: true,
-                        status,
-                        suppressSuccessToast: true,
-                      });
-                    }}
-                  />
-                ) : (
-                <div className="space-y-4">
-                  {assignmentDetail.exercises.map((exercise, index) => {
-                    const response = exerciseResponses[exercise.id] || {
-                      responseText: '',
-                      selectedOption: '',
-                      inputMode: exercise.type === 'multiple_choice' ? 'selection' : 'typed',
-                      revealedSide: '',
-                    };
-                    const isSaving = submittingExerciseId === exercise.id;
-                    const videoAssetKind = activeModuleGateState?.assetKind || 'none';
-                    const isVideoLocked = Boolean(activeModuleGateState?.videoReviewLocked && !exercise.attempt);
-                    const isMediaUnavailable = Boolean(activeModuleGateState?.assessmentUnavailable);
-                    const isExerciseLocked = isMediaUnavailable || isVideoLocked || isQuizReadingLocked;
-                    const keywordCoverage = getKeywordCoverage(response.responseText, exercise.required_keywords);
-                    const speechEnabled = exercise.enable_stt || false;
-
-                    return (
-                      <Card key={exercise.id} className="border-slate-200">
-                        <CardHeader>
-                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                            <div>
-                              <CardTitle className="text-base">
-                                Exercise {index + 1}: {exercise.title}
-                              </CardTitle>
-                              <CardDescription>{exercise.prompt}</CardDescription>
-                            </div>
-                            <Badge variant="outline">{formatLabel(exercise.type)}</Badge>
-                          </div>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          {exercise.required_keywords && exercise.required_keywords.length > 0 ? (
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium text-slate-700">Target keywords</p>
-                              <div className="flex flex-wrap gap-2">
-                                {exercise.required_keywords.map((keyword) => (
-                                  <Badge key={keyword} variant="outline">
-                                    {keyword}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {exercise.tips && exercise.tips.length > 0 ? (
-                            <div className="rounded-lg bg-slate-50 p-3 text-sm text-slate-600">
-                              <p className="font-medium text-slate-700">Coaching tips</p>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {exercise.tips.map((tip) => (
-                                  <Badge key={tip} variant="outline">
-                                    {tip}
-                                  </Badge>
-                                ))}
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {exercise.type === 'flashcard_recall' ? (
-                            <div className="rounded-lg border border-sky-200 bg-sky-50 p-4 text-sm text-sky-900">
-                              Flashcard recall cards run through the dedicated timed flashcard session and are not available in the standard exercise list.
-                            </div>
-                          ) : exercise.type === 'multiple_choice' ? (
-                            <div className="space-y-3">
-                              <RadioGroup
-                                value={response.selectedOption}
-                                disabled={isExerciseLocked}
-                                onValueChange={(value) =>
-                                  updateExerciseResponse(exercise.id, {
-                                    selectedOption: value,
-                                    inputMode: 'selection',
-                                  })
-                                }
-                              >
-                                {(exercise.options || []).map((option, optionIndex) => {
-                                  const optionId = `${exercise.id}-option-${optionIndex}`;
-
-                                  return (
-                                    <label
-                                      key={option}
-                                      htmlFor={optionId}
-                                      className={`flex items-start gap-3 rounded-lg border p-3 ${isExerciseLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
-                                    >
-                                      <RadioGroupItem id={optionId} value={option} disabled={isExerciseLocked} />
-                                      <span className="text-sm text-slate-700">{option}</span>
-                                    </label>
-                                  );
-                                })}
-                              </RadioGroup>
-                            </div>
-                          ) : exercise.type === 'timestamp_question' ? (
-                            <div className="space-y-2">
-                              <Label htmlFor={exercise.id}>Your response</Label>
-                              <Textarea
-                                id={exercise.id}
-                                value={response.responseText}
-                                disabled={isExerciseLocked}
-                                placeholder={
-                                  speechEnabled
-                                    ? 'Type your response here, or use Speech-to-Text to capture your delivery.'
-                                    : 'Type your response here.'
-                                }
-                                onChange={(event) =>
-                                  updateExerciseResponse(exercise.id, {
-                                    responseText: event.target.value,
-                                    inputMode: 'typed',
-                                  })
-                                }
-                              />
-                              <div className="flex flex-wrap gap-2">
-                                {speechEnabled ? (
-                                  <Button
-                                    type="button"
-                                    variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
-                                    onClick={() => handleSpeechCapture(exercise.id)}
-                                    disabled={isExerciseLocked}
-                                  >
-                                    {activeSpeechExerciseId === exercise.id ? (
-                                      <>
-                                        <Square className="mr-2 size-4" />
-                                        Stop Speech Capture
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Mic className="mr-2 size-4" />
-                                        Start Speech-to-Text
-                                      </>
-                                    )}
-                                  </Button>
-                                ) : null}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  onClick={() => resetExerciseDraft(exercise)}
-                                  disabled={isExerciseLocked}
-                                >
-                                  <RotateCcw className="mr-2 size-4" />
-                                  Reset Draft
-                                </Button>
-                              </div>
-                              {exercise.required_keywords && exercise.required_keywords.length > 0 ? (
-                                <div className="rounded-lg border bg-slate-50 p-3">
-                                  <p className="text-sm font-medium text-slate-700">
-                                    {speechEnabled ? 'Power phrase tracker' : 'Keyword tracker'}
-                                  </p>
-                                  <div className="mt-2 flex flex-wrap gap-2">
-                                    {exercise.required_keywords.map((keyword) => {
-                                      const isMatched = keywordCoverage.matched.includes(keyword.toLowerCase());
-
-                                      return (
-                                        <Badge
-                                          key={keyword}
-                                          className={
-                                            isMatched
-                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                              : 'border-slate-200 bg-white text-slate-600'
-                                          }
-                                        >
-                                          {keyword}
-                                        </Badge>
-                                      );
-                                    })}
-                                  </div>
-                                  <p className="mt-2 text-xs text-slate-500">
-                                    Matched {keywordCoverage.matched.length} of {exercise.required_keywords.length} target phrases before submission.
-                                  </p>
-                                </div>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <Label htmlFor={exercise.id}>Your response</Label>
-                              <Textarea
-                                id={exercise.id}
-                                value={response.responseText}
-                                disabled={isExerciseLocked}
-                                placeholder={
-                                  speechEnabled
-                                    ? 'Type your response here, or use Speech-to-Text to capture your delivery.'
-                                    : 'Type your response here.'
-                                }
-                                onChange={(event) =>
-                                  updateExerciseResponse(exercise.id, {
-                                    responseText: event.target.value,
-                                    inputMode: 'typed',
-                                  })
-                                }
-                              />
-                              <div className="flex flex-wrap gap-2">
-                                {speechEnabled ? (
-                                  <Button
-                                    type="button"
-                                    variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
-                                    onClick={() => handleSpeechCapture(exercise.id)}
-                                    disabled={isExerciseLocked}
-                                  >
-                                    {activeSpeechExerciseId === exercise.id ? (
-                                      <>
-                                        <Square className="mr-2 size-4" />
-                                        Stop Speech Capture
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Mic className="mr-2 size-4" />
-                                        Start Speech-to-Text
-                                      </>
-                                    )}
-                                  </Button>
-                                ) : null}
-                                <Button
-                                  type="button"
-                                  variant="ghost"
-                                  onClick={() => resetExerciseDraft(exercise)}
-                                  disabled={isExerciseLocked}
-                                >
-                                  <RotateCcw className="mr-2 size-4" />
-                                  Reset Draft
-                                </Button>
-                              </div>
-                              {exercise.required_keywords && exercise.required_keywords.length > 0 ? (
-                                <div className="rounded-lg border bg-slate-50 p-3">
-                                  <p className="text-sm font-medium text-slate-700">
-                                    {speechEnabled ? 'Power phrase tracker' : 'Keyword tracker'}
-                                  </p>
-                                  <div className="mt-2 flex flex-wrap gap-2">
-                                    {exercise.required_keywords.map((keyword) => {
-                                      const isMatched = keywordCoverage.matched.includes(keyword.toLowerCase());
-
-                                      return (
-                                        <Badge
-                                          key={keyword}
-                                          className={
-                                            isMatched
-                                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                              : 'border-slate-200 bg-white text-slate-600'
-                                          }
-                                        >
-                                          {keyword}
-                                        </Badge>
-                                      );
-                                    })}
-                                  </div>
-                                  <p className="mt-2 text-xs text-slate-500">
-                                    Matched {keywordCoverage.matched.length} of {exercise.required_keywords.length} target phrases before submission.
-                                  </p>
-                                </div>
-                              ) : null}
-                            </div>
-                          )}
-
-                          {exercise.attempt && exercise.type !== 'flashcard_recall' ? (
-                            <div className="rounded-lg border bg-emerald-50 p-3 text-sm text-slate-700">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-medium">Latest result</p>
-                                <Badge className="bg-white text-emerald-700 border-emerald-200">
-                                  Score: {formatAttemptScore(exercise.attempt)}
-                                </Badge>
-                              </div>
-                              <p className="mt-2">{exercise.attempt.feedback || 'Saved successfully.'}</p>
-                              <p className="mt-2 text-xs text-slate-500">
-                                Input mode: {getInputModeLabel(exercise.attempt.input_mode)}
-                              </p>
-                              {exercise.attempt.matched_keywords?.length ? (
-                                <p className="mt-2 text-xs text-emerald-700">
-                                  Matched: {exercise.attempt.matched_keywords.join(', ')}
-                                </p>
-                              ) : null}
-                              {exercise.attempt.missing_keywords?.length ? (
-                                <p className="mt-1 text-xs text-amber-700">
-                                  Missing: {exercise.attempt.missing_keywords.join(', ')}
-                                </p>
-                              ) : null}
-                              {exercise.attempt.submitted_at ? (
-                                <p className="mt-2 text-xs text-slate-500">
-                                  Last submitted: {formatDate(exercise.attempt.submitted_at)}
-                                </p>
-                              ) : null}
-                            </div>
-                          ) : null}
-
-                          {isExerciseLocked ? (
-                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                              {isQuizReadingLocked
-                                ? 'Read the trainer story or mock call scenario above, then confirm it to unlock the quiz questions.'
-                                : isMediaUnavailable
-                                ? activeModuleGateState?.lockMessage || 'The required module media is not available yet.'
-                                : videoAssetKind === 'file'
-                                  ? 'Complete the video first to unlock this practice prompt.'
-                                  : 'Review the lesson reference and confirm it first to unlock this practice prompt.'}
-                            </div>
-                          ) : null}
-
-                          {exercise.type !== 'flashcard_recall' ? (
-                          <Button type="button" onClick={() => void handleSubmitExercise(exercise)} disabled={isSaving || isExerciseLocked}>
-                            {isSaving
-                              ? 'Saving Exercise...'
-                              : getExerciseActionLabel(assignmentDetail.module.module_type, exercise)}
-                          </Button>
-                          ) : null}
-                        </CardContent>
-                      </Card>
-                    );
-                  })}
-                </div>
-                )
+                  isFlashcardModule ? (
+                    <div className="space-y-4">
+                      <TimedFlashcardSessionCard
+                        assignmentId={activeAssignmentId}
+                        assignment={activeAssignment}
+                        exercise={activeFlashcardExercise}
+                        response={activeFlashcardResponse}
+                        session={flashcardSession}
+                        isSaving={Boolean(activeFlashcardExercise && submittingExerciseId === activeFlashcardExercise.id)}
+                        onDraftChange={(patch) => {
+                          if (!activeFlashcardExercise) {
+                            return;
+                          }
+                          updateExerciseResponse(activeFlashcardExercise.id, patch);
+                        }}
+                        onPersistDraft={(responseText, revealedSide) => persistFlashcardSessionDraft(responseText, revealedSide)}
+                        onAutoSubmit={(status) => {
+                          if (!activeFlashcardExercise) {
+                            return;
+                          }
+                          void handleSubmitExercise(activeFlashcardExercise, {
+                            timerExpired: true,
+                            allowBlank: true,
+                            status,
+                            suppressSuccessToast: true,
+                          });
+                        }}
+                      />
+                      {shouldShowModuleResultSummary ? renderAssignmentResultSummary() : null}
+                    </div>
+                  ) : renderStandardExerciseFlow()
                 ) : null}
               </div>
             )}

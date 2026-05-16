@@ -39,6 +39,7 @@ from ..services.certificate_awards import (
 from ..services.microlearning import (
     advance_flashcard_assignment_runtime,
     assignment_is_current,
+    ensure_assignment_result_summary,
     ensure_module_exercises,
     evaluate_exercise_submission,
     filter_current_assignments,
@@ -1342,6 +1343,7 @@ async def list_microlearning_assignments(
 @router.get("/microlearning-assignments/{assignment_id}")
 async def get_microlearning_assignment_detail(
     assignment_id: str,
+    include_exercises: bool = True,
     current_user: Any = Depends(verify_trainee),
     db: Session = Depends(),
 ):
@@ -1359,6 +1361,7 @@ async def get_microlearning_assignment_detail(
         assignment.completed_exercises,
         assignment.completed_at,
     )
+    responses_before = dict(assignment.responses or {})
     did_update = sync_flashcard_assignment_runtime(db, assignment) or did_update
     refresh_assignment_progress(assignment)
     after = (
@@ -1367,11 +1370,12 @@ async def get_microlearning_assignment_detail(
         assignment.completed_exercises,
         assignment.completed_at,
     )
-    if did_update or before != after:
+    result_summary = ensure_assignment_result_summary(assignment)
+    if did_update or before != after or responses_before != dict(assignment.responses or {}):
         db.commit()
         db.refresh(assignment)
 
-    return serialize_assignment_detail(assignment)
+    return serialize_assignment_detail(assignment, include_exercises=include_exercises)
 
 
 @router.post("/microlearning-assignments/{assignment_id}/start")
@@ -1569,6 +1573,7 @@ async def submit_microlearning_exercise(
             assignment=assignment,
         )
         refresh_assignment_progress(assignment)
+    result_summary = ensure_assignment_result_summary(assignment)
     db.commit()
     db.refresh(assignment)
 
@@ -1577,6 +1582,7 @@ async def submit_microlearning_exercise(
         "attempt": attempt,
         "assignment": serialize_assignment_summary(assignment),
         "flashcard_session": get_flashcard_session_state(assignment),
+        "result_summary": result_summary or None,
     }
 
 

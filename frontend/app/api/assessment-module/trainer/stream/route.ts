@@ -7,8 +7,10 @@ export const dynamic = 'force-dynamic'
 
 type RealtimeRecord = {
   id?: string
-  trainee_id?: string | null
-  batch_id?: string | null
+  created_by?: string | null
+  assigned_by?: string | null
+  trainer_id?: string | null
+  category_id?: string | null
 }
 
 function getRealtimeRecord(payload: {
@@ -18,26 +20,33 @@ function getRealtimeRecord(payload: {
   return ((payload.new || payload.old || null) as RealtimeRecord | null)
 }
 
+async function loadOwnedCategoryIds(trainerId: string) {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('training_assessment_categories')
+    .select('id')
+    .eq('created_by', trainerId)
+    .eq('active_status', true)
+
+  if (error) {
+    throw error
+  }
+
+  return new Set(
+    (data || [])
+      .map((row) => row.id)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )
+}
+
 export async function GET(request: Request) {
   return withAssessmentRequestContext(request, async () => {
     try {
-      const sessionUser = await requireBackendSessionUser(request, ['trainee'])
+      const sessionUser = await requireBackendSessionUser(request, ['admin', 'trainer'])
       const supabase = createSupabaseAdminClient()
-
-      const { data: batchMemberships, error: batchError } = await supabase
-        .from('batch_user')
-        .select('batch_id')
-        .eq('user_id', sessionUser.userId)
-
-      if (batchError) {
-        throw batchError
-      }
-
-      const batchIds = new Set(
-        (batchMemberships || [])
-          .map((membership) => membership.batch_id)
-          .filter((value): value is string => typeof value === 'string' && value.length > 0),
-      )
+      const ownedCategoryIds = sessionUser.role === 'admin'
+        ? null
+        : await loadOwnedCategoryIds(sessionUser.userId)
 
       const stream = new TransformStream()
       const writer = stream.writable.getWriter()
@@ -45,6 +54,38 @@ export async function GET(request: Request) {
 
       const sendEvent = async (payload: Record<string, unknown>) => {
         await writer.write(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`))
+      }
+
+      const isOwnedCategory = (categoryId: string | null | undefined) => {
+        if (sessionUser.role === 'admin') {
+          return true
+        }
+
+        return !!categoryId && !!ownedCategoryIds?.has(categoryId)
+      }
+
+      const matchesTrainerScope = (record: RealtimeRecord | null) => {
+        if (!record) {
+          return false
+        }
+
+        if (sessionUser.role === 'admin') {
+          return true
+        }
+
+        if (record.created_by === sessionUser.userId) {
+          return true
+        }
+
+        if (record.assigned_by === sessionUser.userId) {
+          return true
+        }
+
+        if (record.trainer_id === sessionUser.userId) {
+          return true
+        }
+
+        return isOwnedCategory(record.category_id)
       }
 
       let closed = false
@@ -64,28 +105,52 @@ export async function GET(request: Request) {
       }
 
       const channel = supabase
-        .channel(`training-assessment-trainee-stream-${sessionUser.userId}-${Date.now()}`)
+        .channel(`training-assessment-trainer-stream-${sessionUser.userId}-${Date.now()}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'training_assessment_categories' },
+          async (payload) => {
+            const record = getRealtimeRecord(payload)
+            if (!matchesTrainerScope(record)) {
+              return
+            }
+
+            await sendEvent({
+              type: 'category_changed',
+              table: 'training_assessment_categories',
+              recordId: record?.id || null,
+            })
+          },
+        )
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'training_assessment_questions' },
+          async (payload) => {
+            const record = getRealtimeRecord(payload)
+            if (!matchesTrainerScope(record)) {
+              return
+            }
+
+            await sendEvent({
+              type: 'question_changed',
+              table: 'training_assessment_questions',
+              recordId: record?.id || null,
+            })
+          },
+        )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'training_assessment_assignments' },
           async (payload) => {
             const record = getRealtimeRecord(payload)
-            if (!record) {
-              return
-            }
-
-            const matchesTrainee =
-              record.trainee_id === sessionUser.userId
-              || (!!record.batch_id && batchIds.has(record.batch_id))
-
-            if (!matchesTrainee) {
+            if (!matchesTrainerScope(record)) {
               return
             }
 
             await sendEvent({
               type: 'assignment_changed',
               table: 'training_assessment_assignments',
-              recordId: record.id || null,
+              recordId: record?.id || null,
             })
           },
         )
@@ -94,14 +159,14 @@ export async function GET(request: Request) {
           { event: '*', schema: 'public', table: 'training_assessment_attempts' },
           async (payload) => {
             const record = getRealtimeRecord(payload)
-            if (!record || record.trainee_id !== sessionUser.userId) {
+            if (!matchesTrainerScope(record)) {
               return
             }
 
             await sendEvent({
               type: 'attempt_changed',
               table: 'training_assessment_attempts',
-              recordId: record.id || null,
+              recordId: record?.id || null,
             })
           },
         )
@@ -110,14 +175,14 @@ export async function GET(request: Request) {
           { event: '*', schema: 'public', table: 'training_assessment_coaching_notes' },
           async (payload) => {
             const record = getRealtimeRecord(payload)
-            if (!record || record.trainee_id !== sessionUser.userId) {
+            if (!matchesTrainerScope(record)) {
               return
             }
 
             await sendEvent({
               type: 'coaching_changed',
               table: 'training_assessment_coaching_notes',
-              recordId: record.id || null,
+              recordId: record?.id || null,
             })
           },
         )
@@ -126,14 +191,14 @@ export async function GET(request: Request) {
           { event: '*', schema: 'public', table: 'training_assessment_certificates' },
           async (payload) => {
             const record = getRealtimeRecord(payload)
-            if (!record || record.trainee_id !== sessionUser.userId) {
+            if (!matchesTrainerScope(record)) {
               return
             }
 
             await sendEvent({
               type: 'certificate_changed',
               table: 'training_assessment_certificates',
-              recordId: record.id || null,
+              recordId: record?.id || null,
             })
           },
         )
@@ -153,7 +218,7 @@ export async function GET(request: Request) {
       await sendEvent({
         type: 'ready',
         role: sessionUser.role,
-        traineeId: sessionUser.userId,
+        trainerId: sessionUser.userId,
       })
 
       return new Response(stream.readable, {

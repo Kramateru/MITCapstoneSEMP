@@ -14,7 +14,7 @@ call :load_env_file "%APP_ROOT%.env"
 cd /d "%FRONTEND_DIR%" || exit /b 1
 if defined HOST if not defined FRONTEND_HOST set "FRONTEND_HOST=%HOST%"
 if defined PORT if not defined FRONTEND_PORT set "FRONTEND_PORT=%PORT%"
-if not defined FRONTEND_HOST set "FRONTEND_HOST=localhost"
+if not defined FRONTEND_HOST set "FRONTEND_HOST=127.0.0.1"
 if not defined FRONTEND_PORT set "FRONTEND_PORT=3000"
 if not defined BACKEND_URL set "BACKEND_URL=http://127.0.0.1:8000"
 if not defined NODE_OPTIONS set "NODE_OPTIONS=--no-deprecation"
@@ -22,11 +22,15 @@ if not defined SKIP_FRONTEND_BUILD set "SKIP_FRONTEND_BUILD=0"
 if not defined NEXT_TELEMETRY_DISABLED set "NEXT_TELEMETRY_DISABLED=1"
 if not defined WAIT_FOR_BACKEND set "WAIT_FOR_BACKEND=1"
 if not defined RESTART_IF_RUNNING set "RESTART_IF_RUNNING=1"
+if not defined STRICT_SUPABASE_PROJECT_CHECK set "STRICT_SUPABASE_PROJECT_CHECK=0"
 
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%SUPABASE_URL%"
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined REACT_APP_SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%REACT_APP_SUPABASE_URL%"
+if not defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY if defined SUPABASE_PUBLISHABLE_KEY set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%SUPABASE_PUBLISHABLE_KEY%"
+if not defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY if defined NEXT_PUBLIC_SUPABASE_ANON_KEY set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%NEXT_PUBLIC_SUPABASE_ANON_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined SUPABASE_ANON_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%SUPABASE_ANON_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined REACT_APP_ANON_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%REACT_APP_ANON_KEY%"
+if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY%"
 if not defined NEXT_PUBLIC_BACKEND_URL set "NEXT_PUBLIC_BACKEND_URL=%BACKEND_URL%"
 if not defined NEXT_PUBLIC_BACKEND_WS_URL call :derive_ws_url "%NEXT_PUBLIC_BACKEND_URL%"
 
@@ -38,7 +42,7 @@ if not defined NEXT_PUBLIC_SUPABASE_URL (
 
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY (
   echo NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured.
-  echo Set NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY, or REACT_APP_ANON_KEY in your env files.
+  echo Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY, or REACT_APP_ANON_KEY in your env files.
   exit /b 1
 )
 
@@ -47,6 +51,9 @@ if not defined SUPABASE_SERVICE_ROLE_KEY if not defined SUPABASE_SERVICE_KEY if 
   echo Set SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY, or SUPABASE_SERVICE_ROLE in backend\.env or .env.
   exit /b 1
 )
+
+call :check_supabase_project_alignment
+if errorlevel 1 exit /b 1
 
 if not exist "node_modules" (
   echo Frontend dependencies not found.
@@ -84,6 +91,23 @@ if errorlevel 1 exit /b 1
 
 echo Starting frontend in production mode against %BACKEND_URL%...
 call npm.cmd run start -- --hostname %FRONTEND_HOST% --port %FRONTEND_PORT%
+exit /b %errorlevel%
+
+:check_supabase_project_alignment
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
+  "$url = ($env:NEXT_PUBLIC_SUPABASE_URL, $env:SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY, $env:SUPABASE_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
+  "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^
+  "$urlRef = Get-ProjectRefFromUrl $url;" ^
+  "$anonRef = Get-ProjectRefFromJwt $anon;" ^
+  "$serviceRef = Get-ProjectRefFromJwt $service;" ^
+  "$mismatch = $false;" ^
+  "if ($urlRef -and $anonRef -and $urlRef -ne $anonRef) { Write-Host ('WARNING: NEXT_PUBLIC_SUPABASE_ANON_KEY belongs to project ' + $anonRef + ', but NEXT_PUBLIC_SUPABASE_URL points to ' + $urlRef + '.'); $mismatch = $true }" ^
+  "if ($urlRef -and $serviceRef -and $urlRef -ne $serviceRef) { Write-Host ('WARNING: Supabase service-role key belongs to project ' + $serviceRef + ', but NEXT_PUBLIC_SUPABASE_URL points to ' + $urlRef + '.'); $mismatch = $true }" ^
+  "if ($mismatch) { Write-Host 'Update the Supabase URL and keys so they all point to the same project before relying on assessment routes.'; if ($strict -eq '1') { exit 1 } }"
 exit /b %errorlevel%
 
 :restart_listener

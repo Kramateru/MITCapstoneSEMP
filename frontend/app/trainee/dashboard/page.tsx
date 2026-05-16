@@ -488,8 +488,8 @@ export default function TraineeDashboard() {
                     accent="sky"
                   />
                   <QuickLinkCard
-                    title="Assessment Hub"
-                    description="Start assigned tests, unlock certificates, and retake failed assessments right away."
+                    title="Assessments"
+                    description="Open only your saved trainer assignments, take one question at a time, and review the latest pass or fail results."
                     href="/trainee/assessment"
                     icon={<ClipboardList size={20} />}
                     accent="emerald"

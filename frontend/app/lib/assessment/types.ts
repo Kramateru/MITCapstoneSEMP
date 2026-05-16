@@ -43,6 +43,7 @@ export interface TraineeOption {
 export interface AssessmentQuestionRecord {
   id: string
   assessmentId: string
+  assessmentTitle?: string | null
   categoryId?: string
   categoryName?: string | null
   trainerId?: string | null
@@ -54,6 +55,7 @@ export interface AssessmentQuestionRecord {
   correctAnswer: string
   difficulty?: QuestionDifficulty | null
   explanation?: string | null
+  pointValue?: number
   orderIndex: number
   activeStatus?: boolean
   createdAt?: string
@@ -159,6 +161,8 @@ export interface AttemptQuestionResult {
   correctAnswer: string
   isCorrect: boolean
   explanation?: string | null
+  points?: number
+  earnedPoints?: number
 }
 
 export interface AttemptAnalysisSummary {
@@ -167,6 +171,8 @@ export interface AttemptAnalysisSummary {
   strengths: string[]
   improvements: string[]
   recommendations: string[]
+  earnedPoints?: number
+  totalPoints?: number
   categoryBreakdown: Array<{
     categoryId: string
     categoryTitle: string
@@ -207,6 +213,9 @@ export interface AttemptRecord {
   certificateCode?: string | null
   certificateStatus?: CertificateStatus
   certificateUrl?: string | null
+  attemptsRemaining?: number | null
+  canRetake?: boolean
+  statusLabel?: string
   questionResults: AttemptQuestionResult[]
   analysis?: AttemptAnalysisSummary
 }
@@ -393,6 +402,7 @@ export interface TraineeAssessmentCard {
   maximumAttempts?: number | null
   timeLimitMinutes?: number | null
   certificate?: CertificateRecord
+  statusLabel?: string
   questions: AssessmentQuestionRecord[]
 }
 
@@ -403,6 +413,7 @@ export interface AssessmentSessionQuestion {
   questionType: AssessmentQuestionType
   difficulty?: QuestionDifficulty | null
   choices: string[]
+  pointValue?: number
 }
 
 export interface TraineeAssessmentSession {
@@ -427,6 +438,7 @@ export interface TraineeAssessmentSession {
   isCompleted: boolean
   latestAttempt?: AttemptRecord
   certificate?: CertificateRecord
+  statusLabel?: string
   questions: AssessmentSessionQuestion[]
 }
 
@@ -493,6 +505,7 @@ export interface CreateQuestionPayload {
   correctAnswer: string
   difficulty?: QuestionDifficulty | null
   explanation?: string
+  points?: number | null
   orderIndex: number
 }
 

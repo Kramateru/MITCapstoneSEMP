@@ -38,6 +38,7 @@ import { apiFetch } from '@/app/utils/api'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
+import { ChartCountLabelList, ChartPercentLabelList } from '../ui/chart-data-labels'
 import { Progress } from '../ui/progress'
 import { TrainerLearningFilterBar } from './trainer-learning-filter-bar'
 
@@ -414,13 +415,17 @@ export default function TrainerAnalytics() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={completionTrendRows} margin={{ top: 10, right: 10, left: 0, bottom: 60 }}>
+                  <BarChart data={completionTrendRows} margin={{ top: 26, right: 10, left: 0, bottom: 60 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="label" interval={0} angle={-14} textAnchor="end" height={72} />
                     <YAxis domain={[0, 100]} />
                     <Tooltip />
-                    <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score" />
-                    <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate" />
+                    <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                      <ChartPercentLabelList />
+                    </Bar>
+                    <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                      <ChartPercentLabelList />
+                    </Bar>
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
@@ -435,12 +440,13 @@ export default function TrainerAnalytics() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={320}>
-                  <BarChart data={data?.score_distribution || []}>
+                  <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="range_label" />
                     <YAxis allowDecimals={false} />
                     <Tooltip />
                     <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                      <ChartCountLabelList />
                       {(data?.score_distribution || []).map((row, index) => (
                         <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
                       ))}
@@ -461,13 +467,17 @@ export default function TrainerAnalytics() {
               </CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={340}>
-                  <LineChart data={data?.module_progress || []} margin={{ top: 12, right: 14, left: 0, bottom: 72 }}>
+                  <LineChart data={data?.module_progress || []} margin={{ top: 28, right: 14, left: 0, bottom: 72 }}>
                     <CartesianGrid strokeDasharray="3 3" />
                     <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={90} />
                     <YAxis domain={[0, 100]} />
                     <Tooltip />
-                    <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate" />
-                    <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score" />
+                    <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                      <ChartPercentLabelList position="top" />
+                    </Line>
+                    <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                      <ChartPercentLabelList position="bottom" />
+                    </Line>
                   </LineChart>
                 </ResponsiveContainer>
               </CardContent>

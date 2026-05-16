@@ -33,6 +33,7 @@ import { DashboardLayout } from '@/app/components/DashboardLayout'
 import { Badge } from '@/app/components/ui/badge'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
+import { ChartCountLabelList, ChartPercentLabelList } from '@/app/components/ui/chart-data-labels'
 import { Progress } from '@/app/components/ui/progress'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs'
 import { TrainerLearningFilterBar } from '@/app/components/trainer/trainer-learning-filter-bar'
@@ -438,13 +439,17 @@ export default function ReportsPage() {
                     <CardContent>
                       {batchRows.length ? (
                         <ResponsiveContainer width="100%" height={320}>
-                          <BarChart data={batchRows} margin={{ top: 12, right: 12, left: 0, bottom: 56 }}>
+                          <BarChart data={batchRows} margin={{ top: 28, right: 12, left: 0, bottom: 56 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={70} />
                             <YAxis domain={[0, 100]} />
                             <Tooltip />
-                            <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score" />
-                            <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate" />
+                            <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                              <ChartPercentLabelList />
+                            </Bar>
+                            <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                              <ChartPercentLabelList />
+                            </Bar>
                           </BarChart>
                         </ResponsiveContainer>
                       ) : (
@@ -463,12 +468,13 @@ export default function ReportsPage() {
                     <CardContent>
                       {(data?.score_distribution || []).some((row) => row.count > 0) ? (
                         <ResponsiveContainer width="100%" height={320}>
-                          <BarChart data={data?.score_distribution || []}>
+                          <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="range_label" />
                             <YAxis allowDecimals={false} />
                             <Tooltip />
                             <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                              <ChartCountLabelList />
                               {(data?.score_distribution || []).map((row, index) => (
                                 <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
                               ))}
@@ -715,13 +721,17 @@ export default function ReportsPage() {
                     <CardContent>
                       {moduleRows.length ? (
                         <ResponsiveContainer width="100%" height={340}>
-                          <LineChart data={moduleRows} margin={{ top: 12, right: 16, left: 0, bottom: 80 }}>
+                          <LineChart data={moduleRows} margin={{ top: 28, right: 16, left: 0, bottom: 80 }}>
                             <CartesianGrid strokeDasharray="3 3" />
                             <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={96} />
                             <YAxis domain={[0, 100]} />
                             <Tooltip />
-                            <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate" />
-                            <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score" />
+                            <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                              <ChartPercentLabelList position="top" />
+                            </Line>
+                            <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                              <ChartPercentLabelList position="bottom" />
+                            </Line>
                           </LineChart>
                         </ResponsiveContainer>
                       ) : (

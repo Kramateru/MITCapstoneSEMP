@@ -5,6 +5,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { fetchBackendPath } from '@/app/lib/backend-proxy'
 
 import { getConfigValue } from './env'
+import { getAssessmentRequestSupabaseAccessToken } from './request-context'
 import { createSupabaseAdminClient } from './supabase-admin'
 import type { BackendSessionUser, PlatformRole } from './types'
 
@@ -172,11 +173,16 @@ function extractAccessToken(authorization: string | null) {
 
 async function tryResolveSupabaseSessionUser(accessToken: string) {
   try {
+    const tokenToVerify = getAssessmentRequestSupabaseAccessToken() || accessToken
+    if (!tokenToVerify) {
+      return null
+    }
+
     const supabase = createSupabaseAdminClient()
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser(accessToken)
+    } = await supabase.auth.getUser(tokenToVerify)
 
     if (authError || !user?.id) {
       return null

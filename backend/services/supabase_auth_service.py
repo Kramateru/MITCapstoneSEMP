@@ -7,12 +7,22 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+import os
 from typing import Any, Sequence
 
+import requests
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
+from ..config_validation import (
+    extract_supabase_project_ref_from_key,
+    extract_supabase_project_ref_from_url,
+    is_usable_supabase_publishable_key,
+    is_usable_supabase_url,
+    normalize_env_value,
+    supabase_key_matches_url,
+)
 from ..models import User
 
 
@@ -30,6 +40,84 @@ class SupabaseAuthenticationError(SupabaseAuthServiceError):
 
 class SupabaseUserSyncError(SupabaseAuthServiceError):
     """Raised when a local user cannot be synced into Supabase Auth."""
+
+
+def _get_supabase_auth_rest_config() -> tuple[str, str]:
+    supabase_url = normalize_env_value(
+        os.getenv("SUPABASE_URL")
+        or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+        or os.getenv("REACT_APP_SUPABASE_URL")
+    )
+    publishable_key = normalize_env_value(
+        os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
+        or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+        or os.getenv("REACT_APP_ANON_KEY")
+        or os.getenv("SUPABASE_KEY")
+    )
+
+    if not is_usable_supabase_url(supabase_url):
+        raise SupabaseAuthConfigurationError(
+            "Supabase Auth REST is unavailable because SUPABASE_URL is missing or invalid."
+        )
+
+    if not is_usable_supabase_publishable_key(publishable_key):
+        raise SupabaseAuthConfigurationError(
+            "Supabase Auth REST is unavailable because the public API key is missing or invalid."
+        )
+
+    if not supabase_key_matches_url(supabase_url, publishable_key):
+        url_ref = extract_supabase_project_ref_from_url(supabase_url) or "unknown"
+        key_ref = extract_supabase_project_ref_from_key(publishable_key) or "unknown"
+        raise SupabaseAuthConfigurationError(
+            "Supabase Auth REST is unavailable because the configured public API key "
+            f"belongs to project {key_ref}, but the Supabase URL points to project {url_ref}."
+        )
+
+    return supabase_url.rstrip("/"), publishable_key
+
+
+def _request_supabase_auth_session(
+    *,
+    grant_type: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    supabase_url, publishable_key = _get_supabase_auth_rest_config()
+    endpoint = f"{supabase_url}/auth/v1/token?grant_type={grant_type}"
+
+    try:
+        response = requests.post(
+            endpoint,
+            headers={
+                "apikey": publishable_key,
+                "Authorization": f"Bearer {publishable_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise SupabaseAuthServiceError(
+            "Unable to reach Supabase Auth while creating a session."
+        ) from exc
+
+    try:
+        response_payload = response.json() if response.content else {}
+    except ValueError:
+        response_payload = {}
+    if not response.ok:
+        detail = (
+            response_payload.get("msg")
+            or response_payload.get("error_description")
+            or response_payload.get("error")
+            or "Supabase rejected the session request."
+        )
+
+        if response.status_code in {400, 401, 422}:
+            raise SupabaseAuthenticationError(str(detail))
+
+        raise SupabaseAuthServiceError(str(detail))
+
+    return response_payload
 
 
 def _normalized_email(email: str) -> str:
@@ -221,6 +309,33 @@ def authenticate_supabase_credentials(db: Session, email: str, password: str) ->
         raise SupabaseAuthenticationError("This Supabase account is currently disabled.")
 
     return dict(record)
+
+
+def issue_supabase_session(email: str, password: str) -> dict[str, Any]:
+    normalized_email = _normalized_email(email)
+    if not normalized_email or not password:
+        raise SupabaseAuthenticationError("Invalid email or password")
+
+    return _request_supabase_auth_session(
+        grant_type="password",
+        payload={
+            "email": normalized_email,
+            "password": password,
+        },
+    )
+
+
+def refresh_supabase_session(refresh_token: str) -> dict[str, Any]:
+    normalized_refresh_token = (refresh_token or "").strip()
+    if not normalized_refresh_token:
+        raise SupabaseAuthenticationError("Supabase refresh token is required.")
+
+    return _request_supabase_auth_session(
+        grant_type="refresh_token",
+        payload={
+            "refresh_token": normalized_refresh_token,
+        },
+    )
 
 
 def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:

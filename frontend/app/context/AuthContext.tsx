@@ -23,6 +23,8 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
+const SUPABASE_ACCESS_TOKEN_KEY = 'supabase_access_token'
+const SUPABASE_REFRESH_TOKEN_KEY = 'supabase_refresh_token'
 
 function isUserRole(value: unknown): value is User['user_role'] {
   return value === 'admin' || value === 'trainer' || value === 'trainee'
@@ -85,6 +87,8 @@ function clearStoredAuthState() {
   try {
     window.localStorage.removeItem('token')
     window.localStorage.removeItem('refresh_token')
+    window.localStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
+    window.localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
     window.localStorage.removeItem('user')
   } catch (storageError) {
     console.warn('Unable to clear cached auth state:', storageError)
@@ -243,6 +247,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (data.refresh_token) {
           localStorage.setItem('refresh_token', data.refresh_token)
         }
+        if (typeof data.supabase_access_token === 'string' && data.supabase_access_token.trim()) {
+          localStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, data.supabase_access_token)
+        } else {
+          localStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
+        }
+        if (typeof data.supabase_refresh_token === 'string' && data.supabase_refresh_token.trim()) {
+          localStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, data.supabase_refresh_token)
+        } else {
+          localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
+        }
         localStorage.setItem('user', JSON.stringify(userData))
       } catch (storageError) {
         console.warn('Unable to cache auth state:', storageError)
@@ -282,10 +296,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const tokenForRefresh = refreshTokenValue || token
       if (!tokenForRefresh) return null
+      const supabaseRefreshToken =
+        typeof window !== 'undefined'
+          ? window.localStorage.getItem(SUPABASE_REFRESH_TOKEN_KEY)
+          : null
 
       const response = await fetch('/api/auth/refresh-token', {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${tokenForRefresh}` }
+        headers: {
+          'Authorization': `Bearer ${tokenForRefresh}`,
+          ...(supabaseRefreshToken
+            ? { 'X-Supabase-Refresh-Token': supabaseRefreshToken }
+            : {}),
+        },
       })
 
       if (!response.ok) {
@@ -309,6 +332,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem('token', data.access_token)
         if (data.refresh_token) {
           localStorage.setItem('refresh_token', data.refresh_token)
+        }
+        if (typeof data.supabase_access_token === 'string' && data.supabase_access_token.trim()) {
+          localStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, data.supabase_access_token)
+        }
+        if (typeof data.supabase_refresh_token === 'string' && data.supabase_refresh_token.trim()) {
+          localStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, data.supabase_refresh_token)
         }
       } catch (storageError) {
         console.warn('Unable to cache refreshed auth state:', storageError)

@@ -1,13 +1,13 @@
 'use client'
 
 import { DashboardLayout } from '@/app/components/DashboardLayout'
-import { TrainerAssessmentStudio } from '@/app/components/assessment/trainer/trainer-assessment-studio'
+import AssessmentDashboard from '@/app/components/assessment/AssessmentDashboard'
 import { trainerSidebarItems } from '@/app/trainer/nav'
 
-export default function TrainerAssessmentPage() {
+export default function AssessmentDashboardPage() {
   return (
     <DashboardLayout sidebarItems={trainerSidebarItems()} userRole="trainer">
-      <TrainerAssessmentStudio role="trainer" />
+      <AssessmentDashboard />
     </DashboardLayout>
   )
 }

@@ -12,10 +12,11 @@ if defined HOST if not defined BACKEND_HOST set "BACKEND_HOST=%HOST%"
 if defined PORT if not defined BACKEND_PORT set "BACKEND_PORT=%PORT%"
 if not defined BACKEND_HOST set "BACKEND_HOST=127.0.0.1"
 if not defined BACKEND_PORT set "BACKEND_PORT=8000"
-if not defined FRONTEND_URL set "FRONTEND_URL=http://localhost:3000"
+if not defined FRONTEND_URL set "FRONTEND_URL=http://127.0.0.1:3000"
 if not defined BACKEND_URL set "BACKEND_URL=http://%BACKEND_HOST%:%BACKEND_PORT%"
 if not defined USE_LOCAL_SQLITE set "USE_LOCAL_SQLITE=0"
 if not defined RESTART_IF_RUNNING set "RESTART_IF_RUNNING=1"
+if not defined STRICT_SUPABASE_PROJECT_CHECK set "STRICT_SUPABASE_PROJECT_CHECK=0"
 
 if /I not "%USE_LOCAL_SQLITE%"=="0" (
   echo This launcher is locked to Supabase/Postgres mode.
@@ -42,6 +43,9 @@ if not exist "%PYTHON_EXE%" (
   exit /b 1
 )
 
+call :check_supabase_project_alignment
+if errorlevel 1 exit /b 1
+
 call :restart_listener "%BACKEND_PORT%" "backend"
 if errorlevel 1 exit /b 1
 
@@ -50,6 +54,23 @@ echo The backend will validate Supabase and sync local users into auth.users dur
 echo Backend URL: %BACKEND_URL%
 
 "%PYTHON_EXE%" -m uvicorn backend.main:app --host %BACKEND_HOST% --port %BACKEND_PORT%
+exit /b %errorlevel%
+
+:check_supabase_project_alignment
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
+  "$url = ($env:SUPABASE_URL, $env:NEXT_PUBLIC_SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:SUPABASE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
+  "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^
+  "$urlRef = Get-ProjectRefFromUrl $url;" ^
+  "$anonRef = Get-ProjectRefFromJwt $anon;" ^
+  "$serviceRef = Get-ProjectRefFromJwt $service;" ^
+  "$mismatch = $false;" ^
+  "if ($urlRef -and $anonRef -and $urlRef -ne $anonRef) { Write-Host ('WARNING: Supabase public key belongs to project ' + $anonRef + ', but SUPABASE_URL points to ' + $urlRef + '.'); $mismatch = $true }" ^
+  "if ($urlRef -and $serviceRef -and $urlRef -ne $serviceRef) { Write-Host ('WARNING: Supabase service-role key belongs to project ' + $serviceRef + ', but SUPABASE_URL points to ' + $urlRef + '.'); $mismatch = $true }" ^
+  "if ($mismatch) { Write-Host 'Update the Supabase URL and keys so they all point to the same project before relying on assessment features.'; if ($strict -eq '1') { exit 1 } }"
 exit /b %errorlevel%
 
 :restart_listener

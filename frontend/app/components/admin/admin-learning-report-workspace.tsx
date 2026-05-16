@@ -41,6 +41,7 @@ import { apiFetch, downloadApiFile } from '@/app/utils/api'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
+import { ChartCountLabelList, ChartPercentLabelList } from '../ui/chart-data-labels'
 import { Progress } from '../ui/progress'
 import { ScrollArea } from '../ui/scroll-area'
 import {
@@ -531,13 +532,15 @@ export function AdminLearningReportWorkspace() {
                   <CardContent>
                     {(data?.score_distribution || []).some((row) => row.count > 0) ? (
                       <ResponsiveContainer width="100%" height={320}>
-                        <BarChart data={data?.score_distribution || []}>
+                        <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="range_label" />
                           <YAxis allowDecimals={false} />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey="count" fill="#2563eb" radius={[8, 8, 0, 0]} name="Results" />
+                          <Bar dataKey="count" fill="#2563eb" radius={[8, 8, 0, 0]} name="Results">
+                            <ChartCountLabelList />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -579,13 +582,15 @@ export function AdminLearningReportWorkspace() {
 
                     {(data?.performance_breakdown || []).some((row) => row.count > 0) ? (
                       <ResponsiveContainer width="100%" height={240}>
-                        <BarChart data={data?.performance_breakdown || []}>
+                        <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="label" />
                           <YAxis allowDecimals={false} />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results" />
+                          <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
+                            <ChartCountLabelList />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -826,14 +831,18 @@ export function AdminLearningReportWorkspace() {
                   <CardContent>
                     {moduleRows.length ? (
                       <ResponsiveContainer width="100%" height={340}>
-                        <LineChart data={moduleRows.slice(0, 10)} margin={{ top: 12, right: 16, left: 0, bottom: 84 }}>
+                        <LineChart data={moduleRows.slice(0, 10)} margin={{ top: 28, right: 16, left: 0, bottom: 84 }}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={100} />
                           <YAxis domain={[0, 100]} />
                           <Tooltip />
                           <Legend />
-                          <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate" />
-                          <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score" />
+                          <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                            <ChartPercentLabelList position="top" />
+                          </Line>
+                          <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                            <ChartPercentLabelList position="bottom" />
+                          </Line>
                         </LineChart>
                       </ResponsiveContainer>
                     ) : (
@@ -995,14 +1004,18 @@ export function AdminLearningReportWorkspace() {
                   <CardContent>
                     {assessmentRows.length ? (
                       <ResponsiveContainer width="100%" height={340}>
-                        <BarChart data={assessmentRows.slice(0, 10)} margin={{ top: 12, right: 10, left: 0, bottom: 84 }}>
+                        <BarChart data={assessmentRows.slice(0, 10)} margin={{ top: 28, right: 10, left: 0, bottom: 84 }}>
                           <CartesianGrid strokeDasharray="3 3" />
                           <XAxis dataKey="assessment_title" interval={0} angle={-18} textAnchor="end" height={100} />
                           <YAxis domain={[0, 100]} />
                           <Tooltip />
                           <Legend />
-                          <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score" />
-                          <Bar dataKey="pass_rate" fill="#2563eb" radius={[8, 8, 0, 0]} name="Pass Rate" />
+                          <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score">
+                            <ChartPercentLabelList />
+                          </Bar>
+                          <Bar dataKey="pass_rate" fill="#2563eb" radius={[8, 8, 0, 0]} name="Pass Rate">
+                            <ChartPercentLabelList />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (

@@ -319,6 +319,235 @@ Provide specific, actionable coaching tips that will help the trainee improve.""
             max_points=max_points,
         )
 
+    def summarize_microlearning_assignment_performance(
+        self,
+        *,
+        module_title: str,
+        module_type: str,
+        percentage_score: float,
+        passing_score: float,
+        passed: bool,
+        breakdown: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Summarize overall microlearning assignment performance from the question breakdown."""
+        cleaned_breakdown = [
+            {
+                "question_number": int(item.get("question_number") or 0),
+                "title": str(item.get("title") or "").strip(),
+                "prompt": str(item.get("prompt") or "").strip(),
+                "question_result": str(item.get("question_result") or "").strip().lower(),
+                "score": float(item.get("score") or 0.0),
+                "points_earned": float(item.get("points_earned") or 0.0),
+                "points_possible": float(item.get("points_possible") or 0.0),
+                "trainee_answer": str(item.get("trainee_answer") or "").strip(),
+                "correct_answer": str(item.get("correct_answer") or "").strip(),
+                "matched_keywords": [str(keyword or "").strip() for keyword in (item.get("matched_keywords") or []) if str(keyword or "").strip()],
+                "missing_keywords": [str(keyword or "").strip() for keyword in (item.get("missing_keywords") or []) if str(keyword or "").strip()],
+                "feedback": str(item.get("feedback") or "").strip(),
+            }
+            for item in (breakdown or [])
+        ]
+
+        if not cleaned_breakdown:
+            return self._fallback_microlearning_assignment_summary(
+                module_title=module_title,
+                module_type=module_type,
+                percentage_score=percentage_score,
+                passing_score=passing_score,
+                passed=passed,
+                breakdown=[],
+            )
+
+        if not self.is_available():
+            return self._fallback_microlearning_assignment_summary(
+                module_title=module_title,
+                module_type=module_type,
+                percentage_score=percentage_score,
+                passing_score=passing_score,
+                passed=passed,
+                breakdown=cleaned_breakdown,
+            )
+
+        prompt = self._build_microlearning_assignment_summary_prompt(
+            module_title=module_title,
+            module_type=module_type,
+            percentage_score=percentage_score,
+            passing_score=passing_score,
+            passed=passed,
+            breakdown=cleaned_breakdown,
+        )
+
+        try:
+            response = self.client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                    system_instruction=self._get_microlearning_assignment_summary_instruction(),
+                ),
+            )
+
+            if response.text:
+                parsed = json.loads(response.text)
+                if isinstance(parsed, dict):
+                    parsed["provider"] = "gemini"
+                    return parsed
+        except Exception as exc:
+            logger.error("Gemini microlearning assignment summary failed: %s", exc)
+
+        return self._fallback_microlearning_assignment_summary(
+            module_title=module_title,
+            module_type=module_type,
+            percentage_score=percentage_score,
+            passing_score=passing_score,
+            passed=passed,
+            breakdown=cleaned_breakdown,
+        )
+
+    def _get_microlearning_assignment_summary_instruction(self) -> str:
+        return """You are an expert BPO microlearning coach.
+
+Review the finished module score and question breakdown, then produce a JSON object with:
+{
+  "overallSummary": "2-4 sentence performance summary",
+  "strengths": ["specific strengths"],
+  "weakAreas": ["specific weak areas"],
+  "improvementOpportunities": ["specific improvement opportunities"],
+  "recommendedNextSteps": ["practical next steps"],
+  "explanation": "short explanation grounded in the question-by-question breakdown"
+}
+
+Rules:
+- Base every point on the supplied question breakdown.
+- Do not mention hidden system behavior or model limitations.
+- Keep feedback constructive, specific, and trainee-facing.
+- If the trainee passed, still include the most important next improvement area.
+- If open-ended answers were AI-reviewed, explain the outcome using the observed answer quality and missing keywords when available."""
+
+    def _build_microlearning_assignment_summary_prompt(
+        self,
+        *,
+        module_title: str,
+        module_type: str,
+        percentage_score: float,
+        passing_score: float,
+        passed: bool,
+        breakdown: list[dict[str, Any]],
+    ) -> str:
+        breakdown_lines = []
+        for item in breakdown:
+            breakdown_lines.append(
+                "\n".join([
+                    f"Question {item.get('question_number')}: {item.get('title') or 'Untitled Question'}",
+                    f"Prompt: {item.get('prompt') or 'No prompt provided'}",
+                    f"Result: {item.get('question_result') or 'unknown'}",
+                    f"Score: {float(item.get('score') or 0.0):.2f}%",
+                    f"Points: {float(item.get('points_earned') or 0.0):.2f}/{float(item.get('points_possible') or 0.0):.2f}",
+                    f"Trainee Answer: {item.get('trainee_answer') or 'No answer submitted'}",
+                    f"Correct Answer: {item.get('correct_answer') or 'Not available'}",
+                    f"Matched Keywords: {', '.join(item.get('matched_keywords') or []) or 'None'}",
+                    f"Missing Keywords: {', '.join(item.get('missing_keywords') or []) or 'None'}",
+                    f"Feedback: {item.get('feedback') or 'No feedback available'}",
+                ]),
+            )
+
+        status_label = "passed" if passed else "failed"
+        return f"""Summarize this completed trainee microlearning module.
+
+Module Title: {module_title or 'Untitled Module'}
+Module Type: {module_type or 'unknown'}
+Percentage Score: {float(percentage_score or 0.0):.2f}%
+Passing Score: {float(passing_score or 0.0):.2f}%
+Final Status: {status_label}
+
+Question Breakdown:
+{chr(10).join(breakdown_lines)}
+
+Return only valid JSON using the structure from the instructions."""
+
+    def _fallback_microlearning_assignment_summary(
+        self,
+        *,
+        module_title: str,
+        module_type: str,
+        percentage_score: float,
+        passing_score: float,
+        passed: bool,
+        breakdown: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        correct_items = [item for item in breakdown if item.get("question_result") == "correct"]
+        incorrect_items = [item for item in breakdown if item.get("question_result") == "incorrect"]
+        review_items = [item for item in breakdown if item.get("question_result") == "needs_review"]
+
+        strengths = [
+            f"Answered {item.get('title') or f'Question {item.get('question_number')}' } correctly."
+            for item in correct_items[:3]
+        ]
+        if not strengths and passed:
+            strengths.append("Maintained a passing performance across the module.")
+        elif not strengths:
+            strengths.append("Completed the module and submitted all required answers.")
+
+        weak_areas = [
+            f"Needs improvement on {item.get('title') or f'Question {item.get('question_number')}' }."
+            for item in incorrect_items[:3]
+        ]
+        weak_areas.extend(
+            f"Open-ended response quality should be reviewed for {item.get('title') or f'Question {item.get('question_number')}' }."
+            for item in review_items[:2]
+        )
+
+        improvement_opportunities: list[str] = []
+        for item in breakdown:
+            missing_keywords = [str(keyword or "").strip() for keyword in (item.get("missing_keywords") or []) if str(keyword or "").strip()]
+            if missing_keywords:
+                improvement_opportunities.append(
+                    f"Include key ideas such as {', '.join(missing_keywords[:3])} in {item.get('title') or f'Question {item.get('question_number')}' }."
+                )
+            elif item.get("question_result") == "incorrect":
+                improvement_opportunities.append(
+                    f"Review the expected answer pattern for {item.get('title') or f'Question {item.get('question_number')}' }."
+                )
+
+        if not improvement_opportunities:
+            improvement_opportunities.append("Keep reinforcing the same response structure to make strong answers more consistent.")
+
+        recommended_next_steps = [
+            "Retake the module if the score is still below the passing target.",
+            "Review the missed questions and compare your answer with the correct answer before the next attempt.",
+            "Practice short, structured responses that include the required keywords or action steps.",
+        ]
+        if passed:
+            recommended_next_steps[0] = "Review the weakest questions once more to turn a passing result into a stronger repeat performance."
+
+        performance_gap = max(0.0, float(passing_score or 0.0) - float(percentage_score or 0.0))
+        overall_summary = (
+            f"{module_title or 'This module'} ended with a score of {float(percentage_score or 0.0):.2f}%, "
+            f"which {'meets' if passed else 'does not meet'} the passing target of {float(passing_score or 0.0):.2f}%."
+        )
+        if not passed and performance_gap > 0:
+            overall_summary += f" The score is short by {performance_gap:.2f} percentage points."
+        if correct_items:
+            overall_summary += f" Stronger performance appeared in {len(correct_items)} question(s)."
+        if incorrect_items or review_items:
+            overall_summary += f" The biggest gains will come from the {len(incorrect_items) + len(review_items)} item(s) that were missed or need review."
+
+        explanation = (
+            "This summary is based on the saved question breakdown, including correct and incorrect answers, "
+            "open-ended feedback, and any missing keyword patterns."
+        )
+
+        return {
+            "overallSummary": overall_summary,
+            "strengths": strengths,
+            "weakAreas": weak_areas or ["Review the lowest-scoring questions for the clearest next improvement area."],
+            "improvementOpportunities": improvement_opportunities[:4],
+            "recommendedNextSteps": recommended_next_steps,
+            "explanation": explanation,
+            "provider": "fallback",
+        }
+
     def _get_microlearning_open_response_instruction(self, *, max_points: int) -> str:
         return f"""You are grading a trainee's open-ended microlearning response for a BPO training platform.
 
@@ -482,4 +711,25 @@ def score_microlearning_open_response(
         trainee_response=trainee_response,
         required_keywords=required_keywords,
         max_points=max_points,
+    )
+
+
+def summarize_microlearning_assignment_performance(
+    *,
+    module_title: str,
+    module_type: str,
+    percentage_score: float,
+    passing_score: float,
+    passed: bool,
+    breakdown: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize a finished microlearning module using Gemini when available."""
+    engine = get_evaluation_engine()
+    return engine.summarize_microlearning_assignment_performance(
+        module_title=module_title,
+        module_type=module_type,
+        percentage_score=percentage_score,
+        passing_score=passing_score,
+        passed=passed,
+        breakdown=breakdown,
     )
