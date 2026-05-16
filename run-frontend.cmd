@@ -72,7 +72,7 @@ if /I not "%SKIP_FRONTEND_BUILD%"=="1" (
     rmdir /s /q ".next"
   )
   echo Building frontend before startup...
-  call npm.cmd run build
+  cmd /d /c npm.cmd run build
   if errorlevel 1 exit /b 1
 )
 set "FRONTEND_BUILD_READY=0"
@@ -90,7 +90,7 @@ call :restart_listener "%FRONTEND_PORT%" "frontend"
 if errorlevel 1 exit /b 1
 
 echo Starting frontend in production mode against %BACKEND_URL%...
-call npm.cmd run start -- --hostname %FRONTEND_HOST% --port %FRONTEND_PORT%
+cmd /d /c npm.cmd run start -- --hostname %FRONTEND_HOST% --port %FRONTEND_PORT%
 exit /b %errorlevel%
 
 :check_supabase_project_alignment
