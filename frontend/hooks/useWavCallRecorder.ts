@@ -25,6 +25,25 @@ function writeString(view: DataView, offset: number, value: string) {
   }
 }
 
+function getCaptureErrorMessage(error: unknown) {
+  if (error instanceof DOMException) {
+    if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
+      return 'Microphone access is blocked. Allow microphone permission in the browser, then start the call again.';
+    }
+    if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+      return 'No microphone was detected. Connect a microphone or headset before starting the mock call.';
+    }
+    if (error.name === 'NotReadableError' || error.name === 'TrackStartError') {
+      return 'The microphone is busy in another app. Close the other app or release the device, then try again.';
+    }
+    if (error.name === 'OverconstrainedError') {
+      return 'The current microphone does not support the requested call-recorder settings. Try another microphone or browser.';
+    }
+  }
+
+  return error instanceof Error ? error.message : 'Unable to start the call recorder.';
+}
+
 function encodeWav(samples: Float32Array, sampleRate: number) {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(buffer);
@@ -160,7 +179,7 @@ export function useWavCallRecorder() {
       sampleRateRef.current = audioContext.sampleRate || 44100;
       setIsCapturing(true);
     } catch (captureError) {
-      const message = captureError instanceof Error ? captureError.message : 'Unable to start the call recorder.';
+      const message = getCaptureErrorMessage(captureError);
       setError(message);
       await cleanup();
       setIsCapturing(false);

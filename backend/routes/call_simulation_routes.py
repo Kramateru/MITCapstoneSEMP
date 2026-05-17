@@ -4788,9 +4788,9 @@ async def bulk_upload_scenarios(
     target_scenario.expected_keywords = []
     target_scenario.member_profile = {
         "name": first_member_row["actor"] if first_member_row else "Member",
-        "member_id": "SIM-001",
-        "plan_type": "Call Simulation",
-        "verification_status": "Pending verification",
+        "member_id": None,
+        "plan_type": None,
+        "verification_status": None,
         "problem_statement": first_member_row["script"] if first_member_row else first_csr_row["script"],
     }
     target_scenario.cxone_metadata = {
@@ -4937,24 +4937,24 @@ async def get_bulk_upload_template(
 
     rows = [
         ["Actor", "Script", "Score", "Scenario"],
-        ["CSR", "Thank you for calling Healthy Benefits Plus Member Support. What is the name on the account?", 3, 1],
-        ["CSR", "Thank you for calling Healthy Benefits Plus Member Support. What is your first and last name?", 2, 1],
-        ["Member", "This is Calvin Smith", "", 1],
-        ["CSR", "Can I have your date of birth?", 3, 2],
-        ["CSR", "What is your birth date?", 2, 2],
-        ["Member", "My date of birth is February 4, 1955", "", 2],
+        ["CSR", "Thank you for calling member support. May I have your full name?", 3, 1],
+        ["CSR", "For security, may I verify your member ID?", 2, 1],
+        ["Member", "I need help checking my account and a recent order.", "", 1],
+        ["CSR", "I can help with that. May I verify your date of birth?", 3, 2],
+        ["CSR", "Do you also have the order or reference number available?", 2, 2],
+        ["Member", "I have the order number ready if you need it.", "", 2],
     ]
 
     if format == "txt":
         txt_lines = [
-            "Benefits Verification and Order Support",
-            "Member needs help verifying benefits and checking a delayed order.",
+            "Call Verification and Account Support",
+            "Member needs help verifying the account and checking a recent order.",
             "Actor | Script | Score | Scenario",
-            "CSR | Thank you for calling Healthy Benefits Plus Member Support. What is the name on the account? | 3 | 1",
-            "CSR | Thank you for calling Healthy Benefits Plus Member Support. What is your first and last name? | 2 | 1",
-            "Member | This is Calvin Smith | 0 | 1",
-            "CSR | Can I have your date of birth? | 3 | 2",
-            "Member | My date of birth is February 4, 1955 | 0 | 2",
+            "CSR | Thank you for calling member support. May I have your full name? | 3 | 1",
+            "CSR | For security, may I verify your member ID? | 2 | 1",
+            "Member | I need help checking my account and a recent order. | 0 | 1",
+            "CSR | I can help with that. May I verify your date of birth? | 3 | 2",
+            "Member | I have the order number ready if you need it. | 0 | 2",
         ]
         return Response(
             content="\n".join(txt_lines),
