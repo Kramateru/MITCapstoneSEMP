@@ -17,7 +17,17 @@ services:
         sync: false
       - key: SUPABASE_URL
         sync: false
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
       - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
@@ -42,7 +52,7 @@ services:
         sync: false
         optional: true
       - key: ENABLE_LOCAL_TTS
-        value: "1"
+        value: "0"
 
   # --- Frontend Next.js ---
   - type: web

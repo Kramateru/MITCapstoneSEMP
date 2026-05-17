@@ -35,9 +35,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def _default_local_tts_enabled() -> bool:
     normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
-    if normalized:
-        return normalized in {"1", "true", "yes", "on"}
-    return os.path.exists("/.dockerenv") or bool(normalize_env_value(os.getenv("RENDER")))
+    if not normalized or normalized not in {"1", "true", "yes", "on"}:
+        return False
+
+    # Offline local fallback is meant for local desktop development, not Render/Linux containers.
+    is_render = normalize_env_value(os.getenv("RENDER")).lower() in {"1", "true", "yes", "on"}
+    is_docker = os.path.exists("/.dockerenv")
+    if is_render or is_docker or os.name != "nt":
+        logger.info(
+            "Ignoring ENABLE_LOCAL_TTS because offline server-side fallback is only supported in local Windows development."
+        )
+        return False
+
+    return True
 
 
 class TTSService:

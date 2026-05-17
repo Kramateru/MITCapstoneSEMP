@@ -358,7 +358,7 @@ function getScenarioPriorityScore(scenario: ScenarioCard) {
 
 function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Start the Call';
+    return 'Start Call';
   }
   if (scenario.active_session_id) {
     return 'Resume Call';
@@ -369,7 +369,7 @@ function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (scenario.can_retake || (scenario.attempt_count > 0 && !scenario.competent && !scenario.launch_blocked)) {
     return 'Retake';
   }
-  return 'Start the Call';
+  return 'Start Call';
 }
 
 function getScenarioLaunchNote(scenario: ScenarioCard | null) {
@@ -392,7 +392,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `The phone will ring first, then Accept Call will start the microphone, timer, recording, and guided call workflow.${attemptWindow}`;
+  return `Start Call will trigger the ringer first, then Accept Call will start the microphone, timer, recording, and guided call workflow.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -601,10 +601,10 @@ function TraineeSimFloorPageContent() {
   const dialerScriptFlow = useMemo(() => buildDialerScriptFlow(sessionData), [sessionData]);
   const currentStep = steps[currentStepIndex] || null;
   const memberName = String(sessionData?.member_profile?.name || sessionData?.cxone_metadata?.member_name || 'Scenario Member');
-  const memberId = String(sessionData?.member_profile?.member_id || sessionData?.cxone_metadata?.member_id || 'SIM-001');
-  const planType = String(sessionData?.member_profile?.plan_type || sessionData?.cxone_metadata?.plan_type || 'Healthy Benefits Plus');
+  const memberId = String(sessionData?.member_profile?.member_id || sessionData?.cxone_metadata?.member_id || 'Not provided');
+  const planType = String(sessionData?.member_profile?.plan_type || sessionData?.cxone_metadata?.plan_type || 'Plan not provided');
   const verificationStatus = String(
-    sessionData?.member_profile?.verification_status || sessionData?.cxone_metadata?.verification_status || 'Pending verification',
+    sessionData?.member_profile?.verification_status || sessionData?.cxone_metadata?.verification_status || 'Verification required',
   );
   const memberIssue = String(
     sessionData?.member_profile?.problem_statement ||
@@ -1432,6 +1432,86 @@ function TraineeSimFloorPageContent() {
     }
   }, [currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
 
+  const handleReplayInstruction = useCallback(async () => {
+    if (callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall) {
+      return;
+    }
+    if (isRecording) {
+      toast.info('Save or hold the current CSR turn before replaying the instruction cue.');
+      return;
+    }
+
+    const queuedScript = queuedMemberPlayback?.script?.trim()
+      || (typeof queuedMemberStepIndex === 'number' ? steps[queuedMemberStepIndex]?.script?.trim() : '')
+      || '';
+    const queuedAudioUrl = queuedMemberPlayback?.audioUrl
+      || (typeof queuedMemberStepIndex === 'number' ? steps[queuedMemberStepIndex]?.audio_url || null : null);
+    const shouldReplayQueuedMember = needsHoldForMemberResponse || canResumeMemberTurn;
+    const hasCurrentMemberCue = Boolean(currentStep?.actor === 'member' && (currentStep.script.trim() || currentStep.audio_url));
+    const hasCurrentCsrInstruction = Boolean(currentStep?.script?.trim());
+
+    if (
+      !(shouldReplayQueuedMember && (queuedScript || queuedAudioUrl))
+      && !hasCurrentMemberCue
+      && !hasCurrentCsrInstruction
+    ) {
+      toast.info('No instruction is available to replay for this turn yet.');
+      return;
+    }
+
+    try {
+      setShowSilenceAlert(false);
+      setShowIncomingAudio(true);
+      setCallState('member-speaking');
+
+      if (shouldReplayQueuedMember && (queuedScript || queuedAudioUrl)) {
+        await playPlaybackPrompt({
+          script: queuedScript,
+          audioUrl: queuedAudioUrl,
+          speaker: 'member',
+        });
+        toast.success('Queued member response replayed.');
+        return;
+      }
+
+      if (currentStep?.actor === 'member') {
+        await playPlaybackPrompt({
+          script: currentStep.script,
+          audioUrl: currentStep.audio_url,
+          speaker: 'member',
+        });
+        toast.success('Member cue replayed.');
+        return;
+      }
+
+      if (currentStep?.script?.trim()) {
+        await playPlaybackPrompt({
+          script: currentStep.script,
+          speaker: 'system',
+        });
+        silenceStartRef.current = performance.now();
+        toast.success('CSR instruction replayed.');
+        return;
+      }
+
+    } finally {
+      setCallState('connected');
+    }
+  }, [
+    callState,
+    canResumeMemberTurn,
+    currentStep,
+    isEndingCall,
+    isProcessing,
+    isRecording,
+    memberTurnState,
+    needsHoldForMemberResponse,
+    playPlaybackPrompt,
+    queuedMemberPlayback,
+    queuedMemberStepIndex,
+    steps,
+  ]);
+
   const openScenarioDetails = useCallback((scenarioId: string) => {
     router.push(`/trainee/call-simulation/${encodeURIComponent(scenarioId)}`);
   }, [router]);
@@ -1524,14 +1604,14 @@ function TraineeSimFloorPageContent() {
 
       if (options?.autoPlayMemberResponse) {
         await playQueuedMemberResponse(nextPlayback);
-        toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
+        toast.success('Member response delivered. Click Resume to continue to the next CSR step.');
         return;
       }
 
       setMemberTurnState('awaiting-hold');
       setShowIncomingAudio(false);
       setCallState('connected');
-      toast.info('Turn saved. Click Hold to hear the member response, then click Unhold to continue.');
+      toast.info('Turn saved. Click Hold to hear the member response, then click Resume to continue.');
       return;
     }
 
@@ -1605,7 +1685,7 @@ function TraineeSimFloorPageContent() {
     }
 
     await playQueuedMemberResponse(queuedMemberPlayback);
-    toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
+    toast.success('Member response delivered. Click Resume to continue to the next CSR step.');
   }, [
     callState,
     currentStep,
@@ -1620,6 +1700,31 @@ function TraineeSimFloorPageContent() {
     stopBrowserTranscript,
     stopRecording,
   ]);
+
+  const handleEndCallRequest = useCallback(async () => {
+    if (isRecording || isUploadingCall || isEndingCall || callState === 'processing') {
+      return;
+    }
+
+    const lastStepNumber = steps[steps.length - 1]?.step_number ?? null;
+    const isEndingEarly = Boolean(
+      currentStep
+      && lastStepNumber
+      && currentStep.step_number < lastStepNumber
+      && memberTurnState !== 'awaiting-resume',
+    );
+
+    const confirmed = window.confirm(
+      isEndingEarly
+        ? 'End this mock call now? The conversation recording will be uploaded and any remaining scenario turns will be scored as incomplete.'
+        : 'End this mock call now? The recording will be uploaded and the final KPI and AI evaluation will be generated.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    await finalizeSession();
+  }, [callState, currentStep, finalizeSession, isEndingCall, isRecording, isUploadingCall, memberTurnState, steps]);
 
   const handleMicClick = useCallback(async () => {
     if (!currentStep || currentStep.actor !== 'csr') {
@@ -2374,7 +2479,7 @@ function TraineeSimFloorPageContent() {
                     <div className="flex flex-col items-center gap-1">
                       {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
                       <span className="text-xs font-medium">
-                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold'}
+                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Resume' : 'Hold'}
                       </span>
                     </div>
                   </Button>
@@ -2394,9 +2499,21 @@ function TraineeSimFloorPageContent() {
                   </Button>
                   <Button
                     type="button"
+                    variant="secondary"
+                    className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
+                    onClick={() => void handleReplayInstruction()}
+                    disabled={callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isRecording || isEndingCall}
+                  >
+                    <div className="flex flex-col items-center gap-1">
+                      <RotateCcw className="h-6 w-6" />
+                      <span className="text-xs font-medium">Replay</span>
+                    </div>
+                  </Button>
+                  <Button
+                    type="button"
                     variant="destructive"
                     className="mt-auto h-20 rounded-3xl"
-                    onClick={() => void finalizeSession()}
+                    onClick={() => void handleEndCallRequest()}
                     disabled={isRecording || isUploadingCall || isEndingCall || callState === 'processing'}
                   >
                     <div className="flex flex-col items-center gap-1">
@@ -2450,7 +2567,7 @@ function TraineeSimFloorPageContent() {
                           <PauseCircle className="h-5 w-5 text-sky-600" />
                           <div>
                             <div className="font-semibold">Hold Required</div>
-                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Unhold for the next CSR script.</div>
+                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Resume for the next CSR script.</div>
                           </div>
                         </div>
                       </div>
@@ -2632,7 +2749,7 @@ function TraineeSimFloorPageContent() {
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                             {isOnHold
                               ? canResumeMemberTurn
-                                ? 'The member response already played on hold. Click Unhold to unlock the next CSR script.'
+                                ? 'The member response already played on hold. Click Resume to unlock the next CSR script.'
                                 : 'The call is on hold while the full conversation recorder continues capturing the session.'
                               : needsHoldForMemberResponse
                                 ? 'The next member response is queued. Click Hold to play it before the next CSR turn.'

@@ -339,20 +339,20 @@ const createStarterScenarioRows = (): ScenarioRowForm[] => ([
 
 const createDefaultScenarioForm = (): ScenarioFormState => ({
   title: '',
-  topic: 'Benefits verification and order support',
+  topic: '',
   description: '',
   scenario_group_label: '',
-  opening_prompt: 'Answer the call, review the member context, and deliver the expected CSR spiel.',
-  expected_keywords: 'thank you for calling, member id, verification',
+  opening_prompt: '',
+  expected_keywords: '',
   estimated_duration: '180',
   passing_score: String(defaultKpiForm.passing_score),
   max_attempts: '3',
   target_kpis_json: JSON.stringify(buildTargetKpisFromConfig(defaultKpiForm), null, 2),
-  member_name: 'Calvin Smith',
-  member_id: 'HBP-100245',
-  plan_type: 'Healthy Benefits Plus',
-  verification_status: 'Pending verification',
-  problem_statement: 'Member wants help checking plan benefits and delivery status.',
+  member_name: '',
+  member_id: '',
+  plan_type: '',
+  verification_status: '',
+  problem_statement: '',
   difficulty: 'intermediate',
   rows: createStarterScenarioRows(),
 });
@@ -831,6 +831,19 @@ export default function TrainerSimFloorPage() {
     return payload;
   }, [authedFetch, selectedBatch]);
 
+  const syncCallToneSettingsToSupabase = useCallback(async (settings: CallSimulationAudioSettings) => {
+    const response = await authedFetch('/api/call-simulation/audio/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || 'Unable to sync the Call Simulation audio settings to Supabase.');
+    }
+    return payload;
+  }, [authedFetch]);
+
   const syncScenarioKpiMetrics = useCallback(async (scenarioGroupIds: string[], config: KPIConfig) => {
     const response = await authedFetch('/api/call-simulation/kpi/sync', {
       method: 'POST',
@@ -1176,7 +1189,7 @@ export default function TrainerSimFloorPage() {
         await deleteScenarioRecordFromSupabase(scenarioIdToDelete);
       } catch (syncError) {
         console.warn('Call simulation scenario Supabase delete sync failed:', syncError);
-        toast.error('Module deleted locally, but Supabase cleanup did not complete.');
+        toast.error('Scenario archived, but the Supabase authoring mirror cleanup did not finish.');
       }
 
       toast.success(`"${deleteScenarioTitle}" has been deleted.`);
@@ -1408,7 +1421,7 @@ export default function TrainerSimFloorPage() {
           await syncScenarioRecordToSupabase(scenarioReference);
         } catch (syncError) {
           console.warn('Call simulation scenario Supabase sync failed:', syncError);
-      toast.error('Module saved locally, but Supabase scenario/script sync did not complete.');
+          toast.error('Scenario saved, but the Supabase authoring mirror did not finish updating.');
         }
 
         try {
@@ -1418,7 +1431,7 @@ export default function TrainerSimFloorPage() {
           );
         } catch (syncError) {
           console.warn('Call simulation KPI metric Supabase sync failed:', syncError);
-          toast.error('Module saved locally, but KPI metric sync to Supabase did not complete.');
+          toast.error('Scenario saved, but the Supabase KPI mirror did not finish updating.');
         }
       }
 
@@ -1520,7 +1533,7 @@ export default function TrainerSimFloorPage() {
           await syncScenarioKpiMetrics(scenarioIds, kpiForm);
         } catch (syncError) {
           console.warn('Call simulation KPI management Supabase sync failed:', syncError);
-          toast.error('KPI configuration saved locally, but KPI metric sync to Supabase did not complete.');
+          toast.error('KPI configuration saved, but the Supabase KPI mirror did not finish updating.');
         }
       }
       toast.success('KPI configuration saved.');
@@ -1586,14 +1599,14 @@ export default function TrainerSimFloorPage() {
           await syncScenarioRecordToSupabase(String(scenarioId));
         } catch (syncError) {
           console.warn('Call simulation bulk-upload Supabase sync failed:', syncError);
-          toast.error('Bulk upload saved locally, but Supabase scenario/script sync did not complete.');
+          toast.error('Bulk upload completed, but the Supabase authoring mirror did not finish updating.');
         }
 
         try {
           await syncScenarioKpiMetrics([String(scenarioId)], kpiForm);
         } catch (syncError) {
           console.warn('Call simulation bulk-upload KPI sync failed:', syncError);
-          toast.error('Bulk upload saved locally, but KPI metric sync to Supabase did not complete.');
+          toast.error('Bulk upload completed, but the Supabase KPI mirror did not finish updating.');
         }
       }
 
@@ -1654,11 +1667,7 @@ export default function TrainerSimFloorPage() {
               ...callToneSettings,
               ...(target === 'ringer' ? { ringer_audio_url: payload.audio_url } : { hold_audio_url: payload.audio_url }),
             };
-            await authedFetch('/api/call-simulation/audio/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ settings: audioSettings }),
-            });
+            await syncCallToneSettingsToSupabase(audioSettings);
           } catch (syncError) {
             console.warn('Call tone audio Supabase sync failed:', syncError);
           }
@@ -1681,7 +1690,7 @@ export default function TrainerSimFloorPage() {
 
       input.click();
     },
-    [applyCallToneSettings, authedFetch, callToneSettings, refreshScenarioData],
+    [applyCallToneSettings, callToneSettings, refreshScenarioData, syncCallToneSettingsToSupabase],
   );
 
   const handleSaveCallTone = useCallback(async (target: 'ringer' | 'hold') => {
@@ -1703,11 +1712,7 @@ export default function TrainerSimFloorPage() {
       applyCallToneSettings(payload as CallSimulationAudioSettings);
       
       try {
-        await authedFetch('/api/call-simulation/audio/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ settings: payload }),
-        });
+        await syncCallToneSettingsToSupabase(payload as CallSimulationAudioSettings);
       } catch (syncError) {
         console.warn('Call tone audio Supabase sync failed:', syncError);
       }
@@ -1725,7 +1730,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setSavingCallToneTarget(null);
     }
-  }, [applyCallToneSettings, authedFetch, callToneSettings.hold_audio_url, callToneSettings.ringer_audio_url, refreshScenarioData]);
+  }, [applyCallToneSettings, callToneSettings.hold_audio_url, callToneSettings.ringer_audio_url, refreshScenarioData, syncCallToneSettingsToSupabase]);
 
   const handleDeleteCallTone = useCallback(async (target: 'ringer' | 'hold') => {
     setSavingCallToneTarget(target);
@@ -1739,6 +1744,11 @@ export default function TrainerSimFloorPage() {
       }
 
       applyCallToneSettings(payload as CallSimulationAudioSettings);
+      try {
+        await syncCallToneSettingsToSupabase(payload as CallSimulationAudioSettings);
+      } catch (syncError) {
+        console.warn('Call tone audio Supabase sync failed:', syncError);
+      }
       toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio removed from your Call Simulation scenarios.`);
       try {
         await refreshScenarioData();
@@ -1752,7 +1762,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setSavingCallToneTarget(null);
     }
-  }, [applyCallToneSettings, authedFetch, refreshScenarioData]);
+  }, [applyCallToneSettings, authedFetch, refreshScenarioData, syncCallToneSettingsToSupabase]);
 
   const requestMemberSpeechAsset = useCallback(async (script: string, rowIndex: number) => {
       const params = new URLSearchParams({
@@ -2151,10 +2161,10 @@ export default function TrainerSimFloorPage() {
       <div className="space-y-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-foreground">Call Simulations Management</h2>
+            <h2 className="text-3xl font-bold text-foreground">Call Simulation Management</h2>
             <p className="mt-2 text-sm text-muted-foreground">
-              Manage the full call module library, assign modules to batches, monitor CSR response scoring, and review
-              trainee recordings for coaching.
+              Create trainer-owned call scenarios, assign them to batches or trainees, monitor scored mock calls, and coach
+              completed sessions from one workspace.
             </p>
           </div>
           <Button
@@ -2617,7 +2627,7 @@ export default function TrainerSimFloorPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Accomplished Mock Calls</CardTitle>
+            <CardTitle>Submitted Mock Calls</CardTitle>
             <CardDescription>Review finished trainee scenarios, replay the Supabase recording, and send coaching or retake guidance.</CardDescription>
           </CardHeader>
           <CardContent>
@@ -2759,7 +2769,7 @@ export default function TrainerSimFloorPage() {
                     <Input
                       value={scenarioForm.title}
                       onChange={(event) => setScenarioForm((previous) => ({ ...previous, title: event.target.value }))}
-                      placeholder="Healthy Benefits Plus verification flow"
+                      placeholder="Inbound member support call"
                     />
                   </div>
                   <div className="space-y-2">
@@ -2767,7 +2777,7 @@ export default function TrainerSimFloorPage() {
                     <Input
                       value={scenarioForm.topic}
                       onChange={(event) => setScenarioForm((previous) => ({ ...previous, topic: event.target.value }))}
-                      placeholder="Benefits verification, escalations, billing dispute"
+                      placeholder="Verification, billing, eligibility, escalation"
                     />
                   </div>
                   <div className="space-y-2">
@@ -2784,7 +2794,7 @@ export default function TrainerSimFloorPage() {
                     <Input
                       value={scenarioForm.scenario_group_label}
                       onChange={(event) => setScenarioForm((previous) => ({ ...previous, scenario_group_label: event.target.value }))}
-                      placeholder="Benefits Balance, Card Replacement, Billing Escalation"
+                      placeholder="Verification, Escalation, Order Support"
                     />
                     <p className="text-xs text-slate-500">
                       Save the broader scenario family here, then use the row-level Scenario Group field to organize each call turn.

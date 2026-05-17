@@ -2089,6 +2089,112 @@ def _sync_supabase_scenario_authoring_tables(
         supabase.table("kpi_metrics").insert(kpi_metric_rows).execute()
 
 
+def _sync_call_simulation_scenario_to_supabase_from_db(
+    supabase: Any,
+    *,
+    db: Session,
+    scenario: Scenario,
+    trainer_id: str,
+    batch_id: Optional[str] = None,
+) -> dict[str, Any]:
+    scenario_config = _resolve_call_simulation_config_for_batch(
+        db,
+        scenario,
+        batch_id=str(batch_id) if batch_id else None,
+    )
+    sanitized_script_flow = _sanitize_supabase_script_flow(
+        scenario_config.get("script_flow")
+    )
+    passing_score = _resolve_call_scenario_passing_score(
+        scenario,
+        float(
+            _get_effective_kpi_config(db, str(batch_id) if batch_id else None).passing_score
+            or DEFAULT_PASSING_SCORE
+        ),
+    )
+
+    scenario_sync_data = {
+        "source_scenario_id": str(scenario.id),
+        "trainer_id": str(trainer_id),
+        "title": scenario.title,
+        "topic": str(scenario_config.get("topic") or scenario.lob or scenario.title),
+        "description": scenario.description,
+        "target_kpis": _normalize_json_object(scenario_config.get("target_kpis")),
+        "script_flow": sanitized_script_flow,
+        "ringer_audio_url": scenario.ringer_audio_url,
+        "hold_audio_url": scenario.hold_audio_url,
+        "difficulty": scenario.difficulty or "intermediate",
+        "estimated_duration_seconds": scenario.estimated_duration or 300,
+        "passing_score": passing_score,
+        "is_published": bool(scenario.is_published),
+        "is_active": True,
+        "metadata": scenario_config,
+    }
+
+    try:
+        supabase.table("call_scenarios").upsert(
+            scenario_sync_data,
+            ignore_duplicates=False,
+        ).execute()
+    except Exception as supabase_error:
+        logger.warning(
+            "Call Simulation Supabase upsert failed for scenario %s. Retrying with insert/update flow: %s",
+            scenario.id,
+            supabase_error,
+        )
+        try:
+            existing = supabase.table("call_scenarios").select("id").eq(
+                "source_scenario_id",
+                scenario_sync_data["source_scenario_id"],
+            ).execute()
+
+            if existing.data and len(existing.data) > 0:
+                supabase.table("call_scenarios").update(
+                    scenario_sync_data
+                ).eq(
+                    "source_scenario_id",
+                    scenario_sync_data["source_scenario_id"],
+                ).execute()
+            else:
+                supabase.table("call_scenarios").insert(
+                    scenario_sync_data
+                ).execute()
+        except Exception:
+            legacy_existing = supabase.table("call_scenarios").select("id").eq(
+                "scenario_id",
+                scenario_sync_data["source_scenario_id"],
+            ).execute()
+
+            if legacy_existing.data and len(legacy_existing.data) > 0:
+                supabase.table("call_scenarios").update(
+                    scenario_sync_data
+                ).eq(
+                    "scenario_id",
+                    scenario_sync_data["source_scenario_id"],
+                ).execute()
+            else:
+                raise
+
+    _sync_supabase_scenario_authoring_tables(
+        supabase,
+        source_scenario_id=scenario_sync_data["source_scenario_id"],
+        trainer_id=scenario_sync_data["trainer_id"],
+        title=scenario_sync_data.get("title"),
+        description=scenario_sync_data.get("description"),
+        topic=str(scenario_sync_data.get("topic") or ""),
+        target_kpis=_normalize_json_object(scenario_sync_data.get("target_kpis")),
+        script_flow=_sanitize_supabase_script_flow(scenario_sync_data.get("script_flow")),
+        ringer_audio_url=_normalize_optional_url(scenario_sync_data.get("ringer_audio_url")),
+        hold_audio_url=_normalize_optional_url(scenario_sync_data.get("hold_audio_url")),
+        difficulty=_normalize_optional_url(scenario_sync_data.get("difficulty")),
+        estimated_duration_seconds=scenario_sync_data.get("estimated_duration_seconds"),
+        is_published=bool(scenario_sync_data.get("is_published", True)),
+        metadata=_normalize_json_object(scenario_sync_data.get("metadata")),
+    )
+
+    return scenario_sync_data
+
+
 def _delete_supabase_scenario_mirror(
     supabase: Any,
     *,
@@ -4222,12 +4328,68 @@ async def sync_call_audio_to_supabase(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Sync call audio settings to Supabase (placeholder endpoint)"""
+    """Mirror updated trainer call-tone settings to the Supabase scenario records."""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
 
-    logger.debug("Received Supabase call audio sync request: %s", sync_data)
-    return SuccessResponse(message="Call audio sync completed")
+    try:
+        supabase = _require_supabase_storage(
+            "Supabase sync is required for Call Simulation audio mirroring."
+        )
+        requested_ids = sync_data.get("scenario_ids") or sync_data.get("scenarioIds") or []
+        normalized_requested_ids = [
+            scenario_id
+            for scenario_id in (
+                _normalize_uuid_candidate(value) for value in requested_ids
+            )
+            if scenario_id
+        ]
+
+        scenario_query = db.query(Scenario).filter(
+            Scenario.created_by == current_user.id,
+            Scenario.is_published == True,
+        )
+        if normalized_requested_ids:
+            scenario_query = scenario_query.filter(Scenario.id.in_(normalized_requested_ids))
+
+        scenarios = scenario_query.order_by(Scenario.updated_at.desc()).all()
+        synced_count = 0
+
+        for scenario in scenarios:
+            latest_mapping = (
+                db.query(BatchScenarioMapping)
+                .filter(
+                    BatchScenarioMapping.scenario_id == scenario.id,
+                    BatchScenarioMapping.is_active == True,
+                )
+                .order_by(BatchScenarioMapping.assigned_at.desc())
+                .first()
+            )
+            _sync_call_simulation_scenario_to_supabase_from_db(
+                supabase,
+                db=db,
+                scenario=scenario,
+                trainer_id=current_user.id,
+                batch_id=latest_mapping.batch_id if latest_mapping else None,
+            )
+            synced_count += 1
+
+        logger.info(
+            "Synchronized Call Simulation audio settings to Supabase for %s scenario(s) owned by trainer %s",
+            synced_count,
+            current_user.id,
+        )
+        return SuccessResponse(
+            message=f"Call audio sync completed for {synced_count} Call Simulation scenario(s)"
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error syncing Call Simulation audio to Supabase: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync Call Simulation audio to Supabase: {str(exc)}",
+        ) from exc
 
 
 # ==================== Variation Management ====================
@@ -4788,9 +4950,9 @@ async def bulk_upload_scenarios(
     target_scenario.expected_keywords = []
     target_scenario.member_profile = {
         "name": first_member_row["actor"] if first_member_row else "Member",
-        "member_id": "SIM-001",
-        "plan_type": "Call Simulation",
-        "verification_status": "Pending verification",
+        "member_id": None,
+        "plan_type": None,
+        "verification_status": None,
         "problem_statement": first_member_row["script"] if first_member_row else first_csr_row["script"],
     }
     target_scenario.cxone_metadata = {
@@ -4937,24 +5099,24 @@ async def get_bulk_upload_template(
 
     rows = [
         ["Actor", "Script", "Score", "Scenario"],
-        ["CSR", "Thank you for calling Healthy Benefits Plus Member Support. What is the name on the account?", 3, 1],
-        ["CSR", "Thank you for calling Healthy Benefits Plus Member Support. What is your first and last name?", 2, 1],
-        ["Member", "This is Calvin Smith", "", 1],
-        ["CSR", "Can I have your date of birth?", 3, 2],
-        ["CSR", "What is your birth date?", 2, 2],
-        ["Member", "My date of birth is February 4, 1955", "", 2],
+        ["CSR", "Thank you for calling member support. May I have your full name?", 3, 1],
+        ["CSR", "For security, may I verify your member ID?", 2, 1],
+        ["Member", "I need help checking my account and a recent order.", "", 1],
+        ["CSR", "I can help with that. May I verify your date of birth?", 3, 2],
+        ["CSR", "Do you also have the order or reference number available?", 2, 2],
+        ["Member", "I have the order number ready if you need it.", "", 2],
     ]
 
     if format == "txt":
         txt_lines = [
-            "Benefits Verification and Order Support",
-            "Member needs help verifying benefits and checking a delayed order.",
+            "Call Verification and Account Support",
+            "Member needs help verifying the account and checking a recent order.",
             "Actor | Script | Score | Scenario",
-            "CSR | Thank you for calling Healthy Benefits Plus Member Support. What is the name on the account? | 3 | 1",
-            "CSR | Thank you for calling Healthy Benefits Plus Member Support. What is your first and last name? | 2 | 1",
-            "Member | This is Calvin Smith | 0 | 1",
-            "CSR | Can I have your date of birth? | 3 | 2",
-            "Member | My date of birth is February 4, 1955 | 0 | 2",
+            "CSR | Thank you for calling member support. May I have your full name? | 3 | 1",
+            "CSR | For security, may I verify your member ID? | 2 | 1",
+            "Member | I need help checking my account and a recent order. | 0 | 1",
+            "CSR | I can help with that. May I verify your date of birth? | 3 | 2",
+            "Member | I have the order number ready if you need it. | 0 | 2",
         ]
         return Response(
             content="\n".join(txt_lines),
