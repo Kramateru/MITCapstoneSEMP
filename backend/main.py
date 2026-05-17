@@ -19,9 +19,18 @@ except ImportError:
 
 def _local_tts_enabled() -> bool:
     normalized = str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower()
-    if not normalized:
+    if not normalized or normalized not in {"1", "true", "yes", "on"}:
         return False
-    return normalized in {"1", "true", "yes", "on"}
+
+    is_render = str(os.getenv("RENDER", "")).strip().lower() in {"1", "true", "yes", "on"}
+    is_docker = Path("/.dockerenv").exists()
+    if is_render or is_docker or os.name != "nt":
+        logger.info(
+            "Ignoring ENABLE_LOCAL_TTS because offline local TTS is only supported in local Windows development."
+        )
+        return False
+
+    return True
 
 def initialize_tts():
     if not _local_tts_enabled():

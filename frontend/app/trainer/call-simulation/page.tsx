@@ -831,6 +831,19 @@ export default function TrainerSimFloorPage() {
     return payload;
   }, [authedFetch, selectedBatch]);
 
+  const syncCallToneSettingsToSupabase = useCallback(async (settings: CallSimulationAudioSettings) => {
+    const response = await authedFetch('/api/call-simulation/audio/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ settings }),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || 'Unable to sync the Call Simulation audio settings to Supabase.');
+    }
+    return payload;
+  }, [authedFetch]);
+
   const syncScenarioKpiMetrics = useCallback(async (scenarioGroupIds: string[], config: KPIConfig) => {
     const response = await authedFetch('/api/call-simulation/kpi/sync', {
       method: 'POST',
@@ -1654,11 +1667,7 @@ export default function TrainerSimFloorPage() {
               ...callToneSettings,
               ...(target === 'ringer' ? { ringer_audio_url: payload.audio_url } : { hold_audio_url: payload.audio_url }),
             };
-            await authedFetch('/api/call-simulation/audio/sync', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ settings: audioSettings }),
-            });
+            await syncCallToneSettingsToSupabase(audioSettings);
           } catch (syncError) {
             console.warn('Call tone audio Supabase sync failed:', syncError);
           }
@@ -1681,7 +1690,7 @@ export default function TrainerSimFloorPage() {
 
       input.click();
     },
-    [applyCallToneSettings, authedFetch, callToneSettings, refreshScenarioData],
+    [applyCallToneSettings, callToneSettings, refreshScenarioData, syncCallToneSettingsToSupabase],
   );
 
   const handleSaveCallTone = useCallback(async (target: 'ringer' | 'hold') => {
@@ -1703,11 +1712,7 @@ export default function TrainerSimFloorPage() {
       applyCallToneSettings(payload as CallSimulationAudioSettings);
       
       try {
-        await authedFetch('/api/call-simulation/audio/sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ settings: payload }),
-        });
+        await syncCallToneSettingsToSupabase(payload as CallSimulationAudioSettings);
       } catch (syncError) {
         console.warn('Call tone audio Supabase sync failed:', syncError);
       }
@@ -1725,7 +1730,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setSavingCallToneTarget(null);
     }
-  }, [applyCallToneSettings, authedFetch, callToneSettings.hold_audio_url, callToneSettings.ringer_audio_url, refreshScenarioData]);
+  }, [applyCallToneSettings, callToneSettings.hold_audio_url, callToneSettings.ringer_audio_url, refreshScenarioData, syncCallToneSettingsToSupabase]);
 
   const handleDeleteCallTone = useCallback(async (target: 'ringer' | 'hold') => {
     setSavingCallToneTarget(target);
@@ -1739,6 +1744,11 @@ export default function TrainerSimFloorPage() {
       }
 
       applyCallToneSettings(payload as CallSimulationAudioSettings);
+      try {
+        await syncCallToneSettingsToSupabase(payload as CallSimulationAudioSettings);
+      } catch (syncError) {
+        console.warn('Call tone audio Supabase sync failed:', syncError);
+      }
       toast.success(`${target === 'ringer' ? 'Ringer' : 'Hold'} audio removed from your Call Simulation scenarios.`);
       try {
         await refreshScenarioData();
@@ -1752,7 +1762,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setSavingCallToneTarget(null);
     }
-  }, [applyCallToneSettings, authedFetch, refreshScenarioData]);
+  }, [applyCallToneSettings, authedFetch, refreshScenarioData, syncCallToneSettingsToSupabase]);
 
   const requestMemberSpeechAsset = useCallback(async (script: string, rowIndex: number) => {
       const params = new URLSearchParams({
