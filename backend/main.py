@@ -19,9 +19,9 @@ except ImportError:
 
 def _local_tts_enabled() -> bool:
     normalized = str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower()
-    if normalized:
-        return normalized in {"1", "true", "yes", "on"}
-    return Path("/.dockerenv").exists() or str(os.getenv("RENDER", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if not normalized:
+        return False
+    return normalized in {"1", "true", "yes", "on"}
 
 def initialize_tts():
     if not _local_tts_enabled():
@@ -35,7 +35,7 @@ def initialize_tts():
         engine = pyttsx3.init()
         return engine
     except Exception as e:
-        print(f"TTS Error: {e}. Backend will run without local audio generation.")
+        logger.warning("Local TTS fallback is unavailable: %s", e)
         return None
 
 
@@ -166,12 +166,6 @@ def validate_environment():
     supabase_url = resolve_supabase_url(os.getenv)
     if not is_usable_supabase_url(supabase_url):
         missing.append("SUPABASE_URL: Supabase project URL")
-    publishable_key = resolve_supabase_publishable_key(os.getenv)
-    if not is_usable_supabase_publishable_key(publishable_key):
-        missing.append(
-            "SUPABASE_PUBLISHABLE_KEY: Supabase public/publishable key for Auth REST session issuance"
-        )
-
     if missing:
         error_msg = "Missing required environment variables:\n" + "\n".join(missing)
         logger.error(error_msg)
@@ -198,12 +192,22 @@ def validate_environment():
     except Exception as e:
         raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
 
-    if not supabase_key_matches_url(supabase_url, publishable_key):
+    publishable_key = resolve_supabase_publishable_key(os.getenv)
+    if not is_usable_supabase_publishable_key(publishable_key):
+        logger.warning(
+            "SUPABASE_PUBLISHABLE_KEY is missing or invalid. The backend will still start, "
+            "but Supabase Auth REST session issuance and realtime client tokens will be unavailable until a valid "
+            "publishable/anon key is configured."
+        )
+    elif not supabase_key_matches_url(supabase_url, publishable_key):
         url_ref = extract_supabase_project_ref_from_url(supabase_url) or "unknown"
         key_ref = extract_supabase_project_ref_from_key(publishable_key) or "unknown"
-        raise RuntimeError(
+        logger.warning(
             "SUPABASE_PUBLISHABLE_KEY does not match SUPABASE_URL. "
-            f"The Supabase URL points to project {url_ref}, but the publishable key belongs to {key_ref}."
+            "The backend will still start, but Supabase Auth REST session issuance will fail until both values target "
+            "the same project. URL project=%s key project=%s",
+            url_ref,
+            key_ref,
         )
 
     service_key = resolve_supabase_service_key(os.getenv)

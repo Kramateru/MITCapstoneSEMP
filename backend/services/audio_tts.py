@@ -27,7 +27,7 @@ def _default_local_tts_enabled() -> bool:
     normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
     if normalized:
         return normalized in {"1", "true", "yes", "on"}
-    return os.path.exists("/.dockerenv") or bool(normalize_env_value(os.getenv("RENDER")))
+    return False
 
 # Try to import Gemini TTS
 try:
