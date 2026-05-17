@@ -293,6 +293,8 @@ def _sync_audio_content_data(
     language_code: Optional[str] = None,
     original_filename: Optional[str] = None,
     content_type: Optional[str] = None,
+    storage_path: Optional[str] = None,
+    bucket_name: Optional[str] = None,
     transcript_provider: Optional[str] = None,
     transcript_confidence: Optional[float] = None,
 ) -> None:
@@ -334,6 +336,11 @@ def _sync_audio_content_data(
         content_data["audio_original_filename"] = original_filename
     if content_type:
         content_data["audio_content_type"] = content_type
+    if storage_path:
+        content_data["audio_storage_path"] = storage_path
+        content_data["signed_url_required"] = True
+    if bucket_name:
+        content_data["audio_bucket"] = bucket_name
     if transcript_provider:
         content_data["transcript_provider"] = transcript_provider
     if transcript_confidence is not None:
@@ -354,6 +361,36 @@ def _resolve_module_audio_asset_url(module: MicrolearningModule) -> Optional[str
         if normalized:
             return normalized
     return None
+
+
+def _resolve_module_audio_storage_metadata(module: MicrolearningModule) -> dict[str, Any]:
+    content_data = dict(module.content_data or {})
+    audio_url = _resolve_module_audio_asset_url(module) or ""
+    storage_path = str(content_data.get("audio_storage_path") or "").strip()
+    bucket_name = str(content_data.get("audio_bucket") or "").strip()
+
+    inferred_bucket, inferred_path = _resolve_supabase_public_asset(audio_url) if audio_url else (None, None)
+    if inferred_path and (
+        not storage_path
+        or storage_path != inferred_path
+        or not storage_path.startswith("microlearning/")
+    ):
+        storage_path = inferred_path
+    if inferred_bucket and (
+        not bucket_name
+        or (storage_path == inferred_path and bucket_name != inferred_bucket)
+    ):
+        bucket_name = inferred_bucket
+
+    if storage_path and not bucket_name:
+        bucket_name = get_supabase_client().microlearning_bucket_name
+
+    return {
+        "audio_url": audio_url or None,
+        "storage_path": storage_path or None,
+        "bucket_name": bucket_name or None,
+        "signed_url_required": bool(storage_path) and bool(content_data.get("signed_url_required", True)),
+    }
 
 
 def _resolve_module_transcript_text(module: MicrolearningModule) -> str:
@@ -651,8 +688,11 @@ async def upload_module_audio(
     storage_filename = (
         f"{module_id}/{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{_sanitize_asset_name(filename)}"
     )
+    storage_path = f"microlearning/audio/{current_user.id}/{storage_filename}"
+    bucket_name = None
 
     supabase_client = _require_supabase_storage()
+    bucket_name = supabase_client.microlearning_bucket_name
     audio_url = supabase_client.upload_microlearning_audio(
         file_data=audio_bytes,
         module_id=module_id,
@@ -677,11 +717,21 @@ async def upload_module_audio(
         language_code=module.audio_language or "en-US",
         original_filename=filename,
         content_type=content_type,
+        storage_path=storage_path,
+        bucket_name=bucket_name,
     )
+    signed_url = supabase_client.create_signed_storage_url(
+        bucket_name=bucket_name,
+        path=storage_path,
+    ) if bucket_name and storage_path else None
 
     result = {
         "audio_url": audio_url,
+        "signed_url": signed_url,
+        "storage_path": storage_path,
+        "bucket_name": bucket_name,
         "filename": filename,
+        "original_filename": filename,
         "content_type": content_type,
         "duration_seconds": estimated_duration,
     }
@@ -1035,14 +1085,33 @@ async def get_module_audio(
     resolved_audio_url = _resolve_module_audio_asset_url(module)
     resolved_transcript = _resolve_module_transcript_text(module)
     content_data = dict(module.content_data or {})
+    storage_metadata = _resolve_module_audio_storage_metadata(module)
+    supabase_client = get_supabase_client()
+    signed_url = (
+        supabase_client.create_signed_storage_url(
+            bucket_name=storage_metadata["bucket_name"],
+            path=storage_metadata["storage_path"],
+        )
+        if storage_metadata.get("storage_path") and storage_metadata.get("bucket_name")
+        else None
+    )
 
     result = {
         "module_id": module_id,
         "title": module.title,
         "audio_url": resolved_audio_url,
+        "signed_url": signed_url,
+        "storage_path": storage_metadata.get("storage_path"),
+        "bucket_name": storage_metadata.get("bucket_name"),
+        "signed_url_required": storage_metadata.get("signed_url_required"),
         "audio_duration_seconds": module.audio_duration_seconds,
         "audio_language": module.audio_language,
         "transcript": resolved_transcript,
+        "summary_text": (
+            content_data.get("summary_text")
+            or content_data.get("audio_summary")
+            or content_data.get("summary")
+        ),
         "captions_url": content_data.get("captions_url"),
         "caption_data": content_data.get("caption_data"),
         "live_caption_mode": content_data.get("live_caption_mode"),

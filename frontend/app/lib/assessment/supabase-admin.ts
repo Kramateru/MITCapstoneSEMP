@@ -156,6 +156,7 @@ function resolveSupabaseApiKey() {
 
 function resolveSupabasePublicApiKey() {
   const publicKey = normalizeEnvValue(getConfigValue([
+    'SUPABASE_PUBLISHABLE_KEY',
     'VITE_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',

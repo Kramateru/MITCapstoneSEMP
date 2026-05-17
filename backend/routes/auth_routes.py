@@ -21,6 +21,7 @@ from ..schemas import LoginRequest, LoginResponse, UserResponse, ChangePasswordR
 from ..services.supabase_auth_service import (
     SupabaseAuthenticationError,
     SupabaseAuthConfigurationError,
+    SupabaseAuthInputError,
     SupabaseAuthServiceError,
     authenticate_supabase_credentials,
     get_auth_provider_status,
@@ -44,6 +45,12 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
     try:
         authenticate_supabase_credentials(db, normalized_email, credentials.password)
+        supabase_session = issue_supabase_session(normalized_email, credentials.password)
+    except SupabaseAuthInputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except SupabaseAuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -74,7 +81,7 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive"
         )
     
-    # Create tokens
+    # Create tokens only after both local auth and Supabase session issuance succeed.
     access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
     refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
     
@@ -87,12 +94,6 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
         and auth_utils.verify_password(DEFAULT_TRAINEE_PASSWORD, user.password_hash)
     )
 
-    supabase_session: dict[str, Any] = {}
-    try:
-        supabase_session = issue_supabase_session(normalized_email, credentials.password)
-    except SupabaseAuthServiceError as exc:
-        logger.warning("Unable to issue Supabase session for %s: %s", normalized_email, exc)
-    
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -196,8 +197,16 @@ async def refresh_token(
     if x_supabase_refresh_token:
         try:
             supabase_session = refresh_supabase_session(x_supabase_refresh_token)
+        except SupabaseAuthInputError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
         except SupabaseAuthServiceError as exc:
-            logger.warning("Unable to refresh Supabase session for %s: %s", user.email, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
     
     return LoginResponse(
         access_token=access_token,

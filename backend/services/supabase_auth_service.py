@@ -40,6 +40,10 @@ class SupabaseAuthenticationError(SupabaseAuthServiceError):
     """Raised when Supabase rejects the submitted credentials."""
 
 
+class SupabaseAuthInputError(SupabaseAuthServiceError):
+    """Raised when a login request contains invalid auth input."""
+
+
 class SupabaseUserSyncError(SupabaseAuthServiceError):
     """Raised when a local user cannot be synced into Supabase Auth."""
 
@@ -115,6 +119,13 @@ def _request_supabase_auth_session(
 
 def _normalized_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def _validate_auth_password(password: str, *, field_name: str = "Password") -> str:
+    try:
+        return auth_utils.validate_password_length(password, field_name=field_name)
+    except auth_utils.PasswordValidationError as exc:
+        raise SupabaseAuthInputError(str(exc)) from exc
 
 
 def _uses_supabase_auth_schema(db: Session) -> bool:
@@ -235,14 +246,13 @@ def get_auth_provider_status(db: Session) -> dict[str, Any]:
 
     try:
         db.execute(text("select 1 from auth.users limit 1"))
-    except Exception as exc:
+    except Exception:
         return {
             "provider": "supabase",
             "uses_supabase": True,
             "available": False,
             "credential_source": "auth.users",
             "message": "Unable to reach Supabase Auth right now.",
-            "error": str(exc),
         }
 
     return {
@@ -258,7 +268,8 @@ def authenticate_supabase_credentials(db: Session, email: str, password: str) ->
     """Validate an email/password pair against Supabase's auth.users table."""
     normalized_email = _normalized_email(email)
     if not normalized_email:
-        raise SupabaseAuthenticationError("Invalid email or password")
+        raise SupabaseAuthInputError("Email is required.")
+    normalized_password = _validate_auth_password(password)
 
     if not _uses_supabase_auth_schema(db):
         raise SupabaseAuthConfigurationError(
@@ -294,7 +305,7 @@ def authenticate_supabase_credentials(db: Session, email: str, password: str) ->
     if not record or record["deleted_at"] is not None or not record["encrypted_password"]:
         raise SupabaseAuthenticationError("Invalid email or password")
 
-    if not auth_utils.verify_password(password, record["encrypted_password"]):
+    if not auth_utils.verify_password(normalized_password, record["encrypted_password"]):
         raise SupabaseAuthenticationError("Invalid email or password")
 
     banned_until = record["banned_until"]
@@ -306,14 +317,15 @@ def authenticate_supabase_credentials(db: Session, email: str, password: str) ->
 
 def issue_supabase_session(email: str, password: str) -> dict[str, Any]:
     normalized_email = _normalized_email(email)
-    if not normalized_email or not password:
-        raise SupabaseAuthenticationError("Invalid email or password")
+    if not normalized_email:
+        raise SupabaseAuthInputError("Email is required.")
+    normalized_password = _validate_auth_password(password)
 
     return _request_supabase_auth_session(
         grant_type="password",
         payload={
             "email": normalized_email,
-            "password": password,
+            "password": normalized_password,
         },
     )
 
@@ -321,7 +333,7 @@ def issue_supabase_session(email: str, password: str) -> dict[str, Any]:
 def refresh_supabase_session(refresh_token: str) -> dict[str, Any]:
     normalized_refresh_token = (refresh_token or "").strip()
     if not normalized_refresh_token:
-        raise SupabaseAuthenticationError("Supabase refresh token is required.")
+        raise SupabaseAuthInputError("Supabase refresh token is required.")
 
     return _request_supabase_auth_session(
         grant_type="refresh_token",

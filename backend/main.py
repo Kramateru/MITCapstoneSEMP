@@ -18,7 +18,10 @@ except ImportError:
 
 
 def _local_tts_enabled() -> bool:
-    return str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+    normalized = str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower()
+    if normalized:
+        return normalized in {"1", "true", "yes", "on"}
+    return Path("/.dockerenv").exists() or str(os.getenv("RENDER", "")).strip().lower() in {"1", "true", "yes", "on"}
 
 def initialize_tts():
     if not _local_tts_enabled():
@@ -110,21 +113,31 @@ except ImportError:
 
 try:
     from .config_validation import (
+        extract_supabase_project_ref_from_key,
+        extract_supabase_project_ref_from_url,
         is_usable_azure_speech_key,
+        is_usable_supabase_publishable_key,
         is_usable_supabase_service_key,
         is_usable_supabase_url,
         normalize_env_value,
+        resolve_supabase_publishable_key,
         resolve_supabase_service_key,
         resolve_supabase_url,
+        supabase_key_matches_url,
     )
 except ImportError:
     from config_validation import (
+        extract_supabase_project_ref_from_key,
+        extract_supabase_project_ref_from_url,
         is_usable_azure_speech_key,
+        is_usable_supabase_publishable_key,
         is_usable_supabase_service_key,
         is_usable_supabase_url,
         normalize_env_value,
+        resolve_supabase_publishable_key,
         resolve_supabase_service_key,
         resolve_supabase_url,
+        supabase_key_matches_url,
     )
 
 # Load environment variables using the shared backend resolution order.
@@ -153,6 +166,11 @@ def validate_environment():
     supabase_url = resolve_supabase_url(os.getenv)
     if not is_usable_supabase_url(supabase_url):
         missing.append("SUPABASE_URL: Supabase project URL")
+    publishable_key = resolve_supabase_publishable_key(os.getenv)
+    if not is_usable_supabase_publishable_key(publishable_key):
+        missing.append(
+            "SUPABASE_PUBLISHABLE_KEY: Supabase public/publishable key for Auth REST session issuance"
+        )
 
     if missing:
         error_msg = "Missing required environment variables:\n" + "\n".join(missing)
@@ -180,14 +198,32 @@ def validate_environment():
     except Exception as e:
         raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
 
+    if not supabase_key_matches_url(supabase_url, publishable_key):
+        url_ref = extract_supabase_project_ref_from_url(supabase_url) or "unknown"
+        key_ref = extract_supabase_project_ref_from_key(publishable_key) or "unknown"
+        raise RuntimeError(
+            "SUPABASE_PUBLISHABLE_KEY does not match SUPABASE_URL. "
+            f"The Supabase URL points to project {url_ref}, but the publishable key belongs to {key_ref}."
+        )
+
     service_key = resolve_supabase_service_key(os.getenv)
     if not service_key:
-        logger.warning(
-            'Supabase service role key is not configured. Supabase storage and upload features will be disabled until SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY is set.'
+        logger.error(
+            'Supabase service role key is not configured. Server-side Supabase admin features will stay disabled until SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY is set.'
         )
     elif not is_usable_supabase_service_key(service_key):
-        logger.warning(
-            'Supabase service role key is configured but invalid. Storage and upload features will stay disabled until SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY contains a valid service-role JWT or sb_secret key.'
+        logger.error(
+            'Supabase service role key is configured but invalid. Server-side Supabase admin features will stay disabled until SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY contains a valid service-role JWT or sb_secret key.'
+        )
+    elif not supabase_key_matches_url(supabase_url, service_key):
+        url_ref = extract_supabase_project_ref_from_url(supabase_url) or "unknown"
+        key_ref = extract_supabase_project_ref_from_key(service_key) or "unknown"
+        logger.error(
+            "Supabase service role key does not match SUPABASE_URL. "
+            "Server-side Supabase admin features will stay disabled until both values target the same project. "
+            "URL project=%s key project=%s",
+            url_ref,
+            key_ref,
         )
     else:
         logger.info("Supabase admin storage configuration detected.")

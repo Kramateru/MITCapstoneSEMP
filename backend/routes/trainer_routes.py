@@ -391,6 +391,22 @@ def _normalize_media_url(value: Any) -> str:
     return _normalize_text_value(value).split("#", 1)[0]
 
 
+def _looks_like_local_media_url(value: Any) -> bool:
+    normalized_value = _normalize_media_url(value)
+    if not normalized_value:
+        return False
+
+    if normalized_value.startswith("/media/"):
+        return True
+
+    try:
+        parsed = urlparse(normalized_value)
+    except Exception:
+        return False
+
+    return (parsed.path or "").startswith("/media/")
+
+
 def _path_has_extension(value: str, extensions: tuple[str, ...]) -> bool:
     normalized_value = _normalize_media_url(value).lower()
     if not normalized_value:
@@ -652,6 +668,23 @@ def _resolve_microlearning_asset_folder(
     return "assets"
 
 
+def _resolve_asset_storage_backend(content_data: dict[str, Any]) -> Optional[str]:
+    normalized_backend = _normalize_text_value(content_data.get("storage_backend")).lower()
+    if normalized_backend in {"supabase_storage", "supabase_postgres", "local_media"}:
+        return normalized_backend
+
+    if _normalize_text_value(content_data.get("asset_storage_path")):
+        return "supabase_storage"
+
+    if _looks_like_local_media_url(content_data.get("asset_url")):
+        return "local_media"
+
+    if _normalize_text_value(content_data.get("asset_record_id")):
+        return "supabase_postgres"
+
+    return None
+
+
 def _upload_microlearning_asset(
     *,
     db: Session,
@@ -686,13 +719,15 @@ def _upload_microlearning_asset(
 
     supabase_client = get_supabase_client()
     if not supabase_client.is_available:
-        raise HTTPException(
-            status_code=503,
-            detail="Supabase storage is required for trainer microlearning video and media uploads.",
+        logger.warning(
+            "Supabase storage is unavailable for trainer microlearning asset uploads. "
+            "Falling back to local /media storage for trainer %s.",
+            trainer_id,
         )
 
-    bucket_name = supabase_client.microlearning_bucket_name
-    storage_path = f"microlearning/{storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
+    bucket_name = supabase_client.microlearning_bucket_name if supabase_client.is_available else None
+    normalized_storage_folder = supabase_client._normalize_microlearning_folder(storage_folder)
+    storage_path = f"{normalized_storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
     asset_url = supabase_client.upload_microlearning_binary(
         module_id=module_storage_segment,
         trainer_id=trainer_id,
@@ -704,11 +739,15 @@ def _upload_microlearning_asset(
     if not asset_url:
         raise HTTPException(
             status_code=503,
-            detail="Supabase storage could not save the uploaded microlearning media asset.",
+            detail="Microlearning media upload failed. Check local media permissions and Supabase storage configuration.",
         )
     used_local_media_fallback = asset_url.startswith(("http://", "https://")) and "/media/" in asset_url
     if not used_local_media_fallback:
         used_local_media_fallback = asset_url.startswith("/media/")
+    signed_url = None if used_local_media_fallback or not bucket_name else supabase_client.create_signed_storage_url(
+        bucket_name=bucket_name,
+        path=storage_path,
+    )
 
     asset_record_id: Optional[str] = None
     asset_byte_size = len(file_bytes)
@@ -736,6 +775,7 @@ def _upload_microlearning_asset(
 
     return {
         "asset_url": asset_url,
+        "signed_url": signed_url,
         "asset_record_id": asset_record_id,
         "storage_backend": "local_media" if used_local_media_fallback else "supabase_storage",
         "storage_path": None if used_local_media_fallback else storage_path,
@@ -1072,7 +1112,12 @@ def _create_trainee_account(
     if existing_user:
         raise ValueError(f"Email {normalized_email} already exists")
 
-    temporary_password = password or DEFAULT_TRAINEE_PASSWORD
+    try:
+        temporary_password = auth_utils.validate_password_length(
+            password or DEFAULT_TRAINEE_PASSWORD
+        )
+    except auth_utils.PasswordValidationError as exc:
+        raise ValueError(str(exc)) from exc
     new_user = User(
         email=normalized_email,
         full_name=normalized_name,
@@ -2244,7 +2289,9 @@ async def create_microlearning_module(
     if payload.content_url and not content_data.get("asset_url"):
         content_data["asset_url"] = payload.content_url
     if content_data.get("asset_record_id"):
-        content_data["storage_backend"] = content_data.get("storage_backend") or "supabase_postgres"
+        resolved_storage_backend = _resolve_asset_storage_backend(content_data)
+        if resolved_storage_backend:
+            content_data["storage_backend"] = resolved_storage_backend
     normalized_asset_bucket, normalized_asset_path = _normalize_supabase_asset_reference(content_data)
     if normalized_asset_path:
         content_data["asset_storage_path"] = normalized_asset_path
@@ -2364,7 +2411,9 @@ async def update_microlearning_module(
     if next_content_url and not next_content_data.get("asset_url"):
         next_content_data["asset_url"] = next_content_url
     if next_content_data.get("asset_record_id"):
-        next_content_data["storage_backend"] = next_content_data.get("storage_backend") or "supabase_postgres"
+        resolved_storage_backend = _resolve_asset_storage_backend(next_content_data)
+        if resolved_storage_backend:
+            next_content_data["storage_backend"] = resolved_storage_backend
     normalized_asset_bucket, normalized_asset_path = _normalize_supabase_asset_reference(next_content_data)
     if normalized_asset_path:
         next_content_data["asset_storage_path"] = normalized_asset_path

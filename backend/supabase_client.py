@@ -238,6 +238,125 @@ class SupabaseClient:
 
         return f"{backend_base_url.rstrip('/')}{normalized_local_url}"
 
+    def _allow_local_media_fallback(self) -> bool:
+        explicit_value = normalize_env_value(os.getenv("ALLOW_LOCAL_MEDIA_FALLBACK")).lower()
+        if explicit_value in {"1", "true", "yes", "on"}:
+            return True
+        if explicit_value in {"0", "false", "no", "off"}:
+            return False
+
+        backend_base_url = normalize_env_value(os.getenv("BACKEND_URL"))
+        if not backend_base_url:
+            return True
+
+        try:
+            parsed = urlparse(backend_base_url)
+        except Exception:
+            return True
+
+        return (parsed.hostname or "").strip().lower() in {"127.0.0.1", "localhost", "0.0.0.0"}
+
+    def _build_upload_file_options(
+        self,
+        *,
+        content_type: Optional[str],
+        upsert: bool = False,
+    ) -> Dict[str, str]:
+        options: Dict[str, str] = {
+            "content-type": content_type or "application/octet-stream",
+        }
+        if upsert:
+            options["upsert"] = "true"
+            options["x-upsert"] = "true"
+        return options
+
+    def _upload_bytes_to_bucket(
+        self,
+        *,
+        bucket_name: str,
+        path: str,
+        file_data: bytes,
+        content_type: Optional[str] = None,
+        upsert: bool = False,
+    ) -> Optional[str]:
+        if not self.is_available or not self.client:
+            return None
+
+        normalized_bucket = (bucket_name or "").strip()
+        normalized_path = (path or "").strip().replace("\\", "/").lstrip("/")
+        if not normalized_bucket or not normalized_path:
+            return None
+
+        file_options = self._build_upload_file_options(
+            content_type=content_type,
+            upsert=upsert,
+        )
+
+        last_error: Optional[Exception] = None
+        for attempt in range(2):
+            try:
+                self.client.storage.from_(normalized_bucket).upload(
+                    path=normalized_path,
+                    file=file_data,
+                    file_options=file_options,
+                )
+                public_url = self.client.storage.from_(normalized_bucket).get_public_url(normalized_path)
+                logger.info("Uploaded file to %s: %s", normalized_bucket, normalized_path)
+                return public_url
+            except Exception as exc:
+                last_error = exc
+                if attempt == 0:
+                    logger.warning(
+                        "Supabase upload to %s/%s failed on first attempt: %s. Rechecking buckets and retrying once.",
+                        normalized_bucket,
+                        normalized_path,
+                        exc,
+                    )
+                    try:
+                        self._ensure_buckets_exist()
+                    except Exception:
+                        logger.warning("Bucket recheck failed during upload retry.", exc_info=True)
+                    continue
+
+        if last_error:
+            logger.error(
+                "Failed to upload file to %s/%s after retry: %s",
+                normalized_bucket,
+                normalized_path,
+                last_error,
+            )
+        return None
+
+    def create_signed_storage_url(
+        self,
+        *,
+        bucket_name: str,
+        path: str,
+        expires_in: int = 3600,
+    ) -> Optional[str]:
+        if not self.is_available or not self.client:
+            return None
+
+        normalized_bucket = (bucket_name or "").strip()
+        normalized_path = (path or "").strip().replace("\\", "/").lstrip("/")
+        if not normalized_bucket or not normalized_path:
+            return None
+
+        try:
+            result = self.client.storage.from_(normalized_bucket).create_signed_url(
+                normalized_path,
+                expires_in,
+            )
+            return result.get("signedURL") or result.get("signedUrl")
+        except Exception as exc:
+            logger.warning(
+                "Failed to create signed URL for %s/%s: %s",
+                normalized_bucket,
+                normalized_path,
+                exc,
+            )
+            return None
+
     def _delete_local_media_copy(self, public_url: str) -> bool:
         normalized_url = (public_url or "").strip()
         if not normalized_url:
@@ -471,33 +590,30 @@ class SupabaseClient:
         content_type: str,
     ) -> Optional[str]:
         """Upload a user profile image to Supabase storage."""
-        local_url = self._to_public_media_url(
-            self._write_local_media_copy(
-                relative_path=f"profiles/{user_id}/{filename}",
-                file_data=file_data,
-            )
-        )
+        path = f"profiles/{user_id}/{filename}"
 
-        if not self.is_available:
-            logger.warning("Supabase not available. Using local fallback for profile image upload.")
-            return local_url
-
-        try:
-            path = f"profiles/{user_id}/{filename}"
-            self.client.storage.from_(self.profile_bucket_name).upload(
+        if self.is_available:
+            public_url = self._upload_bytes_to_bucket(
+                bucket_name=self.profile_bucket_name,
                 path=path,
-                file=file_data,
-                file_options={
-                    "content-type": content_type,
-                    "upsert": "true",
-                },
+                file_data=file_data,
+                content_type=content_type,
+                upsert=True,
             )
-            public_url = self.client.storage.from_(self.profile_bucket_name).get_public_url(path)
-            logger.info(f"Profile image uploaded: {path}")
-            return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload profile image: {e}")
-            return local_url
+            if public_url:
+                return public_url
+
+        if self._allow_local_media_fallback():
+            logger.warning("Using local fallback for profile image upload: %s", path)
+            return self._to_public_media_url(
+                self._write_local_media_copy(
+                    relative_path=path,
+                    file_data=file_data,
+                )
+            )
+
+        logger.error("Profile image upload failed and local fallback is disabled: %s", path)
+        return None
 
     def upload_microlearning_audio(
         self,
@@ -524,27 +640,18 @@ class SupabaseClient:
             logger.warning("Supabase not available. Microlearning audio not uploaded to cloud.")
             return None
 
-        try:
-            if not filename:
-                timestamp = datetime.utcnow().isoformat().replace(":", "-")
-                ext = "mp3" if (content_type or "").startswith("audio/mpeg") else "wav"
-                filename = f"{module_id}/{timestamp}.{ext}"
+        if not filename:
+            timestamp = datetime.utcnow().isoformat().replace(":", "-")
+            ext = "mp3" if (content_type or "").startswith("audio/mpeg") else "wav"
+            filename = f"{module_id}/{timestamp}.{ext}"
 
-            # Upload to microlearning-audio bucket
-            path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{trainer_id}/{filename}"
-            self.client.storage.from_(self.microlearning_bucket_name).upload(
-                path=path,
-                file=file_data,
-                file_options={"content-type": content_type or "audio/mpeg"},
-            )
-
-            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
-            logger.info(f"Microlearning audio uploaded: {path}")
-            return public_url
-
-        except Exception as e:
-            logger.error(f"Failed to upload microlearning audio: {e}")
-            return None
+        path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{trainer_id}/{filename}"
+        return self._upload_bytes_to_bucket(
+            bucket_name=self.microlearning_bucket_name,
+            path=path,
+            file_data=file_data,
+            content_type=content_type or "audio/mpeg",
+        )
 
     def upload_microlearning_tts(
         self,
@@ -567,25 +674,17 @@ class SupabaseClient:
             logger.warning("Supabase not available. TTS audio not uploaded to cloud.")
             return None
 
-        try:
-            if not filename:
-                timestamp = datetime.utcnow().isoformat().replace(":", "-")
-                filename = f"{module_id}/tts_{timestamp}.wav"
+        if not filename:
+            timestamp = datetime.utcnow().isoformat().replace(":", "-")
+            filename = f"{module_id}/tts_{timestamp}.wav"
 
-            path = f"{MICROLEARNING_STORAGE_ROOT}/tts/{filename}"
-            self.client.storage.from_(self.microlearning_bucket_name).upload(
-                path=path,
-                file=audio_data,
-                file_options={"content-type": "audio/wav"},
-            )
-
-            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
-            logger.info(f"TTS audio uploaded: {path}")
-            return public_url
-
-        except Exception as e:
-            logger.error(f"Failed to upload TTS audio: {e}")
-            return None
+        path = f"{MICROLEARNING_STORAGE_ROOT}/tts/{filename}"
+        return self._upload_bytes_to_bucket(
+            bucket_name=self.microlearning_bucket_name,
+            path=path,
+            file_data=audio_data,
+            content_type="audio/wav",
+        )
 
     def upload_microlearning_binary(
         self,
@@ -600,34 +699,35 @@ class SupabaseClient:
         """Upload an arbitrary microlearning companion file such as captions."""
         sanitized_folder = self._normalize_microlearning_folder(folder)
         path = f"{sanitized_folder}/{trainer_id}/{module_id}/{filename}"
-        local_url = self._to_public_media_url(
-            self._write_local_media_copy(
-                relative_path=path,
-                file_data=file_data,
-            )
-        )
 
-        if not self.is_available:
-            logger.warning(
-                "Supabase not available. Using local fallback for microlearning companion file upload."
-            )
-            return local_url
-
-        try:
-            self.client.storage.from_(self.microlearning_bucket_name).upload(
+        if self.is_available:
+            public_url = self._upload_bytes_to_bucket(
+                bucket_name=self.microlearning_bucket_name,
                 path=path,
-                file=file_data,
-                file_options={
-                    "content-type": content_type or "application/octet-stream",
-                    "upsert": "true",
-                },
+                file_data=file_data,
+                content_type=content_type or "application/octet-stream",
+                upsert=True,
             )
-            public_url = self.client.storage.from_(self.microlearning_bucket_name).get_public_url(path)
-            logger.info(f"Microlearning companion file uploaded: {path}")
-            return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload microlearning companion file: {e}")
-            return local_url
+            if public_url:
+                return public_url
+
+        if self._allow_local_media_fallback():
+            logger.warning(
+                "Using local fallback for microlearning companion file upload: %s",
+                path,
+            )
+            return self._to_public_media_url(
+                self._write_local_media_copy(
+                    relative_path=path,
+                    file_data=file_data,
+                )
+            )
+
+        logger.error(
+            "Microlearning companion file upload failed and local fallback is disabled: %s",
+            path,
+        )
+        return None
 
     def upload_binary(
         self,
@@ -647,23 +747,13 @@ class SupabaseClient:
             logger.warning("Supabase upload path is required for binary upload.")
             return None
 
-        try:
-            self.client.storage.from_(self.bucket_name).upload(
-                path=normalized_path,
-                file=file_data,
-                file_options={
-                    "content-type": content_type or "application/octet-stream",
-                    "upsert": "true" if upsert else "false",
-                },
-            )
-            public_url = self.client.storage.from_(self.bucket_name).get_public_url(
-                normalized_path
-            )
-            logger.info(f"Binary file uploaded: {normalized_path}")
-            return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload binary file: {e}")
-            return None
+        return self._upload_bytes_to_bucket(
+            bucket_name=self.bucket_name,
+            path=normalized_path,
+            file_data=file_data,
+            content_type=content_type or "application/octet-stream",
+            upsert=upsert,
+        )
 
     def delete_storage_object(
         self,

@@ -18,6 +18,7 @@ from ..models import User, UserRole
 from ..services.supabase_auth_service import (
     SupabaseAuthenticationError,
     SupabaseAuthConfigurationError,
+    SupabaseAuthInputError,
     SupabaseAuthServiceError,
     SupabaseUserSyncError,
     authenticate_supabase_credentials,
@@ -51,6 +52,16 @@ def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
         return None
     normalized = value.strip()
     return normalized or None
+
+
+def _validate_password_or_raise(password: Optional[str], *, field_name: str = "Password") -> str:
+    try:
+        return auth_utils.validate_password_length(password, field_name=field_name)
+    except auth_utils.PasswordValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 def _apply_self_profile_updates(current_user: User, user_update: UserUpdate, db: Session) -> None:
@@ -159,6 +170,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Password is required for admin/trainer accounts"
         )
+    effective_password = _validate_password_or_raise(effective_password)
 
     # Create new user
     new_user = User(
@@ -194,6 +206,12 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
     try:
         authenticate_supabase_credentials(db, normalized_email, credentials.password)
+        supabase_session = issue_supabase_session(normalized_email, credentials.password)
+    except SupabaseAuthInputError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
     except SupabaseAuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -224,7 +242,7 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive"
         )
     
-    # Create tokens
+    # Create tokens only after both local auth and Supabase session issuance succeed.
     access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
     refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
     
@@ -232,12 +250,6 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     user.last_login = __import__('datetime').datetime.utcnow()
     db.commit()
 
-    supabase_session = {}
-    try:
-        supabase_session = issue_supabase_session(normalized_email, credentials.password)
-    except SupabaseAuthServiceError as exc:
-        logger.warning("Unable to issue Supabase session for %s: %s", normalized_email, exc)
-    
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -377,23 +389,25 @@ async def change_password(
 ):
     """Change user password"""
     current_user = await auth_utils.get_current_user(authorization, db)
+    old_password = _validate_password_or_raise(password_change.old_password, field_name="Old password")
+    new_password = _validate_password_or_raise(password_change.new_password, field_name="New password")
 
     # Verify old password
-    if not auth_utils.verify_password(password_change.old_password, current_user.password_hash):
+    if not auth_utils.verify_password(old_password, current_user.password_hash):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Old password is incorrect"
         )
 
     # Prevent reusing the same password
-    if password_change.old_password == password_change.new_password:
+    if old_password == new_password:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="New password must be different from the old password"
         )
     
     # Update password
-    current_user.password_hash = auth_utils.hash_password(password_change.new_password)
+    current_user.password_hash = auth_utils.hash_password(new_password)
     db.flush()
     try:
         _sync_user_to_supabase_or_raise(db, current_user)

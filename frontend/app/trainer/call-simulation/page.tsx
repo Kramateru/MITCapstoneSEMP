@@ -1583,14 +1583,6 @@ export default function TrainerSimFloorPage() {
       const scenarioId = payload?.scenario_id;
       if (scenarioId) {
         try {
-          const syncResponse = await authedFetch('/api/call-simulation/scenarios/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ scenarioId, syncFromDatabase: true, batchId: selectedBatch }),
-          });
-          if (!syncResponse.ok) {
-            throw new Error('Supabase scenario sync failed');
-          }
           await syncScenarioRecordToSupabase(String(scenarioId));
         } catch (syncError) {
           console.warn('Call simulation bulk-upload Supabase sync failed:', syncError);
@@ -1814,6 +1806,8 @@ export default function TrainerSimFloorPage() {
       }));
       if (result.fallbackMode === 'browser' || !result.audioUrl) {
         toast.info(result.warning || 'AI voice is using browser fallback mode.');
+      } else if (result.storageMode === 'local') {
+        toast.success('Member speech generated and saved to the local media folder.');
       } else if (result.warning) {
         toast.success('Member speech generated and saved for trainee playback.');
         toast.info(result.warning);
@@ -1844,6 +1838,7 @@ export default function TrainerSimFloorPage() {
     let successCount = 0;
     let failedCount = 0;
     let browserFallbackCount = 0;
+    let localStorageCount = 0;
     let firstFailureMessage: string | null = null;
 
     try {
@@ -1863,6 +1858,8 @@ export default function TrainerSimFloorPage() {
           }));
           if (result.fallbackMode === 'browser' || !result.audioUrl) {
             browserFallbackCount += 1;
+          } else if (result.storageMode === 'local') {
+            localStorageCount += 1;
           }
           successCount += 1;
         } catch (error) {
@@ -1884,6 +1881,10 @@ export default function TrainerSimFloorPage() {
               ? 'AI voice is using browser fallback mode.'
               : `${browserFallbackCount} Member row${browserFallbackCount === 1 ? '' : 's'} will use browser fallback mode during live playback.`,
           );
+        } else if (localStorageCount === successCount) {
+          toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved it to the local media folder.`);
+        } else if (localStorageCount > 0) {
+          toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved ${localStorageCount} locally.`);
         } else {
           toast.success(`Generated Gemini speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
         }
