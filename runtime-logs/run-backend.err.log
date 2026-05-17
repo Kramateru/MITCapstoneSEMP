@@ -19,3 +19,6 @@ INFO:backend.main:Admin user already exists
 INFO:backend.main:Synchronized 3 users to Supabase Auth (created=0, updated=3, skipped=0, mismatched_ids=0)
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:59814 - "WebSocket /api/trainer/live-updates?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMjMyZmM4MTktZTJhYS00NDNmLWIyOWYtNTQ1ZDAxNjM0YTI2IiwiZW1haWwiOiJ0cmFpbmVyQHN0cGV0ZXJ2ZWxsZS5lZHUucGgiLCJyb2xlIjoidHJhaW5lciIsImV4cCI6MTc3ODk0Nzc0MSwiaWF0IjoxNzc4OTQ1OTQxLCJ0eXBlIjoiYWNjZXNzIn0.gwNZ4Kn8zOUxTIseVa7bu0IntaoOTvDtvcR2-Dw1sbE" [accepted]
+INFO:     connection open
+INFO:     connection closed
