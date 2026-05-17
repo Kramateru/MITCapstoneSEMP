@@ -54,6 +54,10 @@ from ..services.microlearning import (
     sync_flashcard_assignment_runtime,
     update_flashcard_assignment_runtime_progress,
 )
+from ..services.notifications import (
+    notify_microlearning_completion,
+    notify_microlearning_progress_update,
+)
 from ..services.speech_assessment import (
     assess_audio_submission,
     build_gold_standard_script,
@@ -1392,6 +1396,7 @@ async def start_microlearning_assignment(
     )
 
     ensure_module_exercises(assignment.module)
+    had_started_assignment = assignment.started_at is not None
     start_time = datetime.utcnow()
     if assignment.started_at is None:
         assignment.started_at = start_time
@@ -1401,6 +1406,12 @@ async def start_microlearning_assignment(
     )
 
     refresh_assignment_progress(assignment)
+    if not had_started_assignment:
+        notify_microlearning_progress_update(
+            db,
+            trainee=current_user,
+            assignment=assignment,
+        )
     db.commit()
     db.refresh(assignment)
 
@@ -1468,6 +1479,7 @@ async def submit_microlearning_exercise(
 
     ensure_module_exercises(assignment.module)
     sync_flashcard_assignment_runtime(db, assignment)
+    was_completed = assignment.status in {"completed", "certified"}
     exercises = (assignment.module.exercises or []) if assignment.module else []
     exercise = next((item for item in exercises if item.get("id") == exercise_id), None)
     if not exercise:
@@ -1574,6 +1586,15 @@ async def submit_microlearning_exercise(
         )
         refresh_assignment_progress(assignment)
     result_summary = ensure_assignment_result_summary(assignment)
+    final_assignment_summary = serialize_assignment_summary(assignment)
+    if not was_completed and assignment.status in {"completed", "certified"}:
+        notify_microlearning_completion(
+            db,
+            trainee=current_user,
+            assignment=assignment,
+            score=float(final_assignment_summary.get("average_score") or 0),
+            is_passed=bool(final_assignment_summary.get("is_passed")),
+        )
     db.commit()
     db.refresh(assignment)
 

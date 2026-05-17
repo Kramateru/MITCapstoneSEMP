@@ -9,6 +9,25 @@ import json
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+SUPABASE_URL_ENV_KEYS = (
+    "SUPABASE_URL",
+    "VITE_SUPABASE_URL",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "REACT_APP_SUPABASE_URL",
+)
+SUPABASE_PUBLISHABLE_KEY_ENV_KEYS = (
+    "VITE_SUPABASE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "SUPABASE_ANON_KEY",
+    "REACT_APP_ANON_KEY",
+)
+SUPABASE_SERVICE_KEY_ENV_KEYS = (
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_SERVICE_KEY",
+    "SUPABASE_SERVICE_ROLE",
+)
+
 _PLACEHOLDER_VALUES = {
     "",
     "undefined",
@@ -40,6 +59,28 @@ def normalize_env_value(value: Optional[str]) -> str:
         return ""
 
     return trimmed
+
+
+def resolve_first_configured_value(values: list[Optional[str]] | tuple[Optional[str], ...]) -> str:
+    for value in values:
+        normalized = normalize_env_value(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def resolve_supabase_url(value_provider) -> str:
+    return resolve_first_configured_value([value_provider(key) for key in SUPABASE_URL_ENV_KEYS])
+
+
+def resolve_supabase_publishable_key(value_provider) -> str:
+    return resolve_first_configured_value(
+        [value_provider(key) for key in SUPABASE_PUBLISHABLE_KEY_ENV_KEYS]
+    )
+
+
+def resolve_supabase_service_key(value_provider) -> str:
+    return resolve_first_configured_value([value_provider(key) for key in SUPABASE_SERVICE_KEY_ENV_KEYS])
 
 
 def is_placeholder_value(value: Optional[str]) -> bool:

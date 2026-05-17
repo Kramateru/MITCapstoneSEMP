@@ -20,10 +20,6 @@ export function getRoleHomePath(role?: UserRole | null) {
 }
 
 export function getPostLoginPath(user?: AuthenticatedUserLike | null) {
-  if (user?.must_change_password) {
-    return '/trainee/settings'
-  }
-
   return getRoleHomePath(user?.user_role ?? 'trainee')
 }
 

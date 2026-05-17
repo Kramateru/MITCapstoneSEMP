@@ -9,7 +9,7 @@ import { fetchBackendPath } from '@/app/lib/backend-proxy'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const DEFAULT_MICROLEARNING_BUCKET = 'audio-modules'
+const DEFAULT_MICROLEARNING_BUCKET = 'microlearning-videos'
 const SIGNED_URL_TTL_SECONDS = 60 * 60
 const SUPABASE_PUBLIC_OBJECT_MARKER = '/storage/v1/object/public/'
 

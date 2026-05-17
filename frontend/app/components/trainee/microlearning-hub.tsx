@@ -3296,7 +3296,6 @@ export default function MicrolearningHub() {
       return null;
     }
 
-    const breakdown = assignmentResultSummary.breakdown || [];
     const isPassed =
       String(assignmentResultSummary.status || '').toLowerCase() === 'passed'
       || Boolean(activeAssignment.is_passed);
@@ -3340,7 +3339,7 @@ export default function MicrolearningHub() {
             <div>
               <CardTitle>Module Result Summary</CardTitle>
               <CardDescription>
-                Review your final score, the saved answer breakdown, and the end-of-module observation.
+                Review your final score, completion status, feedback, and the recommended next steps.
               </CardDescription>
             </div>
             <Badge
@@ -3418,84 +3417,6 @@ export default function MicrolearningHub() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">Question Breakdown</p>
-                <p className="text-sm text-slate-500">
-                  Each saved answer includes your response, the correct answer, and the question result.
-                </p>
-              </div>
-              <Badge variant="outline">{breakdown.length} question{breakdown.length === 1 ? '' : 's'}</Badge>
-            </div>
-
-            {breakdown.length ? breakdown.map((item) => {
-              const perQuestionScore =
-                formatPoints(item.points_earned, item.points_possible)
-                || `${Math.round(Number(item.score || 0))}%`;
-
-              return (
-                <div key={item.question_id || `${item.question_number}-${item.title}`} className="rounded-xl border bg-white p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">
-                        Question {item.question_number}: {item.title || 'Untitled Question'}
-                      </p>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">{item.prompt}</p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge className={getQuestionResultBadgeClass(item.question_result)}>
-                        {formatLabel(item.question_result || 'needs_review')}
-                      </Badge>
-                      <Badge variant="outline">{perQuestionScore}</Badge>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-2">
-                    <div className="rounded-lg border bg-slate-50 p-3">
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Your Answer</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-700">
-                        {item.trainee_answer?.trim() || 'No answer submitted.'}
-                      </p>
-                    </div>
-                    <div className="rounded-lg border bg-slate-50 p-3">
-                      <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Correct Answer</p>
-                      <p className="mt-2 text-sm leading-6 text-slate-700">
-                        {item.correct_answer?.trim() || 'No correct answer was provided.'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {item.feedback ? (
-                    <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                      {item.feedback}
-                    </div>
-                  ) : null}
-
-                  {(item.matched_keywords?.length || item.missing_keywords?.length) ? (
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <div className="rounded-lg border bg-emerald-50 p-3">
-                        <p className="text-xs uppercase tracking-[0.16em] text-emerald-700">Matched Keywords</p>
-                        <p className="mt-2 text-sm text-emerald-900">
-                          {item.matched_keywords?.length ? item.matched_keywords.join(', ') : 'None recorded.'}
-                        </p>
-                      </div>
-                      <div className="rounded-lg border bg-amber-50 p-3">
-                        <p className="text-xs uppercase tracking-[0.16em] text-amber-700">Missing Keywords</p>
-                        <p className="mt-2 text-sm text-amber-900">
-                          {item.missing_keywords?.length ? item.missing_keywords.join(', ') : 'None recorded.'}
-                        </p>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            }) : (
-              <div className="rounded-lg border border-dashed p-6 text-sm text-slate-500">
-                The question breakdown will appear here after the module is fully submitted.
-              </div>
-            )}
-          </div>
         </CardContent>
       </Card>
     );

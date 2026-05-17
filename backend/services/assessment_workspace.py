@@ -23,6 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from backend.models import User, UserRole
+from backend.services.notifications import notify_assessment_completion
 
 logger = logging.getLogger(__name__)
 
@@ -3740,6 +3741,13 @@ def submit_trainee_workspace_attempt(
     category_breakdown = analysis_summary["categoryBreakdown"]
     assignment_title = assignment.get("title") or assessments_by_id.get(assessment_id, {}).get("title") or category_title
     certificate_status = "issued" if passed else "not_issued"
+    batch_row = next(
+        (row for row in batch_rows if str(row.get("id")) == str(batch_id))
+        if batch_id
+        else [],
+        None,
+    )
+    batch_name = _format_batch_label(batch_row)
 
     certificate_row = None
     try:
@@ -3892,6 +3900,18 @@ def submit_trainee_workspace_attempt(
                         "assignment_title": assignment_title,
                     },
                 )
+        notify_assessment_completion(
+            db,
+            trainee=current_user,
+            assignment_title=assignment_title,
+            category_title=category_title,
+            batch_name=batch_name,
+            score=score,
+            passing_score=passing_score,
+            passed=passed,
+            attempt_no=attempt_no,
+            completed_at=now_iso,
+        )
         db.commit()
     except HTTPException:
         db.rollback()

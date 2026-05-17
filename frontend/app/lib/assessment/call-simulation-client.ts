@@ -39,14 +39,16 @@ function isLikelySupabasePublishableKey(value?: string) {
 
 function getSupabaseUrl() {
   return (
-    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_URL)
+    normalizeEnvValue(process.env.VITE_SUPABASE_URL)
+    || normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_URL)
     || normalizeEnvValue(process.env.REACT_APP_SUPABASE_URL)
   )
 }
 
 function getSupabaseAnonKey() {
   return (
-    normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
+    normalizeEnvValue(process.env.VITE_SUPABASE_PUBLISHABLE_KEY)
+    || normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
     || normalizeEnvValue(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
     || normalizeEnvValue(process.env.REACT_APP_ANON_KEY)
   )

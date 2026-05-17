@@ -421,8 +421,13 @@ with
 insert into
     storage.buckets (id, name, public)
 values (
-        'call-simulation-audio',
-        'call-simulation-audio',
+        'call-recordings',
+        'call-recordings',
+        true
+    ),
+    (
+        'call-ringers',
+        'call-ringers',
         true
     ) on conflict (id) do nothing;
 
@@ -432,7 +437,7 @@ create policy "audio_read_own_or_trainer"
 on storage.objects
 for select
 using (
-  bucket_id = 'call-simulation-audio'
+  bucket_id = 'call-recordings'
   and (
     public.is_trainer_or_admin()
     or split_part(name, '/', 2) = auth.uid()::text
@@ -445,7 +450,7 @@ create policy "audio_insert_own_or_trainer"
 on storage.objects
 for insert
 with check (
-  bucket_id = 'call-simulation-audio'
+  bucket_id = 'call-recordings'
   and (
     public.is_trainer_or_admin()
     or split_part(name, '/', 2) = auth.uid()::text
@@ -458,14 +463,14 @@ create policy "audio_update_own_or_trainer"
 on storage.objects
 for update
 using (
-  bucket_id = 'call-simulation-audio'
+  bucket_id = 'call-recordings'
   and (
     public.is_trainer_or_admin()
     or split_part(name, '/', 2) = auth.uid()::text
   )
 )
 with check (
-  bucket_id = 'call-simulation-audio'
+  bucket_id = 'call-recordings'
   and (
     public.is_trainer_or_admin()
     or split_part(name, '/', 2) = auth.uid()::text
@@ -476,7 +481,7 @@ drop policy if exists "call_simulation_assets_read_authenticated" on storage.obj
 
 create policy "call_simulation_assets_read_authenticated" on storage.objects for
 select using (
-        bucket_id = 'call-simulation-audio'
+        bucket_id = 'call-ringers'
         and split_part (name, '/', 1) = 'assets'
         and auth.role () = 'authenticated'
     );
@@ -487,7 +492,7 @@ create policy "call_simulation_assets_manage_trainers" on storage.objects for
 insert
 with
     check (
-        bucket_id = 'call-simulation-audio'
+        bucket_id = 'call-ringers'
         and split_part (name, '/', 1) = 'assets'
         and public.is_trainer_or_admin ()
     );
@@ -496,13 +501,13 @@ drop policy if exists "call_simulation_assets_update_trainers" on storage.object
 
 create policy "call_simulation_assets_update_trainers" on storage.objects for
 update using (
-    bucket_id = 'call-simulation-audio'
+    bucket_id = 'call-ringers'
     and split_part (name, '/', 1) = 'assets'
     and public.is_trainer_or_admin ()
 )
 with
     check (
-        bucket_id = 'call-simulation-audio'
+        bucket_id = 'call-ringers'
         and split_part (name, '/', 1) = 'assets'
         and public.is_trainer_or_admin ()
     );

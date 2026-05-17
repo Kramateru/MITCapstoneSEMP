@@ -20,6 +20,12 @@ if not defined USE_LOCAL_SQLITE set "USE_LOCAL_SQLITE=0"
 if not defined RESTART_IF_RUNNING set "RESTART_IF_RUNNING=1"
 if not defined STRICT_SUPABASE_PROJECT_CHECK set "STRICT_SUPABASE_PROJECT_CHECK=0"
 
+if not defined SUPABASE_URL if defined VITE_SUPABASE_URL set "SUPABASE_URL=%VITE_SUPABASE_URL%"
+if not defined SUPABASE_URL if defined NEXT_PUBLIC_SUPABASE_URL set "SUPABASE_URL=%NEXT_PUBLIC_SUPABASE_URL%"
+if not defined SUPABASE_URL if defined REACT_APP_SUPABASE_URL set "SUPABASE_URL=%REACT_APP_SUPABASE_URL%"
+if not defined SUPABASE_SERVICE_ROLE_KEY if defined SUPABASE_SERVICE_KEY set "SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_KEY%"
+if not defined SUPABASE_SERVICE_KEY if defined SUPABASE_SERVICE_ROLE_KEY set "SUPABASE_SERVICE_KEY=%SUPABASE_SERVICE_ROLE_KEY%"
+
 if /I not "%USE_LOCAL_SQLITE%"=="0" (
   echo This launcher is locked to Supabase/Postgres mode.
   echo Set USE_LOCAL_SQLITE=0 and make sure the Supabase environment variables are available.
@@ -67,8 +73,8 @@ exit /b %errorlevel%
 :check_supabase_project_alignment
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
-  "$url = ($env:SUPABASE_URL, $env:NEXT_PUBLIC_SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
-  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$url = ($env:SUPABASE_URL, $env:VITE_SUPABASE_URL, $env:NEXT_PUBLIC_SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:VITE_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
   "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^

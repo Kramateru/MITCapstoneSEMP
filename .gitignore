@@ -1,0 +1,12 @@
+# Root environment files should stay local only.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Common local tooling artifacts.
+venv/
+.venv/
+__pycache__/
+.DS_Store
+Thumbs.db

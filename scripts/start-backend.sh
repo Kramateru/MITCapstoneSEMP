@@ -16,19 +16,33 @@ fi
 
 cd "$APP_ROOT"
 
-# Use the PORT provided by Render, or default to 8000
+# Use the PORT provided by Render, or default to 8000.
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
+export BACKEND_URL="${BACKEND_URL:-http://$HOST:$PORT}"
+export FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3000}"
 
+# Mirror legacy/public aliases into the backend-friendly names when needed.
+if [ -z "${SUPABASE_URL:-}" ]; then
+    export SUPABASE_URL="${VITE_SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL:-${REACT_APP_SUPABASE_URL:-}}}"
+fi
 
-# Inside ./scripts/start-backend.sh
-python -m uvicorn main:app --host 0.0.0.0 --port 10000
+if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && [ -n "${SUPABASE_SERVICE_KEY:-}" ]; then
+    export SUPABASE_SERVICE_ROLE_KEY="$SUPABASE_SERVICE_KEY"
+fi
+
+if [ -z "${SUPABASE_SERVICE_KEY:-}" ] && [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+    export SUPABASE_SERVICE_KEY="$SUPABASE_SERVICE_ROLE_KEY"
+fi
 
 echo "Starting backend in Supabase/Postgres mode on $HOST:$PORT ..."
+if [ -n "${SUPABASE_SERVICE_ROLE_KEY:-${SUPABASE_SERVICE_KEY:-}}" ]; then
+    echo "Supabase admin storage credentials detected for backend startup."
+else
+    echo "WARNING: Supabase admin storage credentials are not set at process launch."
+fi
 
-
-
-exec uvicorn backend.main:app \
+exec python -m uvicorn backend.main:app \
   --host "$HOST" \
   --port "$PORT" \
   --workers 1 \

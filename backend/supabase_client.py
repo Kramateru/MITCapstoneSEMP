@@ -17,6 +17,8 @@ from .config_validation import (
     is_usable_supabase_service_key,
     is_usable_supabase_url,
     normalize_env_value,
+    resolve_supabase_service_key,
+    resolve_supabase_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,29 +47,29 @@ class SupabaseClient:
 
     def __init__(self):
         self.client: Optional[Client] = None
-        self.url = normalize_env_value(
-            os.getenv("SUPABASE_URL")
-            or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-            or os.getenv("REACT_APP_SUPABASE_URL")
+        self.url = resolve_supabase_url(os.getenv)
+        self.key = resolve_supabase_service_key(os.getenv)
+        self.bucket_name = normalize_env_value(os.getenv("STORAGE_BUCKET_NAME")) or "attachments"
+        self.profile_bucket_name = (
+            normalize_env_value(os.getenv("PROFILE_STORAGE_BUCKET_NAME")) or "profile-pictures"
         )
-        self.key = normalize_env_value(
-            os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-            or os.getenv("SUPABASE_SERVICE_KEY")
-            or os.getenv("SUPABASE_SERVICE_ROLE")
+        self.call_simulation_bucket_name = (
+            normalize_env_value(os.getenv("CALL_SIMULATION_STORAGE_BUCKET_NAME"))
+            or "call-recordings"
         )
-        self.bucket_name = os.getenv("STORAGE_BUCKET_NAME", "audio-records")
-        self.call_simulation_bucket_name = os.getenv(
-            "CALL_SIMULATION_STORAGE_BUCKET_NAME", "call-simulation-audio"
-        )
-        # New bucket for microlearning audio content
-        self.microlearning_bucket_name = os.getenv(
-            "MICROLEARNING_STORAGE_BUCKET_NAME", "audio-modules"
+        self.call_simulation_asset_bucket_name = normalize_env_value(
+            os.getenv("CALL_SIMULATION_ASSET_BUCKET_NAME")
+        ) or "call-ringers"
+        # Shared bucket for trainer-uploaded lesson video and related media.
+        self.microlearning_bucket_name = (
+            normalize_env_value(os.getenv("MICROLEARNING_STORAGE_BUCKET_NAME"))
+            or "microlearning-videos"
         )
         self.is_available = False
         self.config_status = "not_configured"
         self.status_detail = (
             "Supabase service credentials are not configured. "
-            "Set SUPABASE_URL and SUPABASE_SERVICE_KEY to enable storage features."
+            "Set SUPABASE_URL and either SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY to enable storage features."
         )
         self.key_kind = classify_supabase_api_key(self.key)
 
@@ -101,13 +103,15 @@ class SupabaseClient:
             elif not self.key:
                 self.config_status = "invalid"
                 self.status_detail = (
-                    "SUPABASE_SERVICE_KEY is missing. Use a service-role JWT or an sb_secret key."
+                    "Supabase service-role credentials are missing. "
+                    "Set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY to a service-role JWT or sb_secret key."
                 )
                 logger.warning(self.status_detail)
             else:
                 self.config_status = "invalid"
                 self.status_detail = (
-                    "SUPABASE_SERVICE_KEY is malformed. Use a full service-role JWT or an sb_secret key."
+                    "Supabase service-role credentials are malformed. "
+                    "Use a full service-role JWT or an sb_secret key in SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY."
                 )
                 logger.warning(self.status_detail)
 
@@ -135,7 +139,17 @@ class SupabaseClient:
                 "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
                 "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
             },
+            self.profile_bucket_name: {
+                "public": True,
+                "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
+                "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
+            },
             self.call_simulation_bucket_name: {
+                "public": True,
+                "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
+                "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
+            },
+            self.call_simulation_asset_bucket_name: {
                 "public": True,
                 "file_size_limit": MICROLEARNING_BUCKET_FILE_SIZE_LIMIT,
                 "allowed_mime_types": MICROLEARNING_ALLOWED_MIME_TYPES,
@@ -387,12 +401,12 @@ class SupabaseClient:
 
         try:
             path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
-            self.client.storage.from_(self.call_simulation_bucket_name).upload(
+            self.client.storage.from_(self.call_simulation_asset_bucket_name).upload(
                 path=path,
                 file=file_data,
                 file_options={"content-type": content_type or "audio/mpeg"},
             )
-            public_url = self.client.storage.from_(self.call_simulation_bucket_name).get_public_url(path)
+            public_url = self.client.storage.from_(self.call_simulation_asset_bucket_name).get_public_url(path)
             logger.info(f"Call Simulation asset uploaded: {path}")
             return public_url
         except Exception as e:
@@ -470,7 +484,7 @@ class SupabaseClient:
 
         try:
             path = f"profiles/{user_id}/{filename}"
-            self.client.storage.from_(self.bucket_name).upload(
+            self.client.storage.from_(self.profile_bucket_name).upload(
                 path=path,
                 file=file_data,
                 file_options={
@@ -478,7 +492,7 @@ class SupabaseClient:
                     "upsert": "true",
                 },
             )
-            public_url = self.client.storage.from_(self.bucket_name).get_public_url(path)
+            public_url = self.client.storage.from_(self.profile_bucket_name).get_public_url(path)
             logger.info(f"Profile image uploaded: {path}")
             return public_url
         except Exception as e:
@@ -710,7 +724,9 @@ class SupabaseClient:
             parsed = urlparse(public_url)
             bucket_names = [
                 self.bucket_name,
+                self.profile_bucket_name,
                 self.call_simulation_bucket_name,
+                self.call_simulation_asset_bucket_name,
                 self.microlearning_bucket_name,
             ]
 

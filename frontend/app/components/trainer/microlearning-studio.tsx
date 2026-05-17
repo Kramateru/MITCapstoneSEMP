@@ -129,6 +129,23 @@ function hasTrainerPlayableVideoReference(form: ModuleFormState) {
   );
 }
 
+const MAX_TRAINER_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+function getTrainerMediaUploadSizeError(file: File, moduleType: ModuleFormState['module_type']) {
+  if (file.size <= MAX_TRAINER_MEDIA_UPLOAD_BYTES) {
+    return null;
+  }
+
+  const assetLabel =
+    moduleType === 'video'
+      ? 'Video'
+      : moduleType === 'infographic'
+        ? 'Image'
+        : 'Audio';
+
+  return `${assetLabel} uploads must be 50 MB or smaller.`;
+}
+
 function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['module_type']) {
   const normalizedName = file.name.trim().toLowerCase();
   const normalizedMimeType = file.type.trim().toLowerCase();
@@ -328,6 +345,7 @@ export default function TrainerMicrolearningStudio() {
   const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [audioUploading, setAudioUploading] = useState(false);
   const [audioProcessing, setAudioProcessing] = useState(false);
   const [showModuleDialog, setShowModuleDialog] = useState(false);
@@ -360,6 +378,57 @@ export default function TrainerMicrolearningStudio() {
         throw new Error(getApiErrorMessage(payload, 'Request failed.'));
       }
       return response;
+    },
+    [token],
+  );
+
+  const uploadWithProgress = useCallback(
+    async <TPayload,>(url: string, formData: FormData): Promise<TPayload> => {
+      if (!token) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
+      return new Promise<TPayload>((resolve, reject) => {
+        const request = new XMLHttpRequest();
+        request.open('POST', url);
+        request.responseType = 'json';
+        request.setRequestHeader('Authorization', `Bearer ${token}`);
+
+        request.upload.onprogress = (event) => {
+          if (!event.lengthComputable) {
+            return;
+          }
+
+          setUploadProgress(Math.max(1, Math.min(100, Math.round((event.loaded / event.total) * 100))));
+        };
+
+        request.onload = () => {
+          const payload =
+            typeof request.response === 'object' && request.response !== null
+              ? request.response
+              : (() => {
+                  try {
+                    return request.responseText ? JSON.parse(request.responseText) : null;
+                  } catch {
+                    return null;
+                  }
+                })();
+
+          if (request.status >= 200 && request.status < 300) {
+            setUploadProgress(100);
+            resolve(payload as TPayload);
+            return;
+          }
+
+          reject(new Error(getApiErrorMessage(payload, 'Upload failed.')));
+        };
+
+        request.onerror = () => {
+          reject(new Error('Upload failed. Check your connection and try again.'));
+        };
+
+        request.send(formData);
+      });
     },
     [token],
   );
@@ -424,7 +493,13 @@ export default function TrainerMicrolearningStudio() {
       toast.error(validationError);
       return;
     }
+    const fileSizeError = getTrainerMediaUploadSizeError(file, moduleForm.module_type);
+    if (fileSizeError) {
+      toast.error(fileSizeError);
+      return;
+    }
     setUploading(true);
+    setUploadProgress(0);
     try {
       const formData = new FormData();
       formData.append('file', file);
@@ -432,29 +507,45 @@ export default function TrainerMicrolearningStudio() {
         formData.append('module_id', editingModule.id);
       }
       formData.append('module_type', moduleForm.module_type);
-      const response = await authedFetch('/api/trainer/microlearning-assets/upload', {
-        method: 'POST',
-        body: formData,
-      });
-      const payload = await response.json().catch(() => null);
-        setModuleForm((current) => ({
-          ...current,
-          content_url: payload?.asset_url || '',
-          asset_record_id: typeof payload?.asset_record_id === 'string' ? payload.asset_record_id : '',
-          asset_storage_path: typeof payload?.storage_path === 'string' ? payload.storage_path : '',
-          asset_bucket_name: typeof payload?.bucket_name === 'string' ? payload.bucket_name : '',
-          asset_content_type: typeof payload?.content_type === 'string' ? payload.content_type : (file.type || ''),
-          asset_signed_url_required: Boolean(payload?.storage_path || payload?.signed_url_required),
-        }));
-        toast.success(
-          moduleForm.module_type === 'video'
-            ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
-            : 'Asset uploaded successfully.',
-        );
-      } catch (error) {
+      const payload = await uploadWithProgress<{
+        asset_url?: string;
+        asset_record_id?: string;
+        storage_path?: string;
+        bucket_name?: string;
+        content_type?: string;
+        signed_url_required?: boolean;
+        file_name?: string;
+        file_size?: number;
+        byte_size?: number;
+        uploaded_at?: string;
+      }>('/api/trainer/microlearning-assets/upload', formData);
+      setModuleForm((current) => ({
+        ...current,
+        content_url: payload?.asset_url || '',
+        asset_record_id: typeof payload?.asset_record_id === 'string' ? payload.asset_record_id : '',
+        asset_storage_path: typeof payload?.storage_path === 'string' ? payload.storage_path : '',
+        asset_bucket_name: typeof payload?.bucket_name === 'string' ? payload.bucket_name : '',
+        asset_content_type: typeof payload?.content_type === 'string' ? payload.content_type : (file.type || ''),
+        asset_signed_url_required: Boolean(payload?.storage_path || payload?.signed_url_required),
+        asset_file_name: typeof payload?.file_name === 'string' ? payload.file_name : file.name,
+        asset_file_size:
+          typeof payload?.file_size === 'number'
+            ? payload.file_size
+            : typeof payload?.byte_size === 'number'
+              ? payload.byte_size
+              : file.size,
+        asset_uploaded_at: typeof payload?.uploaded_at === 'string' ? payload.uploaded_at : new Date().toISOString(),
+      }));
+      toast.success(
+        moduleForm.module_type === 'video'
+          ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
+          : 'Asset uploaded successfully.',
+      );
+    } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Asset upload failed.');
     } finally {
       setUploading(false);
+      setUploadProgress(null);
     }
   }
 
@@ -528,6 +619,11 @@ export default function TrainerMicrolearningStudio() {
       const validationError = getTrainerMediaUploadError(file, moduleForm.module_type);
       if (validationError) {
         toast.error(validationError);
+        return null;
+      }
+      const fileSizeError = getTrainerMediaUploadSizeError(file, moduleForm.module_type);
+      if (fileSizeError) {
+        toast.error(fileSizeError);
         return null;
       }
     }
@@ -1573,6 +1669,19 @@ export default function TrainerMicrolearningStudio() {
                       }
                       placeholder="https://youtube.com/... or a Supabase-hosted asset URL"
                     />
+                    {uploading && uploadProgress !== null ? (
+                      <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
+                        <div className="flex items-center justify-between gap-3 text-sm text-sky-900">
+                          <span>
+                            {moduleForm.module_type === 'video'
+                              ? 'Uploading trainer video to Supabase Storage...'
+                              : 'Uploading lesson media to Supabase Storage...'}
+                          </span>
+                          <span className="font-semibold">{uploadProgress}%</span>
+                        </div>
+                        <Progress value={uploadProgress} className="mt-3 h-2.5" />
+                      </div>
+                    ) : null}
                     {moduleForm.module_type === 'video' && trainerHasInvalidVideoReference ? (
                       <p className="mt-2 text-sm text-amber-700">
                         Invalid video reference. Paste a supported YouTube link or upload MP4, MOV, WEBM, OGG, or M4V.
@@ -1619,7 +1728,7 @@ export default function TrainerMicrolearningStudio() {
                           ? 'Upload a lesson audio file or process a direct audio link. The system will automatically:'
                           : 'Upload MP3, WAV, M4A, or OGG lesson audio. The system will automatically:'}
                         <ul className="mt-2 list-inside list-disc space-y-1">
-                          <li>Upload the file to the private Supabase `audio-modules` bucket</li>
+                          <li>Upload the file to the Supabase `microlearning-videos` bucket</li>
                           <li>Send the audio to Gemini for speech-to-text captions and a concise summary</li>
                           <li>Store the transcript, caption data, summary, and file metadata in `audio_content` plus the module record</li>
                         </ul>
@@ -1748,7 +1857,7 @@ export default function TrainerMicrolearningStudio() {
                           <div className="mt-2 space-y-1 text-sm text-slate-600">
                             <div>Audio Content ID: {moduleForm.audio_content_id || 'Pending'}</div>
                             <div>Storage Path: {moduleForm.audio_storage_path || 'Pending'}</div>
-                            <div>Bucket: {moduleForm.audio_bucket_name || 'audio-modules'}</div>
+                            <div>Bucket: {moduleForm.audio_bucket_name || 'microlearning-videos'}</div>
                             <div>Format: {moduleForm.audio_content_type || 'Pending'}</div>
                             <div>Language: {moduleForm.audio_language || 'en-US'}</div>
                             <div>Duration: {moduleForm.audio_duration_seconds ? `${moduleForm.audio_duration_seconds}s` : 'Pending'}</div>

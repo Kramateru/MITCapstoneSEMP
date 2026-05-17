@@ -109,9 +109,23 @@ except ImportError:
     from env_loader import load_backend_environment
 
 try:
-    from .config_validation import is_usable_azure_speech_key, normalize_env_value
+    from .config_validation import (
+        is_usable_azure_speech_key,
+        is_usable_supabase_service_key,
+        is_usable_supabase_url,
+        normalize_env_value,
+        resolve_supabase_service_key,
+        resolve_supabase_url,
+    )
 except ImportError:
-    from config_validation import is_usable_azure_speech_key, normalize_env_value
+    from config_validation import (
+        is_usable_azure_speech_key,
+        is_usable_supabase_service_key,
+        is_usable_supabase_url,
+        normalize_env_value,
+        resolve_supabase_service_key,
+        resolve_supabase_url,
+    )
 
 # Load environment variables using the shared backend resolution order.
 load_backend_environment()
@@ -133,16 +147,11 @@ def validate_environment():
 
     missing = []
     for var, description in required.items():
-        if not os.getenv(var):
+        if not normalize_env_value(os.getenv(var)):
             missing.append(f"{var}: {description}")
 
-    # SUPABASE_URL may be provided through frontend-compatible env names in local development.
-    supabase_url = (
-        os.getenv('SUPABASE_URL')
-        or os.getenv('NEXT_PUBLIC_SUPABASE_URL')
-        or os.getenv('REACT_APP_SUPABASE_URL')
-    )
-    if not supabase_url:
+    supabase_url = resolve_supabase_url(os.getenv)
+    if not is_usable_supabase_url(supabase_url):
         missing.append("SUPABASE_URL: Supabase project URL")
 
     if missing:
@@ -151,7 +160,7 @@ def validate_environment():
         raise RuntimeError(error_msg)
 
     # Validate SECRET_KEY strength
-    secret_key = os.getenv('SECRET_KEY')
+    secret_key = normalize_env_value(os.getenv('SECRET_KEY'))
     if secret_key == 'your-secret-key-change-in-production':
         raise RuntimeError("SECRET_KEY must be changed from default in production!")
     if len(secret_key) < 32:
@@ -160,32 +169,28 @@ def validate_environment():
     # Validate URLs
     from urllib.parse import urlparse
 
-    backend_url = os.getenv('BACKEND_URL')
+    backend_url = normalize_env_value(os.getenv('BACKEND_URL'))
     try:
         urlparse(backend_url)
     except Exception as e:
         raise RuntimeError(f"Invalid BACKEND_URL format: {e}")
 
-    supabase_url = (
-        os.getenv('SUPABASE_URL')
-        or os.getenv('NEXT_PUBLIC_SUPABASE_URL')
-        or os.getenv('REACT_APP_SUPABASE_URL')
-    )
     try:
         urlparse(supabase_url)
     except Exception as e:
         raise RuntimeError(f"Invalid SUPABASE_URL format: {e}")
 
-    if not any(
-        os.getenv(key)
-        for key in (
-            'SUPABASE_SERVICE_KEY',
-            'SUPABASE_SERVICE_ROLE_KEY',
-        )
-    ):
+    service_key = resolve_supabase_service_key(os.getenv)
+    if not service_key:
         logger.warning(
             'Supabase service role key is not configured. Supabase storage and upload features will be disabled until SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY is set.'
         )
+    elif not is_usable_supabase_service_key(service_key):
+        logger.warning(
+            'Supabase service role key is configured but invalid. Storage and upload features will stay disabled until SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY contains a valid service-role JWT or sb_secret key.'
+        )
+    else:
+        logger.info("Supabase admin storage configuration detected.")
 
     logger.info("Environment validation passed")
 
@@ -350,6 +355,7 @@ def ensure_supabase_realtime_publication() -> None:
         "certificate_record",
         "coaching_log",
         "call_simulation_assignment",
+        "notification_event",
     }
 
     try:

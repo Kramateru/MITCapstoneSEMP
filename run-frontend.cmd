@@ -26,9 +26,13 @@ if not defined RESTART_IF_RUNNING set "RESTART_IF_RUNNING=1"
 if not defined STRICT_SUPABASE_PROJECT_CHECK set "STRICT_SUPABASE_PROJECT_CHECK=0"
 
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%SUPABASE_URL%"
+if not defined NEXT_PUBLIC_SUPABASE_URL if defined VITE_SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%VITE_SUPABASE_URL%"
 if not defined NEXT_PUBLIC_SUPABASE_URL if defined REACT_APP_SUPABASE_URL set "NEXT_PUBLIC_SUPABASE_URL=%REACT_APP_SUPABASE_URL%"
+if not defined VITE_SUPABASE_URL if defined NEXT_PUBLIC_SUPABASE_URL set "VITE_SUPABASE_URL=%NEXT_PUBLIC_SUPABASE_URL%"
 if not defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY if defined SUPABASE_PUBLISHABLE_KEY set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%SUPABASE_PUBLISHABLE_KEY%"
+if not defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY if defined VITE_SUPABASE_PUBLISHABLE_KEY set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%VITE_SUPABASE_PUBLISHABLE_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY if defined NEXT_PUBLIC_SUPABASE_ANON_KEY set "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=%NEXT_PUBLIC_SUPABASE_ANON_KEY%"
+if not defined VITE_SUPABASE_PUBLISHABLE_KEY if defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY set "VITE_SUPABASE_PUBLISHABLE_KEY=%NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined SUPABASE_ANON_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%SUPABASE_ANON_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined REACT_APP_ANON_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%REACT_APP_ANON_KEY%"
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY if defined NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY set "NEXT_PUBLIC_SUPABASE_ANON_KEY=%NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY%"
@@ -37,13 +41,13 @@ if not defined NEXT_PUBLIC_BACKEND_WS_URL call :derive_ws_url "%NEXT_PUBLIC_BACK
 
 if not defined NEXT_PUBLIC_SUPABASE_URL (
   echo NEXT_PUBLIC_SUPABASE_URL is not configured.
-  echo Set NEXT_PUBLIC_SUPABASE_URL, SUPABASE_URL, or REACT_APP_SUPABASE_URL in your env files.
+  echo Set NEXT_PUBLIC_SUPABASE_URL, VITE_SUPABASE_URL, SUPABASE_URL, or REACT_APP_SUPABASE_URL in your env files.
   exit /b 1
 )
 
 if not defined NEXT_PUBLIC_SUPABASE_ANON_KEY (
   echo NEXT_PUBLIC_SUPABASE_ANON_KEY is not configured.
-  echo Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY, or REACT_APP_ANON_KEY in your env files.
+  echo Set NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, VITE_SUPABASE_PUBLISHABLE_KEY, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY, or REACT_APP_ANON_KEY in your env files.
   exit /b 1
 )
 
@@ -96,8 +100,8 @@ exit /b %errorlevel%
 :check_supabase_project_alignment
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$strict = '%STRICT_SUPABASE_PROJECT_CHECK%';" ^
-  "$url = ($env:NEXT_PUBLIC_SUPABASE_URL, $env:SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
-  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$url = ($env:NEXT_PUBLIC_SUPABASE_URL, $env:VITE_SUPABASE_URL, $env:SUPABASE_URL, $env:REACT_APP_SUPABASE_URL | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
+  "$anon = ($env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, $env:VITE_SUPABASE_PUBLISHABLE_KEY, $env:NEXT_PUBLIC_SUPABASE_ANON_KEY, $env:SUPABASE_ANON_KEY, $env:REACT_APP_ANON_KEY | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "$service = ($env:SUPABASE_SERVICE_ROLE_KEY, $env:SUPABASE_SERVICE_KEY, $env:SUPABASE_SERVICE_ROLE | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1);" ^
   "function Get-ProjectRefFromUrl([string]$value) { try { return ([uri]$value).Host.Split('.')[0] } catch { return '' } }" ^
   "function Get-ProjectRefFromJwt([string]$value) { try { $part = $value.Split('.')[1]; if (-not $part) { return '' }; $padding = '=' * ((4 - $part.Length %% 4) %% 4); $json = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(($part + $padding).Replace('-', '+').Replace('_', '/'))); return ((ConvertFrom-Json $json).ref) } catch { return '' } }" ^

@@ -21,6 +21,8 @@ from ..config_validation import (
     is_usable_supabase_publishable_key,
     is_usable_supabase_url,
     normalize_env_value,
+    resolve_supabase_publishable_key,
+    resolve_supabase_url,
     supabase_key_matches_url,
 )
 from ..models import User
@@ -43,17 +45,8 @@ class SupabaseUserSyncError(SupabaseAuthServiceError):
 
 
 def _get_supabase_auth_rest_config() -> tuple[str, str]:
-    supabase_url = normalize_env_value(
-        os.getenv("SUPABASE_URL")
-        or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-        or os.getenv("REACT_APP_SUPABASE_URL")
-    )
-    publishable_key = normalize_env_value(
-        os.getenv("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY")
-        or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-        or os.getenv("SUPABASE_ANON_KEY")
-        or os.getenv("REACT_APP_ANON_KEY")
-    )
+    supabase_url = resolve_supabase_url(os.getenv)
+    publishable_key = resolve_supabase_publishable_key(os.getenv)
 
     if not is_usable_supabase_url(supabase_url):
         raise SupabaseAuthConfigurationError(

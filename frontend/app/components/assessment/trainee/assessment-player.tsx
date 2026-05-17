@@ -31,7 +31,6 @@ import { Input } from '@/app/components/ui/input'
 import { Label } from '@/app/components/ui/label'
 import { Progress } from '@/app/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/app/components/ui/radio-group'
-import { ScrollArea } from '@/app/components/ui/scroll-area'
 import { normalizeAssessmentAnswer } from '@/app/lib/assessment/scoring'
 import type {
   SubmitAssessmentResponse,
@@ -39,6 +38,78 @@ import type {
 } from '@/app/lib/assessment/types'
 
 type QuestionAnswerMap = Record<string, string>
+type StoredAssessmentDraft = {
+  assignmentId: string
+  assessmentId: string
+  answers: QuestionAnswerMap
+  currentQuestionIndex: number
+  startedAtMs: number
+}
+
+const ASSESSMENT_DRAFT_STORAGE_PREFIX = 'spv-assessment-draft:'
+
+function getAssessmentDraftStorageKey(assignmentId: string) {
+  return `${ASSESSMENT_DRAFT_STORAGE_PREFIX}${assignmentId}`
+}
+
+function clearStoredAssessmentDraft(assignmentId?: string | null) {
+  if (typeof window === 'undefined' || !assignmentId) {
+    return
+  }
+
+  window.localStorage.removeItem(getAssessmentDraftStorageKey(assignmentId))
+}
+
+function readStoredAssessmentDraft(
+  assessment: TraineeAssessmentSession | null,
+  totalQuestions: number,
+) {
+  if (typeof window === 'undefined' || !assessment) {
+    return null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(getAssessmentDraftStorageKey(assessment.assignmentId))
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StoredAssessmentDraft>
+    if (
+      parsed.assignmentId !== assessment.assignmentId
+      || parsed.assessmentId !== assessment.assessmentId
+      || typeof parsed.startedAtMs !== 'number'
+      || !Number.isFinite(parsed.startedAtMs)
+    ) {
+      clearStoredAssessmentDraft(assessment.assignmentId)
+      return null
+    }
+
+    const answers = parsed.answers && typeof parsed.answers === 'object'
+      ? Object.fromEntries(
+          Object.entries(parsed.answers).map(([questionId, value]) => [questionId, String(value || '')]),
+        )
+      : {}
+    const currentQuestionIndex = Math.max(
+      0,
+      Math.min(
+        Number.isFinite(Number(parsed.currentQuestionIndex)) ? Number(parsed.currentQuestionIndex) : 0,
+        Math.max(totalQuestions - 1, 0),
+      ),
+    )
+
+    return {
+      assignmentId: assessment.assignmentId,
+      assessmentId: assessment.assessmentId,
+      answers,
+      currentQuestionIndex,
+      startedAtMs: parsed.startedAtMs,
+    } satisfies StoredAssessmentDraft
+  } catch {
+    clearStoredAssessmentDraft(assessment.assignmentId)
+    return null
+  }
+}
 
 function formatDate(value?: string | null) {
   if (!value) {
@@ -167,6 +238,7 @@ export function AssessmentPlayer({
   const progressValue = totalQuestions > 0 ? Number(((answeredCount / totalQuestions) * 100).toFixed(2)) : 0
   const currentQuestion = assessment?.questions[currentQuestionIndex] || null
   const timeLimitSeconds = assessment?.timeLimitMinutes ? assessment.timeLimitMinutes * 60 : null
+
   useEffect(() => {
     const nextSubmission = displayMode === 'review' && assessment?.latestAttempt
       ? {
@@ -174,16 +246,35 @@ export function AssessmentPlayer({
           certificate: assessment.certificate ?? null,
         }
       : null
+    const restoredDraft = !nextSubmission
+      ? readStoredAssessmentDraft(assessment, totalQuestions)
+      : null
 
-    setMode(nextSubmission ? 'submitted' : 'overview')
-    setCurrentQuestionIndex(0)
-    setAnswers({})
+    if (nextSubmission) {
+      clearStoredAssessmentDraft(assessment?.assignmentId)
+    }
+
+    setMode(nextSubmission ? 'submitted' : restoredDraft ? 'in_progress' : 'overview')
+    setCurrentQuestionIndex(restoredDraft?.currentQuestionIndex ?? 0)
+    setAnswers(restoredDraft?.answers ?? {})
     setSubmitting(false)
-    setStartedAtMs(null)
-    setRemainingSeconds(timeLimitSeconds)
+    setStartedAtMs(restoredDraft?.startedAtMs ?? null)
+    setRemainingSeconds(
+      restoredDraft?.startedAtMs && timeLimitSeconds
+        ? Math.max(timeLimitSeconds - Math.max(Math.floor((Date.now() - restoredDraft.startedAtMs) / 1000), 0), 0)
+        : timeLimitSeconds,
+    )
     setSubmission(nextSubmission)
     setConfirmSubmitOpen(false)
-  }, [assessment?.assignmentId, assessment?.certificate?.id, assessment?.latestAttempt?.id, displayMode, timeLimitSeconds])
+  }, [
+    assessment,
+    assessment?.assignmentId,
+    assessment?.certificate?.id,
+    assessment?.latestAttempt?.id,
+    displayMode,
+    timeLimitSeconds,
+    totalQuestions,
+  ])
 
   useEffect(() => {
     onModeChange?.(mode)
@@ -204,6 +295,38 @@ export function AssessmentPlayer({
       window.clearInterval(timerId)
     }
   }, [mode, startedAtMs, timeLimitSeconds])
+
+  useEffect(() => {
+    if (!assessment) {
+      return
+    }
+
+    if (mode === 'submitted') {
+      clearStoredAssessmentDraft(assessment.assignmentId)
+      return
+    }
+
+    if (mode !== 'in_progress' || !startedAtMs) {
+      return
+    }
+
+    const payload: StoredAssessmentDraft = {
+      assignmentId: assessment.assignmentId,
+      assessmentId: assessment.assessmentId,
+      answers,
+      currentQuestionIndex,
+      startedAtMs,
+    }
+
+    try {
+      window.localStorage.setItem(
+        getAssessmentDraftStorageKey(assessment.assignmentId),
+        JSON.stringify(payload),
+      )
+    } catch {
+      // Keep the active assessment usable even if local draft persistence is unavailable.
+    }
+  }, [answers, assessment, currentQuestionIndex, mode, startedAtMs])
 
   const handleStartAssessment = () => {
     if (!assessment) {
@@ -257,6 +380,7 @@ export function AssessmentPlayer({
 
       setSubmission(result)
       setMode('submitted')
+      clearStoredAssessmentDraft(assessment.assignmentId)
 
       if (result.attempt.status === 'pass') {
         void confetti({
@@ -303,6 +427,7 @@ export function AssessmentPlayer({
       return
     }
 
+    clearStoredAssessmentDraft(assessment.assignmentId)
     await onRetakeRequested(assessment.assignmentId)
   }
 
@@ -314,7 +439,6 @@ export function AssessmentPlayer({
   const latestAttempt = submission?.attempt || assessment?.latestAttempt || null
   const hasSavedReview = Boolean(latestAttempt?.questionResults?.length)
   const correctAnswers = latestAttempt?.correctAnswers ?? latestAttempt?.questionResults.filter((result) => result.isCorrect).length ?? 0
-  const incorrectAnswers = latestAttempt?.incorrectAnswers ?? latestAttempt?.questionResults.filter((result) => !result.isCorrect).length ?? 0
   const remainingAttempts = submission?.attempt.attemptsRemaining ?? assessment?.attemptsRemaining ?? null
   const passingScore = submission?.attempt.passingScore ?? assessment?.passingScore ?? 0
   const canStartAssessment = assessment?.canStart ?? (
@@ -572,75 +696,32 @@ export function AssessmentPlayer({
 
             <Card className="border-slate-200">
               <CardHeader>
-                <CardTitle>Saved Review</CardTitle>
+                <CardTitle>Next Steps</CardTitle>
                 <CardDescription>
-                  This review is based on the exact answers and choices saved for your attempt.
+                  Continue from this saved result based on your score and remaining attempts.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ScrollArea className="h-[420px] pr-4">
-                  <div className="space-y-4">
-                    {submission.attempt.questionResults.map((result, index) => (
-                      <div
-                        key={result.questionId}
-                        className={`rounded-2xl border p-4 ${
-                          result.isCorrect
-                            ? 'border-emerald-200 bg-emerald-50/60'
-                            : 'border-amber-200 bg-amber-50/60'
-                        }`}
-                      >
-                        <div className="flex items-start gap-3">
-                          {result.isCorrect ? (
-                            <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" />
-                          ) : (
-                            <XCircle className="mt-0.5 size-5 text-amber-600" />
-                          )}
-                          <div className="space-y-3">
-                            <div className="font-semibold text-slate-950">
-                              Q{index + 1}. {result.questionText}
-                            </div>
-                            <div className="text-sm text-slate-700">
-                              Your answer: <span className="font-semibold">{result.userAnswer || 'No answer submitted'}</span>
-                            </div>
-                            <div className="text-sm text-slate-700">
-                              Correct answer: <span className="font-semibold">{result.correctAnswer}</span>
-                            </div>
-                            {result.options?.length ? (
-                              <div className="space-y-2">
-                                {result.options.map((option, optionIndex) => {
-                                  const isCorrectAnswer =
-                                    normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.correctAnswer)
-                                  const isSelectedAnswer =
-                                    normalizeAssessmentAnswer(option) === normalizeAssessmentAnswer(result.userAnswer)
-
-                                  return (
-                                    <div
-                                      key={`${result.questionId}-${optionIndex}`}
-                                      className={`rounded-xl border px-3 py-2 text-sm ${
-                                        isCorrectAnswer
-                                          ? 'border-emerald-200 bg-emerald-50'
-                                          : isSelectedAnswer
-                                            ? 'border-amber-200 bg-amber-50'
-                                            : 'border-slate-200 bg-white'
-                                      }`}
-                                    >
-                                      {option}
-                                    </div>
-                                  )
-                                })}
-                              </div>
-                            ) : null}
-                            {result.explanation ? (
-                              <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
-                                {result.explanation}
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+                <div className="space-y-3 text-sm text-slate-700">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                    {submission.attempt.status === 'pass'
+                      ? 'You reached the required passing score. This assessment is saved as completed.'
+                      : canRetakeAfterSubmission
+                        ? 'You can retake this assessment from the dashboard while attempts remain.'
+                        : 'No more retakes are available for this assessment assignment.'}
                   </div>
-                </ScrollArea>
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    Remaining attempts:{' '}
+                    <span className="font-semibold">
+                      {remainingAttempts === null ? 'Unlimited' : String(remainingAttempts)}
+                    </span>
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                    {submission.certificate
+                      ? 'Your certificate is ready to open from the certificates workspace.'
+                      : 'Use the dashboard and assignment list to continue with your next required training step.'}
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

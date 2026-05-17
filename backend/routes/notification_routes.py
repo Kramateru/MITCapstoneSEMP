@@ -4,10 +4,13 @@ Notification routes for role-specific dashboard alerts.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, Query, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -20,6 +23,7 @@ from ..models import (
     MCQAssessment,
     MCQSubmission,
     MicrolearningAssignment,
+    NotificationEvent,
     NotificationRead,
     PracticeSession,
     SimSession,
@@ -129,6 +133,52 @@ def _active_notifications_for_user(
     notifications = _build_notifications_for_user(db=db, current_user=current_user)
     cleared_ids = _read_notification_ids(db=db, current_user=current_user)
     return [notification for notification in notifications if notification["id"] not in cleared_ids]
+
+
+def _serialize_persisted_notification(notification: NotificationEvent) -> dict[str, Any]:
+    return {
+        "id": notification.id,
+        "title": notification.title,
+        "message": notification.message,
+        "href": notification.href or "",
+        "level": notification.level or "info",
+        "action_label": notification.action_label or "Open details",
+        "created_at": notification.created_at.isoformat() if notification.created_at else None,
+        "status": "read" if notification.is_read else "unread",
+        "is_cleared": bool(notification.is_read),
+        "event_type": notification.event_type,
+        "details": notification.details or {},
+        "recipient_role": notification.recipient_role.value if notification.recipient_role else None,
+        "trainee_id": notification.trainee_id,
+    }
+ 
+
+def _list_persisted_notifications(
+    *,
+    db: Session,
+    current_user: User,
+    limit: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    unread_count = (
+        db.query(func.count(NotificationEvent.id))
+        .filter(
+            NotificationEvent.recipient_id == current_user.id,
+            NotificationEvent.is_read == False,
+        )
+        .scalar()
+        or 0
+    )
+    rows = (
+        db.query(NotificationEvent)
+        .filter(
+            NotificationEvent.recipient_id == current_user.id,
+            NotificationEvent.is_read == False,
+        )
+        .order_by(NotificationEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return int(unread_count), [_serialize_persisted_notification(row) for row in rows]
 
 
 def _persist_notification_reads(
@@ -730,11 +780,20 @@ async def list_notifications(
     current_user: User = Depends(auth_utils.get_current_user),
     db: Session = Depends(get_db),
 ):
-    notifications = _active_notifications_for_user(db=db, current_user=current_user)
+    if current_user.role == UserRole.TRAINEE:
+        notifications = _active_notifications_for_user(db=db, current_user=current_user)
+        count = len(notifications)
+        visible_notifications = notifications[:limit]
+    else:
+        count, visible_notifications = _list_persisted_notifications(
+            db=db,
+            current_user=current_user,
+            limit=limit,
+        )
 
     return {
-        "count": len(notifications),
-        "notifications": notifications[:limit],
+        "count": count,
+        "notifications": visible_notifications,
         "role": current_user.role.value,
         "generated_at": datetime.utcnow().isoformat(),
     }
@@ -748,30 +807,72 @@ async def mark_notification_read(
 ):
     notification_id = (payload.get("notification_id") or "").strip()
     href = (payload.get("href") or "").strip()
-    notification_ids = _resolve_notification_ids_to_clear(
-        db=db,
-        current_user=current_user,
-        notification_id=notification_id,
-        href=href or None,
+    if current_user.role == UserRole.TRAINEE:
+        notification_ids = _resolve_notification_ids_to_clear(
+            db=db,
+            current_user=current_user,
+            notification_id=notification_id,
+            href=href or None,
+        )
+        if not notification_ids:
+            raise HTTPException(status_code=400, detail="notification_id or href is required")
+
+        read_records = _persist_notification_reads(
+            db=db,
+            current_user=current_user,
+            notification_ids=notification_ids,
+        )
+        unread_notifications = _active_notifications_for_user(db=db, current_user=current_user)
+
+        return {
+            "message": "Notifications marked as read",
+            "notification_id": notification_ids[0],
+            "notification_ids": notification_ids,
+            "status": read_records[0].status if read_records else "read",
+            "is_cleared": all(record.is_cleared for record in read_records) if read_records else True,
+            "read_at": read_records[0].read_at.isoformat() if read_records and read_records[0].read_at else None,
+            "count": len(unread_notifications),
+        }
+
+    query = db.query(NotificationEvent).filter(
+        NotificationEvent.recipient_id == current_user.id,
+        NotificationEvent.is_read == False,
     )
-    if not notification_ids:
+    if href:
+        query = query.filter(NotificationEvent.href == href)
+    elif notification_id:
+        query = query.filter(NotificationEvent.id == notification_id)
+    else:
         raise HTTPException(status_code=400, detail="notification_id or href is required")
 
-    read_records = _persist_notification_reads(
-        db=db,
-        current_user=current_user,
-        notification_ids=notification_ids,
+    rows = query.order_by(NotificationEvent.created_at.desc()).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Notification not found")
+
+    read_at = datetime.utcnow()
+    for row in rows:
+        row.is_read = True
+        row.read_at = read_at
+    db.commit()
+
+    unread_count = (
+        db.query(func.count(NotificationEvent.id))
+        .filter(
+            NotificationEvent.recipient_id == current_user.id,
+            NotificationEvent.is_read == False,
+        )
+        .scalar()
+        or 0
     )
-    unread_notifications = _active_notifications_for_user(db=db, current_user=current_user)
 
     return {
         "message": "Notifications marked as read",
-        "notification_id": notification_ids[0],
-        "notification_ids": notification_ids,
-        "status": read_records[0].status if read_records else "read",
-        "is_cleared": all(record.is_cleared for record in read_records) if read_records else True,
-        "read_at": read_records[0].read_at.isoformat() if read_records and read_records[0].read_at else None,
-        "count": len(unread_notifications),
+        "notification_id": rows[0].id,
+        "notification_ids": [row.id for row in rows],
+        "status": "read",
+        "is_cleared": True,
+        "read_at": read_at.isoformat(),
+        "count": int(unread_count),
     }
 
 
@@ -782,3 +883,86 @@ async def dismiss_notification(
     db: Session = Depends(get_db),
 ):
     return await mark_notification_read(payload=payload, current_user=current_user, db=db)
+
+
+@router.get("/stream")
+async def stream_notifications(
+    request: Request,
+    token: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    bearer_token = authorization or (f"Bearer {token}" if token else None)
+    current_user = await auth_utils.get_current_user(bearer_token, db)
+
+    async def event_stream():
+        last_marker = ""
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                if current_user.role == UserRole.TRAINEE:
+                    active_notifications = _active_notifications_for_user(
+                        db=db,
+                        current_user=current_user,
+                    )
+                    latest_notification = active_notifications[0] if active_notifications else {}
+                    count = len(active_notifications)
+                    marker = "::".join(
+                        [
+                            str(count),
+                            str(latest_notification.get("id") or ""),
+                            str(latest_notification.get("created_at") or ""),
+                        ]
+                    )
+                else:
+                    rows = (
+                        db.query(NotificationEvent.id, NotificationEvent.created_at)
+                        .filter(
+                            NotificationEvent.recipient_id == current_user.id,
+                            NotificationEvent.is_read == False,
+                        )
+                        .order_by(NotificationEvent.created_at.desc())
+                        .limit(1)
+                        .all()
+                    )
+                    count = (
+                        db.query(func.count(NotificationEvent.id))
+                        .filter(
+                            NotificationEvent.recipient_id == current_user.id,
+                            NotificationEvent.is_read == False,
+                        )
+                        .scalar()
+                        or 0
+                    )
+                    latest_id = rows[0][0] if rows else ""
+                    latest_created_at = rows[0][1].isoformat() if rows and rows[0][1] else ""
+                    marker = f"{count}::{latest_id}::{latest_created_at}"
+
+                if marker != last_marker:
+                    payload = json.dumps(
+                        {
+                            "count": count,
+                            "generated_at": datetime.utcnow().isoformat(),
+                        }
+                    )
+                    yield f"event: notifications\ndata: {payload}\n\n"
+                    last_marker = marker
+                else:
+                    yield ": keep-alive\n\n"
+
+                db.expire_all()
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )

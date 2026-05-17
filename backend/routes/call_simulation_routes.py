@@ -81,6 +81,7 @@ from ..services.certificate_awards import (
 )
 from ..services.coaching import generate_coaching_id, normalize_competency_status
 from ..services.gemini_tts import gemini_tts_engine
+from ..services.notifications import notify_call_simulation_completion
 from ..services.speech_assessment import assess_audio_submission, normalize_text, tokenize_text
 from ..services.supabase_auth_service import filter_to_supabase_active_users
 from ..services.tts_service import text_to_speech
@@ -4694,13 +4695,13 @@ async def upload_call_simulation_audio_asset(
     if mime_type and not mime_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="Only audio files can be uploaded for Call Simulation assets")
 
-    original_name = file.filename or "call-simulation-audio"
+    original_name = file.filename or "call-simulation-asset"
     base_name, extension = os.path.splitext(original_name)
     safe_extension = extension if extension else ".mp3"
     normalized_base = "".join(
         character.lower() if character.isalnum() else "-"
-        for character in (base_name or "call-simulation-audio")
-    ).strip("-") or "call-simulation-audio"
+        for character in (base_name or "call-simulation-asset")
+    ).strip("-") or "call-simulation-asset"
     step_prefix = (
         f"step-{max(int(step_number or 0), 0):02d}_"
         if normalized_asset_kind == "member-step" and step_number
@@ -5716,6 +5717,12 @@ async def finalize_session(
         session=session,
         scenario=scenario,
     )
+    notify_call_simulation_completion(
+        db,
+        trainee=current_user,
+        session=session,
+        scenario=scenario,
+    )
     db.commit()
     db.refresh(session)
     return SimSessionResponse.model_validate(session)
@@ -5856,6 +5863,12 @@ async def submit_session_audio(
         session=session,
         scenario=scenario,
     )
+    notify_call_simulation_completion(
+        db,
+        trainee=current_user,
+        session=session,
+        scenario=scenario,
+    )
 
     db.commit()
     db.refresh(session)
@@ -5918,6 +5931,12 @@ async def complete_session(
     )
     _sync_call_simulation_certificate(
         db,
+        session=session,
+        scenario=scenario,
+    )
+    notify_call_simulation_completion(
+        db,
+        trainee=current_user,
         session=session,
         scenario=scenario,
     )

@@ -17,6 +17,8 @@ services:
         sync: false
       - key: SUPABASE_URL
         sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: SUPABASE_SERVICE_KEY
         sync: false
       - key: SECRET_KEY
@@ -50,7 +52,15 @@ services:
         value: 22.0.0
       - key: NEXT_PUBLIC_SUPABASE_URL
         sync: false
+      - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+        sync: false
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_URL
+        sync: false
+      - key: VITE_SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: NEXT_PUBLIC_BACKEND_URL
         value: https://speech-bpo-backend.onrender.com

@@ -67,7 +67,6 @@ export default function TrainerUsersPage() {
   const [form, setForm] = useState({
     email: '',
     full_name: '',
-    batch_id: '',
   });
   const [editForm, setEditForm] = useState({
     email: '',
@@ -193,13 +192,6 @@ export default function TrainerUsersPage() {
       setBatches(nextBatches);
       setTrainees(traineeData.trainees || []);
       setRegisteredTrainees(nextRegisteredTrainees);
-      setForm((current) => ({
-        ...current,
-        batch_id:
-          current.batch_id && nextBatches.some((batch: Batch) => batch.id === current.batch_id)
-            ? current.batch_id
-            : nextBatches[0]?.id || '',
-      }));
       setAssignmentBatchId((current) =>
         current && nextBatches.some((batch: Batch) => batch.id === current)
           ? current
@@ -224,10 +216,6 @@ export default function TrainerUsersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthLoading, isAuthenticated, token]);
 
-  const selectedBatch = useMemo(
-    () => batches.find((batch) => batch.id === form.batch_id) || null,
-    [batches, form.batch_id],
-  );
   const activeBatches = useMemo(
     () => batches.filter((batch) => batch.is_active !== false),
     [batches],
@@ -304,7 +292,6 @@ export default function TrainerUsersPage() {
           email: form.email,
           full_name: form.full_name,
           role: 'trainee',
-          batch_id: form.batch_id,
         }),
       });
 
@@ -679,9 +666,9 @@ export default function TrainerUsersPage() {
             </div>
 
             {!batches.length && (
-              <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                No saved batches yet. Use the Batches page first so each trainee can be attached to the correct wave or
-                batch during registration.
+              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                Batch or wave assignment is now handled separately. You can create the trainee account first and add it
+                to a saved batch later from the registered trainee roster below.
               </div>
             )}
 
@@ -704,28 +691,13 @@ export default function TrainerUsersPage() {
                 value={DEFAULT_TRAINEE_PASSWORD}
                 readOnly
               />
-              <select
-                className="w-full rounded border px-3 py-2"
-                value={form.batch_id}
-                onChange={(event) => setForm((current) => ({ ...current, batch_id: event.target.value }))}
-                disabled={!activeBatches.length}
-                title="Select batch for trainee assignment"
-              >
-                <option value="">{activeBatches.length ? 'Select batch / wave' : 'No active batches available'}</option>
-                {activeBatches.map((batch) => (
-                  <option key={batch.id} value={batch.id}>
-                    {formatBatchLabel(batch)}
-                  </option>
-                ))}
-              </select>
-              {selectedBatch && (
-                <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                  Selected batch: <span className="font-semibold text-gray-900">{formatBatchLabel(selectedBatch)}</span>
-                </div>
-              )}
+              <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                Batch / Wave selection removed from account creation. Use the roster assignment section to place the
+                trainee into a batch after the account is created.
+              </div>
               <button
                 onClick={createTrainee}
-                disabled={isCreatingTrainee || !batches.length || !form.batch_id}
+                disabled={isCreatingTrainee || !form.email.trim() || !form.full_name.trim()}
                 className="rounded bg-blue-600 px-4 py-2 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
               >
                 {isCreatingTrainee ? 'Creating Trainee...' : 'Create Trainee'}

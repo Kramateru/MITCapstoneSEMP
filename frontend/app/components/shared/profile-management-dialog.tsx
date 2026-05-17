@@ -47,6 +47,24 @@ const EMPTY_PASSWORD_FORM: PasswordForm = {
   newPassword: '',
   confirmPassword: '',
 };
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024;
+const ALLOWED_PROFILE_IMAGE_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+]);
+
+function getProfileImageValidationError(file: File) {
+  if (!ALLOWED_PROFILE_IMAGE_TYPES.has(file.type)) {
+    return 'Profile picture must be a JPG, PNG, or WEBP image.';
+  }
+
+  if (file.size > MAX_PROFILE_IMAGE_BYTES) {
+    return 'Profile picture must be 5 MB or smaller.';
+  }
+
+  return null;
+}
 
 function buildInitialProfile(user: ReturnType<typeof useAuth>['user']): ProfileRecord | null {
   if (!user) {
@@ -398,10 +416,18 @@ export default function ProfileManagementDialog() {
                       <input
                         ref={fileInputRef}
                         type="file"
-                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        accept="image/png,image/jpeg,image/webp"
                         className="hidden"
                         onChange={(event) => {
                           const nextFile = event.target.files?.[0] ?? null;
+                          if (nextFile) {
+                            const validationError = getProfileImageValidationError(nextFile);
+                            if (validationError) {
+                              toast.error(validationError);
+                              event.target.value = '';
+                              return;
+                            }
+                          }
                           setSelectedImageFile(nextFile);
                           if (nextFile) {
                             setRemoveExistingImage(false);
@@ -434,6 +460,20 @@ export default function ProfileManagementDialog() {
                           Remove Picture
                         </Button>
                       </div>
+
+                      {selectedImageFile ? (
+                        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+                          Selected file: <span className="font-semibold">{selectedImageFile.name}</span>
+                          {' '}({(selectedImageFile.size / (1024 * 1024)).toFixed(2)} MB)
+                        </div>
+                      ) : null}
+
+                      {savingProfile && selectedImageFile ? (
+                        <div className="flex items-center gap-2 rounded-2xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                          <Loader2 className="size-3.5 animate-spin" />
+                          Uploading your profile picture to Supabase Storage...
+                        </div>
+                      ) : null}
                     </div>
 
                   </div>

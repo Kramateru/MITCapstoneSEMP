@@ -72,7 +72,7 @@ from ..services.microlearning_catalog import (
     serialize_topic_category,
 )
 from ..services.supabase_auth_service import SupabaseUserSyncError, sync_user_to_supabase_auth
-from ..supabase_client import get_supabase_client
+from ..supabase_client import MICROLEARNING_BUCKET_FILE_SIZE_LIMIT, get_supabase_client
 
 router = APIRouter(prefix="/api/trainer", tags=["trainer"])
 logger = logging.getLogger(__name__)
@@ -93,6 +93,7 @@ SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/webm",
     "audio/flac",
 }
+MAX_TRAINER_MICROLEARNING_ASSET_SIZE = MICROLEARNING_BUCKET_FILE_SIZE_LIMIT
 
 
 def Depends(dependency=None):
@@ -669,6 +670,11 @@ def _upload_microlearning_asset(
         filename=sanitized,
         content_type=content_type,
     )
+    if len(file_bytes) > MAX_TRAINER_MICROLEARNING_ASSET_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail="Microlearning uploads must be 50 MB or smaller.",
+        )
     module_storage_segment = (
         normalized_module_id
         or f"draft-{normalized_module_type or 'asset'}"
@@ -737,7 +743,56 @@ def _upload_microlearning_asset(
         "signed_url_required": not used_local_media_fallback,
         "content_type": content_type or "application/octet-stream",
         "byte_size": asset_byte_size,
+        "file_name": sanitized,
+        "file_size": asset_byte_size,
+        "uploaded_at": datetime.utcnow().isoformat(),
     }
+
+
+def _enrich_video_content_metadata(
+    *,
+    content_data: dict[str, Any],
+    title: str,
+    description: Optional[str],
+    category: str,
+    trainer_id: str,
+) -> dict[str, Any]:
+    enriched_content_data = dict(content_data or {})
+    resolved_video_url = _normalize_media_url(
+        enriched_content_data.get("video_url") or enriched_content_data.get("asset_url")
+    )
+    resolved_file_name = (
+        _normalize_text_value(enriched_content_data.get("file_name"))
+        or _normalize_text_value(enriched_content_data.get("asset_file_name"))
+        or _normalize_text_value(enriched_content_data.get("filename"))
+    )
+    resolved_file_size_raw = (
+        enriched_content_data.get("file_size")
+        or enriched_content_data.get("asset_file_size")
+        or enriched_content_data.get("byte_size")
+        or 0
+    )
+    try:
+        resolved_file_size = int(resolved_file_size_raw or 0)
+    except (TypeError, ValueError):
+        resolved_file_size = 0
+
+    enriched_content_data.update(
+        {
+            "video_title": title,
+            "description": description,
+            "module_category": category,
+            "trainer_id": trainer_id,
+            "video_url": resolved_video_url,
+            "file_name": resolved_file_name or None,
+            "file_size": resolved_file_size or None,
+            "uploaded_at": (
+                _normalize_text_value(enriched_content_data.get("uploaded_at"))
+                or datetime.utcnow().isoformat()
+            ),
+        }
+    )
+    return enriched_content_data
 
 
 def _prepare_replaced_module_asset_cleanup(
@@ -1002,7 +1057,7 @@ def _create_trainee_account(
     *,
     email: str,
     full_name: str,
-    batch: Batch,
+    batch: Optional[Batch],
     password: Optional[str] = None,
 ) -> User:
     normalized_email = _normalize_email(email)
@@ -1024,13 +1079,14 @@ def _create_trainee_account(
         password_hash=auth_utils.hash_password(temporary_password),
         role=UserRole.TRAINEE,
     )
-    _apply_batch_profile(new_user, batch)
+    if batch:
+        _apply_batch_profile(new_user, batch)
 
     db.add(new_user)
     db.flush()
     _sync_trainee_to_supabase_or_raise(db, new_user)
 
-    if new_user not in batch.users:
+    if batch and new_user not in batch.users:
         batch.users.append(new_user)
 
     return new_user
@@ -1174,14 +1230,14 @@ class TraineeCreate(BaseModel):
     full_name: str
     role: UserRole = UserRole.TRAINEE
     password: Optional[str] = None
-    batch_id: str
+    batch_id: Optional[str] = None
 
 
 class TraineeUpdate(BaseModel):
     email: str
     full_name: str
     role: UserRole = UserRole.TRAINEE
-    batch_id: str
+    batch_id: Optional[str] = None
 
 
 class TraineeStatusUpdate(BaseModel):
@@ -1479,13 +1535,17 @@ async def create_trainee(
     current_user: Any = Depends(verify_trainer),
     db: Session = Depends(),
 ):
-    """Create a trainee account and assign it to one of the trainer's batches."""
+    """Create a trainee account that can be assigned to a batch later."""
     if trainee_data.role != UserRole.TRAINEE:
         raise HTTPException(
             status_code=400,
             detail="Trainer user management only creates Trainee accounts.",
         )
-    batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=trainee_data.batch_id)
+    batch = (
+        _get_trainer_batch(db, trainer_id=current_user.id, batch_id=trainee_data.batch_id)
+        if trainee_data.batch_id
+        else None
+    )
 
     temporary_password = trainee_data.password or DEFAULT_TRAINEE_PASSWORD
     try:
@@ -1512,7 +1572,7 @@ async def create_trainee(
         "full_name": new_user.full_name,
         "role": new_user.role,
         "temporary_password": temporary_password,
-        "batch": _serialize_batch(batch),
+        "batch": _serialize_batch(batch) if batch else None,
     }
 
 
@@ -1652,7 +1712,11 @@ async def update_trainee(
             detail="Trainer user management only updates Trainee accounts.",
         )
 
-    batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=trainee_data.batch_id)
+    batch = (
+        _get_trainer_batch(db, trainer_id=current_user.id, batch_id=trainee_data.batch_id)
+        if trainee_data.batch_id
+        else None
+    )
     trainee = (
         db.query(User)
         .filter(
@@ -1691,14 +1755,15 @@ async def update_trainee(
 
     trainee.email = normalized_email
     trainee.full_name = normalized_name
-    _apply_batch_profile(trainee, batch)
+    if batch:
+        _apply_batch_profile(trainee, batch)
 
-    for existing_batch in trainer_batches:
-        if existing_batch.id != batch.id and trainee in existing_batch.users:
-            existing_batch.users.remove(trainee)
+        for existing_batch in trainer_batches:
+            if existing_batch.id != batch.id and trainee in existing_batch.users:
+                existing_batch.users.remove(trainee)
 
-    if trainee not in batch.users:
-        batch.users.append(trainee)
+        if trainee not in batch.users:
+            batch.users.append(trainee)
 
     try:
         _sync_trainee_to_supabase_or_raise(db, trainee)
@@ -2191,6 +2256,14 @@ async def create_microlearning_module(
         content_url=payload.content_url,
         content_data=content_data,
     )
+    if module_type == "video":
+        content_data = _enrich_video_content_metadata(
+            content_data=content_data,
+            title=title,
+            description=(payload.description or "").strip() or None,
+            category=feedback_category_value,
+            trainer_id=current_user.id,
+        )
     resolved_audio_url = _normalize_text_value(content_data.get("audio_url")) or None
     resolved_audio_transcript = _normalize_text_value(content_data.get("transcript_text")) or None
     resolved_audio_duration = content_data.get("audio_duration_seconds")
@@ -2303,6 +2376,14 @@ async def update_microlearning_module(
         content_url=next_content_url,
         content_data=next_content_data,
     )
+    if module_type == "video":
+        next_content_data = _enrich_video_content_metadata(
+            content_data=next_content_data,
+            title=title,
+            description=next_description,
+            category=feedback_category_value,
+            trainer_id=current_user.id,
+        )
     cleanup_storage_target, cleanup_asset_record_id = _prepare_replaced_module_asset_cleanup(
         previous_content_data=previous_content_data,
         next_content_data=next_content_data,

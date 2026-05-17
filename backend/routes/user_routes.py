@@ -42,7 +42,6 @@ ALLOWED_PROFILE_IMAGE_TYPES = {
     "image/jpg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
-    "image/gif": "gif",
 }
 MAX_PROFILE_IMAGE_SIZE = 5 * 1024 * 1024
 
@@ -299,7 +298,7 @@ async def upload_current_user_profile_image(
     if not extension:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Profile picture must be a JPG, PNG, WEBP, or GIF image",
+            detail="Profile picture must be a JPG, PNG, or WEBP image",
         )
 
     file_bytes = await file.read()
@@ -316,13 +315,12 @@ async def upload_current_user_profile_image(
     new_profile_image_url: Optional[str] = None
 
     supabase = get_supabase_client()
-    if supabase.is_available:
-        new_profile_image_url = supabase.upload_profile_image(
-            file_data=file_bytes,
-            user_id=current_user.id,
-            filename=new_filename,
-            content_type=content_type,
-        )
+    new_profile_image_url = supabase.upload_profile_image(
+        file_data=file_bytes,
+        user_id=current_user.id,
+        filename=new_filename,
+        content_type=content_type,
+    )
 
     if not new_profile_image_url:
         raise HTTPException(

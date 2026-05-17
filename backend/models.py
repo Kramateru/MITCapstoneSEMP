@@ -155,6 +155,31 @@ class NotificationRead(Base):
     )
 
 
+class NotificationEvent(Base):
+    """Persisted trainer/admin notification event."""
+
+    __tablename__ = "notification_event"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipient_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    recipient_role = Column(SQLEnum(UserRole), nullable=False, index=True)
+    trainee_id = Column(String(36), ForeignKey("user.id"), nullable=True, index=True)
+    event_type = Column(String(80), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    details = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    href = Column(String(255), nullable=True)
+    action_label = Column(String(80), nullable=True, default="Open")
+    level = Column(String(20), nullable=False, default="info")
+    is_read = Column(Boolean, nullable=False, default=False, index=True)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    recipient = relationship("User", foreign_keys=[recipient_id])
+    trainee = relationship("User", foreign_keys=[trainee_id])
+
+
 class LineOfBusiness(Base):
     """Line of Business configuration"""
 

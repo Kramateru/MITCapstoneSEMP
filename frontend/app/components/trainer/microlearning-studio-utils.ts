@@ -135,6 +135,9 @@ export interface ModuleFormState {
   asset_bucket_name: string;
   asset_content_type: string;
   asset_signed_url_required: boolean;
+  asset_file_name: string;
+  asset_file_size: number;
+  asset_uploaded_at: string;
   difficulty: Difficulty;
   topic_category_id: string;
   // Video specific
@@ -227,6 +230,9 @@ export function emptyModuleForm(): ModuleFormState {
     asset_bucket_name: '',
     asset_content_type: '',
     asset_signed_url_required: false,
+    asset_file_name: '',
+    asset_file_size: 0,
+    asset_uploaded_at: '',
     difficulty: 'basic',
     topic_category_id: '',
     video_questions: [],
@@ -298,6 +304,9 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
         asset_storage_path: form.asset_storage_path || undefined,
         asset_bucket: form.asset_bucket_name || undefined,
         asset_content_type: form.asset_content_type || undefined,
+        file_name: form.asset_file_name || undefined,
+        file_size: form.asset_file_size > 0 ? form.asset_file_size : undefined,
+        uploaded_at: form.asset_uploaded_at || undefined,
         storage_backend: form.asset_storage_path
           ? 'supabase_storage'
           : form.asset_record_id
@@ -342,6 +351,9 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
         asset_storage_path: form.asset_storage_path || undefined,
         asset_bucket: form.asset_bucket_name || undefined,
         asset_content_type: form.asset_content_type || undefined,
+        file_name: form.asset_file_name || undefined,
+        file_size: form.asset_file_size > 0 ? form.asset_file_size : undefined,
+        uploaded_at: form.asset_uploaded_at || undefined,
         storage_backend: form.asset_storage_path
           ? 'supabase_storage'
           : form.asset_record_id
@@ -435,6 +447,9 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
     asset_signed_url_required: Boolean(
       content.asset_storage_path && content.signed_url_required !== false,
     ),
+    asset_file_name: content.file_name || '',
+    asset_file_size: Number(content.file_size || 0) || 0,
+    asset_uploaded_at: content.uploaded_at || '',
     difficulty: module.difficulty || 'basic',
     topic_category_id: module.topic_category_id || '',
     audio_content_id: content.audio_content_id || '',

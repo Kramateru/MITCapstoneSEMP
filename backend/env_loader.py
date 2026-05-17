@@ -7,7 +7,50 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+try:
+    from .config_validation import (
+        SUPABASE_PUBLISHABLE_KEY_ENV_KEYS,
+        SUPABASE_SERVICE_KEY_ENV_KEYS,
+        SUPABASE_URL_ENV_KEYS,
+        normalize_env_value,
+        resolve_first_configured_value,
+    )
+except ImportError:
+    from config_validation import (
+        SUPABASE_PUBLISHABLE_KEY_ENV_KEYS,
+        SUPABASE_SERVICE_KEY_ENV_KEYS,
+        SUPABASE_URL_ENV_KEYS,
+        normalize_env_value,
+        resolve_first_configured_value,
+    )
+
 _FALSE_VALUES = {"0", "false", "no", "off"}
+
+
+def _apply_env_aliases() -> None:
+    supabase_url = resolve_first_configured_value(
+        [os.getenv(key) for key in SUPABASE_URL_ENV_KEYS]
+    )
+    if supabase_url:
+        for key in SUPABASE_URL_ENV_KEYS:
+            if not normalize_env_value(os.getenv(key)):
+                os.environ[key] = supabase_url
+
+    publishable_key = resolve_first_configured_value(
+        [os.getenv(key) for key in SUPABASE_PUBLISHABLE_KEY_ENV_KEYS]
+    )
+    if publishable_key:
+        for key in SUPABASE_PUBLISHABLE_KEY_ENV_KEYS:
+            if not normalize_env_value(os.getenv(key)):
+                os.environ[key] = publishable_key
+
+    service_key = resolve_first_configured_value(
+        [os.getenv(key) for key in SUPABASE_SERVICE_KEY_ENV_KEYS]
+    )
+    if service_key:
+        for key in SUPABASE_SERVICE_KEY_ENV_KEYS:
+            if not normalize_env_value(os.getenv(key)):
+                os.environ[key] = service_key
 
 
 def load_backend_environment() -> None:
@@ -19,6 +62,8 @@ def load_backend_environment() -> None:
     for env_path in (backend_env, root_env):
         if env_path.exists():
             load_dotenv(dotenv_path=env_path, override=False)
+
+    _apply_env_aliases()
 
 
 def use_local_sqlite() -> bool:

@@ -1,6 +1,7 @@
 'use client'
 
 import React, { createContext, useContext, useEffect, useState } from 'react'
+import { clearAuthSessionCookies, isTokenExpired, writeAuthSessionCookies } from '@/app/utils/auth-session'
 
 export interface User {
   user_id: string
@@ -93,6 +94,8 @@ function clearStoredAuthState() {
   } catch (storageError) {
     console.warn('Unable to clear cached auth state:', storageError)
   }
+
+  clearAuthSessionCookies()
 }
 
 function readStoredAuthState() {
@@ -199,15 +202,93 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Initialize auth state from localStorage
   useEffect(() => {
-    const storedAuth = readStoredAuthState()
+    let isMounted = true
 
-    if (storedAuth.token && storedAuth.user) {
+    const initializeAuth = async () => {
+      const storedAuth = readStoredAuthState()
+
+      if (!storedAuth.token || !storedAuth.user) {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+        return
+      }
+
       setToken(storedAuth.token)
       setRefreshTokenValue(storedAuth.refreshToken)
       setUser(storedAuth.user)
+      writeAuthSessionCookies(storedAuth.token, storedAuth.user, storedAuth.refreshToken)
+
+      if (!storedAuth.refreshToken || !isTokenExpired(storedAuth.token)) {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+        return
+      }
+
+      try {
+        const supabaseRefreshToken =
+          typeof window !== 'undefined'
+            ? window.localStorage.getItem(SUPABASE_REFRESH_TOKEN_KEY)
+            : null
+
+        const response = await fetch('/api/auth/refresh-token', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${storedAuth.refreshToken}`,
+            ...(supabaseRefreshToken
+              ? { 'X-Supabase-Refresh-Token': supabaseRefreshToken }
+              : {}),
+          },
+        })
+
+        if (!response.ok) {
+          throw new Error('Session expired. Please sign in again.')
+        }
+
+        const data = await response.json()
+        if (!isMounted) {
+          return
+        }
+
+        const nextUser = data.user ? buildUserFromResponse(data) : storedAuth.user
+        const nextRefreshToken = data.refresh_token || storedAuth.refreshToken
+
+        setToken(data.access_token)
+        setRefreshTokenValue(nextRefreshToken)
+        setUser(nextUser)
+
+        localStorage.setItem('token', data.access_token)
+        if (nextRefreshToken) {
+          localStorage.setItem('refresh_token', nextRefreshToken)
+        }
+        localStorage.setItem('user', JSON.stringify(nextUser))
+        if (typeof data.supabase_access_token === 'string' && data.supabase_access_token.trim()) {
+          localStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, data.supabase_access_token)
+        }
+        if (typeof data.supabase_refresh_token === 'string' && data.supabase_refresh_token.trim()) {
+          localStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, data.supabase_refresh_token)
+        }
+        writeAuthSessionCookies(data.access_token, nextUser, nextRefreshToken)
+      } catch (initializationError) {
+        console.error('Session bootstrap refresh failed:', initializationError)
+        if (isMounted) {
+          setUser(null)
+          setToken(null)
+          setRefreshTokenValue(null)
+        }
+        clearStoredAuthState()
+      } finally {
+        if (isMounted) {
+          setIsLoading(false)
+        }
+      }
     }
 
-    setIsLoading(false)
+    void initializeAuth()
+    return () => {
+      isMounted = false
+    }
   }, [])
 
   const login = async (email: string, password: string): Promise<User> => {
@@ -258,6 +339,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
         }
         localStorage.setItem('user', JSON.stringify(userData))
+        writeAuthSessionCookies(data.access_token, userData, data.refresh_token || null)
       } catch (storageError) {
         console.warn('Unable to cache auth state:', storageError)
       }
@@ -285,6 +367,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const next = { ...prev, ...updates }
       try {
         localStorage.setItem('user', JSON.stringify(next))
+        if (token) {
+          writeAuthSessionCookies(token, next, refreshTokenValue)
+        }
       } catch (storageError) {
         console.warn('Unable to update cached user:', storageError)
       }
@@ -324,6 +409,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(nextUser)
         try {
           localStorage.setItem('user', JSON.stringify(nextUser))
+          writeAuthSessionCookies(
+            data.access_token,
+            nextUser,
+            data.refresh_token || tokenForRefresh,
+          )
         } catch (storageError) {
           console.warn('Unable to update cached user after refresh:', storageError)
         }
@@ -335,9 +425,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         if (typeof data.supabase_access_token === 'string' && data.supabase_access_token.trim()) {
           localStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, data.supabase_access_token)
+        } else {
+          localStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
         }
         if (typeof data.supabase_refresh_token === 'string' && data.supabase_refresh_token.trim()) {
           localStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, data.supabase_refresh_token)
+        } else {
+          localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
+        }
+        if (!data.user && user) {
+          writeAuthSessionCookies(
+            data.access_token,
+            user,
+            data.refresh_token || tokenForRefresh,
+          )
         }
       } catch (storageError) {
         console.warn('Unable to cache refreshed auth state:', storageError)

@@ -141,8 +141,8 @@ function getSupabasePublicKeyKind(token: string): SupabasePublicKeyKind | null {
 
 function resolveSupabaseApiKey() {
   const serviceRoleKey = normalizeEnvValue(getConfigValue([
-    'SUPABASE_SERVICE_KEY',
     'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_SERVICE_KEY',
     'SUPABASE_SERVICE_ROLE',
   ], ''))
 
@@ -156,6 +156,7 @@ function resolveSupabaseApiKey() {
 
 function resolveSupabasePublicApiKey() {
   const publicKey = normalizeEnvValue(getConfigValue([
+    'VITE_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
     'SUPABASE_ANON_KEY',
@@ -172,6 +173,7 @@ function resolveSupabasePublicApiKey() {
 
 export function createSupabaseAdminClient() {
   const supabaseUrl = normalizeEnvValue(getConfigValue([
+    'VITE_SUPABASE_URL',
     'NEXT_PUBLIC_SUPABASE_URL',
     'SUPABASE_URL',
     'REACT_APP_SUPABASE_URL',
@@ -182,7 +184,7 @@ export function createSupabaseAdminClient() {
 
   if (!isLikelySupabaseUrl(supabaseUrl)) {
     console.error('Supabase URL not configured:', {
-      envVars: ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'REACT_APP_SUPABASE_URL'],
+      envVars: ['VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL', 'REACT_APP_SUPABASE_URL'],
       received: supabaseUrl || 'empty',
     })
     throw new Error('A valid Supabase URL is not configured for the assessment workspace.')

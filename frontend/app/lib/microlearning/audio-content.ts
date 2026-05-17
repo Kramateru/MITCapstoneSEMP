@@ -8,7 +8,7 @@ import { getConfigValue } from '@/app/lib/assessment/env'
 import { createSupabaseAdminClient } from '@/app/lib/assessment/supabase-admin'
 import type { BackendSessionUser } from '@/app/lib/assessment/types'
 
-const DEFAULT_AUDIO_BUCKET = 'audio-modules'
+const DEFAULT_AUDIO_BUCKET = 'microlearning-videos'
 const DEFAULT_GEMINI_AUDIO_MODEL = 'gemini-2.5-flash'
 const GEMINI_READY_ATTEMPTS = 20
 const GEMINI_READY_DELAY_MS = 1500
