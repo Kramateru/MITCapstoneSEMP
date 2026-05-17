@@ -11,12 +11,6 @@ from typing import Optional
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-try:
-    import pyttsx3
-except ImportError:
-    pyttsx3 = None
-
-
 def _local_tts_enabled() -> bool:
     normalized = str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower()
     if not normalized or normalized not in {"1", "true", "yes", "on"}:
@@ -32,10 +26,21 @@ def _local_tts_enabled() -> bool:
 
     return True
 
+
+def _load_pyttsx3():
+    try:
+        import pyttsx3
+    except ImportError:
+        return None
+
+    return pyttsx3
+
+
 def initialize_tts():
     if not _local_tts_enabled():
         logger.info("Local server-side TTS fallback is disabled.")
         return None
+    pyttsx3 = _load_pyttsx3()
     if pyttsx3 is None:
         logger.warning("pyttsx3 is not installed. Local TTS generation is disabled.")
         return None
@@ -46,14 +51,6 @@ def initialize_tts():
     except Exception as e:
         logger.warning("Local TTS fallback is unavailable: %s", e)
         return None
-
-
-
-    # Set BPO-friendly properties
-    engine.setProperty('rate', 150)    # Speed of speech
-    engine.setProperty('volume', 1.0)  # Volume (0.0 to 1.0)
-    
-    return engine
 
 # Create the engine instance to be used throughout your app
 tts_engine = initialize_tts()

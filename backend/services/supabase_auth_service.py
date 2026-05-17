@@ -20,7 +20,6 @@ from ..config_validation import (
     extract_supabase_project_ref_from_url,
     is_usable_supabase_publishable_key,
     is_usable_supabase_url,
-    normalize_env_value,
     resolve_supabase_publishable_key,
     resolve_supabase_url,
     supabase_key_matches_url,
@@ -46,6 +45,9 @@ class SupabaseAuthInputError(SupabaseAuthServiceError):
 
 class SupabaseUserSyncError(SupabaseAuthServiceError):
     """Raised when a local user cannot be synced into Supabase Auth."""
+
+
+SUPABASE_AUTH_INSTANCE_ID = "00000000-0000-0000-0000-000000000000"
 
 
 def _get_supabase_auth_rest_config() -> tuple[str, str]:
@@ -233,6 +235,87 @@ def _build_identity_metadata(user_id: str, email: str) -> str:
     )
 
 
+def _sync_supabase_email_identity(
+    db: Session,
+    *,
+    supabase_user_id: str,
+    normalized_email: str,
+    identity_metadata: str,
+    created_at: datetime,
+    updated_at: datetime,
+    last_sign_in_at: datetime | None,
+) -> None:
+    provider_id = str(supabase_user_id or "").strip()
+    if not provider_id:
+        raise SupabaseUserSyncError("Supabase sync requires a UUID-shaped auth user id.")
+
+    # Delete legacy rows created with provider_id=email so the canonical
+    # email identity can be re-inserted in the format Supabase expects.
+    db.execute(
+        text(
+            """
+            delete from auth.identities
+            where provider = 'email'
+              and (
+                    user_id = cast(:supabase_user_id as uuid)
+                 or lower(provider_id) = :email
+                 or lower(coalesce(email, '')) = :email
+              )
+              and (
+                    id <> cast(:supabase_user_id as uuid)
+                 or provider_id <> :provider_id
+              )
+            """
+        ),
+        {
+            "supabase_user_id": supabase_user_id,
+            "provider_id": provider_id,
+            "email": normalized_email,
+        },
+    )
+
+    db.execute(
+        text(
+            """
+            insert into auth.identities (
+                id,
+                user_id,
+                identity_data,
+                provider,
+                provider_id,
+                last_sign_in_at,
+                created_at,
+                updated_at
+            ) values (
+                cast(:supabase_user_id as uuid),
+                cast(:supabase_user_id as uuid),
+                cast(:identity_data as jsonb),
+                'email',
+                :provider_id,
+                :last_sign_in_at,
+                :created_at,
+                :updated_at
+            )
+            on conflict (provider_id, provider)
+            do update set
+                id = excluded.id,
+                user_id = excluded.user_id,
+                identity_data = excluded.identity_data,
+                last_sign_in_at = excluded.last_sign_in_at,
+                updated_at = excluded.updated_at
+            """
+        ),
+        {
+            "supabase_user_id": supabase_user_id,
+            "provider_id": provider_id,
+            "identity_data": identity_metadata,
+            "last_sign_in_at": last_sign_in_at,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        },
+    )
+
+
 def get_auth_provider_status(db: Session) -> dict[str, Any]:
     """Report which credential store is currently active for login checks."""
     if not _uses_supabase_auth_schema(db):
@@ -360,6 +443,8 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
         )
 
     now = datetime.utcnow()
+    created_at = local_user.created_at or now
+    last_sign_in_at = local_user.last_login or created_at
     app_metadata = _build_app_metadata(local_user)
     user_metadata = _build_user_metadata(local_user)
     identity_metadata = _build_identity_metadata(local_user.id, normalized_email)
@@ -393,6 +478,13 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                         email,
                         encrypted_password,
                         email_confirmed_at,
+                        confirmation_token,
+                        recovery_token,
+                        email_change_token_new,
+                        email_change,
+                        email_change_token_current,
+                        email_change_confirm_status,
+                        last_sign_in_at,
                         raw_app_meta_data,
                         raw_user_meta_data,
                         created_at,
@@ -402,12 +494,19 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                         is_anonymous
                     ) values (
                         cast(:user_id as uuid),
-                        null,
+                        cast(:instance_id as uuid),
                         'authenticated',
                         'authenticated',
                         :email,
                         :encrypted_password,
                         :confirmed_at,
+                        '',
+                        '',
+                        '',
+                        '',
+                        '',
+                        0,
+                        :last_sign_in_at,
                         cast(:app_metadata as jsonb),
                         cast(:user_metadata as jsonb),
                         :created_at,
@@ -420,12 +519,14 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                 ),
                 {
                     "user_id": local_user.id,
+                    "instance_id": SUPABASE_AUTH_INSTANCE_ID,
                     "email": normalized_email,
                     "encrypted_password": local_user.password_hash,
                     "confirmed_at": now,
                     "app_metadata": app_metadata,
                     "user_metadata": user_metadata,
-                    "created_at": local_user.created_at or now,
+                    "created_at": created_at,
+                    "last_sign_in_at": last_sign_in_at,
                     "updated_at": now,
                 },
             )
@@ -441,63 +542,49 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                     """
                     update auth.users
                     set
+                        instance_id = coalesce(instance_id, cast(:instance_id as uuid)),
                         email = :email,
                         encrypted_password = :encrypted_password,
                         email_confirmed_at = coalesce(email_confirmed_at, :confirmed_at),
+                        confirmation_token = coalesce(confirmation_token, ''),
+                        recovery_token = coalesce(recovery_token, ''),
+                        email_change_token_new = coalesce(email_change_token_new, ''),
+                        email_change = coalesce(email_change, ''),
+                        email_change_token_current = coalesce(email_change_token_current, ''),
+                        email_change_confirm_status = coalesce(email_change_confirm_status, 0),
                         raw_app_meta_data = cast(:app_metadata as jsonb),
                         raw_user_meta_data = cast(:user_metadata as jsonb),
                         aud = 'authenticated',
                         role = 'authenticated',
                         deleted_at = null,
                         banned_until = null,
+                        last_sign_in_at = coalesce(last_sign_in_at, :last_sign_in_at),
                         updated_at = :updated_at
                     where id = cast(:supabase_user_id as uuid)
                     """
                 ),
                 {
                     "supabase_user_id": supabase_user_id,
+                    "instance_id": SUPABASE_AUTH_INSTANCE_ID,
                     "email": normalized_email,
                     "encrypted_password": local_user.password_hash,
                     "confirmed_at": now,
                     "app_metadata": app_metadata,
                     "user_metadata": user_metadata,
+                    "last_sign_in_at": last_sign_in_at,
                     "updated_at": now,
                 },
             )
             status = "updated"
 
-        db.execute(
-            text(
-                """
-                insert into auth.identities (
-                    user_id,
-                    identity_data,
-                    provider,
-                    provider_id,
-                    created_at,
-                    updated_at
-                ) values (
-                    cast(:supabase_user_id as uuid),
-                    cast(:identity_data as jsonb),
-                    'email',
-                    :provider_id,
-                    :created_at,
-                    :updated_at
-                )
-                on conflict (provider_id, provider)
-                do update set
-                    user_id = excluded.user_id,
-                    identity_data = excluded.identity_data,
-                    updated_at = excluded.updated_at
-                """
-            ),
-            {
-                "supabase_user_id": supabase_user_id,
-                "identity_data": identity_metadata,
-                "provider_id": normalized_email,
-                "created_at": local_user.created_at or now,
-                "updated_at": now,
-            },
+        _sync_supabase_email_identity(
+            db,
+            supabase_user_id=supabase_user_id,
+            normalized_email=normalized_email,
+            identity_metadata=identity_metadata,
+            created_at=created_at,
+            updated_at=now,
+            last_sign_in_at=last_sign_in_at,
         )
 
         return {
