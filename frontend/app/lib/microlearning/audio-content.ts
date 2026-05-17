@@ -41,12 +41,15 @@ type AuthorizedAudioContent = AudioContentRow & {
 type BackendModuleDetail = {
   content_data?: Record<string, unknown> | null
   audio_language?: string | null
+  audio_transcript?: string | null
 }
 
 type BackendModuleAudioMetadata = {
   title?: string | null
   audio_url?: string | null
+  signed_url?: string | null
   transcript?: string | null
+  summary_text?: string | null
   audio_duration_seconds?: number | null
   audio_language?: string | null
   captions_url?: string | null
@@ -65,6 +68,21 @@ type BackendModuleAssetPayload = {
 
 type TrainerModuleListResponse = {
   modules?: Array<{ id?: string | null }>
+}
+
+type BackendAudioUploadResponse = {
+  module_id?: string | null
+  audio_url?: string | null
+  signed_url?: string | null
+  storage_path?: string | null
+  bucket_name?: string | null
+  filename?: string | null
+  original_filename?: string | null
+  content_type?: string | null
+  duration_seconds?: number | null
+  transcript?: string | null
+  transcript_provider?: string | null
+  captions_url?: string | null
 }
 
 type UploadMicrolearningAudioParams = {
@@ -98,7 +116,7 @@ export type UploadMicrolearningAudioResult = {
   transcript: string
   transcript_text: string
   summary_text: string
-  transcript_provider: 'gemini'
+  transcript_provider: string
   transcript_model: string
   duration_seconds: number | null
   mime_type: string
@@ -434,6 +452,36 @@ async function fetchBackendJson<T>(
   return readJsonSafely<T>(response)
 }
 
+async function uploadMicrolearningAudioToBackend(
+  authorization: string,
+  {
+    moduleId,
+    fileName,
+    mimeType,
+    fileBytes,
+  }: {
+    moduleId: string
+    fileName: string
+    mimeType: string
+    fileBytes: Buffer
+  },
+) {
+  const formData = new FormData()
+  formData.append('file', new Blob([new Uint8Array(fileBytes)], { type: mimeType }), fileName)
+
+  return fetchBackendJson<BackendAudioUploadResponse>(
+    `/api/microlearning/modules/${moduleId}/audio?generate_transcript=true&generate_tts=true`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+      },
+      body: formData,
+    },
+    'Unable to upload the lesson audio to the microlearning service.',
+  )
+}
+
 async function waitForGeminiFileToBeReady(
   fileManager: GoogleAIFileManager,
   fileId: string,
@@ -661,6 +709,7 @@ async function syncBackendMicrolearningAudio(
     bucketName,
     mimeType,
     audioLanguage,
+    transcriptProvider,
     transcriptModel,
     durationSeconds,
     originalFilename,
@@ -675,6 +724,7 @@ async function syncBackendMicrolearningAudio(
     bucketName: string
     mimeType: string
     audioLanguage: string
+    transcriptProvider: string
     transcriptModel: string
     durationSeconds: number | null
     originalFilename: string
@@ -682,30 +732,71 @@ async function syncBackendMicrolearningAudio(
   },
 ) {
   const currentModule = await getBackendMicrolearningModule(authorization, moduleId)
-  const contentData = {
-    ...(currentModule?.content_data || {}),
+  const currentContentData = currentModule?.content_data || {}
+  const normalizedTranscript = transcript.trim()
+    || String(
+      currentContentData.transcript_text
+      ?? currentContentData.transcript
+      ?? currentContentData.captions_text
+      ?? currentContentData.content
+      ?? currentModule?.audio_transcript
+      ?? '',
+    ).trim()
+  const normalizedSummary = summaryText.trim()
+    || String(
+      currentContentData.summary_text
+      ?? currentContentData.audio_summary
+      ?? currentContentData.summary
+      ?? '',
+    ).trim()
+  const normalizedTranscriptProvider = transcriptProvider.trim()
+    || String(currentContentData.transcript_provider ?? '').trim()
+  const normalizedTranscriptModel = transcriptModel.trim()
+    || String(currentContentData.transcript_model ?? '').trim()
+  const existingCaptionData = Array.isArray(currentContentData.caption_data)
+    ? currentContentData.caption_data
+    : []
+  const normalizedCaptionData = captionData.length ? captionData : existingCaptionData
+
+  const contentData: Record<string, unknown> = {
+    ...currentContentData,
     asset_url: audioUrl,
     audio_url: audioUrl,
-    transcript,
-    transcript_text: transcript,
-    content: transcript,
-    captions_text: transcript,
-    summary: summaryText,
-    summary_text: summaryText,
-    audio_summary: summaryText,
     audio_content_id: audioContentId,
     audio_storage_path: storagePath,
     audio_bucket: bucketName,
     audio_content_type: mimeType,
     audio_language: audioLanguage,
     audio_original_filename: originalFilename,
-    transcript_provider: 'gemini',
-    transcript_model: transcriptModel,
     signed_url_required: true,
-    live_caption_mode: 'speech_to_text_playback',
     audio_source_type: 'supabase_upload',
-    caption_data: captionData,
-  } satisfies Record<string, unknown>
+  }
+
+  if (normalizedTranscript) {
+    contentData.transcript = normalizedTranscript
+    contentData.transcript_text = normalizedTranscript
+    contentData.content = normalizedTranscript
+    contentData.captions_text = normalizedTranscript
+  }
+
+  if (normalizedSummary) {
+    contentData.summary = normalizedSummary
+    contentData.summary_text = normalizedSummary
+    contentData.audio_summary = normalizedSummary
+  }
+
+  if (normalizedTranscriptProvider) {
+    contentData.transcript_provider = normalizedTranscriptProvider
+  }
+
+  if (normalizedTranscriptModel) {
+    contentData.transcript_model = normalizedTranscriptModel
+  }
+
+  if (normalizedCaptionData.length) {
+    contentData.caption_data = normalizedCaptionData
+    contentData.live_caption_mode = 'speech_to_text_playback'
+  }
 
   await fetchBackendJson(
     `/api/microlearning/modules/${moduleId}`,
@@ -719,7 +810,7 @@ async function syncBackendMicrolearningAudio(
         content_url: audioUrl,
         content_data: contentData,
         audio_url: audioUrl,
-        audio_transcript: transcript,
+        audio_transcript: normalizedTranscript || undefined,
         audio_duration_seconds: durationSeconds ?? undefined,
         audio_language: audioLanguage || currentModule?.audio_language || 'en-US',
       }),
@@ -777,7 +868,9 @@ export async function getAuthorizedAudioPlaybackMetadata(
   return {
     title: payload?.title?.trim() || '',
     audioUrl: payload?.audio_url?.trim() || '',
+    signedUrl: payload?.signed_url?.trim() || '',
     transcriptText: payload?.transcript?.trim() || '',
+    summaryText: payload?.summary_text?.trim() || '',
     durationSeconds:
       typeof payload?.audio_duration_seconds === 'number' && Number.isFinite(payload.audio_duration_seconds)
         ? payload.audio_duration_seconds
@@ -796,29 +889,30 @@ export async function generateAuthorizedAudioTranscript(
   if (playbackMetadata.transcriptText) {
     return {
       transcriptText: playbackMetadata.transcriptText,
-      summaryText: '',
+      summaryText: playbackMetadata.summaryText || '',
       durationSeconds: playbackMetadata.durationSeconds,
-      audioUrl: playbackMetadata.audioUrl,
+      audioUrl: playbackMetadata.signedUrl || playbackMetadata.audioUrl,
       audioLanguage: playbackMetadata.audioLanguage,
       transcriptProvider: 'stored',
     }
   }
 
-  if (!playbackMetadata.audioUrl) {
+  const playbackUrl = playbackMetadata.signedUrl || playbackMetadata.audioUrl
+  if (!playbackUrl) {
     throw new AssessmentHttpError(404, 'No lesson audio file is attached to this microlearning module.')
   }
 
-  const audioBytes = await loadAudioAssetBytes(playbackMetadata.audioUrl)
+  const audioBytes = await loadAudioAssetBytes(playbackUrl)
   const analysis = await transcribeAudioWithGemini(audioBytes, {
-    mimeType: inferAudioMimeType(playbackMetadata.audioUrl, playbackMetadata.contentType),
+    mimeType: inferAudioMimeType(playbackUrl, playbackMetadata.contentType),
     title: playbackMetadata.title || `Microlearning audio ${moduleId}`,
   })
 
   return {
     transcriptText: analysis.transcript_text || analysis.transcript,
-    summaryText: analysis.summary_text || '',
+    summaryText: analysis.summary_text || playbackMetadata.summaryText || '',
     durationSeconds: playbackMetadata.durationSeconds,
-    audioUrl: playbackMetadata.audioUrl,
+    audioUrl: playbackUrl,
     audioLanguage: playbackMetadata.audioLanguage,
     transcriptProvider: 'gemini',
   }
@@ -995,82 +1089,88 @@ export async function uploadMicrolearningAudioContent({
 }: UploadMicrolearningAudioParams): Promise<UploadMicrolearningAudioResult> {
   assertSupportedAudioUpload(fileName, mimeType)
 
-  const supabase = createSupabaseAdminClient()
-  const existingRow = await fetchAudioContentRow(moduleId)
-  const bucketName = getAudioBucketName()
-  const storagePath = buildStoragePath(trainerId, moduleId, fileName)
-  const canonicalAudioUrl = getSupabaseObjectUrl(bucketName, storagePath)
+  const backendUpload = await uploadMicrolearningAudioToBackend(authorization, {
+    moduleId,
+    fileName,
+    mimeType,
+    fileBytes,
+  })
 
-  const { error: uploadError } = await supabase
-    .storage
-    .from(bucketName)
-    .upload(storagePath, fileBytes, {
-      contentType: mimeType,
-      upsert: true,
+  const audioUrl = backendUpload?.audio_url?.trim() || ''
+  const signedUrl = backendUpload?.signed_url?.trim() || audioUrl
+  const storagePath = backendUpload?.storage_path?.trim() || ''
+  const bucketName = backendUpload?.bucket_name?.trim() || getAudioBucketName()
+  const transcriptText = backendUpload?.transcript?.trim() || ''
+  const transcriptProvider = backendUpload?.transcript_provider?.trim() || ''
+  const durationSeconds =
+    typeof backendUpload?.duration_seconds === 'number' && Number.isFinite(backendUpload.duration_seconds)
+      ? backendUpload.duration_seconds
+      : null
+  const originalFilename = backendUpload?.original_filename?.trim()
+    || backendUpload?.filename?.trim()
+    || fileName
+  const normalizedMimeType = backendUpload?.content_type?.trim() || mimeType
+  const audioContentId = `module-${moduleId}`
+
+  let normalizedTranscriptText = transcriptText
+  let summaryText = ''
+  let transcriptModel = transcriptProvider
+  let normalizedTranscriptProvider = transcriptProvider
+
+  if (!normalizedTranscriptText && getGeminiApiKey()) {
+    try {
+      const analysis = await transcribeAudioWithGemini(fileBytes, {
+        mimeType: normalizedMimeType,
+        title,
+      })
+      normalizedTranscriptText = analysis.transcript_text || analysis.transcript
+      summaryText = analysis.summary_text || ''
+      transcriptModel = analysis.geminiModel
+      normalizedTranscriptProvider = 'gemini'
+    } catch {
+      // Keep the upload successful even when optional Gemini analysis is unavailable.
+    }
+  }
+
+  const captionData = buildCaptionCues(normalizedTranscriptText, durationSeconds)
+
+  if (audioUrl && storagePath) {
+    await syncBackendMicrolearningAudio(authorization, {
+      moduleId,
+      audioUrl,
+      transcript: normalizedTranscriptText,
+      summaryText,
+      audioContentId,
+      storagePath,
+      bucketName,
+      mimeType: normalizedMimeType,
+      audioLanguage: audioLanguage || 'en-US',
+      transcriptProvider: normalizedTranscriptProvider,
+      transcriptModel,
+      durationSeconds,
+      originalFilename,
+      captionData,
     })
-
-  if (uploadError) {
-    throw uploadError
   }
-
-  const { transcript, transcript_text, summary_text, geminiModel, geminiFileUri } = await transcribeAudioWithGemini(fileBytes, {
-    mimeType,
-    title,
-  })
-  const captionData = buildCaptionCues(transcript_text || transcript)
-
-  const persistedRow = await persistAudioContentRow(supabase, existingRow, {
-    moduleId,
-    title,
-    trainerId,
-    canonicalAudioUrl,
-    storagePath,
-    mimeType,
-    transcript: transcript_text || transcript,
-    summaryText: summary_text,
-    geminiModel,
-    geminiFileUri,
-  })
-
-  if (existingRow?.storage_path && existingRow.storage_path !== storagePath) {
-    await supabase.storage.from(bucketName).remove([existingRow.storage_path]).catch(() => undefined)
-  }
-
-  const signedUrl = await createAudioModuleSignedUrl(storagePath)
-
-  await syncBackendMicrolearningAudio(authorization, {
-    moduleId,
-    audioUrl: canonicalAudioUrl,
-    transcript: transcript_text || transcript,
-    summaryText: summary_text,
-    audioContentId: persistedRow.id,
-    storagePath,
-    bucketName,
-    mimeType,
-    audioLanguage: audioLanguage || 'en-US',
-    transcriptModel: geminiModel,
-    durationSeconds: persistedRow.duration_seconds,
-    originalFilename: fileName,
-    captionData,
-  })
 
   return {
-    audio_content_id: persistedRow.id,
+    audio_content_id: audioContentId,
     module_id: moduleId,
     title,
-    audio_url: canonicalAudioUrl,
+    audio_url: audioUrl,
     signed_url: signedUrl,
     storage_path: storagePath,
     bucket_name: bucketName,
-    transcript: transcript_text || transcript,
-    transcript_text: transcript_text || transcript,
-    summary_text,
-    transcript_provider: 'gemini',
-    transcript_model: geminiModel,
-    duration_seconds: persistedRow.duration_seconds,
-    mime_type: mimeType,
+    transcript: normalizedTranscriptText,
+    transcript_text: normalizedTranscriptText,
+    summary_text: summaryText,
+    transcript_provider: normalizedTranscriptProvider || 'speech_to_text',
+    transcript_model: transcriptModel || normalizedTranscriptProvider || 'speech_to_text',
+    duration_seconds: durationSeconds,
+    mime_type: normalizedMimeType,
     audio_language: audioLanguage || 'en-US',
-    original_filename: fileName,
+    original_filename: originalFilename,
+    captions_url: backendUpload?.captions_url?.trim() || null,
     caption_data: captionData,
   }
 }

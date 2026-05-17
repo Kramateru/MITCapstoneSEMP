@@ -1570,6 +1570,22 @@ def _sync_call_simulation_assignments_for_scenario(
     return did_change
 
 
+def _deactivate_scenario_variations(
+    db: Session,
+    *,
+    scenario_id: str,
+) -> list[ScenarioVariation]:
+    """Retire active variations without breaking historical sim-session links."""
+    variations = (
+        db.query(ScenarioVariation)
+        .filter(ScenarioVariation.scenario_id == scenario_id)
+        .all()
+    )
+    for variation in variations:
+        variation.is_active = False
+    return variations
+
+
 def _sync_call_simulation_assignments_for_trainee(
     db: Session,
     trainee: User,
@@ -1799,6 +1815,299 @@ def _normalize_optional_url(value: Any) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _normalize_uuid_candidate(value: Any) -> Optional[str]:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    return (
+        normalized
+        if re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            normalized,
+            re.IGNORECASE,
+        )
+        else None
+    )
+
+
+def _sanitize_supabase_script_flow(script_flow: Any) -> list[dict[str, Any]]:
+    sanitized_steps: list[dict[str, Any]] = []
+    for index, step in enumerate(script_flow if isinstance(script_flow, list) else [], start=1):
+        if not isinstance(step, dict):
+            continue
+
+        expected_keywords = [
+            str(keyword).strip()
+            for keyword in (step.get("expected_keywords") or [])
+            if str(keyword).strip()
+        ] if isinstance(step.get("expected_keywords"), list) else []
+
+        sanitized_steps.append(
+            {
+                "step_id": str(step.get("step_id") or f"step-{index}").strip() or f"step-{index}",
+                "suggested_csr_script": str(step.get("suggested_csr_script") or "").strip(),
+                "member_response_text": str(step.get("member_response_text") or "").strip(),
+                "point_value": _coerce_nonnegative_float(step.get("point_value"), fallback=0.0),
+                "expected_keywords": expected_keywords,
+                "member_audio_url": _normalize_optional_url(step.get("member_audio_url")),
+            }
+        )
+
+    return sanitized_steps
+
+
+def _read_supabase_scenario_group_from_step_id(step_id: Any) -> str:
+    raw_step_id = str(step_id or "").strip()
+    normalized = re.sub(r"^scenario[-_:]*", "", raw_step_id, flags=re.IGNORECASE).strip()
+    return normalized or raw_step_id or "1"
+
+
+def _build_supabase_scenario_group_summary(
+    script_flow: list[dict[str, Any]],
+) -> Optional[str]:
+    ordered_groups: list[str] = []
+    seen_groups: set[str] = set()
+    for step in script_flow:
+        scenario_group = _read_supabase_scenario_group_from_step_id(step.get("step_id"))
+        if not scenario_group or scenario_group in seen_groups:
+            continue
+        seen_groups.add(scenario_group)
+        ordered_groups.append(scenario_group)
+
+    return ", ".join(ordered_groups) if ordered_groups else None
+
+
+def _build_supabase_kpi_metric_rows_from_target_kpis(
+    scenario_group_id: str,
+    target_kpis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    metric_candidates = [
+        ("Script Accuracy", target_kpis.get("speech_to_text_weight")),
+        ("AHT", target_kpis.get("aht_weight")),
+        ("Rate of Speech", target_kpis.get("rate_of_speech_weight")),
+        ("Dead Air", target_kpis.get("dead_air_weight")),
+        ("Empathy", target_kpis.get("empathy_statements_weight")),
+        ("Probing", target_kpis.get("probing_questions_weight")),
+        ("Grammar", target_kpis.get("grammar_weight")),
+        ("Pronunciation", target_kpis.get("pronunciation_weight")),
+        ("Pacing", target_kpis.get("pacing_weight")),
+    ]
+
+    metric_rows: list[dict[str, Any]] = []
+    for metric_name, raw_value in metric_candidates:
+        try:
+            weight_value = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+        metric_rows.append(
+            {
+                "scenario_group_id": scenario_group_id,
+                "metric_name": metric_name,
+                "weight_percentage": max(0, round(weight_value)),
+            }
+        )
+
+    return metric_rows
+
+
+def _build_supabase_authoring_script_rows(
+    scenario_id: str,
+    script_flow: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    sequence_order = 1
+    rows: list[dict[str, Any]] = []
+
+    for step in script_flow:
+        scenario_group = _read_supabase_scenario_group_from_step_id(step.get("step_id"))
+        expected_keywords = [
+            str(keyword).strip()
+            for keyword in (step.get("expected_keywords") or [])
+            if str(keyword).strip()
+        ] if isinstance(step.get("expected_keywords"), list) else []
+        csr_script = str(step.get("suggested_csr_script") or "").strip()
+
+        if csr_script:
+            rows.append(
+                {
+                    "scenario_id": scenario_id,
+                    "actor_type": "CSR",
+                    "content": csr_script,
+                    "score_weight": _coerce_nonnegative_float(step.get("point_value"), fallback=0.0),
+                    "sequence_order": sequence_order,
+                    "scenario_group": scenario_group,
+                    "audio_url": None,
+                    "metadata": {
+                        "step_id": step.get("step_id"),
+                        "expected_keywords": expected_keywords,
+                        "role": "csr",
+                    },
+                }
+            )
+            sequence_order += 1
+
+        member_script = str(step.get("member_response_text") or "").strip()
+        member_audio_url = _normalize_optional_url(step.get("member_audio_url"))
+        if member_script or member_audio_url:
+            rows.append(
+                {
+                    "scenario_id": scenario_id,
+                    "actor_type": "Member",
+                    "content": member_script,
+                    "score_weight": 0,
+                    "sequence_order": sequence_order,
+                    "scenario_group": scenario_group,
+                    "audio_url": member_audio_url,
+                    "metadata": {
+                        "step_id": step.get("step_id"),
+                        "role": "member",
+                    },
+                }
+            )
+            sequence_order += 1
+
+    return rows
+
+
+def _sync_supabase_scenario_authoring_tables(
+    supabase: Any,
+    *,
+    source_scenario_id: str,
+    trainer_id: str,
+    title: Optional[str],
+    description: Optional[str],
+    topic: str,
+    target_kpis: dict[str, Any],
+    script_flow: list[dict[str, Any]],
+    ringer_audio_url: Optional[str],
+    hold_audio_url: Optional[str],
+    difficulty: Optional[str],
+    estimated_duration_seconds: Any,
+    is_published: bool,
+    metadata: dict[str, Any],
+) -> None:
+    scenario_id = _normalize_uuid_candidate(source_scenario_id)
+    if not scenario_id:
+        raise RuntimeError(
+            "Scenario sync requires a UUID-shaped scenario id before it can mirror the trainer record to Supabase."
+        )
+
+    trainer_uuid = _normalize_uuid_candidate(trainer_id)
+    resolved_topic = str(topic or "").strip() or str(title or "").strip() or "Call Scenario"
+    resolved_title = str(title or "").strip() or resolved_topic
+    resolved_description = str(description or "").strip() or None
+    resolved_metadata = _normalize_json_object(metadata)
+    scenario_group = (
+        str(resolved_metadata.get("scenario_group_label") or "").strip()
+        or _build_supabase_scenario_group_summary(script_flow)
+    )
+    expected_keywords = list(
+        dict.fromkeys(
+            keyword
+            for step in script_flow
+            for keyword in (
+                [
+                    str(keyword_value).strip()
+                    for keyword_value in (step.get("expected_keywords") or [])
+                    if str(keyword_value).strip()
+                ]
+                if isinstance(step.get("expected_keywords"), list)
+                else []
+            )
+        )
+    )
+
+    try:
+        resolved_duration = float(estimated_duration_seconds)
+    except (TypeError, ValueError):
+        resolved_duration = 0.0
+
+    scenario_payload = {
+        "id": scenario_id,
+        "title": resolved_title,
+        "topic": resolved_topic,
+        "description": resolved_description,
+        "scenario_group": scenario_group,
+        "opening_prompt": resolved_description or str(script_flow[0].get("suggested_csr_script") or "").strip() or resolved_topic,
+        "expected_keywords": expected_keywords,
+        "estimated_duration": int(round(resolved_duration)) if resolved_duration > 0 else None,
+        "difficulty": str(difficulty or "").strip() or None,
+        "purpose": "practice",
+        "member_profile": {},
+        "cxone_metadata": {},
+        "call_simulation_config": {
+            **resolved_metadata,
+            "scenario_group_label": scenario_group,
+            "target_kpis": target_kpis,
+            "script_flow": script_flow,
+        },
+        "ringer_audio_url": _normalize_optional_url(ringer_audio_url),
+        "hold_audio_url": _normalize_optional_url(hold_audio_url),
+        "created_by": trainer_uuid,
+        "is_published": bool(is_published),
+        "is_draft": not bool(is_published),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+
+    supabase.table("scenarios").upsert(scenario_payload, on_conflict="id").execute()
+    supabase.table("scenario_groups").upsert(
+        {
+            "id": scenario_id,
+            "title": resolved_title,
+            "topic": resolved_topic,
+            "description": resolved_description,
+            "created_by": trainer_uuid,
+        },
+        on_conflict="id",
+    ).execute()
+
+    supabase.table("scripts").delete().eq("scenario_id", scenario_id).execute()
+    script_rows = _build_supabase_authoring_script_rows(scenario_id, script_flow)
+    if script_rows:
+        supabase.table("scripts").insert(script_rows).execute()
+
+    supabase.table("scenario_scripts").delete().eq("scenario_group_id", scenario_id).execute()
+    scenario_script_rows = [
+        {
+            "scenario_group_id": scenario_id,
+            "actor_type": row["actor_type"],
+            "script_text": row["content"],
+            "score_value": max(0, round(float(row.get("score_weight") or 0))),
+            "order_index": int(row.get("sequence_order") or 0),
+            "audio_url": _normalize_optional_url(row.get("audio_url")),
+        }
+        for row in script_rows
+    ]
+    if scenario_script_rows:
+        supabase.table("scenario_scripts").insert(scenario_script_rows).execute()
+
+    supabase.table("kpi_metrics").delete().eq("scenario_group_id", scenario_id).execute()
+    kpi_metric_rows = _build_supabase_kpi_metric_rows_from_target_kpis(scenario_id, target_kpis)
+    if kpi_metric_rows:
+        supabase.table("kpi_metrics").insert(kpi_metric_rows).execute()
+
+
+def _delete_supabase_scenario_mirror(
+    supabase: Any,
+    *,
+    source_scenario_id: str,
+) -> None:
+    try:
+        supabase.table("call_scenarios").delete().eq("source_scenario_id", source_scenario_id).execute()
+    except Exception:
+        supabase.table("call_scenarios").delete().eq("scenario_id", source_scenario_id).execute()
+
+    normalized_scenario_id = _normalize_uuid_candidate(source_scenario_id)
+    if not normalized_scenario_id:
+        return
+
+    supabase.table("scenario_scripts").delete().eq("scenario_group_id", normalized_scenario_id).execute()
+    supabase.table("scripts").delete().eq("scenario_id", normalized_scenario_id).execute()
+    supabase.table("kpi_metrics").delete().eq("scenario_group_id", normalized_scenario_id).execute()
+    supabase.table("scenario_groups").delete().eq("id", normalized_scenario_id).execute()
+    supabase.table("scenarios").delete().eq("id", normalized_scenario_id).execute()
 
 
 def _get_trainer_call_audio_settings(current_user: User) -> dict[str, Any]:
@@ -3510,13 +3819,10 @@ async def update_call_simulation_scenario(
         )
 
     if scenario_update.variations is not None:
-        existing_variations = (
-            db.query(ScenarioVariation)
-            .filter(ScenarioVariation.scenario_id == scenario.id)
-            .all()
+        _deactivate_scenario_variations(
+            db,
+            scenario_id=scenario.id,
         )
-        for variation in existing_variations:
-            variation.is_active = False
 
         for variation_data in scenario_update.variations:
             db.add(
@@ -3531,13 +3837,10 @@ async def update_call_simulation_scenario(
                 )
             )
     elif row_assets:
-        existing_variations = (
-            db.query(ScenarioVariation)
-            .filter(ScenarioVariation.scenario_id == scenario.id)
-            .all()
+        _deactivate_scenario_variations(
+            db,
+            scenario_id=scenario.id,
         )
-        for variation in existing_variations:
-            variation.is_active = False
         for variation_data in row_assets["variations"]:
             db.add(
                 ScenarioVariation(
@@ -3639,10 +3942,12 @@ async def sync_scenario_to_supabase(
     """Sync scenario data to Supabase"""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
-    
+
     try:
-        supabase = get_supabase_client()
-        
+        supabase = _require_supabase_storage(
+            "Supabase sync is required for call simulation scenario mirroring."
+        )
+
         # Handle syncFromDatabase flag for bulk upload scenarios
         if sync_data.get("syncFromDatabase"):
             scenario_id = sync_data.get("scenarioId")
@@ -3675,6 +3980,9 @@ async def sync_scenario_to_supabase(
                 scenario,
                 batch_id=str(sync_batch_id) if sync_batch_id else None,
             )
+            sanitized_script_flow = _sanitize_supabase_script_flow(
+                scenario_config.get("script_flow")
+            )
             passing_score = _resolve_call_scenario_passing_score(
                 scenario,
                 float(
@@ -3690,8 +3998,8 @@ async def sync_scenario_to_supabase(
                 "title": scenario.title,
                 "topic": str(scenario_config.get("topic") or scenario.lob or scenario.title),
                 "description": scenario.description,
-                "target_kpis": scenario_config.get("target_kpis", {}),
-                "script_flow": scenario_config.get("script_flow", []),
+                "target_kpis": _normalize_json_object(scenario_config.get("target_kpis")),
+                "script_flow": sanitized_script_flow,
                 "ringer_audio_url": scenario.ringer_audio_url,
                 "hold_audio_url": scenario.hold_audio_url,
                 "difficulty": scenario.difficulty or "intermediate",
@@ -3706,17 +4014,22 @@ async def sync_scenario_to_supabase(
             scenario_data = sync_data.get("scenario")
             if not scenario_data:
                 raise HTTPException(status_code=400, detail="scenario data required")
+            if not isinstance(scenario_data, dict):
+                raise HTTPException(status_code=400, detail="scenario data must be an object")
 
             logger.debug("Syncing scenario data to Supabase: %s", scenario_data.get("scenarioId"))
-            
+            sanitized_script_flow = _sanitize_supabase_script_flow(
+                scenario_data.get("scriptFlow")
+            )
+
             scenario_sync_data = {
                 "source_scenario_id": str(scenario_data.get("scenarioId")),
                 "trainer_id": str(current_user.id),
                 "title": str(scenario_data.get("title", "")),
                 "topic": str(scenario_data.get("topic", "")),
                 "description": scenario_data.get("description"),
-                "target_kpis": scenario_data.get("targetKpis", {}),
-                "script_flow": scenario_data.get("scriptFlow", []),
+                "target_kpis": _normalize_json_object(scenario_data.get("targetKpis")),
+                "script_flow": sanitized_script_flow,
                 "ringer_audio_url": scenario_data.get("ringerAudioUrl"),
                 "hold_audio_url": scenario_data.get("holdAudioUrl"),
                 "difficulty": scenario_data.get("difficulty") or "intermediate",
@@ -3724,9 +4037,9 @@ async def sync_scenario_to_supabase(
                 "passing_score": float(scenario_data.get("passingScore", 80)),
                 "is_published": bool(scenario_data.get("isPublished", True)),
                 "is_active": bool(scenario_data.get("isActive", True)),
-                "metadata": scenario_data.get("metadata", {}),
+                "metadata": _normalize_json_object(scenario_data.get("metadata")),
             }
-        
+
         try:
             # Try to upsert the scenario record - Supabase will use the unique index on source_scenario_id
             result = supabase.table("call_scenarios").upsert(
@@ -3759,13 +4072,64 @@ async def sync_scenario_to_supabase(
             except Exception as fallback_error:
                 logger.error("Fallback insert/update failed: %s", fallback_error)
                 raise fallback_error
-        
+
+        _sync_supabase_scenario_authoring_tables(
+            supabase,
+            source_scenario_id=scenario_sync_data["source_scenario_id"],
+            trainer_id=scenario_sync_data["trainer_id"],
+            title=scenario_sync_data.get("title"),
+            description=scenario_sync_data.get("description"),
+            topic=str(scenario_sync_data.get("topic") or ""),
+            target_kpis=_normalize_json_object(scenario_sync_data.get("target_kpis")),
+            script_flow=_sanitize_supabase_script_flow(scenario_sync_data.get("script_flow")),
+            ringer_audio_url=_normalize_optional_url(scenario_sync_data.get("ringer_audio_url")),
+            hold_audio_url=_normalize_optional_url(scenario_sync_data.get("hold_audio_url")),
+            difficulty=_normalize_optional_url(scenario_sync_data.get("difficulty")),
+            estimated_duration_seconds=scenario_sync_data.get("estimated_duration_seconds"),
+            is_published=bool(scenario_sync_data.get("is_published", True)),
+            metadata=_normalize_json_object(scenario_sync_data.get("metadata")),
+        )
+
         return SuccessResponse(message="Scenario sync completed successfully")
     except Exception as exc:
         logger.error("Error syncing scenario to Supabase: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to sync scenario to Supabase: {str(exc)}"
+        ) from exc
+
+
+@router.delete("/scenarios/sync", response_model=SuccessResponse)
+async def delete_scenario_from_supabase(
+    sync_data: dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    scenario_id = str(sync_data.get("scenarioId") or "").strip()
+    if not scenario_id:
+        raise HTTPException(status_code=400, detail="scenarioId required")
+
+    scenario = db.query(Scenario).filter(Scenario.id == scenario_id).first()
+    if scenario is not None:
+        _get_accessible_scenario(db, current_user, scenario_id)
+
+    try:
+        supabase = _require_supabase_storage(
+            "Supabase sync is required for call simulation scenario cleanup."
+        )
+        _delete_supabase_scenario_mirror(
+            supabase,
+            source_scenario_id=scenario_id,
+        )
+        return SuccessResponse(message="Scenario cleanup completed successfully")
+    except Exception as exc:
+        logger.error("Error deleting scenario from Supabase: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete scenario from Supabase: {str(exc)}"
         ) from exc
 
 
@@ -3780,46 +4144,67 @@ async def sync_kpi_to_supabase(
     _require_trainer(current_user)
 
     try:
-        supabase = get_supabase_client()
-        
+        supabase = _require_supabase_storage(
+            "Supabase sync is required for call simulation KPI mirroring."
+        )
+
         scenario_group_ids = sync_data.get("scenarioGroupIds", [])
         metrics = sync_data.get("metrics", [])
-        
-        if not scenario_group_ids:
+
+        if not isinstance(scenario_group_ids, list) or not scenario_group_ids:
             raise HTTPException(status_code=400, detail="scenarioGroupIds required")
-        if not metrics:
+        if not isinstance(metrics, list) or not metrics:
             raise HTTPException(status_code=400, detail="metrics required")
-        
-        # Build KPI configuration from metrics
-        kpi_config = {
-            "trainer_id": str(current_user.id),
-            "speech_to_text_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Script Accuracy"), 0),
-            "aht_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "AHT"), 0),
-            "rate_of_speech_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Rate of Speech"), 0),
-            "dead_air_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Dead Air"), 0),
-            "empathy_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Empathy"), 0),
-            "probing_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Probing"), 0),
-            "grammar_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Grammar"), 0),
-            "pronunciation_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Pronunciation"), 0),
-            "pacing_weight": next((m.get("weightPercentage", 0) for m in metrics if m.get("metricName") == "Pacing"), 0),
-        }
-        
-        # Sync KPI config for each scenario group
-        for scenario_id in scenario_group_ids:
-            kpi_sync_data = {
-                **kpi_config,
-                "source_scenario_id": scenario_id,
-            }
-            
+
+        normalized_scenario_group_ids = [
+            scenario_group_id
+            for scenario_group_id in (
+                _normalize_uuid_candidate(value) for value in scenario_group_ids
+            )
+            if scenario_group_id
+        ]
+        if not normalized_scenario_group_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="scenarioGroupIds must contain at least one UUID-shaped scenario id",
+            )
+
+        normalized_metrics: list[dict[str, Any]] = []
+        for metric in metrics:
+            if not isinstance(metric, dict):
+                continue
+            metric_name = str(metric.get("metricName") or "").strip()
+            if not metric_name:
+                continue
             try:
-                supabase.table("kpi_metrics").upsert(
-                    {**kpi_sync_data, "updated_at": "now()"},
-                    on_conflict="source_scenario_id"
-                ).execute()
-                logger.info("Synced KPI metrics for scenario %s to Supabase", scenario_id)
-            except Exception as kpi_error:
-                logger.warning("Failed to sync KPI metrics for scenario %s: %s", scenario_id, kpi_error)
-        
+                weight_value = float(metric.get("weightPercentage") or 0)
+            except (TypeError, ValueError):
+                weight_value = 0.0
+            normalized_metrics.append(
+                {
+                    "metric_name": metric_name,
+                    "weight_percentage": max(0, round(weight_value)),
+                }
+            )
+
+        if not normalized_metrics:
+            raise HTTPException(status_code=400, detail="metrics must contain at least one named KPI weight")
+
+        supabase.table("kpi_metrics").delete().in_(
+            "scenario_group_id",
+            normalized_scenario_group_ids,
+        ).execute()
+
+        metric_rows = [
+            {
+                "scenario_group_id": scenario_group_id,
+                **metric,
+            }
+            for scenario_group_id in normalized_scenario_group_ids
+            for metric in normalized_metrics
+        ]
+        supabase.table("kpi_metrics").insert(metric_rows).execute()
+
         return SuccessResponse(message="KPI sync completed successfully")
     except HTTPException:
         raise
@@ -4360,7 +4745,7 @@ async def bulk_upload_scenarios(
     first_group = grouped_rows[0]
     first_csr_row = row_assets["first_csr_row"]
     first_member_row = row_assets["first_member_row"]
-    existing_mapping = (
+    existing_mappings = (
         db.query(BatchScenarioMapping)
         .join(Scenario, Scenario.id == BatchScenarioMapping.scenario_id)
         .filter(
@@ -4369,23 +4754,24 @@ async def bulk_upload_scenarios(
             Scenario.created_by == current_user.id,
         )
         .order_by(BatchScenarioMapping.assigned_at.desc())
-        .first()
+        .all()
     )
-    target_scenario = (
-        db.query(Scenario).filter(Scenario.id == existing_mapping.scenario_id).first()
-        if existing_mapping
-        else None
-    )
+    retired_scenario_ids = {
+        str(mapping.scenario_id)
+        for mapping in existing_mappings
+        if mapping.scenario_id
+    }
+    for mapping in existing_mappings:
+        mapping.is_active = False
 
-    if target_scenario is None:
-        target_scenario = Scenario(
-            id=str(uuid.uuid4()),
-            title=scenario_title_text,
-            created_by=current_user.id,
-            opening_prompt="Answer the call, review the member context, and deliver the expected CSR spiel.",
-        )
-        db.add(target_scenario)
-        db.flush()
+    target_scenario = Scenario(
+        id=str(uuid.uuid4()),
+        title=scenario_title_text,
+        created_by=current_user.id,
+        opening_prompt="Answer the call, review the member context, and deliver the expected CSR spiel.",
+    )
+    db.add(target_scenario)
+    db.flush()
 
     target_scenario.title = scenario_title_text
     target_scenario.description = (
@@ -4442,24 +4828,15 @@ async def bulk_upload_scenarios(
     target_scenario.is_published = True
     target_scenario.is_draft = False
 
-    if existing_mapping:
-        existing_mapping.is_active = True
-        existing_mapping.assigned_by = current_user.id
-        existing_mapping.assigned_at = datetime.utcnow()
-    else:
-        db.add(
-            BatchScenarioMapping(
-                id=str(uuid.uuid4()),
-                batch_id=batch.id,
-                scenario_id=target_scenario.id,
-                assigned_by=current_user.id,
-                is_active=True,
-            )
+    db.add(
+        BatchScenarioMapping(
+            id=str(uuid.uuid4()),
+            batch_id=batch.id,
+            scenario_id=target_scenario.id,
+            assigned_by=current_user.id,
+            is_active=True,
         )
-
-    for variation in db.query(ScenarioVariation).filter(ScenarioVariation.scenario_id == target_scenario.id).all():
-        db.delete(variation)
-    db.flush()
+    )
 
     uploaded_steps = row_assets["steps"]
     variations_created = 0
@@ -4489,6 +4866,9 @@ async def bulk_upload_scenarios(
     )
 
     _sync_call_simulation_assignments_for_scenario(db, target_scenario.id)
+    for retired_scenario_id in retired_scenario_ids:
+        if retired_scenario_id != target_scenario.id:
+            _sync_call_simulation_assignments_for_scenario(db, retired_scenario_id)
 
     # After creating scenario, sync to Supabase
     try:

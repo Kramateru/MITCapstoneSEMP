@@ -33,6 +33,13 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return normalized in {"1", "true", "yes", "on"}
 
 
+def _default_local_tts_enabled() -> bool:
+    normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
+    if normalized:
+        return normalized in {"1", "true", "yes", "on"}
+    return os.path.exists("/.dockerenv") or bool(normalize_env_value(os.getenv("RENDER")))
+
+
 class TTSService:
     """Text-to-Speech service for call simulation."""
 
@@ -41,7 +48,7 @@ class TTSService:
         self.azure_speech_key = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
         self.azure_speech_region = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
         self.azure_voice_name = normalize_env_value(os.getenv("AZURE_TTS_VOICE")) or "en-US-JennyNeural"
-        self.enable_local_tts = _env_flag("ENABLE_LOCAL_TTS", False)
+        self.enable_local_tts = _default_local_tts_enabled()
         if not self.enable_local_tts:
             logger.info("Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini/Azure audio is unavailable.")
 

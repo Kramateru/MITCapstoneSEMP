@@ -17,6 +17,8 @@ services:
         sync: false
       - key: SUPABASE_URL
         sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: SUPABASE_SERVICE_KEY
@@ -39,6 +41,8 @@ services:
       - key: OPENAI_API_KEY
         sync: false
         optional: true
+      - key: ENABLE_LOCAL_TTS
+        value: "1"
 
   # --- Frontend Next.js ---
   - type: web
@@ -57,6 +61,8 @@ services:
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
         sync: false
       - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: VITE_SUPABASE_URL
         sync: false

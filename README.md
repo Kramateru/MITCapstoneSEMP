@@ -18,6 +18,7 @@ Store the production values in the repo root `.env` or `backend/.env`. The backe
 USE_LOCAL_SQLITE=0
 DATABASE_URL=postgresql://<supabase-postgres-connection>
 SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_PUBLISHABLE_KEY=<publishable-or-anon-key>
 SUPABASE_SERVICE_ROLE_KEY=<service-role-or-sb_secret-key>
 SUPABASE_SERVICE_KEY=<service-role-or-sb_secret-key>
 NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
@@ -48,11 +49,13 @@ Never place the Supabase service-role key in a frontend env file.
 Backend service:
 
 - `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `SUPABASE_SERVICE_KEY`
 - `DATABASE_URL`
 - `BACKEND_URL`
 - `FRONTEND_URL`
+- `ENABLE_LOCAL_TTS=1`
 
 Frontend service:
 

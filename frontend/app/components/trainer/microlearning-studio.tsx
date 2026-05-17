@@ -348,6 +348,7 @@ export default function TrainerMicrolearningStudio() {
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [audioUploading, setAudioUploading] = useState(false);
   const [audioProcessing, setAudioProcessing] = useState(false);
+  const [assetPreviewUrl, setAssetPreviewUrl] = useState('');
   const [showModuleDialog, setShowModuleDialog] = useState(false);
   const [showCategoryDialog, setShowCategoryDialog] = useState(false);
   const [editingModule, setEditingModule] = useState<MicrolearningModule | null>(null);
@@ -509,9 +510,11 @@ export default function TrainerMicrolearningStudio() {
       formData.append('module_type', moduleForm.module_type);
       const payload = await uploadWithProgress<{
         asset_url?: string;
+        signed_url?: string;
         asset_record_id?: string;
         storage_path?: string;
         bucket_name?: string;
+        storage_backend?: string;
         content_type?: string;
         signed_url_required?: boolean;
         file_name?: string;
@@ -519,6 +522,10 @@ export default function TrainerMicrolearningStudio() {
         byte_size?: number;
         uploaded_at?: string;
       }>('/api/trainer/microlearning-assets/upload', formData);
+      const nextPreviewUrl =
+        typeof payload?.signed_url === 'string' && payload.signed_url.trim()
+          ? payload.signed_url
+          : payload?.asset_url || '';
       setModuleForm((current) => ({
         ...current,
         content_url: payload?.asset_url || '',
@@ -536,11 +543,15 @@ export default function TrainerMicrolearningStudio() {
               : file.size,
         asset_uploaded_at: typeof payload?.uploaded_at === 'string' ? payload.uploaded_at : new Date().toISOString(),
       }));
+      setAssetPreviewUrl(nextPreviewUrl);
       toast.success(
         moduleForm.module_type === 'video'
           ? 'Video uploaded successfully. Save the module to keep this uploaded lesson attached.'
           : 'Asset uploaded successfully.',
       );
+      if (payload?.storage_backend === 'local_media') {
+        toast.info('Supabase storage is unavailable right now, so the asset was saved to local /media storage for development.');
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Asset upload failed.');
     } finally {
@@ -596,6 +607,60 @@ export default function TrainerMicrolearningStudio() {
     editingModule?.id,
     fetchAudioPreviewUrl,
     moduleForm.audio_content_id,
+    moduleForm.content_url,
+    moduleForm.module_type,
+    showModuleDialog,
+  ]);
+
+  const fetchModuleAssetPreviewUrl = useCallback(
+    async (moduleId: string) => {
+      if (!token) {
+        throw new Error('Your session has expired. Please sign in again.');
+      }
+
+      const response = await authedFetch(`/api/microlearning/modules/${moduleId}/asset/signed-url`, {
+        method: 'GET',
+      });
+      const payload = await response.json().catch(() => null);
+      return (
+        (typeof payload?.signed_url === 'string' ? payload.signed_url : '')
+        || (typeof payload?.asset_url === 'string' ? payload.asset_url : '')
+      );
+    },
+    [authedFetch, token],
+  );
+
+  useEffect(() => {
+    if (!showModuleDialog) {
+      setAssetPreviewUrl('');
+      return;
+    }
+
+    if (moduleForm.module_type !== 'video') {
+      setAssetPreviewUrl('');
+      return;
+    }
+
+    const directUrl = moduleForm.content_url.trim();
+    if (getTrainerYouTubeEmbedUrl(directUrl)) {
+      setAssetPreviewUrl('');
+      return;
+    }
+
+    const moduleId = editingModule?.id;
+    if (!moduleId || !moduleForm.asset_storage_path) {
+      setAssetPreviewUrl(directUrl);
+      return;
+    }
+
+    void fetchModuleAssetPreviewUrl(moduleId).then(
+      (nextUrl) => setAssetPreviewUrl(nextUrl || directUrl),
+      () => setAssetPreviewUrl(directUrl),
+    );
+  }, [
+    editingModule?.id,
+    fetchModuleAssetPreviewUrl,
+    moduleForm.asset_storage_path,
     moduleForm.content_url,
     moduleForm.module_type,
     showModuleDialog,
@@ -1044,9 +1109,13 @@ export default function TrainerMicrolearningStudio() {
   const selectedTopicName =
     categories.find((category) => category.id === moduleForm.topic_category_id)?.name || 'No topic selected';
   const trainerVideoPreviewUrl = moduleForm.module_type === 'video' ? moduleForm.content_url.trim() : '';
+  const trainerDirectVideoPreviewUrl =
+    moduleForm.module_type === 'video' ? (assetPreviewUrl || trainerVideoPreviewUrl) : '';
   const trainerYouTubePreviewUrl = getTrainerYouTubeEmbedUrl(trainerVideoPreviewUrl);
   const trainerShowsDirectVideoPreview =
-    Boolean(trainerVideoPreviewUrl) && !trainerYouTubePreviewUrl && isTrainerDirectVideoFile(trainerVideoPreviewUrl);
+    Boolean(trainerDirectVideoPreviewUrl)
+    && !trainerYouTubePreviewUrl
+    && isTrainerDirectVideoFile(trainerDirectVideoPreviewUrl);
   const trainerHasInvalidVideoReference =
     moduleForm.module_type === 'video'
     && Boolean(trainerVideoPreviewUrl)
@@ -1478,7 +1547,7 @@ export default function TrainerMicrolearningStudio() {
       </Dialog>
 
       <Dialog open={showModuleDialog} onOpenChange={setShowModuleDialog}>
-        <DialogContent className="flex h-[95vh] min-h-0 w-[96vw] !max-w-[96vw] flex-col gap-0 overflow-hidden p-0 sm:h-[93vh] sm:!max-w-[90vw] md:!max-w-[84vw] lg:!max-w-[78vw] xl:!max-w-[70vw] 2xl:!max-w-[60vw]">
+        <DialogContent className="flex h-[95vh] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:h-[93vh]">
           <DialogHeader className="shrink-0 border-b px-5 py-5 pr-12 sm:px-7">
             <DialogTitle className="text-2xl sm:text-[1.65rem]">{editingModule ? 'Edit Module' : 'Create Module'}</DialogTitle>
             <DialogDescription className="max-w-4xl text-sm leading-6 sm:text-base">
@@ -1704,7 +1773,7 @@ export default function TrainerMicrolearningStudio() {
                           </div>
                         </div>
                       ) : trainerShowsDirectVideoPreview ? (
-                        <video controls className="mt-3 w-full rounded-lg border" src={trainerVideoPreviewUrl} />
+                        <video controls className="mt-3 w-full rounded-lg border" src={trainerDirectVideoPreviewUrl} />
                       ) : (
                         <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
                           External lesson reference saved. Trainees will open the same link from their microlearning workspace.

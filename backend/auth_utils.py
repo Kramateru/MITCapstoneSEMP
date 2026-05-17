@@ -10,10 +10,8 @@ from typing import Optional
 import bcrypt
 from fastapi import Depends, Header, HTTPException, Request, status
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from .database import get_db
 from .models import User, UserRole
@@ -34,7 +32,9 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 # Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+BCRYPT_PASSWORD_MAX_BYTES = 72
+PASSWORD_TOO_LONG_MESSAGE = f"Password must not exceed {BCRYPT_PASSWORD_MAX_BYTES} bytes."
+PASSWORD_REQUIRED_MESSAGE = "Password is required."
 
 
 class TokenData(BaseModel):
@@ -54,42 +54,72 @@ class TokenResponse(BaseModel):
 
 # ===================== Password Management =====================
 
-def _bcrypt_secret(password: str) -> bytes:
-    """Normalize bcrypt input to its 72-byte maximum."""
-    return (password or "").encode("utf-8")[:72]
+class PasswordValidationError(ValueError):
+    """Raised when a password cannot be processed safely."""
 
 
-def _bcrypt_secret_text(password: str) -> str:
-    """Return a text form that matches the truncated bcrypt bytes."""
-    return _bcrypt_secret(password).decode("utf-8", "ignore")
+def get_password_byte_length(password: Optional[str]) -> int:
+    """Return the UTF-8 byte length used by bcrypt's 72-byte limit."""
+    return len((password or "").encode("utf-8"))
+
+
+def validate_password_length(
+    password: Optional[str],
+    *,
+    field_name: str = "Password",
+    allow_empty: bool = False,
+) -> str:
+    """
+    Validate password input before handing it to bcrypt.
+
+    Bcrypt only processes the first 72 bytes of the password. Rejecting longer
+    inputs avoids silent truncation and confusing login mismatches.
+    """
+    normalized_password = password if isinstance(password, str) else ""
+
+    if not normalized_password and not allow_empty:
+        if field_name == "Password":
+            raise PasswordValidationError(PASSWORD_REQUIRED_MESSAGE)
+        raise PasswordValidationError(f"{field_name} is required.")
+
+    if get_password_byte_length(normalized_password) > BCRYPT_PASSWORD_MAX_BYTES:
+        raise PasswordValidationError(PASSWORD_TOO_LONG_MESSAGE)
+
+    return normalized_password
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
-    normalized_password = _bcrypt_secret_text(password)
+    """Hash a password using bcrypt after validating its byte length."""
+    normalized_password = validate_password_length(password)
     try:
-        return pwd_context.hash(normalized_password)
+        return bcrypt.hashpw(normalized_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     except ValueError as exc:
-        logger.warning(f"Falling back to direct bcrypt hashing: {str(exc)}")
-        return bcrypt.hashpw(_bcrypt_secret(password), bcrypt.gensalt()).decode("utf-8")
+        logger.warning("Password hashing error: %s", exc)
+        raise
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against a hash"""
+    """Verify a password against a stored hash without exposing password input."""
     try:
-        return pwd_context.verify(_bcrypt_secret_text(plain_password), hashed_password)
-    except (ValueError, TypeError) as e:
-        logger.warning(f"Password verification error: {str(e)}")
-        try:
-            hashed_bytes = (
-                hashed_password.encode("utf-8")
-                if isinstance(hashed_password, str)
-                else hashed_password
-            )
-            return bcrypt.checkpw(_bcrypt_secret(plain_password), hashed_bytes)
-        except (ValueError, TypeError, AttributeError) as fallback_error:
-            logger.warning(f"Direct bcrypt verification error: {str(fallback_error)}")
-            return False
+        normalized_password = validate_password_length(plain_password)
+    except PasswordValidationError as exc:
+        logger.info("Rejected password verification input: %s", exc)
+        return False
+
+    if not hashed_password:
+        logger.warning("Password verification skipped because the stored hash is empty.")
+        return False
+
+    try:
+        hashed_bytes = (
+            hashed_password.encode("utf-8")
+            if isinstance(hashed_password, str)
+            else hashed_password
+        )
+        return bcrypt.checkpw(normalized_password.encode("utf-8"), hashed_bytes)
+    except (ValueError, TypeError, AttributeError) as exc:
+        logger.warning("Password verification error: %s", exc)
+        return False
 
 
 # ===================== JWT Token Management =====================

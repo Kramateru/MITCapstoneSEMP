@@ -22,6 +22,13 @@ def _env_flag(name: str, default: bool = False) -> bool:
         return default
     return normalized in {"1", "true", "yes", "on"}
 
+
+def _default_local_tts_enabled() -> bool:
+    normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
+    if normalized:
+        return normalized in {"1", "true", "yes", "on"}
+    return os.path.exists("/.dockerenv") or bool(normalize_env_value(os.getenv("RENDER")))
+
 # Try to import Gemini TTS
 try:
     from google import genai
@@ -56,7 +63,7 @@ class TextToSpeechService:
     def __init__(self):
         # Gemini TTS configuration
         self.gemini_api_key = normalize_env_value(os.getenv("GEMINI_API_KEY"))
-        self.enable_local_tts = _env_flag("ENABLE_LOCAL_TTS", False)
+        self.enable_local_tts = _default_local_tts_enabled()
         self.gemini_client = None
         if GEMINI_TTS_AVAILABLE and self.gemini_api_key:
             try:

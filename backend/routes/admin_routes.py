@@ -169,6 +169,13 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _validate_password_or_raise(password: Optional[str], *, field_name: str = "Password") -> str:
+    try:
+        return auth_utils.validate_password_length(password, field_name=field_name)
+    except auth_utils.PasswordValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def _ensure_user(
     db: Session,
     *,
@@ -180,6 +187,7 @@ def _ensure_user(
     department: Optional[str] = None,
     language_dialect: str = "en-US",
 ):
+    password = auth_utils.validate_password_length(password)
     user = db.query(User).filter(func.lower(User.email) == _normalize_email(email)).first()
     created = user is None
 
@@ -1061,7 +1069,9 @@ async def create_user(
         UserRole.ADMIN: DEFAULT_ADMIN_PASSWORD,
         UserRole.TRAINER: DEFAULT_TRAINER_PASSWORD,
     }
-    temporary_password = user_data.password or default_passwords[user_data.role]
+    temporary_password = _validate_password_or_raise(
+        user_data.password or default_passwords[user_data.role]
+    )
 
     new_user = User(
         email=normalized_email,
@@ -1139,6 +1149,7 @@ async def bulk_upload_users(
                     row.get("password")
                     or (DEFAULT_TRAINEE_PASSWORD if role == UserRole.TRAINEE else "ChangeMe@123")
                 )
+                temporary_password = auth_utils.validate_password_length(temporary_password)
                 with db.begin_nested():
                     new_user = User(
                         email=row["email"].strip().lower(),
