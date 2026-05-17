@@ -130,6 +130,46 @@ interface KPIConfig {
   target_dead_air_seconds: number;
 }
 
+interface DialerFeedbackKpiBreakdownItem {
+  category: string;
+  score: number;
+  feedback: string;
+}
+
+interface DialerFeedbackReport {
+  provider: 'gemini' | 'fallback';
+  model: string;
+  overallSummary: string;
+  totalScore: number;
+  passingScore: number;
+  passed: boolean;
+  summary: string;
+  overall_score: number;
+  strengths: string[];
+  areas_for_improvement: string[];
+  kpi_breakdown: DialerFeedbackKpiBreakdownItem[];
+  coaching_recommendation: string;
+  transcript_summary: string;
+  scriptAccuracy: {
+    score: number;
+    strengths: string[];
+    misses: string[];
+  };
+  grammarAndPronunciation: {
+    score: number;
+    notes: string[];
+  };
+  softSkills: {
+    score: number;
+    notes: string[];
+  };
+  pacingAndAht: {
+    ahtSeconds: number;
+    notes: string[];
+  };
+  coachingTips: string[];
+}
+
 interface InteractionSession {
   id: string;
   trainee_id?: string;
@@ -147,6 +187,7 @@ interface InteractionSession {
   transcript_log?: Array<Record<string, unknown>>;
   turn_logs?: Array<Record<string, unknown>>;
   ai_feedback?: string;
+  feedback_report?: DialerFeedbackReport | null;
   coaching_notes?: string;
   grammar_score?: number;
   pronunciation_score?: number;
@@ -203,6 +244,8 @@ interface ScenarioFormState {
   opening_prompt: string;
   expected_keywords: string;
   estimated_duration: string;
+  passing_score: string;
+  max_attempts: string;
   target_kpis_json: string;
   member_name: string;
   member_id: string;
@@ -225,6 +268,8 @@ interface MemberSpeechAssetResponse {
   audio_url?: string | null;
   warning?: string | null;
   storage_mode?: string | null;
+  fallback_mode?: string | null;
+  provider?: string | null;
   detail?: string;
 }
 
@@ -300,6 +345,8 @@ const createDefaultScenarioForm = (): ScenarioFormState => ({
   opening_prompt: 'Answer the call, review the member context, and deliver the expected CSR spiel.',
   expected_keywords: 'thank you for calling, member id, verification',
   estimated_duration: '180',
+  passing_score: String(defaultKpiForm.passing_score),
+  max_attempts: '3',
   target_kpis_json: JSON.stringify(buildTargetKpisFromConfig(defaultKpiForm), null, 2),
   member_name: 'Calvin Smith',
   member_id: 'HBP-100245',
@@ -398,6 +445,20 @@ function readAttemptLimit(value: unknown, fallback = 3) {
 function resolveScenarioAttemptLimit(scenario?: Scenario | null, fallback = 3) {
   const configuredValue = scenario?.call_simulation_config?.max_attempts;
   return readAttemptLimit(configuredValue, fallback);
+}
+
+function resolveScenarioPassingScore(scenario?: Scenario | null, fallback = 90) {
+  const config = scenario?.call_simulation_config;
+  const targetKpis =
+    config?.target_kpis && typeof config.target_kpis === 'object'
+      ? config.target_kpis as Record<string, unknown>
+      : {};
+  const configuredValue =
+    config?.passing_score
+    ?? config?.certification_threshold
+    ?? targetKpis.passing_score;
+
+  return readPointValue(configuredValue, fallback);
 }
 
 function parseScenarioConfig(scenario: Scenario) {
@@ -531,6 +592,8 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
     opening_prompt: scenario.opening_prompt || '',
     expected_keywords: (scenario.expected_keywords || []).join(', '),
     estimated_duration: String(scenario.estimated_duration || 120),
+    passing_score: String(resolveScenarioPassingScore(scenario, defaultKpiForm.passing_score)),
+    max_attempts: String(resolveScenarioAttemptLimit(scenario, 3)),
     target_kpis_json: JSON.stringify(
       typeof targetKpis === 'object' && targetKpis ? targetKpis : buildTargetKpisFromConfig(defaultKpiForm),
       null,
@@ -660,7 +723,10 @@ function buildSupabaseScenarioSyncBody(scenario: Scenario) {
     ? scenarioConfig.target_kpis as Record<string, unknown>
     : buildTargetKpisFromConfig(defaultKpiForm);
   const passingScoreCandidate =
-    targetKpis.passing_score ?? scenarioConfig.certification_threshold ?? defaultKpiForm.passing_score;
+    scenarioConfig.passing_score
+    ?? targetKpis.passing_score
+    ?? scenarioConfig.certification_threshold
+    ?? defaultKpiForm.passing_score;
   const passingScore = typeof passingScoreCandidate === 'number'
     ? passingScoreCandidate
     : Number(passingScoreCandidate || 80);
@@ -1141,7 +1207,12 @@ export default function TrainerSimFloorPage() {
       return;
     }
 
-    const targetKpis = buildTargetKpisFromConfig(kpiForm);
+    const scenarioPassingScore = readPointValue(scenarioForm.passing_score, defaultKpiForm.passing_score);
+    const scenarioMaxAttempts = readAttemptLimit(scenarioForm.max_attempts, 3);
+    const targetKpis = {
+      ...buildTargetKpisFromConfig(kpiForm),
+      passing_score: scenarioPassingScore,
+    };
 
     const rows = buildScenarioRowsPayload(scenarioForm.rows).map((row) =>
       isCsrActor(row.actor_name)
@@ -1299,9 +1370,11 @@ export default function TrainerSimFloorPage() {
           topic: scenarioForm.topic.trim() || scenarioForm.title.trim(),
           scenario_group_label: scenarioForm.scenario_group_label.trim() || null,
           target_kpis: targetKpis,
+          passing_score: scenarioPassingScore,
           script_flow: scriptFlow,
           script_rows: rows,
-          certification_threshold: Number(targetKpis.passing_score || defaultKpiForm.passing_score),
+          certification_threshold: scenarioPassingScore,
+          max_attempts: scenarioMaxAttempts,
           interface: 'nice-cxone',
           trainee_talk_icon: true,
           member_talk_icon: true,
@@ -1352,7 +1425,7 @@ export default function TrainerSimFloorPage() {
       setShowScenarioDialog(false);
       setEditingScenarioId(null);
       setScenarioForm(createDefaultScenarioForm());
-      toast.success(editingScenarioId ? 'Module updated.' : 'Module created.');
+      toast.success(editingScenarioId ? 'Scenario updated.' : 'Scenario created.');
       try {
         await refreshScenarioData();
       } catch (refreshError) {
@@ -1412,8 +1485,8 @@ export default function TrainerSimFloorPage() {
       }
       toast.success(
         selectedAssignmentTrainees.length > 0
-          ? `Module assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'} with a ${resolvedAttemptLimit}-attempt limit.`
-          : 'Module removed from all trainee assignments in this batch.',
+          ? `Scenario assigned to ${selectedAssignmentTrainees.length} trainee${selectedAssignmentTrainees.length === 1 ? '' : 's'} with a ${resolvedAttemptLimit}-attempt limit.`
+          : 'Scenario removed from all trainee assignments in this batch.',
       );
     } catch (error) {
       console.error(error);
@@ -1704,14 +1777,15 @@ export default function TrainerSimFloorPage() {
         method: 'POST',
       });
       const payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
-      if (!response.ok || !payload?.audio_url) {
+      if (!response.ok || !payload) {
         throw new Error(payload?.detail || 'Unable to generate member speech');
       }
 
       return {
-        audioUrl: payload.audio_url,
+        audioUrl: payload.audio_url || null,
         warning: payload.warning || null,
         storageMode: payload.storage_mode || null,
+        fallbackMode: payload.fallback_mode || null,
       };
     }, [authedFetch, editingScenarioId]);
 
@@ -1738,9 +1812,11 @@ export default function TrainerSimFloorPage() {
             : entry
         )),
       }));
-      if (result.warning) {
+      if (result.fallbackMode === 'browser' || !result.audioUrl) {
+        toast.info(result.warning || 'AI voice is using browser fallback mode.');
+      } else if (result.warning) {
         toast.success('Member speech generated and saved for trainee playback.');
-        toast(result.warning);
+        toast.info(result.warning);
       } else {
         toast.success('Member speech generated and stored in Supabase.');
       }
@@ -1767,6 +1843,7 @@ export default function TrainerSimFloorPage() {
 
     let successCount = 0;
     let failedCount = 0;
+    let browserFallbackCount = 0;
     let firstFailureMessage: string | null = null;
 
     try {
@@ -1784,6 +1861,9 @@ export default function TrainerSimFloorPage() {
                 : row
             )),
           }));
+          if (result.fallbackMode === 'browser' || !result.audioUrl) {
+            browserFallbackCount += 1;
+          }
           successCount += 1;
         } catch (error) {
           console.error(error);
@@ -1798,7 +1878,15 @@ export default function TrainerSimFloorPage() {
       }
 
       if (failedCount === 0) {
-        toast.success(`Generated Gemini speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
+        if (browserFallbackCount > 0) {
+          toast.info(
+            browserFallbackCount === successCount
+              ? 'AI voice is using browser fallback mode.'
+              : `${browserFallbackCount} Member row${browserFallbackCount === 1 ? '' : 's'} will use browser fallback mode during live playback.`,
+          );
+        } else {
+          toast.success(`Generated Gemini speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
+        }
         return;
       }
 
@@ -1897,9 +1985,9 @@ export default function TrainerSimFloorPage() {
       await fetchInteractions(selectedBatch);
       toast.success(
         status === 'competent'
-          ? 'Module marked as competent and certificate tracking was updated.'
+          ? 'Scenario marked as competent and certificate tracking was updated.'
           : status === 'retake'
-            ? 'Module marked for retake.'
+            ? 'Scenario marked for retake.'
             : 'Trainer verdict reset to pending.',
       );
     } catch (error) {
@@ -2062,7 +2150,7 @@ export default function TrainerSimFloorPage() {
       <div className="space-y-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-foreground">Call Simulation Management</h2>
+            <h2 className="text-3xl font-bold text-foreground">Call Simulations Management</h2>
             <p className="mt-2 text-sm text-muted-foreground">
               Manage the full call module library, assign modules to batches, monitor CSR response scoring, and review
               trainee recordings for coaching.
@@ -2242,7 +2330,7 @@ export default function TrainerSimFloorPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Batch Modules</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Batch Scenarios</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{scenarios.length}</div>
@@ -2252,7 +2340,7 @@ export default function TrainerSimFloorPage() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Module Library</CardTitle>
+              <CardTitle className="text-sm font-medium text-muted-foreground">Scenario Library</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{libraryScenarios.length}</div>
@@ -2287,7 +2375,7 @@ export default function TrainerSimFloorPage() {
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <CardTitle>Batch Module Queue</CardTitle>
+                    <CardTitle>Batch Scenario Queue</CardTitle>
                     <CardDescription>
                       Title, members, CSR response variations, and score performance for {selectedBatchName}.
                     </CardDescription>
@@ -2303,7 +2391,7 @@ export default function TrainerSimFloorPage() {
                     </Button>
                     <Button size="sm" onClick={openCreateScenario}>
                       <Plus className="mr-2 h-4 w-4" />
-                      New Module
+                      New Scenario
                     </Button>
                   </div>
                 </div>
@@ -2435,7 +2523,7 @@ export default function TrainerSimFloorPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Module Library</CardTitle>
+            <CardTitle>Scenario Library</CardTitle>
             <CardDescription>
               View every saved call module, the batches it is assigned to, and the overall trainee completion snapshot.
             </CardDescription>
@@ -2752,10 +2840,25 @@ export default function TrainerSimFloorPage() {
                       <Label>Global KPI Keywords</Label>
                       <Textarea value={scenarioForm.expected_keywords} onChange={(event) => setScenarioForm((previous) => ({ ...previous, expected_keywords: event.target.value }))} rows={3} />
                     </div>
-                    <div className="space-y-2">
-                      <Label>Estimated Duration</Label>
-                      <Input type="number" value={scenarioForm.estimated_duration} onChange={(event) => setScenarioForm((previous) => ({ ...previous, estimated_duration: event.target.value }))} />
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label>Estimated Duration</Label>
+                        <Input type="number" value={scenarioForm.estimated_duration} onChange={(event) => setScenarioForm((previous) => ({ ...previous, estimated_duration: event.target.value }))} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Passing Score</Label>
+                        <Input type="number" min="0" max="100" value={scenarioForm.passing_score} onChange={(event) => setScenarioForm((previous) => ({ ...previous, passing_score: event.target.value }))} />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Max Attempts</Label>
+                        <Input type="number" min="1" step="1" value={scenarioForm.max_attempts} onChange={(event) => setScenarioForm((previous) => ({ ...previous, max_attempts: event.target.value }))} />
+                      </div>
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-xs text-slate-500">
+                      Passing Score and Max Attempts travel with the scenario so trainee retake rules stay aligned even when the batch KPI defaults change later.
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label>Target KPIs JSON</Label>
@@ -2766,7 +2869,7 @@ export default function TrainerSimFloorPage() {
                       className="bg-slate-50 text-slate-600"
                     />
                     <p className="text-xs text-slate-500">
-                      Mirrored from KPI Management for the selected batch. Update KPI Management to change scenario scoring.
+                      Mirrored from KPI Management for the selected batch. Scenario-level Passing Score and Max Attempts above override the batch default only for this scenario.
                     </p>
                   </div>
                   <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 text-sm text-sky-950">
@@ -2781,7 +2884,7 @@ export default function TrainerSimFloorPage() {
               <div className="rounded-3xl border bg-white p-5 shadow-sm">
                 <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-950">Module Builder</h3>
+                    <h3 className="text-base font-semibold text-slate-950">Scenario Builder</h3>
                     <p className="mt-1 text-sm text-slate-500">
                       Use Actor, Script, Score, and Scenario Group rows. Keep at least 5 completed rows, and generate Member audio for hold playback.
                     </p>
@@ -2797,7 +2900,7 @@ export default function TrainerSimFloorPage() {
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{completeScenarioRowCount}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Module Steps</div>
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Scenario Steps</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{scenarioGroupSuggestions.length || 0}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
@@ -2878,7 +2981,7 @@ export default function TrainerSimFloorPage() {
                           <div>
                             <div className="text-sm font-medium text-cyan-950">Member AI Speech</div>
                             <p className="mt-1 text-xs text-cyan-900/80">
-                              Generate Gemini speech for this Member row and store the playable asset in Supabase storage.
+                              Generate Gemini speech for this Member row and store the playable asset in Supabase storage. If server audio is unavailable, the live trainee call will use browser voice fallback instead.
                             </p>
                           </div>
                           <Button
@@ -2903,6 +3006,10 @@ export default function TrainerSimFloorPage() {
                           {isEmbeddedAudioDataUrl(row.audio_url) ? (
                             <p className="text-xs text-cyan-900/80">
                               Supabase storage is unavailable right now, so this row is carrying embedded audio inside the saved scenario data.
+                            </p>
+                          ) : !row.audio_url ? (
+                            <p className="text-xs text-cyan-900/80">
+                              No stored audio asset is attached yet. The trainee call can still continue using browser fallback voice playback.
                             </p>
                           ) : null}
                           {row.audio_url ? (
@@ -2943,7 +3050,7 @@ export default function TrainerSimFloorPage() {
                 <Button variant="outline" onClick={() => setShowScenarioDialog(false)}>Cancel</Button>
                 <Button onClick={handleSaveScenario} disabled={saving || isGeneratingAllMemberSpeech}>
                   <Save className="mr-2 h-4 w-4" />
-                  {saving ? 'Saving...' : editingScenarioId ? 'Update Module' : 'Create Module'}
+                  {saving ? 'Saving...' : editingScenarioId ? 'Update Scenario' : 'Create Scenario'}
                 </Button>
               </div>
             </div>
@@ -3036,7 +3143,7 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showBulkDialog} onOpenChange={setShowBulkDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Bulk Upload Call Modules</DialogTitle>
+            <DialogTitle>Bulk Upload Call Scenarios</DialogTitle>
             <DialogDescription>
               Upload a CSV, Excel, TXT, or DOCX file. Spreadsheet uploads use `Actor`, `Script`, `Score`, and
               `Scenario` columns, while TXT or DOCX files use the file name pattern `Title_Topic_Description` and structured
@@ -3055,7 +3162,7 @@ export default function TrainerSimFloorPage() {
               </Button>
             </div>
             <div className="space-y-2">
-              <Label>Module Title Override</Label>
+              <Label>Scenario Title Override</Label>
               <Input value={bulkTitle} onChange={(event) => setBulkTitle(event.target.value)} placeholder="Optional. Leave blank to use the file name title segment." />
             </div>
             <div className="space-y-2">
@@ -3080,14 +3187,14 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Assign Call Module to Trainees</DialogTitle>
+            <DialogTitle>Assign Call Scenario to Trainees</DialogTitle>
             <DialogDescription>
-              Choose a batch, then select exactly which trainees should see this Call Simulation module on the trainee side.
+              Choose a batch, then select exactly which trainees should see this assigned call scenario on the trainee side.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Call Module</Label>
+              <Label>Call Scenario</Label>
               <Select value={assignScenarioId} onValueChange={setAssignScenarioId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Choose a module" />
@@ -3213,7 +3320,7 @@ export default function TrainerSimFloorPage() {
             <Button variant="outline" onClick={() => setShowAssignDialog(false)}>Cancel</Button>
             <Button onClick={handleAssignScenario} disabled={saving || loadingAssignmentTargets || assignmentTargets.length === 0}>
               <Link2 className="mr-2 h-4 w-4" />
-              {saving ? 'Assigning...' : 'Assign Module'}
+              {saving ? 'Assigning...' : 'Assign Scenario'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -3230,7 +3337,7 @@ export default function TrainerSimFloorPage() {
           }
         }}
       >
-        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogContent className="max-h-[88vh] max-w-[72vw] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Coaching Player</DialogTitle>
             <DialogDescription>
@@ -3428,6 +3535,74 @@ export default function TrainerSimFloorPage() {
                   <p className="mt-2">{selectedInteraction.ai_feedback}</p>
                 </div>
               ) : null}
+              {selectedInteraction.feedback_report ? (
+                <div className="space-y-4 rounded-lg border p-4">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Structured Evaluation Report</p>
+                    <p className="mt-2 text-sm leading-7 text-slate-700">
+                      {selectedInteraction.feedback_report.summary || selectedInteraction.feedback_report.overallSummary}
+                    </p>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-lg border bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Strengths</div>
+                      <div className="mt-3 space-y-2 text-sm text-slate-700">
+                        {(selectedInteraction.feedback_report.strengths || []).length ? (
+                          selectedInteraction.feedback_report.strengths.map((item, index) => (
+                            <div key={`${item}-${index}`}>{item}</div>
+                          ))
+                        ) : (
+                          <div>No strengths were returned yet.</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Areas for Improvement</div>
+                      <div className="mt-3 space-y-2 text-sm text-slate-700">
+                        {(selectedInteraction.feedback_report.areas_for_improvement || []).length ? (
+                          selectedInteraction.feedback_report.areas_for_improvement.map((item, index) => (
+                            <div key={`${item}-${index}`}>{item}</div>
+                          ))
+                        ) : (
+                          <div>No improvement areas were returned yet.</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-lg border bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Coaching Recommendation</div>
+                      <div className="mt-3 text-sm leading-7 text-slate-700">
+                        {selectedInteraction.feedback_report.coaching_recommendation || 'No coaching recommendation was returned yet.'}
+                      </div>
+                    </div>
+                    <div className="rounded-lg border bg-slate-50 p-4">
+                      <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Transcript Summary</div>
+                      <div className="mt-3 text-sm leading-7 text-slate-700">
+                        {selectedInteraction.feedback_report.transcript_summary || 'No transcript summary was returned yet.'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.18em] text-slate-500">KPI Breakdown</div>
+                    <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                      {(selectedInteraction.feedback_report.kpi_breakdown || []).length ? (
+                        selectedInteraction.feedback_report.kpi_breakdown.map((item, index) => (
+                          <div key={`${item.category}-${index}`} className="rounded-lg border bg-white p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="font-medium text-slate-900">{item.category}</div>
+                              <div className="text-sm font-semibold text-slate-700">{item.score.toFixed(1)}%</div>
+                            </div>
+                            <div className="mt-2 text-sm leading-6 text-slate-600">{item.feedback}</div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-sm text-slate-600">The KPI breakdown is not available for this session yet.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <div className="rounded-lg border p-4">
                 <p className="text-sm font-medium text-muted-foreground">Transcript Timeline</p>
                 {selectedTranscriptEntries.length ? (
@@ -3553,7 +3728,7 @@ export default function TrainerSimFloorPage() {
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Call Module</DialogTitle>
+            <DialogTitle>Delete Call Scenario</DialogTitle>
             <DialogDescription>
               Are you sure you want to delete "{deleteScenarioTitle}"? This permanently removes the call module.
             </DialogDescription>
@@ -3566,7 +3741,7 @@ export default function TrainerSimFloorPage() {
               disabled={saving}
             >
               <Trash2 className="mr-2 h-4 w-4" />
-              {saving ? 'Deleting...' : 'Delete Module'}
+              {saving ? 'Deleting...' : 'Delete Scenario'}
             </Button>
           </DialogFooter>
         </DialogContent>

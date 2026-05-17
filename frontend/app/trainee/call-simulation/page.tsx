@@ -9,6 +9,7 @@ import { Progress } from '@/app/components/ui/progress';
 import { cn } from '@/app/components/ui/utils';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
+import { BROWSER_TTS_UNSUPPORTED_MESSAGE, browserTtsService } from '@/app/lib/tts/ttsService';
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import { useSpeechToText, type SimFloorTurnResult } from '@/hooks/useSpeechToText';
 import { useWavCallRecorder } from '@/hooks/useWavCallRecorder';
@@ -130,6 +131,15 @@ interface QueuedMemberPlayback {
   speakerLabel?: string | null;
 }
 
+interface TtsResponsePayload {
+  audio_url?: string | null;
+  audio_base64?: string | null;
+  warning?: string | null;
+  fallback_mode?: string | null;
+  provider?: string | null;
+  detail?: string;
+}
+
 interface KeywordComplianceItem {
   id: string;
   label: string;
@@ -170,11 +180,18 @@ interface SessionResult {
   trainer_verdict_status?: string;
   trainer_verdict_notes?: string | null;
   coaching_notes?: string | null;
+  feedback_report?: DialerFeedbackReport | null;
   certificate_id?: string | null;
   coaching_id?: string | null;
   coaching_status?: string | null;
   coaching_acknowledged_at?: string | null;
   completed_at?: string | null;
+}
+
+interface DialerFeedbackKpiBreakdownItem {
+  category: string;
+  score: number;
+  feedback: string;
 }
 
 interface DialerFeedbackReport {
@@ -184,6 +201,13 @@ interface DialerFeedbackReport {
   totalScore: number;
   passingScore: number;
   passed: boolean;
+  summary: string;
+  overall_score: number;
+  strengths: string[];
+  areas_for_improvement: string[];
+  kpi_breakdown: DialerFeedbackKpiBreakdownItem[];
+  coaching_recommendation: string;
+  transcript_summary: string;
   scriptAccuracy: {
     score: number;
     strengths: string[];
@@ -334,23 +358,23 @@ function getScenarioPriorityScore(scenario: ScenarioCard) {
 
 function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Start Call';
+    return 'Start the Call';
   }
   if (scenario.active_session_id) {
-    return 'Resume Active Call';
+    return 'Resume Call';
   }
   if (scenario.launch_blocked && scenario.competent) {
-    return 'Completed and Certified';
+    return 'Passed';
   }
-  if (scenario.can_retake) {
-    return 'Start Retake';
+  if (scenario.can_retake || (scenario.attempt_count > 0 && !scenario.competent && !scenario.launch_blocked)) {
+    return 'Retake';
   }
-  return 'Start Call';
+  return 'Start the Call';
 }
 
 function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Select an assigned call simulation scenario to start the phone workflow.';
+    return 'Select an assigned call scenario to begin the live mock-call workflow.';
   }
   if (scenario.launch_block_reason?.trim()) {
     return scenario.launch_block_reason.trim();
@@ -358,33 +382,30 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   if (scenario.active_session_id) {
     return 'An in-progress call was found. Relaunching will continue from your next pending scenario turn.';
   }
-  if (scenario.can_retake) {
-    const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} retake${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
-    return `A new retake attempt will be created from the same trainer assignment.${attemptsLeft}`;
+  if (scenario.attempt_count > 0 && !scenario.competent) {
+    const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} attempt${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
+    return `Your latest scored attempt did not meet the passing KPI yet.${attemptsLeft}`;
   }
   if (scenario.competent) {
-    return 'This Call Simulation is already complete and tied to your certificate history.';
+    return 'This assigned call scenario has already been passed and locked for review.';
   }
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `The phone will ring first, then Accept Call will start the microphone, timer, and guided call workflow.${attemptWindow}`;
+  return `The phone will ring first, then Accept Call will start the microphone, timer, recording, and guided call workflow.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
   if (scenario.competent) {
-    return 'Completed';
+    return 'Passed';
   }
   if (scenario.active_session_id) {
     return 'In Progress';
   }
-  if (scenario.retake_required) {
-    return 'Retake Required';
-  }
   if (scenario.attempt_count > 0) {
-    return 'Assigned';
+    return 'Failed';
   }
-  return 'Ready to Start';
+  return 'Not Started';
 }
 
 function getScenarioStatusClasses(scenario: ScenarioCard) {
@@ -394,8 +415,8 @@ function getScenarioStatusClasses(scenario: ScenarioCard) {
   if (scenario.active_session_id) {
     return 'border-sky-200 bg-sky-50 text-sky-700';
   }
-  if (scenario.retake_required) {
-    return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (scenario.attempt_count > 0) {
+    return 'border-rose-200 bg-rose-50 text-rose-700';
   }
   return 'border-slate-200 bg-slate-50 text-slate-600';
 }
@@ -519,7 +540,7 @@ function TraineeSimFloorPageFallback() {
       <div className="space-y-6">
         <Card className="border-slate-200 bg-white shadow-sm">
           <CardHeader>
-            <CardTitle>Loading Call Simulation</CardTitle>
+            <CardTitle>Loading Call Simulations</CardTitle>
             <CardDescription>Preparing your assigned call scenarios and live floor workspace.</CardDescription>
           </CardHeader>
           <CardContent className="text-sm text-slate-600">
@@ -571,6 +592,7 @@ function TraineeSimFloorPageContent() {
   const silenceStartRef = useRef<number | null>(null);
   const synthesizedPlaybackCacheRef = useRef<Map<string, string>>(new Map());
   const invalidRequestedScenarioRef = useRef<string | null>(null);
+  const browserTtsFallbackNoticeRef = useRef(false);
 
   const steps = useMemo(
     () => [...(sessionData?.steps || [])].sort((left, right) => left.step_number - right.step_number),
@@ -732,6 +754,33 @@ function TraineeSimFloorPageContent() {
     memberTurnState === 'awaiting-hold' ||
     memberTurnState === 'awaiting-resume';
 
+  const showBrowserFallbackNotice = useCallback(() => {
+    if (browserTtsFallbackNoticeRef.current) {
+      return;
+    }
+    browserTtsFallbackNoticeRef.current = true;
+    toast.info('AI voice is using browser fallback mode.');
+  }, []);
+
+  const speakWithBrowserFallback = useCallback(
+    async (script: string) => {
+      const normalizedScript = script.trim();
+      if (!normalizedScript) {
+        return;
+      }
+
+      showBrowserFallbackNotice();
+      await browserTtsService.speak(normalizedScript, {
+        lang: 'en-US',
+        voiceName: 'Google US English',
+        onError: (error) => {
+          console.warn('Browser TTS fallback failed:', error);
+        },
+      });
+    },
+    [showBrowserFallbackNotice],
+  );
+
   const fetchScenarios = useCallback(async () => {
     const token = localStorage.getItem('token');
     const response = await fetch('/api/call-simulation/available', {
@@ -793,12 +842,14 @@ function TraineeSimFloorPageContent() {
       trainer_verdict_status: payload.trainer_verdict_status,
       trainer_verdict_notes: payload.trainer_verdict_notes,
       coaching_notes: payload.coaching_notes,
+      feedback_report: payload.feedback_report || null,
       certificate_id: payload.certificate_id,
       coaching_id: payload.coaching_id,
       coaching_status: payload.coaching_status,
       coaching_acknowledged_at: payload.coaching_acknowledged_at,
       completed_at: payload.completed_at,
     });
+    setFeedbackReport(payload.feedback_report || null);
 
     if (payload.status === 'completed' || payload.status === 'failed') {
       setCallState('completed');
@@ -938,20 +989,24 @@ function TraineeSimFloorPageContent() {
         const response = await fetch(`/api/call-simulation/tts?text=${encodeURIComponent(normalizedScript)}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
-        const payload = (await response.json().catch(() => null)) as
-          | { audio_url?: string | null; audio_base64?: string | null }
-          | { detail?: string }
-          | null;
-        if (!response.ok || !payload || ('detail' in payload && payload.detail)) {
+        const payload = (await response.json().catch(() => null)) as TtsResponsePayload | null;
+        if (!response.ok || !payload || payload.detail) {
+          console.warn('Call Simulation backend TTS was unavailable. Browser fallback will be used.');
+          showBrowserFallbackNotice();
           return null;
         }
 
-        if ('audio_url' in payload && payload.audio_url) {
+        if (payload.warning || payload.fallback_mode === 'browser') {
+          console.warn(payload.warning || 'Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
+          showBrowserFallbackNotice();
+        }
+
+        if (payload.audio_url) {
           synthesizedPlaybackCacheRef.current.set(normalizedScript, payload.audio_url);
           return payload.audio_url;
         }
 
-        if ('audio_base64' in payload && payload.audio_base64) {
+        if (payload.audio_base64) {
           const binaryString = window.atob(payload.audio_base64);
           const bytes = Uint8Array.from(binaryString, (character) => character.charCodeAt(0));
           const blob = new Blob([bytes], { type: 'audio/wav' });
@@ -959,7 +1014,12 @@ function TraineeSimFloorPageContent() {
           synthesizedPlaybackCacheRef.current.set(normalizedScript, objectUrl);
           return objectUrl;
         }
-      } catch {
+
+        console.warn('Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
+        showBrowserFallbackNotice();
+      } catch (error) {
+        console.warn('Call Simulation backend TTS request failed. Browser fallback will be used:', error);
+        showBrowserFallbackNotice();
         return null;
       } finally {
         setIsGeneratingMemberAudio(false);
@@ -967,7 +1027,7 @@ function TraineeSimFloorPageContent() {
 
       return null;
     },
-    [],
+    [showBrowserFallbackNotice],
   );
 
   const playPlaybackPrompt = useCallback(
@@ -995,7 +1055,7 @@ function TraineeSimFloorPageContent() {
       }
 
       if (resolvedAudioUrl) {
-        await new Promise<void>((resolve) => {
+        const playedAudio = await new Promise<boolean>((resolve) => {
           const audio = new Audio();
           audio.crossOrigin = 'anonymous';
           audio.src = resolvedAudioUrl;
@@ -1005,37 +1065,43 @@ function TraineeSimFloorPageContent() {
             if (audioRef.current === audio) {
               audioRef.current = null;
             }
-            resolve();
+            resolve(true);
           };
           audio.onerror = () => {
             if (audioRef.current === audio) {
               audioRef.current = null;
             }
-            resolve();
+            resolve(false);
           };
           void audio.play().catch(() => {
             if (audioRef.current === audio) {
               audioRef.current = null;
             }
-            resolve();
+            resolve(false);
           });
         });
-        return;
+        if (playedAudio) {
+          return;
+        }
       }
 
       if (!resolvedScript) {
         return;
       }
 
-      await new Promise<void>((resolve) => {
-        const utterance = new SpeechSynthesisUtterance(resolvedScript);
-        utterance.onend = () => resolve();
-        utterance.onerror = () => resolve();
-        window.speechSynthesis.cancel();
-        window.speechSynthesis.speak(utterance);
-      });
+      if (!browserTtsService.isSupported()) {
+        toast.error(BROWSER_TTS_UNSUPPORTED_MESSAGE);
+        return;
+      }
+
+      try {
+        await speakWithBrowserFallback(resolvedScript);
+      } catch (error) {
+        console.warn('Browser TTS fallback failed during call simulation playback:', error);
+        toast.error(BROWSER_TTS_UNSUPPORTED_MESSAGE);
+      }
     },
-    [registerPlaybackElement, synthesizePlaybackAudio],
+    [registerPlaybackElement, speakWithBrowserFallback, synthesizePlaybackAudio],
   );
 
   const uploadFinalCallRecording = useCallback(async () => {
@@ -1096,6 +1162,12 @@ function TraineeSimFloorPageContent() {
             scenarioId: selectedScenarioId,
             scenarioTitle: sessionData.scenario_title,
             topic: String(sessionData.call_simulation_config?.topic || sessionData.scenario_title || 'Call scenario'),
+            trainerId: result.assigned_by_id || sessionData.assigned_by_id || null,
+            attemptNumber: result.attempt_number || sessionData.attempt_number || null,
+            recordingUrl: result.audio_url || null,
+            startedAt: null,
+            endedAt: result.completed_at || null,
+            durationSeconds: Math.round(result.aht_actual || callTimer),
             targetKpis:
               (sessionData.call_simulation_config?.target_kpis as Record<string, unknown> | undefined)
               || { passing_score: sessionData.passing_score },
@@ -1164,6 +1236,7 @@ function TraineeSimFloorPageContent() {
     setIsEndingCall(true);
     setCallState('processing');
     stopBrowserTranscript();
+    browserTtsService.stop();
 
     try {
       await uploadFinalCallRecording();
@@ -1210,6 +1283,7 @@ function TraineeSimFloorPageContent() {
         trainer_verdict_status: payload.trainer_verdict_status,
         trainer_verdict_notes: payload.trainer_verdict_notes,
         coaching_notes: payload.coaching_notes,
+        feedback_report: payload.feedback_report || null,
         certificate_id: payload.certificate_id,
         coaching_id: payload.coaching_id,
         coaching_status: payload.coaching_status,
@@ -1217,6 +1291,7 @@ function TraineeSimFloorPageContent() {
         completed_at: payload.completed_at,
       };
       setSessionResult(nextResult);
+      setFeedbackReport(payload.feedback_report || null);
       setActivePlaybackScript('');
       setActivePlaybackSpeaker(null);
       setQueuedMemberStepIndex(null);
@@ -1291,11 +1366,12 @@ function TraineeSimFloorPageContent() {
       return;
     }
     if (targetScenario?.launch_blocked) {
-      toast.error(targetScenario.launch_block_reason || 'This Call Simulation cannot be launched right now.');
+      toast.error(targetScenario.launch_block_reason || 'This assigned call scenario cannot be launched right now.');
       return;
     }
 
     setSelectedScenarioId(targetScenarioId);
+    browserTtsFallbackNoticeRef.current = false;
     const token = localStorage.getItem('token');
     setIsStartingCall(true);
     try {
@@ -1714,7 +1790,7 @@ function TraineeSimFloorPageContent() {
       if (holdAudioRef.current) {
         holdAudioRef.current.pause();
       }
-      window.speechSynthesis.cancel();
+      browserTtsService.stop();
       for (const audioUrl of synthesizedPlaybackCache.values()) {
         if (audioUrl.startsWith('blob:')) {
           window.URL.revokeObjectURL(audioUrl);
@@ -1734,7 +1810,7 @@ function TraineeSimFloorPageContent() {
     if (!scenarios.some((scenario) => scenario.id === requestedScenarioId)) {
       if (scenarios.length > 0 && invalidRequestedScenarioRef.current !== requestedScenarioId) {
         invalidRequestedScenarioRef.current = requestedScenarioId;
-        toast.error('That Call Simulation module is not assigned to your trainee workspace.');
+        toast.error('That call scenario is not assigned to your trainee workspace.');
         router.replace('/trainee/call-simulation');
       }
       return;
@@ -1892,7 +1968,7 @@ function TraineeSimFloorPageContent() {
       <div className="space-y-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-3xl font-bold text-foreground">Call Simulation</h2>
+            <h2 className="text-3xl font-bold text-foreground">Call Simulations</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
               Practice in a BPO softphone-style mock-call floor with live voice activity, script confirmation, Supabase-backed recordings,
               and trainer coaching visibility.
@@ -1910,7 +1986,7 @@ function TraineeSimFloorPageContent() {
                 <CardHeader className="space-y-4">
                   <Button type="button" variant="ghost" className="w-fit px-0 text-slate-600 hover:text-slate-950" onClick={returnToModuleList}>
                     <ArrowLeft className="mr-2 h-4 w-4" />
-                    Back to Assigned Modules
+                    Back to Assigned Scenarios
                   </Button>
                   <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
@@ -1926,7 +2002,7 @@ function TraineeSimFloorPageContent() {
                       </CardDescription>
                     ) : null}
                     <CardDescription className="max-w-3xl text-sm text-slate-600">
-                      {selectedScenario.description || 'Trainer-assigned Call Simulation module.'}
+                      {selectedScenario.description || 'Trainer-assigned call scenario.'}
                     </CardDescription>
                   </div>
                 </CardHeader>
@@ -2036,7 +2112,7 @@ function TraineeSimFloorPageContent() {
                     {selectedScenarioLaunchLabel}
                   </Button>
                   <Button type="button" variant="outline" className="w-full border-white/15 bg-transparent text-white hover:bg-white/10" onClick={returnToModuleList}>
-                    View All Assigned Modules
+                    View All Assigned Scenarios
                   </Button>
                   {selectedScenario.competent || selectedScenario.latest_certificate_id ? (
                     <Button
@@ -2056,7 +2132,7 @@ function TraineeSimFloorPageContent() {
             <div className="grid gap-6 lg:grid-cols-[1.2fr,0.8fr]">
               <Card className="border-slate-200 bg-[linear-gradient(135deg,#f8fafc,white)]">
                 <CardHeader>
-                  <CardTitle>Assigned Call Modules</CardTitle>
+                  <CardTitle>Assigned Call Scenarios</CardTitle>
                   <CardDescription>Choose the trainer-assigned module that should ring into your BPO softphone workspace.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -2090,7 +2166,7 @@ function TraineeSimFloorPageContent() {
                               <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{scenario.title}</div>
                             ) : null}
                             <div className="text-sm text-slate-600">
-                              {scenario.description || 'Assigned Call Simulation module.'}
+                              {scenario.description || 'Assigned call scenario.'}
                             </div>
                           </div>
                           <div className="flex flex-wrap gap-2">
@@ -2169,7 +2245,7 @@ function TraineeSimFloorPageContent() {
                   ))}
                   {!scenarios.length ? (
                     <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                      No Call Simulation module has been assigned to your trainee workspace yet.
+                      No call scenario has been assigned to your trainee workspace yet.
                     </div>
                   ) : null}
                 </CardContent>
@@ -2202,7 +2278,7 @@ function TraineeSimFloorPageContent() {
                         <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedScenario.title}</div>
                       ) : null}
                       <div className="mt-2 text-sm text-slate-300">
-                        {selectedScenario.description || 'Trainer-assigned Call Simulation module.'}
+                        {selectedScenario.description || 'Trainer-assigned call scenario.'}
                       </div>
                       <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
                         <span>{formatBatchWave(selectedScenario.assignment_batch_name, selectedScenario.assignment_wave_number)}</span>
@@ -2794,7 +2870,7 @@ function TraineeSimFloorPageContent() {
                               ? sessionResult.trainer_verdict_status === 'competent'
                                 ? 'Mark Competent'
                                 : sessionResult.trainer_verdict_status === 'retake'
-                                  ? 'Needs Retake'
+                                  ? 'Failed'
                                   : 'Pending Review'
                               : 'Pending Review'}
                           </div>
@@ -2862,7 +2938,7 @@ function TraineeSimFloorPageContent() {
                             disabled={Boolean(sessionResult?.pass_fail) || sessionResult?.coaching_status === 'sent'}
                           >
                             <RotateCcw className="mr-2 h-4 w-4" />
-                            Retake Module
+                            Retake Scenario
                           </Button>
                         </div>
                       </CardContent>
@@ -2904,7 +2980,52 @@ function TraineeSimFloorPageContent() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                           <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-slate-700">
-                            {feedbackReport.overallSummary}
+                            {feedbackReport.summary || feedbackReport.overallSummary}
+                          </div>
+                          <div className="grid gap-4 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Overall Score</div>
+                                <div className="mt-2 text-2xl font-semibold text-slate-950">
+                                  {Number(feedbackReport.overall_score || feedbackReport.totalScore || sessionResult?.weighted_score || 0).toFixed(1)}%
+                                </div>
+                                <div className="mt-2 text-sm text-slate-600">
+                                  {feedbackReport.passed ? 'Passed the KPI threshold.' : 'Did not reach the KPI threshold yet.'}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Transcript Summary</div>
+                                <div className="mt-2 text-sm leading-6 text-slate-700">
+                                  {feedbackReport.transcript_summary || 'Transcript summary is still syncing.'}
+                                </div>
+                              </div>
+                            </div>
+                            <div className="grid gap-4 sm:grid-cols-2">
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Strengths</div>
+                                <div className="mt-3 space-y-2 text-sm text-slate-700">
+                                  {(feedbackReport.strengths || []).length ? (
+                                    feedbackReport.strengths.map((item, index) => (
+                                      <div key={`${item}-${index}`}>{item}</div>
+                                    ))
+                                  ) : (
+                                    <div>No strengths were returned yet.</div>
+                                  )}
+                                </div>
+                              </div>
+                              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Areas for Improvement</div>
+                                <div className="mt-3 space-y-2 text-sm text-slate-700">
+                                  {(feedbackReport.areas_for_improvement || []).length ? (
+                                    feedbackReport.areas_for_improvement.map((item, index) => (
+                                      <div key={`${item}-${index}`}>{item}</div>
+                                    ))
+                                  ) : (
+                                    <div>No improvement areas were returned yet.</div>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
                           </div>
                           <div className="grid gap-4 sm:grid-cols-2">
                             <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -2934,6 +3055,30 @@ function TraineeSimFloorPageContent() {
                               <div className="mt-3 text-sm text-slate-600">
                                 {(feedbackReport.pacingAndAht.notes || []).join(' ') || 'No extra pacing notes were returned.'}
                               </div>
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">KPI Breakdown</div>
+                            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                              {(feedbackReport.kpi_breakdown || []).length ? (
+                                feedbackReport.kpi_breakdown.map((item, index) => (
+                                  <div key={`${item.category}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className="text-sm font-semibold text-slate-950">{item.category}</div>
+                                      <div className="text-sm font-semibold text-slate-700">{item.score.toFixed(1)}%</div>
+                                    </div>
+                                    <div className="mt-2 text-sm leading-6 text-slate-600">{item.feedback}</div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="text-sm text-slate-600">The KPI breakdown is still being prepared.</div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Coaching Recommendation</div>
+                            <div className="mt-3 text-sm leading-7 text-slate-700">
+                              {feedbackReport.coaching_recommendation || 'No coaching recommendation was returned yet.'}
                             </div>
                           </div>
                           <div className="rounded-2xl border border-dashed border-slate-200 p-4">
@@ -3227,7 +3372,7 @@ export default function TraineeSimFloorPage() {
                     <Card className="overflow-hidden border-slate-200 bg-white shadow-sm">
                       <CardHeader className="border-b border-slate-100 bg-[linear-gradient(135deg,#f8fafc,#eef2ff)]">
                         <CardTitle>Member Card</CardTitle>
-                        <CardDescription>Live customer context from the assigned Call Simulation scenario.</CardDescription>
+                        <CardDescription>Live customer context from the assigned trainer scenario.</CardDescription>
                       </CardHeader>
                       <CardContent className="grid gap-4 p-6 lg:grid-cols-[1.15fr,0.85fr]">
                         <div className="space-y-4">
@@ -3526,7 +3671,7 @@ export default function TraineeSimFloorPage() {
                 <Card className="border-slate-200 bg-white shadow-sm">
                   <CardHeader>
                     <CardTitle>Floor Presence</CardTitle>
-                    <CardDescription>Visual cues for who should speak next on the Call Simulation.</CardDescription>
+                    <CardDescription>Visual cues for who should speak next during the mock call.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div

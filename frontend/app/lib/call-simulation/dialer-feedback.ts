@@ -35,6 +35,12 @@ export type DialerFeedbackInput = {
   topic: string
   traineeId: string
   traineeName: string
+  trainerId?: string | null
+  attemptNumber?: number | null
+  recordingUrl?: string | null
+  startedAt?: string | null
+  endedAt?: string | null
+  durationSeconds?: number | null
   targetKpis: Record<string, unknown>
   scriptFlow: DialerScriptFlowStep[]
   turnLogs: DialerConversationTurn[]
@@ -56,6 +62,12 @@ export type DialerFeedbackInput = {
   certificateId?: string | null
 }
 
+export type DialerFeedbackKpiBreakdownItem = {
+  category: string
+  score: number
+  feedback: string
+}
+
 export type DialerFeedbackReport = {
   provider: 'gemini' | 'fallback'
   model: string
@@ -63,6 +75,13 @@ export type DialerFeedbackReport = {
   totalScore: number
   passingScore: number
   passed: boolean
+  summary: string
+  overall_score: number
+  strengths: string[]
+  areas_for_improvement: string[]
+  kpi_breakdown: DialerFeedbackKpiBreakdownItem[]
+  coaching_recommendation: string
+  transcript_summary: string
   scriptAccuracy: {
     score: number
     strengths: string[]
@@ -143,6 +162,19 @@ function getDialerGeminiModel() {
 
 function safeRound(value: number, precision = 1) {
   return Number.isFinite(value) ? Number(value.toFixed(precision)) : 0
+}
+
+function clampScore(value: number) {
+  return Math.max(0, Math.min(100, safeRound(value)))
+}
+
+function normalizeStringList(value: unknown, limit = 5) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter(Boolean)
+        .slice(0, limit)
+    : []
 }
 
 function normalizeUuidCandidate(value: unknown) {
@@ -442,7 +474,9 @@ async function syncUnifiedSimulationResults(
   }
 
   const fullTranscript = buildFullConversationTranscript(input.transcriptLog)
-  const sessionStartedAt = new Date(Date.now() - (Math.max(0, Number(input.ahtSeconds || 0)) * 1000)).toISOString()
+  const resolvedDurationSeconds = Math.max(0, Number(input.durationSeconds ?? input.ahtSeconds ?? 0))
+  const sessionStartedAt = input.startedAt || new Date(Date.now() - (resolvedDurationSeconds * 1000)).toISOString()
+  const sessionEndedAt = input.endedAt || nowIso
   const aiFeedback = {
     report,
     metrics: {
@@ -459,6 +493,14 @@ async function syncUnifiedSimulationResults(
     scriptFlow: sanitizeScriptFlow(input.scriptFlow),
     turnLogs: input.turnLogs,
     transcriptLog: input.transcriptLog,
+    sessionMetadata: {
+      trainerId: input.trainerId || null,
+      attemptNumber: input.attemptNumber || 1,
+      recordingUrl: input.recordingUrl || null,
+      startedAt: sessionStartedAt,
+      endedAt: sessionEndedAt,
+      durationSeconds: resolvedDurationSeconds,
+    },
   }
 
   const { error } = await supabase
@@ -488,7 +530,7 @@ async function syncUnifiedSimulationResults(
       trainee_id: traineeId,
       scenario_group_id: scenarioId,
       started_at: sessionStartedAt,
-      completed_at: nowIso,
+      completed_at: sessionEndedAt,
       total_score: Math.max(0, Math.round(input.totalScore)),
       passed: report.passed,
       ai_feedback: report.overallSummary,
@@ -717,6 +759,199 @@ function buildScriptComparisonLog(
   })
 }
 
+function buildTranscriptSummary(input: DialerFeedbackInput) {
+  const csrTurnCount = input.turnLogs.filter((turn) => (turn.actor || '').toLowerCase() === 'csr').length
+  const memberTurnCount = input.transcriptLog.filter((turn) => (turn.actor || '').toLowerCase() === 'member').length
+
+  return [
+    `${input.traineeName} completed ${csrTurnCount || 0} CSR turn${csrTurnCount === 1 ? '' : 's'} across ${input.scriptFlow.length || 0} scripted checkpoint${input.scriptFlow.length === 1 ? '' : 's'}.`,
+    `The call handled ${memberTurnCount || 0} member response${memberTurnCount === 1 ? '' : 's'}, closed in ${Math.max(0, Math.round(input.ahtSeconds || 0))} seconds, and averaged ${safeRound(input.speechAccuracy)}% script accuracy.`,
+  ].join(' ')
+}
+
+function buildHeuristicKpiBreakdown(input: DialerFeedbackInput): DialerFeedbackKpiBreakdownItem[] {
+  const csrTurns = input.turnLogs.filter((turn) => (turn.actor || '').toLowerCase() === 'csr')
+  const firstCsrAccuracy = Number(csrTurns[0]?.speech_to_text_accuracy || input.speechAccuracy || 0)
+  const lastCsrAccuracy = Number(csrTurns[Math.max(csrTurns.length - 1, 0)]?.speech_to_text_accuracy || input.speechAccuracy || 0)
+  const empathyCount = Number(input.softSkillSignals.empathyCount || 0)
+  const probingCount = Number(input.softSkillSignals.probingCount || 0)
+  const sentimentScore = Number(input.softSkillSignals.sentimentScore || 0)
+  const deadAirSeconds = Number(input.softSkillSignals.deadAirSeconds || 0)
+  const rateOfSpeech = Number(input.softSkillSignals.rateOfSpeech || 0)
+  const targetAhtSeconds = Number(input.targetKpis.target_aht_seconds ?? input.targetKpis.aht_seconds ?? 240)
+  const normalizedSentimentScore = clampScore((sentimentScore + 1) * 50)
+
+  const callControlScore = clampScore(
+    100
+      - (deadAirSeconds * 6)
+      - Math.max(0, rateOfSpeech - 170) * 0.35
+      - Math.max(0, input.ahtSeconds - targetAhtSeconds) * 0.12,
+  )
+  const professionalToneScore = clampScore(
+    (Number(input.grammarScore || 0) + Number(input.pronunciationScore || 0) + normalizedSentimentScore) / 3,
+  )
+
+  return [
+    {
+      category: 'Opening spiel',
+      score: clampScore(firstCsrAccuracy),
+      feedback: firstCsrAccuracy >= 80
+        ? 'The trainee opened with a solid match to the expected greeting and call setup.'
+        : 'The opening spiel needs tighter alignment with the scripted greeting and call purpose.',
+    },
+    {
+      category: 'Verification process',
+      score: clampScore((input.speechAccuracy * 0.7) + Math.min(probingCount, 2) * 12),
+      feedback: probingCount > 0
+        ? 'Verification improved once the trainee asked clarifying questions.'
+        : 'Verification sounded light. Add stronger member checks before moving deeper into the issue.',
+    },
+    {
+      category: 'Active listening',
+      score: clampScore((input.totalScore * 0.7) + Math.max(0, 20 - deadAirSeconds * 2)),
+      feedback: deadAirSeconds <= 4
+        ? 'Turn pacing suggests the trainee kept the conversation moving while listening for cues.'
+        : 'Long pauses made the call feel less responsive. Use shorter transitions while acknowledging the member.',
+    },
+    {
+      category: 'Empathy',
+      score: clampScore(45 + (empathyCount * 20) + (sentimentScore * 20)),
+      feedback: empathyCount > 0
+        ? 'Empathy signals were present and helped soften the interaction.'
+        : 'Add a clearer empathy statement before troubleshooting or providing the next step.',
+    },
+    {
+      category: 'Accuracy of information',
+      score: clampScore((input.speechAccuracy * 0.75) + (Number(input.grammarScore || 0) * 0.1) + (Number(input.pronunciationScore || 0) * 0.15)),
+      feedback: input.speechAccuracy >= 80
+        ? 'The response stayed close to the expected information flow.'
+        : 'Accuracy dipped when the trainee moved away from the scripted information and required keywords.',
+    },
+    {
+      category: 'Call control',
+      score: callControlScore,
+      feedback: callControlScore >= 75
+        ? 'Hold usage and pacing stayed mostly controlled through the scenario.'
+        : 'Call control needs work. Reduce dead air, slow rushed segments, and keep transitions more deliberate.',
+    },
+    {
+      category: 'Professional tone',
+      score: professionalToneScore,
+      feedback: professionalToneScore >= 75
+        ? 'Tone, grammar, and pronunciation supported a professional customer experience.'
+        : 'Professional tone slipped in places. Clean up grammar, pronunciation, and delivery consistency.',
+    },
+    {
+      category: 'Resolution/next step',
+      score: clampScore((input.totalScore * 0.8) + Math.min(probingCount, 2) * 8),
+      feedback: input.totalScore >= input.passingScore
+        ? 'The trainee moved toward a workable next step and kept the call outcome on track.'
+        : 'The resolution path needs a clearer next-step statement and stronger control near the end of the call.',
+    },
+    {
+      category: 'Closing spiel',
+      score: clampScore(lastCsrAccuracy),
+      feedback: lastCsrAccuracy >= 80
+        ? 'The closing stayed close to the expected wrap-up language.'
+        : 'The closing spiel needs a cleaner recap, next step, and professional sign-off.',
+    },
+  ]
+}
+
+function normalizeFeedbackReport(
+  input: DialerFeedbackInput,
+  report: Partial<DialerFeedbackReport> & Record<string, unknown>,
+  options: {
+    provider: 'gemini' | 'fallback'
+    model: string
+    rawModelText?: string
+  },
+): DialerFeedbackReport {
+  const { provider, model, rawModelText } = options
+  const fallback = buildFallbackReport(input)
+  const kpiBreakdown = Array.isArray(report.kpi_breakdown)
+    ? report.kpi_breakdown
+        .map((item, index) => {
+          const fallbackItem = fallback.kpi_breakdown[index]
+          const typedItem = item as Record<string, unknown>
+          const category = typeof typedItem?.category === 'string' && typedItem.category.trim()
+            ? typedItem.category.trim()
+            : fallbackItem?.category || `KPI ${index + 1}`
+          const feedback = typeof typedItem?.feedback === 'string' && typedItem.feedback.trim()
+            ? typedItem.feedback.trim()
+            : fallbackItem?.feedback || 'No feedback provided.'
+          const scoreCandidate = Number(typedItem?.score ?? fallbackItem?.score ?? 0)
+
+          return {
+            category,
+            score: clampScore(scoreCandidate),
+            feedback,
+          }
+        })
+        .slice(0, 9)
+    : fallback.kpi_breakdown
+
+  const strengths = normalizeStringList(report.strengths, 5)
+  const areasForImprovement = normalizeStringList(report.areas_for_improvement, 5)
+  const coachingRecommendation =
+    typeof report.coaching_recommendation === 'string' && report.coaching_recommendation.trim()
+      ? report.coaching_recommendation.trim()
+      : fallback.coaching_recommendation
+  const transcriptSummary =
+    typeof report.transcript_summary === 'string' && report.transcript_summary.trim()
+      ? report.transcript_summary.trim()
+      : fallback.transcript_summary
+  const summary =
+    typeof report.summary === 'string' && report.summary.trim()
+      ? report.summary.trim()
+      : fallback.summary
+  const overallSummary =
+    typeof report.overallSummary === 'string' && report.overallSummary.trim()
+      ? report.overallSummary.trim()
+      : summary
+  const scriptAccuracyStrengths = normalizeStringList((report.scriptAccuracy as Record<string, unknown> | undefined)?.strengths, 4)
+  const scriptAccuracyMisses = normalizeStringList((report.scriptAccuracy as Record<string, unknown> | undefined)?.misses, 4)
+  const grammarNotes = normalizeStringList((report.grammarAndPronunciation as Record<string, unknown> | undefined)?.notes, 4)
+  const softSkillNotes = normalizeStringList((report.softSkills as Record<string, unknown> | undefined)?.notes, 4)
+  const pacingNotes = normalizeStringList((report.pacingAndAht as Record<string, unknown> | undefined)?.notes, 4)
+  const coachingTips = normalizeStringList(report.coachingTips, 5)
+
+  return {
+    provider,
+    model,
+    overallSummary,
+    totalScore: safeRound(input.totalScore),
+    passingScore: safeRound(input.passingScore),
+    passed: input.totalScore >= input.passingScore,
+    summary,
+    overall_score: clampScore(Number(report.overall_score ?? input.totalScore)),
+    strengths: strengths.length ? strengths : fallback.strengths,
+    areas_for_improvement: areasForImprovement.length ? areasForImprovement : fallback.areas_for_improvement,
+    kpi_breakdown: kpiBreakdown,
+    coaching_recommendation: coachingRecommendation,
+    transcript_summary: transcriptSummary,
+    scriptAccuracy: {
+      score: clampScore(Number((report.scriptAccuracy as Record<string, unknown> | undefined)?.score ?? input.speechAccuracy)),
+      strengths: scriptAccuracyStrengths.length ? scriptAccuracyStrengths : fallback.scriptAccuracy.strengths,
+      misses: scriptAccuracyMisses.length ? scriptAccuracyMisses : fallback.scriptAccuracy.misses,
+    },
+    grammarAndPronunciation: {
+      score: clampScore(Number((report.grammarAndPronunciation as Record<string, unknown> | undefined)?.score ?? ((input.grammarScore + input.pronunciationScore) / 2))),
+      notes: grammarNotes.length ? grammarNotes : fallback.grammarAndPronunciation.notes,
+    },
+    softSkills: {
+      score: clampScore(Number((report.softSkills as Record<string, unknown> | undefined)?.score ?? input.totalScore)),
+      notes: softSkillNotes.length ? softSkillNotes : fallback.softSkills.notes,
+    },
+    pacingAndAht: {
+      ahtSeconds: Math.max(0, Number((report.pacingAndAht as Record<string, unknown> | undefined)?.ahtSeconds ?? input.ahtSeconds)),
+      notes: pacingNotes.length ? pacingNotes : fallback.pacingAndAht.notes,
+    },
+    coachingTips: coachingTips.length ? coachingTips : fallback.coachingTips,
+    rawModelText,
+  }
+}
+
 function buildFallbackReport(input: DialerFeedbackInput): DialerFeedbackReport {
   const misses = input.scriptFlow
     .filter((step) => !input.turnLogs.some((turn) => (turn.expected_script || '').trim() === step.suggested_csr_script.trim()))
@@ -747,22 +982,46 @@ function buildFallbackReport(input: DialerFeedbackInput): DialerFeedbackReport {
     pacingNotes.push('Average handle time exceeded the scenario target.')
   }
 
+  const transcriptSummary = buildTranscriptSummary(input)
+  const kpiBreakdown = buildHeuristicKpiBreakdown(input)
+  const strengths = [
+    ...input.turnLogs
+      .filter((turn) => (turn.speech_to_text_accuracy || 0) >= 80)
+      .slice(0, 2)
+      .map((turn) => `${turn.speaker_label || 'CSR'} followed the expected script closely.`),
+    input.grammarScore >= 80 ? 'Grammar stayed stable across the scored CSR turns.' : '',
+    input.pronunciationScore >= 80 ? 'Pronunciation stayed understandable and professional.' : '',
+    (input.softSkillSignals.empathyCount || 0) > 0 ? 'The trainee used at least one explicit empathy signal.' : '',
+  ].filter(Boolean).slice(0, 5)
+  const areasForImprovement = [
+    misses.length ? `Reinforce the scripted flow for ${misses.length} step${misses.length === 1 ? '' : 's'} that were not matched closely enough.` : '',
+    ...softSkillNotes,
+    ...pacingNotes,
+  ].filter(Boolean).slice(0, 5)
+  const summary =
+    input.totalScore >= input.passingScore
+      ? `Passing attempt at ${safeRound(input.totalScore)}% against a ${safeRound(input.passingScore)}% KPI target. The trainee kept the call moving and met the overall certification threshold.`
+      : `Attempt closed at ${safeRound(input.totalScore)}% against a ${safeRound(input.passingScore)}% KPI target. The trainee needs a tighter script match, cleaner pacing, and stronger customer-control cues before the next retake.`
+  const coachingRecommendation = areasForImprovement[0]
+    || 'Keep rehearsing the scenario flow so the trainee can stay accurate while sounding natural under time pressure.'
+
   return {
     provider: 'fallback',
     model: 'heuristic',
-    overallSummary:
-      input.totalScore >= input.passingScore
-        ? `Passing attempt at ${safeRound(input.totalScore)}%. Continue improving control, transitions, and empathy.`
-        : `Attempt closed at ${safeRound(input.totalScore)}%. Focus on script accuracy and soft-skill control before the next retake.`,
+    overallSummary: summary,
     totalScore: safeRound(input.totalScore),
     passingScore: safeRound(input.passingScore),
     passed: input.totalScore >= input.passingScore,
+    summary,
+    overall_score: safeRound(input.totalScore),
+    strengths: strengths.length ? strengths : ['The trainee completed the guided mock call and produced a usable transcript for coaching review.'],
+    areas_for_improvement: areasForImprovement.length ? areasForImprovement : ['Keep refining the exact scripted wording and call-control transitions.'],
+    kpi_breakdown: kpiBreakdown,
+    coaching_recommendation: coachingRecommendation,
+    transcript_summary: transcriptSummary,
     scriptAccuracy: {
       score: safeRound(input.speechAccuracy),
-      strengths: input.turnLogs
-        .filter((turn) => (turn.speech_to_text_accuracy || 0) >= 80)
-        .slice(0, 3)
-        .map((turn) => `${turn.speaker_label || 'CSR'} followed the expected script closely.`),
+      strengths: strengths.slice(0, 4),
       misses,
     },
     grammarAndPronunciation: {
@@ -781,6 +1040,7 @@ function buildFallbackReport(input: DialerFeedbackInput): DialerFeedbackReport {
       notes: pacingNotes.length ? pacingNotes : ['AHT and pacing stayed within the expected dialer window.'],
     },
     coachingTips: [
+      coachingRecommendation,
       'Mirror the suggested CSR script more tightly on high-value turns.',
       'Use hold/resume transitions to buy time without letting the pace feel broken.',
       'Keep empathy statements explicit instead of implied.',
@@ -817,32 +1077,28 @@ export function buildDialerFeedbackPrompt(input: DialerFeedbackInput) {
     })}`,
     'Return strict JSON with this exact shape:',
     JSON.stringify({
-      overallSummary: 'string',
-      scriptAccuracy: {
-        score: 0,
-        strengths: ['string'],
-        misses: ['string'],
-      },
-      grammarAndPronunciation: {
-        score: 0,
-        notes: ['string'],
-      },
-      softSkills: {
-        score: 0,
-        notes: ['string'],
-      },
-      pacingAndAht: {
-        ahtSeconds: 0,
-        notes: ['string'],
-      },
-      coachingTips: ['string'],
+      overall_score: 0,
+      passed: true,
+      summary: 'string',
+      strengths: ['string'],
+      areas_for_improvement: ['string'],
+      kpi_breakdown: [
+        {
+          category: 'Opening spiel',
+          score: 0,
+          feedback: 'string',
+        },
+      ],
+      coaching_recommendation: 'string',
+      transcript_summary: 'string',
     }),
     'Evaluation rules:',
-    '- Script Accuracy: compare each trainee CSR transcript with the corresponding suggested_csr_script and cite missing intent, phrasing, or required keywords.',
-    '- Grammar & Pronunciation: infer likely spoken issues from the STT text and the provided scores, but explicitly avoid blaming obvious transcription glitches.',
-    '- Soft Skills: comment on pacing, empathy, tone, ownership, transitions, and how naturally the trainee handled the member response.',
-    '- Pacing & AHT: use the supplied AHT and speed context to explain whether the handle time felt efficient or rushed.',
-    '- Keep each list concise, practical, and specific to the transcript.',
+    '- Use the transcript, script flow, and KPI evidence to grade the trainee response only.',
+    '- Keep the overall_score aligned with the provided metrics and the quality of the transcript.',
+    '- kpi_breakdown must cover these categories in order: Opening spiel, Verification process, Active listening, Empathy, Accuracy of information, Call control, Professional tone, Resolution/next step, Closing spiel.',
+    '- Each kpi_breakdown score must be 0 to 100 and each feedback value must be concise, practical, and specific to the transcript.',
+    '- strengths and areas_for_improvement should each contain 2 to 5 short, evidence-based bullets.',
+    '- coaching_recommendation should be one practical coaching note the trainer can reinforce in the next session.',
     '- Do not wrap the JSON in markdown fences.',
   ].join('\n')
 }
@@ -1037,37 +1293,13 @@ export async function generateDialerFeedbackReport(input: DialerFeedbackInput): 
     })
 
     const rawText = result.response.text()
-    const parsed = JSON.parse(extractJsonCandidate(rawText)) as Omit<DialerFeedbackReport, 'provider' | 'model' | 'totalScore' | 'passingScore' | 'passed'> & {
-      overallSummary?: string
-    }
+    const parsed = JSON.parse(extractJsonCandidate(rawText)) as Partial<DialerFeedbackReport> & Record<string, unknown>
 
-    return {
+    return normalizeFeedbackReport(input, parsed, {
       provider: 'gemini',
       model: modelName,
-      overallSummary: parsed.overallSummary || buildFallbackReport(input).overallSummary,
-      totalScore: safeRound(input.totalScore),
-      passingScore: safeRound(input.passingScore),
-      passed: input.totalScore >= input.passingScore,
-      scriptAccuracy: {
-        score: safeRound(Number(parsed.scriptAccuracy?.score || input.speechAccuracy)),
-        strengths: Array.isArray(parsed.scriptAccuracy?.strengths) ? parsed.scriptAccuracy.strengths.slice(0, 4) : [],
-        misses: Array.isArray(parsed.scriptAccuracy?.misses) ? parsed.scriptAccuracy.misses.slice(0, 4) : [],
-      },
-      grammarAndPronunciation: {
-        score: safeRound(Number(parsed.grammarAndPronunciation?.score || ((input.grammarScore + input.pronunciationScore) / 2))),
-        notes: Array.isArray(parsed.grammarAndPronunciation?.notes) ? parsed.grammarAndPronunciation.notes.slice(0, 4) : [],
-      },
-      softSkills: {
-        score: safeRound(Number(parsed.softSkills?.score || input.totalScore)),
-        notes: Array.isArray(parsed.softSkills?.notes) ? parsed.softSkills.notes.slice(0, 4) : [],
-      },
-      pacingAndAht: {
-        ahtSeconds: Math.max(0, Number(parsed.pacingAndAht?.ahtSeconds || input.ahtSeconds)),
-        notes: Array.isArray(parsed.pacingAndAht?.notes) ? parsed.pacingAndAht.notes.slice(0, 4) : [],
-      },
-      coachingTips: Array.isArray(parsed.coachingTips) ? parsed.coachingTips.slice(0, 5) : [],
       rawModelText: rawText,
-    }
+    })
   } catch {
     return buildFallbackReport(input)
   }
@@ -1130,6 +1362,17 @@ export async function syncDialerScoreToSupabase(
     const fullTranscript = buildFullConversationTranscript(input.transcriptLog)
     const scriptComparisonLog = buildScriptComparisonLog(input.scriptFlow, input.turnLogs)
     const passed = input.totalScore >= input.passingScore
+    const persistedFeedbackReport = {
+      ...report,
+      session_metadata: {
+        trainer_id: input.trainerId || null,
+        attempt_number: input.attemptNumber || 1,
+        recording_url: input.recordingUrl || null,
+        started_at: input.startedAt || null,
+        ended_at: input.endedAt || nowIso,
+        duration_seconds: Math.max(0, Number(input.durationSeconds ?? input.ahtSeconds ?? 0)),
+      },
+    }
 
     let scoreRecordId: string | null = null
     let certificateRecordId: string | null = null
@@ -1163,7 +1406,7 @@ export async function syncDialerScoreToSupabase(
           turn_logs: input.turnLogs,
           full_transcript: fullTranscript,
           script_comparison_log: scriptComparisonLog,
-          feedback_report: report,
+          feedback_report: persistedFeedbackReport,
           certificate_id: input.certificateId || null,
           supabase_certificate_id: null,
           updated_at: nowIso,
@@ -1200,7 +1443,7 @@ export async function syncDialerScoreToSupabase(
           dead_air_seconds: Number(input.softSkillSignals.deadAirSeconds || 0),
           transcript_log: input.transcriptLog,
           turn_logs: input.turnLogs,
-          feedback_report: report,
+          feedback_report: persistedFeedbackReport,
           certificate_id: input.certificateId || null,
           updated_at: nowIso,
         }, { onConflict: 'session_id' })
@@ -1241,7 +1484,7 @@ export async function syncDialerScoreToSupabase(
             total_score: input.totalScore,
             passing_score: input.passingScore,
             certificate_title: buildCertificateTitle(input.topic),
-            feedback_report: report,
+            feedback_report: persistedFeedbackReport,
             local_certificate_id: input.certificateId || null,
             updated_at: nowIso,
           }, { onConflict: 'session_id' })

@@ -1220,13 +1220,19 @@ def _apply_batch_kpi_to_call_simulation_config(
     batch_id: Optional[str] = None,
 ) -> dict[str, Any]:
     resolved_config = _normalize_json_object(config)
-    passing_score = float(kpi_config.passing_score or DEFAULT_PASSING_SCORE)
+    existing_target_kpis = _normalize_json_object(resolved_config.get("target_kpis"))
+    configured_passing_score = _read_call_scenario_passing_score_from_config(resolved_config)
+    passing_score = configured_passing_score or float(kpi_config.passing_score or DEFAULT_PASSING_SCORE)
     return {
         **resolved_config,
-        "target_kpis": _build_batch_target_kpis_payload(
-            kpi_config,
-            batch_id=batch_id,
-        ),
+        "target_kpis": {
+            **existing_target_kpis,
+            **_build_batch_target_kpis_payload(
+                kpi_config,
+                batch_id=batch_id,
+            ),
+            "passing_score": passing_score,
+        },
         "passing_score": passing_score,
         "certification_threshold": passing_score,
     }
@@ -1732,7 +1738,9 @@ def _serialize_sim_session_response(
     session: SimSession,
 ) -> dict[str, Any]:
     coaching_log = _get_latest_sim_session_coaching_logs(db, [session.id]).get(session.id)
+    feedback_report = _get_supabase_call_simulation_feedback_reports([session.id]).get(session.id)
     payload = SimSessionResponse.model_validate(session).model_dump(mode="json")
+    payload["feedback_report"] = feedback_report
     payload["coaching_id"] = coaching_log.coaching_id if coaching_log else None
     payload["coaching_status"] = coaching_log.status if coaching_log else None
     payload["coaching_acknowledged_at"] = (
@@ -1740,6 +1748,44 @@ def _serialize_sim_session_response(
         if coaching_log and coaching_log.acknowledged_at
         else None
     )
+    return payload
+
+
+def _get_supabase_call_simulation_feedback_reports(
+    session_ids: list[str],
+) -> dict[str, dict[str, Any]]:
+    normalized_session_ids = [
+        session_id
+        for session_id in {str(value).strip() for value in session_ids if str(value).strip()}
+        if session_id
+    ]
+    if not normalized_session_ids:
+        return {}
+
+    supabase = get_supabase_client()
+    if not supabase.is_available:
+        return {}
+
+    try:
+        result = (
+            supabase.table("call_simulation_scores")
+            .select("session_id, feedback_report")
+            .in_("session_id", normalized_session_ids)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning("Unable to load Call Simulation feedback reports from Supabase: %s", exc)
+        return {}
+
+    rows = result.data if isinstance(getattr(result, "data", None), list) else []
+    payload: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        session_id = str(row.get("session_id") or "").strip()
+        feedback_report = row.get("feedback_report")
+        if session_id and isinstance(feedback_report, dict) and feedback_report:
+            payload[session_id] = feedback_report
     return payload
 
 
@@ -1833,6 +1879,27 @@ def _resolve_call_simulation_config(scenario: Optional[Scenario]) -> dict[str, A
     return _normalize_json_object(getattr(scenario, "call_simulation_config", None))
 
 
+def _read_call_scenario_passing_score_from_config(
+    config: Optional[dict[str, Any]],
+) -> Optional[float]:
+    resolved_config = _normalize_json_object(config)
+    legacy_target_kpis = _normalize_json_object(resolved_config.get("target_kpis"))
+    for candidate in (
+        resolved_config.get("passing_score"),
+        resolved_config.get("certification_threshold"),
+        legacy_target_kpis.get("passing_score"),
+    ):
+        try:
+            if candidate is None:
+                continue
+            resolved = float(candidate)
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= resolved <= 100.0:
+            return round(resolved, 2)
+    return None
+
+
 def _resolve_call_scenario_max_attempts(
     scenario: Optional[Scenario],
     fallback: int = DEFAULT_MAX_ATTEMPTS,
@@ -1870,25 +1937,13 @@ def _resolve_call_scenario_passing_score(
     scenario: Optional[Scenario],
     fallback: float,
 ) -> float:
-    for candidate in (fallback,):
+    configured_passing_score = _read_call_scenario_passing_score_from_config(
+        _resolve_call_simulation_config(scenario)
+    )
+    for candidate in (configured_passing_score, fallback):
         try:
             if candidate is None:
                 continue
-            resolved = float(candidate)
-        except (TypeError, ValueError):
-            continue
-        if 0.0 <= resolved <= 100.0:
-            return round(resolved, 2)
-
-    config = _resolve_call_simulation_config(scenario)
-    legacy_target_kpis = _normalize_json_object(config.get("target_kpis"))
-    for candidate in (
-        legacy_target_kpis.get("passing_score"),
-        config.get("passing_score"),
-        config.get("certification_threshold"),
-        DEFAULT_PASSING_SCORE,
-    ):
-        try:
             resolved = float(candidate)
         except (TypeError, ValueError):
             continue
@@ -4936,6 +4991,8 @@ async def synthesize_member_speech(
     if not normalized_text:
         raise HTTPException(status_code=400, detail="Text is required")
 
+    browser_fallback_message = "AI voice is using browser fallback mode."
+
     try:
         audio_result = await text_to_speech(
             normalized_text,
@@ -4943,8 +5000,18 @@ async def synthesize_member_speech(
             speaking_style="professional",
         )
     except Exception as exc:
-        logger.error("Call simulation TTS synthesis failed: %s", exc)
-        raise HTTPException(status_code=500, detail="Text-to-speech failed") from exc
+        logger.warning("Call simulation TTS synthesis failed. Browser fallback will be used: %s", exc)
+        audio_result = {
+            "audio_url": None,
+            "audio_base64": None,
+            "audio_bytes": None,
+            "audio_content_type": "audio/wav",
+            "audio_extension": "wav",
+            "duration": 0,
+            "provider": "browser_fallback",
+            "error": str(exc),
+            "fallback_mode": "browser",
+        }
 
     audio_url = str(audio_result.get("audio_url") or "").strip() or None
     audio_base64 = str(audio_result.get("audio_base64") or "").strip() or None
@@ -4952,8 +5019,9 @@ async def synthesize_member_speech(
     audio_content_type = str(audio_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav"
     audio_extension = re.sub(r"[^a-z0-9]+", "", str(audio_result.get("audio_extension") or "wav").lower()) or "wav"
     duration = float(audio_result.get("duration") or 0.0)
-    provider = str(audio_result.get("provider") or "").strip() or ("gemini" if gemini_tts_engine.is_available() else "fallback")
+    provider = str(audio_result.get("provider") or "").strip() or ("gemini" if gemini_tts_engine.is_available() else "browser_fallback")
     provider_error = str(audio_result.get("error") or "").strip() or None
+    fallback_mode = str(audio_result.get("fallback_mode") or "").strip() or None
 
     storage_mode = "inline"
     storage_warning: Optional[str] = None
@@ -4993,10 +5061,23 @@ async def synthesize_member_speech(
                 upload_bytes = None
 
         if upload_bytes is None:
-            raise HTTPException(
-                status_code=503,
-                detail=provider_error or "Generated speech could not be converted into a storable audio file.",
+            logger.warning(
+                "Call Simulation member audio will use browser fallback instead of a persisted asset. "
+                "scenario_id=%s step_number=%s provider=%s reason=%s",
+                scenario_id,
+                step_number,
+                provider,
+                provider_error or "No backend audio payload was returned.",
             )
+            return {
+                "audio_url": None,
+                "audio_base64": None,
+                "duration": round(max(duration, 0.0), 2),
+                "provider": "browser_fallback",
+                "storage_mode": "browser-fallback",
+                "warning": browser_fallback_message,
+                "fallback_mode": "browser",
+            }
 
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
         safe_leaf = re.sub(r"[^a-z0-9]+", "-", normalized_text.lower()).strip("-") or "member-script"
@@ -5031,11 +5112,18 @@ async def synthesize_member_speech(
             )
         audio_base64 = None
 
-    if not audio_url and not audio_base64 and gemini_tts_engine.is_available():
-        raise HTTPException(
-            status_code=503,
-            detail=provider_error or "Gemini text-to-speech did not return playable audio.",
-        )
+    if not audio_url and not audio_base64:
+        if provider_error:
+            logger.warning("Call Simulation backend TTS returned no playable audio. Browser fallback will be used: %s", provider_error)
+        return {
+            "audio_url": None,
+            "audio_base64": None,
+            "duration": round(max(duration, 0.0), 2),
+            "provider": "browser_fallback",
+            "storage_mode": "browser-fallback" if fallback_mode == "browser" else storage_mode,
+            "warning": browser_fallback_message,
+            "fallback_mode": "browser",
+        }
 
     return {
         "audio_url": audio_url,
@@ -5044,6 +5132,7 @@ async def synthesize_member_speech(
         "provider": provider,
         "storage_mode": storage_mode,
         "warning": storage_warning,
+        "fallback_mode": fallback_mode,
     }
 
 
@@ -5994,6 +6083,9 @@ async def get_interaction_history(
         db,
         [session.id for session in sessions],
     )
+    feedback_reports = _get_supabase_call_simulation_feedback_reports(
+        [session.id for session in sessions]
+    )
 
     payload = []
     for session in sessions:
@@ -6019,6 +6111,7 @@ async def get_interaction_history(
                 "transcript_log": session.transcript_log or [],
                 "turn_logs": session.turn_logs or [],
                 "ai_feedback": session.ai_feedback,
+                "feedback_report": feedback_reports.get(session.id),
                 "coaching_notes": session.coaching_notes,
                 "grammar_score": session.grammar_score,
                 "pronunciation_score": session.pronunciation_score,

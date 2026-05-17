@@ -111,6 +111,19 @@ class SupabaseClient:
                 )
                 logger.warning(self.status_detail)
 
+    def __getattr__(self, name: str):
+        """Proxy unknown attributes to the underlying Supabase client when available."""
+        client = self.__dict__.get("client")
+        if client is not None and hasattr(client, name):
+            return getattr(client, name)
+        raise AttributeError(f"{self.__class__.__name__!s} has no attribute {name!r}")
+
+    def table(self, table_name: str):
+        """Return a Supabase query builder for the requested table."""
+        if not self.client:
+            raise RuntimeError("Supabase client is not configured.")
+        return self.client.table(table_name)
+
     def _ensure_buckets_exist(self) -> None:
         """Ensure required storage buckets exist in Supabase."""
         if not self.client:

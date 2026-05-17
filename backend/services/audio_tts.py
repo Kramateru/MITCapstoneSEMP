@@ -15,6 +15,13 @@ from ..config_validation import normalize_env_value
 
 logger = logging.getLogger(__name__)
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    normalized = normalize_env_value(os.getenv(name)).lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on"}
+
 # Try to import Gemini TTS
 try:
     from google import genai
@@ -49,6 +56,7 @@ class TextToSpeechService:
     def __init__(self):
         # Gemini TTS configuration
         self.gemini_api_key = normalize_env_value(os.getenv("GEMINI_API_KEY"))
+        self.enable_local_tts = _env_flag("ENABLE_LOCAL_TTS", False)
         self.gemini_client = None
         if GEMINI_TTS_AVAILABLE and self.gemini_api_key:
             try:
@@ -59,7 +67,7 @@ class TextToSpeechService:
 
         # pyttsx3 offline TTS
         self.pyttsx3_engine = None
-        if PYTTSX3_AVAILABLE:
+        if self.enable_local_tts and PYTTSX3_AVAILABLE:
             try:
                 self.pyttsx3_engine = pyttsx3.init()
                 # Configure voice properties
@@ -68,6 +76,8 @@ class TextToSpeechService:
                 logger.info("✓ pyttsx3 TTS engine initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize pyttsx3 engine: {e}")
+        elif not self.enable_local_tts:
+            logger.info("Local microlearning TTS fallback is disabled. Browser fallback should be used when server audio is unavailable.")
 
     def is_available(self) -> bool:
         """Check if any TTS provider is available"""

@@ -919,10 +919,12 @@ async def generate_tts_audio(
 
     # Check if TTS service is available
     if not text_to_speech_service.is_available():
-        raise HTTPException(
-            status_code=503,
-            detail="Text-to-speech service not available. Configure GEMINI_API_KEY.",
-        )
+        return {
+            "module_id": module_id,
+            "tts_url": None,
+            "provider": "browser_fallback",
+            "warning": "AI voice is using browser fallback mode.",
+        }
 
     # Generate TTS
     tts_result = text_to_speech_service.synthesize(
@@ -931,7 +933,12 @@ async def generate_tts_audio(
     )
 
     if not tts_result:
-        raise HTTPException(status_code=500, detail="TTS generation failed")
+        return {
+            "module_id": module_id,
+            "tts_url": None,
+            "provider": "browser_fallback",
+            "warning": "AI voice is using browser fallback mode.",
+        }
 
     supabase_client = _require_supabase_storage()
     tts_url = supabase_client.upload_microlearning_tts(

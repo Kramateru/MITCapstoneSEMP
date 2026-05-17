@@ -1097,6 +1097,7 @@ class SimSessionResponse(BaseModel):
 
     # Feedback
     ai_feedback: Optional[str]
+    feedback_report: Optional[Dict[str, Any]] = None
     coaching_notes: Optional[str] = None
     trainer_verdict_status: str = "pending"
     trainer_verdict_notes: Optional[str] = None

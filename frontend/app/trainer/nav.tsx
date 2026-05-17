@@ -20,7 +20,7 @@ export const trainerSidebarItems = (pendingReviews?: number) => [
   { label: 'Batches', icon: <Users size={20} />, href: '/trainer/batches', section: 'Delivery' },
   { label: 'Microlearning Studio', icon: <BookOpen size={20} />, href: '/trainer/microlearning', section: 'Delivery' },
   { label: 'Assessments', icon: <ClipboardList size={20} />, href: '/trainer/assessments', section: 'Delivery' },
-  { label: 'Call Simulation', icon: <Mic size={20} />, href: '/trainer/call-simulation', section: 'Delivery' },
+  { label: 'Call Simulations', icon: <Mic size={20} />, href: '/trainer/call-simulation', section: 'Delivery' },
   { label: 'Coaching', icon: <FileText size={20} />, href: '/trainer/coaching', badge: pendingReviews, section: 'Delivery' },
   { label: 'Settings', icon: <Settings size={20} />, href: '/trainer/settings', section: 'Account' },
 ];

@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 
 import { useAuth } from '@/app/context/AuthContext';
 import { openTraineeMicrolearningLiveUpdates } from '@/app/lib/microlearning/client';
+import { BROWSER_TTS_UNSUPPORTED_MESSAGE, browserTtsService } from '@/app/lib/tts/ttsService';
 
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -971,7 +972,6 @@ function AudioPlaybackCard({
   const primaryAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsObjectUrlRef = useRef<string | null>(null);
-  const browserSpeechRef = useRef<SpeechSynthesisUtterance | null>(null);
   const [captionCues, setCaptionCues] = useState<CaptionCue[]>(() => normalizeCaptionCueList(captionData));
   const [currentTime, setCurrentTime] = useState(0);
   const [resolvedDuration, setResolvedDuration] = useState(0);
@@ -996,12 +996,7 @@ function AudioPlaybackCard({
   }, []);
 
   const cancelBrowserSpeech = useCallback(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-    browserSpeechRef.current = null;
+    browserTtsService.stop();
     setIsTtsPlaying(false);
   }, []);
 
@@ -1271,7 +1266,8 @@ function AudioPlaybackCard({
   const transcriptBody =
     resolvedTranscriptText || captionCues.map((cue) => cue.text).join('\n').trim() || '';
   const canPlayPrimaryAudio = hasPrimaryAudio ?? Boolean(audioUrl);
-  const shouldShowBrowserTtsFallback = false;
+  const canUseBrowserTtsFallback = Boolean(transcriptBody.trim());
+  const shouldShowBrowserTtsFallback = !ttsUrl && canUseBrowserTtsFallback;
   const resolvedCaptionCues = captionCues.length
     ? captionCues
     : buildSimulatedCaptionCues(transcriptBody, resolvedDuration || durationSeconds);
@@ -1368,8 +1364,8 @@ function AudioPlaybackCard({
         return;
       }
 
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        toast.error('Browser text-to-speech is not available on this device.');
+      if (!browserTtsService.isSupported()) {
+        toast.error(BROWSER_TTS_UNSUPPORTED_MESSAGE);
         return;
       }
 
@@ -1385,23 +1381,24 @@ function AudioPlaybackCard({
       setShowTranscript(true);
       await hydrateModuleAudioMetadata().catch(() => undefined);
 
-      const utterance = new SpeechSynthesisUtterance(transcriptBody);
-      utterance.lang = languageLabel || 'en-US';
-      utterance.rate = 0.96;
-      utterance.onend = () => {
-        browserSpeechRef.current = null;
-        setIsTtsPlaying(false);
-      };
-      utterance.onerror = () => {
-        browserSpeechRef.current = null;
-        setIsTtsPlaying(false);
-      };
-
-      browserSpeechRef.current = utterance;
       setIsPrimaryPlaying(false);
-      setIsTtsPlaying(true);
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
+      try {
+        setIsTtsPlaying(true);
+        await browserTtsService.speak(transcriptBody, {
+          lang: languageLabel || 'en-US',
+          rate: 0.96,
+          voiceName: 'Google US English',
+          onEnd: () => {
+            setIsTtsPlaying(false);
+          },
+          onError: () => {
+            setIsTtsPlaying(false);
+          },
+        });
+      } catch (error) {
+        setIsTtsPlaying(false);
+        toast.error(error instanceof Error ? error.message : BROWSER_TTS_UNSUPPORTED_MESSAGE);
+      }
       return;
     }
 
@@ -1426,9 +1423,42 @@ function AudioPlaybackCard({
       await ensureProtectedPlaybackSource('tts');
       await target.play();
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : 'Unable to start the accessibility audio playback.',
-      );
+      if (!canUseBrowserTtsFallback) {
+        toast.error(
+          error instanceof Error ? error.message : 'Unable to start the accessibility audio playback.',
+        );
+        return;
+      }
+
+      toast.info('AI voice is using browser fallback mode.');
+
+      if (!browserTtsService.isSupported()) {
+        toast.error(BROWSER_TTS_UNSUPPORTED_MESSAGE);
+        return;
+      }
+
+      try {
+        setIsPrimaryPlaying(false);
+        setIsTtsPlaying(true);
+        await browserTtsService.speak(transcriptBody, {
+          lang: languageLabel || 'en-US',
+          rate: 0.96,
+          voiceName: 'Google US English',
+          onEnd: () => {
+            setIsTtsPlaying(false);
+          },
+          onError: () => {
+            setIsTtsPlaying(false);
+          },
+        });
+      } catch (fallbackError) {
+        setIsTtsPlaying(false);
+        toast.error(
+          fallbackError instanceof Error
+            ? fallbackError.message
+            : BROWSER_TTS_UNSUPPORTED_MESSAGE,
+        );
+      }
     }
   }
 
@@ -1547,7 +1577,7 @@ function AudioPlaybackCard({
 
       {shouldShowBrowserTtsFallback ? (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Original lesson audio is unavailable. Use the browser read-aloud fallback to hear the saved transcript.
+          AI voice is using browser fallback mode.
         </div>
       ) : null}
 
@@ -2427,12 +2457,18 @@ export default function MicrolearningHub() {
     }));
   }
 
-  const persistFlashcardSessionDraft = useEffectEvent(async (responseText: string, revealedSide: FlashcardSide) => {
+  const persistFlashcardSessionDraft = useCallback(async (responseText: string, revealedSide: FlashcardSide) => {
+    const currentAssignment =
+      assignments.find((assignment) => assignment.id === activeAssignmentId)
+      || assignmentDetail?.assignment
+      || null;
+    const currentExerciseId = assignmentDetail?.flashcard_session?.current_exercise_id || null;
+
     if (
       !activeAssignmentId
       || assignmentDetail?.module.module_type !== 'flashcard'
-      || !flashcardSession?.current_exercise_id
-      || !hasStartedAssignment(activeAssignment)
+      || !currentExerciseId
+      || !hasStartedAssignment(currentAssignment)
     ) {
       return;
     }
@@ -2447,7 +2483,7 @@ export default function MicrolearningHub() {
         {
           method: 'POST',
           body: JSON.stringify({
-            exercise_id: flashcardSession.current_exercise_id,
+            exercise_id: currentExerciseId,
             response_text: responseText || '',
             revealed_side: revealedSide,
           }),
@@ -2479,7 +2515,14 @@ export default function MicrolearningHub() {
     } catch {
       // Keep the local draft and retry on the next change or timeout edge.
     }
-  });
+  }, [
+    activeAssignmentId,
+    apiRequest,
+    assignments,
+    assignmentDetail?.module.module_type,
+    assignmentDetail?.assignment,
+    assignmentDetail?.flashcard_session?.current_exercise_id,
+  ]);
 
   async function handleStartAssignment() {
     if (!activeAssignmentId) {

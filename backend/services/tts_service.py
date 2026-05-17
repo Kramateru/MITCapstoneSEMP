@@ -26,6 +26,13 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    normalized = normalize_env_value(os.getenv(name)).lower()
+    if not normalized:
+        return default
+    return normalized in {"1", "true", "yes", "on"}
+
+
 class TTSService:
     """Text-to-Speech service for call simulation."""
 
@@ -34,12 +41,15 @@ class TTSService:
         self.azure_speech_key = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
         self.azure_speech_region = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
         self.azure_voice_name = normalize_env_value(os.getenv("AZURE_TTS_VOICE")) or "en-US-JennyNeural"
+        self.enable_local_tts = _env_flag("ENABLE_LOCAL_TTS", False)
+        if not self.enable_local_tts:
+            logger.info("Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini/Azure audio is unavailable.")
 
     def is_available(self) -> bool:
         return (
             self.gemini_tts.is_available()
             or self._azure_tts_available()
-            or self._windows_sapi_available()
+            or self._local_tts_available()
         )
 
     def _azure_tts_available(self) -> bool:
@@ -50,7 +60,19 @@ class TTSService:
         )
 
     def _windows_sapi_available(self) -> bool:
-        return os.name == "nt"
+        return self.enable_local_tts and os.name == "nt"
+
+    def _local_tts_available(self) -> bool:
+        if not self.enable_local_tts:
+            return False
+        if self._windows_sapi_available():
+            return True
+        try:
+            import pyttsx3  # noqa: F401
+
+            return True
+        except Exception:
+            return False
 
     async def synthesize(
         self,
@@ -104,7 +126,7 @@ class TTSService:
                         "error": None,
                     }
             except Exception as e:
-                logger.error(f"Gemini TTS failed: {e}")
+                logger.warning("Gemini TTS failed. Browser fallback may be used: %s", e)
                 gemini_error = str(e)
 
             if not gemini_error:
@@ -121,13 +143,27 @@ class TTSService:
                 if azure_result:
                     return azure_result
             except Exception as e:
-                logger.error(f"Azure TTS failed: {e}")
+                logger.warning("Azure TTS failed. Browser fallback may be used: %s", e)
                 azure_error = str(e)
 
             if not azure_error:
                 azure_error = "Azure TTS returned no audio."
 
-        # Fallback to native Windows SAPI or pyttsx3
+        if not self.enable_local_tts:
+            provider_errors = [error for error in [gemini_error, azure_error] if error]
+            return {
+                "audio_url": None,
+                "audio_base64": None,
+                "audio_bytes": None,
+                "audio_content_type": "audio/wav",
+                "audio_extension": "wav",
+                "duration": 0,
+                "provider": "browser_fallback",
+                "error": ". ".join(provider_errors) if provider_errors else "Server-side TTS is unavailable.",
+                "fallback_mode": "browser",
+            }
+
+        # Fallback to native Windows SAPI or pyttsx3 only for local development.
         fallback_result = await self._fallback_tts(text)
         if fallback_result.get("audio_bytes") or fallback_result.get("audio_base64"):
             if not fallback_result.get("error"):
@@ -260,6 +296,18 @@ try {{
 
     async def _fallback_tts(self, text: str) -> dict[str, Any]:
         """Fallback TTS using native Windows SAPI, then pyttsx3."""
+        if not self.enable_local_tts:
+            return {
+                "audio_url": None,
+                "audio_base64": None,
+                "audio_bytes": None,
+                "audio_content_type": "audio/wav",
+                "audio_extension": "wav",
+                "duration": 0,
+                "provider": None,
+                "error": "Local server-side TTS fallback is disabled.",
+            }
+
         windows_error: Optional[str] = None
         try:
             windows_result = self._synthesize_windows_sapi(text)
@@ -267,7 +315,7 @@ try {{
                 return windows_result
         except Exception as exc:
             windows_error = str(exc)
-            logger.error("Windows SAPI fallback TTS failed: %s", exc)
+            logger.warning("Windows SAPI fallback TTS failed: %s", exc)
 
         try:
             import pyttsx3
@@ -302,7 +350,7 @@ try {{
             }
 
         except Exception as e:
-            logger.error(f"Fallback TTS failed: {e}")
+            logger.warning("Local pyttsx3 fallback TTS failed: %s", e)
             error_parts = [part for part in [windows_error, str(e)] if part]
             return {
                 "audio_url": None,

@@ -16,7 +16,14 @@ try:
 except ImportError:
     pyttsx3 = None
 
+
+def _local_tts_enabled() -> bool:
+    return str(os.getenv("ENABLE_LOCAL_TTS", "")).strip().lower() in {"1", "true", "yes", "on"}
+
 def initialize_tts():
+    if not _local_tts_enabled():
+        logger.info("Local server-side TTS fallback is disabled.")
+        return None
     if pyttsx3 is None:
         logger.warning("pyttsx3 is not installed. Local TTS generation is disabled.")
         return None
