@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,6 +285,7 @@ from backend.services.speech_pipeline import (
     SpeechPipelineController,
     SpeechPipelineError,
 )
+from backend.supabase_client import get_supabase_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -1228,10 +1230,57 @@ def cleanup_legacy_seed_data() -> None:
         db.close()
 
 
+def _normalize_origin(value: str | None) -> str:
+    candidate = normalize_env_value(value or "")
+    if not candidate:
+        return ""
+
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return ""
+
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+
+    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+
+
+def build_allowed_cors_origins() -> list[str]:
+    configured_values = [
+        os.getenv("FRONTEND_URL"),
+        os.getenv("BACKEND_URL"),
+        os.getenv("RENDER_EXTERNAL_URL"),
+    ]
+    configured_values.extend(
+        segment.strip()
+        for segment in (os.getenv("APP_ALLOWED_ORIGINS") or "").split(",")
+        if segment.strip()
+    )
+
+    defaults = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ]
+
+    normalized_origins: list[str] = []
+    seen: set[str] = set()
+    for raw_value in [*configured_values, *defaults]:
+        normalized = _normalize_origin(raw_value)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            normalized_origins.append(normalized)
+
+    return normalized_origins
+
+
 # Add CORS middleware to allow requests from React frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL instead
+    allow_origins=build_allowed_cors_origins(),
+    allow_origin_regex=r"^https://([a-z0-9-]+\.)*onrender\.com$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -1691,14 +1740,66 @@ from fastapi.responses import RedirectResponse
 
 @app.get("/health", include_in_schema=False)
 async def health():
-    return {"status": "ok"}
+    database_status = {
+        "status": "connected",
+        "detail": "Primary database connection is healthy.",
+    }
+    supabase_client = get_supabase_client()
+    supabase_status = {
+        "status": "connected" if supabase_client.is_available else "error",
+        "detail": (
+            "Supabase storage and admin APIs are configured."
+            if supabase_client.is_available
+            else getattr(
+                supabase_client,
+                "status_detail",
+                "Supabase storage is not configured.",
+            )
+        ),
+    }
+    http_status = 200
+
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+    except Exception as exc:
+        database_status = {
+            "status": "error",
+            "detail": str(exc),
+        }
+        http_status = 503
+    finally:
+        db.close()
+
+    if not supabase_client.is_available:
+        http_status = 503
+
+    return JSONResponse(
+        status_code=http_status,
+        content={
+            "status": "ok" if http_status == 200 else "degraded",
+            "services": {
+                "database": database_status,
+                "supabase": supabase_status,
+            },
+            "urls": {
+                "backend_url": normalize_env_value(os.getenv("BACKEND_URL")),
+                "frontend_url": normalize_env_value(os.getenv("FRONTEND_URL")),
+            },
+            "render": {
+                "enabled": normalize_env_value(os.getenv("RENDER")).lower() in {"1", "true", "yes", "on"},
+                "external_url": normalize_env_value(os.getenv("RENDER_EXTERNAL_URL")),
+                "service_name": normalize_env_value(os.getenv("RENDER_SERVICE_NAME")),
+            },
+        },
+    )
 
 
 @app.get("/")
 async def root():
     # when the backend is browsed directly, redirect to the frontend
     # development server if available; otherwise return basic JSON.
-    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    frontend_url = _normalize_origin(os.getenv("FRONTEND_URL"))
     if frontend_url:
         return RedirectResponse(url=frontend_url)
     return {

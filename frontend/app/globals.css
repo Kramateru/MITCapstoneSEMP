@@ -408,12 +408,15 @@
       linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(252, 253, 255, 0.94)),
       var(--card);
     box-shadow: var(--dashboard-shell-shadow);
+    min-height: calc(100dvh - 8.5rem);
+    backdrop-filter: blur(8px);
   }
 
   .workspace-topbar {
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 253, 0.92));
     backdrop-filter: blur(16px);
+    box-shadow: 0 20px 44px -40px rgba(15, 23, 42, 0.24);
   }
 
   .dashboard-grid {

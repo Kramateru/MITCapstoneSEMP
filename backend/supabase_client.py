@@ -256,6 +256,10 @@ class SupabaseClient:
 
         return (parsed.hostname or "").strip().lower() in {"127.0.0.1", "localhost", "0.0.0.0"}
 
+    def _allow_explicit_local_media_fallback(self) -> bool:
+        explicit_value = normalize_env_value(os.getenv("ALLOW_LOCAL_MEDIA_FALLBACK")).lower()
+        return explicit_value in {"1", "true", "yes", "on"}
+
     def _build_upload_file_options(
         self,
         *,
@@ -454,28 +458,41 @@ class SupabaseClient:
         content_type: Optional[str] = None,
     ) -> Optional[str]:
         """Upload a Call Simulation recording using the recordings/{trainee}/{scenario}/... layout."""
-        local_url = self._write_local_media_copy(
-            relative_path=f"call-simulation-recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}",
-            file_data=file_data,
-        )
+        relative_path = f"call-simulation-recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
 
         if not self.is_available:
-            logger.warning("Supabase not available. Using local fallback for Call Simulation audio.")
-            return local_url
+            if self._allow_explicit_local_media_fallback():
+                logger.warning("Supabase not available. Using explicitly enabled local fallback for Call Simulation audio.")
+                return self._write_local_media_copy(
+                    relative_path=relative_path,
+                    file_data=file_data,
+                )
+            logger.warning("Supabase not available. Call Simulation audio upload was rejected.")
+            return None
 
-        try:
-            path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
-            self.client.storage.from_(self.call_simulation_bucket_name).upload(
-                path=path,
-                file=file_data,
-                file_options={"content-type": content_type or "audio/webm"},
-            )
-            public_url = self.client.storage.from_(self.call_simulation_bucket_name).get_public_url(path)
+        path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+        public_url = self._upload_bytes_to_bucket(
+            bucket_name=self.call_simulation_bucket_name,
+            path=path,
+            file_data=file_data,
+            content_type=content_type or "audio/webm",
+        )
+        if public_url:
             logger.info(f"Call Simulation audio uploaded: {path}")
             return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload Call Simulation audio file: {e}")
-            return local_url
+
+        if self._allow_explicit_local_media_fallback():
+            logger.warning(
+                "Supabase upload failed. Using explicitly enabled local fallback for Call Simulation audio: %s",
+                relative_path,
+            )
+            return self._write_local_media_copy(
+                relative_path=relative_path,
+                file_data=file_data,
+            )
+
+        logger.error("Failed to upload Call Simulation audio file to Supabase and local fallback is disabled.")
+        return None
 
     def upload_sim_floor_audio(
         self,
@@ -509,28 +526,41 @@ class SupabaseClient:
     ) -> Optional[str]:
         """Upload trainer-managed Call Simulation audio assets such as member turns and call tones."""
         scenario_segment = scenario_id or "draft"
-        local_url = self._write_local_media_copy(
-            relative_path=f"practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}",
-            file_data=file_data,
-        )
+        relative_path = f"practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
 
         if not self.is_available:
-            logger.warning("Supabase not available. Using local fallback for Call Simulation asset upload.")
-            return local_url
+            if self._allow_explicit_local_media_fallback():
+                logger.warning("Supabase not available. Using explicitly enabled local fallback for Call Simulation asset upload.")
+                return self._write_local_media_copy(
+                    relative_path=relative_path,
+                    file_data=file_data,
+                )
+            logger.warning("Supabase not available. Call Simulation asset upload was rejected.")
+            return None
 
-        try:
-            path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
-            self.client.storage.from_(self.call_simulation_asset_bucket_name).upload(
-                path=path,
-                file=file_data,
-                file_options={"content-type": content_type or "audio/mpeg"},
-            )
-            public_url = self.client.storage.from_(self.call_simulation_asset_bucket_name).get_public_url(path)
+        path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
+        public_url = self._upload_bytes_to_bucket(
+            bucket_name=self.call_simulation_asset_bucket_name,
+            path=path,
+            file_data=file_data,
+            content_type=content_type or "audio/mpeg",
+        )
+        if public_url:
             logger.info(f"Call Simulation asset uploaded: {path}")
             return public_url
-        except Exception as e:
-            logger.error(f"Failed to upload Call Simulation asset: {e}")
-            return local_url
+
+        if self._allow_explicit_local_media_fallback():
+            logger.warning(
+                "Supabase upload failed. Using explicitly enabled local fallback for Call Simulation asset: %s",
+                relative_path,
+            )
+            return self._write_local_media_copy(
+                relative_path=relative_path,
+                file_data=file_data,
+            )
+
+        logger.error("Failed to upload Call Simulation asset to Supabase and local fallback is disabled.")
+        return None
 
     def upload_document(
         self,

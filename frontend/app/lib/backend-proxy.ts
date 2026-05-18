@@ -138,9 +138,9 @@ function getBackendBaseUrlCandidates() {
     for (const fallbackUrl of DEFAULT_LOOPBACK_BACKEND_URLS) {
       pushBaseUrl(candidates, seen, fallbackUrl)
     }
-  }
 
-  pushBaseUrl(candidates, seen, DEFAULT_BACKEND_URL)
+    pushBaseUrl(candidates, seen, DEFAULT_BACKEND_URL)
+  }
 
   if (preferredBackendBaseUrl && seen.has(preferredBackendBaseUrl)) {
     return [
@@ -193,6 +193,20 @@ export function buildResponseHeaders(response: Response) {
 
     headers.set(key, value)
   })
+
+  headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0')
+  headers.set('Pragma', 'no-cache')
+  headers.set('Expires', '0')
+
+  const varyValues = new Set(
+    (headers.get('Vary') || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )
+  varyValues.add('Authorization')
+  varyValues.add('Cookie')
+  headers.set('Vary', Array.from(varyValues).join(', '))
 
   return headers
 }

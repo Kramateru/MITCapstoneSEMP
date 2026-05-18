@@ -374,7 +374,7 @@ export default function ProfileManagementDialog() {
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="w-[min(100vw-1rem,1180px)] max-w-[min(1180px,100vw-1rem)] overflow-hidden rounded-3xl p-0 sm:w-[min(100vw-2rem,1180px)] sm:max-w-[min(1180px,100vw-2rem)]">
+        <DialogContent size="lg" className="overflow-hidden rounded-3xl p-0">
           <div className="flex max-h-[min(92vh,900px)] flex-col">
             <DialogHeader className="border-b border-border px-4 py-4 pr-12 sm:px-6 sm:py-5 sm:pr-14">
               <DialogTitle>Profile Management</DialogTitle>

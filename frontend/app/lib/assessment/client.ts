@@ -22,7 +22,6 @@ import type {
 
 const DEFAULT_RETRY_COUNT = 3
 const DEFAULT_RETRY_DELAY_MS = 1000
-const DIRECT_ASSESSMENT_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || 'http://127.0.0.1:8000'
 
 function getToken() {
   return window.localStorage.getItem('token')
@@ -86,12 +85,6 @@ async function request<T>(input: string, init?: RequestInit, retryCount = 0): Pr
   return payload as T
 }
 
-function toDirectAssessmentBackendUrl(path: string) {
-  const normalizedBaseUrl = DIRECT_ASSESSMENT_BACKEND_URL.replace(/\/+$/, '')
-  const normalizedPath = path.startsWith('/') ? path : `/${path}`
-  return `${normalizedBaseUrl}${normalizedPath}`
-}
-
 async function downloadBlob(input: string, fallbackFileName: string) {
   const token = getToken()
   const supabaseAccessToken = getSupabaseAccessToken()
@@ -129,7 +122,7 @@ async function downloadBlob(input: string, fallbackFileName: string) {
 }
 
 export function fetchTrainerAssessmentBootstrap() {
-  return request<TrainerBootstrapResponse>(toDirectAssessmentBackendUrl('/api/assessment-module/trainer/bootstrap'))
+  return request<TrainerBootstrapResponse>('/api/assessment-module/trainer/bootstrap')
 }
 
 export function fetchTraineeAssessmentDashboard() {
@@ -238,7 +231,7 @@ export function bulkUploadAssessmentQuestions(file: File) {
   const formData = new FormData()
   formData.append('file', file)
 
-  return request<BulkUploadQuestionsResponse>(toDirectAssessmentBackendUrl('/api/assessment-module/trainer/questions/bulk-upload'), {
+  return request<BulkUploadQuestionsResponse>('/api/assessment-module/trainer/questions/bulk-upload', {
     method: 'POST',
     body: formData,
   })

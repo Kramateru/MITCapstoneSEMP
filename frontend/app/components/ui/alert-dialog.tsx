@@ -9,10 +9,10 @@ import { buttonVariants } from "./button";
 type AlertDialogContentSize = "sm" | "md" | "lg" | "xl";
 
 const alertDialogSizeClasses: Record<AlertDialogContentSize, string> = {
-  sm: "!w-[min(92vw,720px)] !max-w-[720px]",
-  md: "!w-[95vw] md:!w-[90vw] lg:!w-[80vw] xl:!w-[66vw] xl:!max-w-[1080px]",
-  lg: "!w-[95vw] md:!w-[90vw] lg:!w-[84vw] xl:!w-[72vw] xl:!min-w-[860px] xl:!max-w-[1240px]",
-  xl: "!w-[95vw] md:!w-[90vw] lg:!w-[85vw] xl:!w-[75vw] xl:!min-w-[900px] xl:!max-w-[1400px] 2xl:!w-[68vw]",
+  sm: "!w-[95vw] md:!w-[88vw] lg:!w-[62vw] lg:!min-w-[min(60vw,1160px)] xl:!w-[60vw] xl:!max-w-[1180px]",
+  md: "!w-[95vw] md:!w-[90vw] lg:!w-[68vw] lg:!min-w-[min(62vw,1200px)] xl:!w-[65vw] xl:!max-w-[1260px]",
+  lg: "!w-[96vw] md:!w-[92vw] lg:!w-[73vw] lg:!min-w-[min(66vw,1280px)] xl:!w-[71vw] xl:!max-w-[1380px]",
+  xl: "!w-[96vw] md:!w-[93vw] lg:!w-[75vw] lg:!min-w-[min(68vw,1360px)] xl:!w-[74vw] xl:!max-w-[1480px] 2xl:!w-[70vw]",
 };
 
 function AlertDialog({
@@ -66,7 +66,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 flex max-h-[92vh] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-6 overflow-y-auto overscroll-contain rounded-[1.25rem] border border-slate-200/85 bg-white p-6 text-sm leading-6 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-7 sm:text-base xl:p-8 [&_button]:text-sm [&_button]:sm:text-base",
+          "fixed top-[50%] left-[50%] z-50 flex max-h-[92vh] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-7 overflow-y-auto overscroll-contain rounded-[1.35rem] border border-slate-200/85 bg-white p-6 text-[0.96rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-8 sm:text-base xl:p-9 [&_button]:text-sm [&_button]:sm:text-base [&_p]:text-balance",
           alertDialogSizeClasses[size],
           className,
         )}
@@ -84,7 +84,7 @@ function AlertDialogHeader({
     <div
       data-slot="alert-dialog-header"
       className={cn(
-        "sticky top-0 z-10 flex shrink-0 flex-col gap-2.5 border-b border-slate-200/80 bg-white/95 pb-5 text-left backdrop-blur supports-[backdrop-filter]:bg-white/88",
+        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-6 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90",
         className,
       )}
       {...props}
@@ -100,7 +100,7 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/95 pt-5 backdrop-blur supports-[backdrop-filter]:bg-white/88 sm:flex-row sm:justify-end",
+        "sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-6 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:flex-row sm:justify-end",
         className,
       )}
       {...props}
@@ -115,7 +115,7 @@ function AlertDialogTitle({
   return (
     <AlertDialogPrimitive.Title
       data-slot="alert-dialog-title"
-      className={cn("text-2xl font-bold tracking-[-0.02em]", className)}
+      className={cn("text-[clamp(1.55rem,1.2rem+0.9vw,2.35rem)] font-bold tracking-[-0.025em]", className)}
       {...props}
     />
   );
@@ -128,7 +128,7 @@ function AlertDialogDescription({
   return (
     <AlertDialogPrimitive.Description
       data-slot="alert-dialog-description"
-      className={cn("text-sm leading-6 text-slate-600 sm:text-base", className)}
+      className={cn("text-sm leading-7 text-slate-600 sm:text-[1.01rem]", className)}
       {...props}
     />
   );
