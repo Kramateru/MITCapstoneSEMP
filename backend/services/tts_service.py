@@ -23,7 +23,30 @@ except Exception:
     speechsdk = None
     AZURE_TTS_AVAILABLE = False
 
+try:
+    from openai import OpenAI
+
+    OPENAI_TTS_AVAILABLE = True
+except Exception:
+    OpenAI = None
+    OPENAI_TTS_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+OPENAI_TTS_VOICES = {
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+    "marin",
+    "cedar",
+}
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -58,14 +81,27 @@ class TTSService:
         self.azure_speech_key = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
         self.azure_speech_region = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
         self.azure_voice_name = normalize_env_value(os.getenv("AZURE_TTS_VOICE")) or "en-US-JennyNeural"
+        self.openai_api_key = normalize_env_value(os.getenv("OPENAI_API_KEY"))
+        self.openai_tts_model = normalize_env_value(os.getenv("OPENAI_TTS_MODEL")) or "gpt-4o-mini-tts"
+        self.openai_voice_name = normalize_env_value(os.getenv("OPENAI_TTS_VOICE")) or "marin"
+        self.openai_client = None
+        if OPENAI_TTS_AVAILABLE and self.openai_api_key:
+            try:
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+            except Exception as exc:
+                logger.warning("Failed to initialize OpenAI TTS client: %s", exc)
+                self.openai_client = None
         self.enable_local_tts = _default_local_tts_enabled()
         if not self.enable_local_tts:
-            logger.info("Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini/Azure audio is unavailable.")
+            logger.info(
+                "Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini, Azure, and OpenAI audio are unavailable."
+            )
 
     def is_available(self) -> bool:
         return (
             self.gemini_tts.is_available()
             or self._azure_tts_available()
+            or self._openai_tts_available()
             or self._local_tts_available()
         )
 
@@ -75,6 +111,20 @@ class TTSService:
             and is_usable_azure_speech_key(self.azure_speech_key)
             and self.azure_speech_region
         )
+
+    def _openai_tts_available(self) -> bool:
+        return bool(OPENAI_TTS_AVAILABLE and self.openai_client and self.openai_api_key)
+
+    def _resolve_openai_voice_name(self, voice_name: Optional[str]) -> str:
+        requested_voice = normalize_env_value(voice_name)
+        if requested_voice in OPENAI_TTS_VOICES:
+            return requested_voice
+
+        configured_voice = normalize_env_value(self.openai_voice_name)
+        if configured_voice in OPENAI_TTS_VOICES:
+            return configured_voice
+
+        return "marin"
 
     def _windows_sapi_available(self) -> bool:
         return self.enable_local_tts and os.name == "nt"
@@ -166,8 +216,26 @@ class TTSService:
             if not azure_error:
                 azure_error = "Azure TTS returned no audio."
 
+        # Try OpenAI TTS next when it is configured.
+        openai_error: Optional[str] = None
+        if self._openai_tts_available():
+            try:
+                openai_result = self._synthesize_openai(
+                    text,
+                    voice_name=voice_name,
+                    speaking_style=speaking_style,
+                )
+                if openai_result:
+                    return openai_result
+            except Exception as e:
+                logger.warning("OpenAI TTS failed. Browser fallback may be used: %s", e)
+                openai_error = str(e)
+
+            if not openai_error:
+                openai_error = "OpenAI TTS returned no audio."
+
         if not self.enable_local_tts:
-            provider_errors = [error for error in [gemini_error, azure_error] if error]
+            provider_errors = [error for error in [gemini_error, azure_error, openai_error] if error]
             return {
                 "audio_url": None,
                 "audio_base64": None,
@@ -176,7 +244,12 @@ class TTSService:
                 "audio_extension": "wav",
                 "duration": 0,
                 "provider": "browser_fallback",
-                "error": ". ".join(provider_errors) if provider_errors else "Server-side TTS is unavailable.",
+                "error": ". ".join(provider_errors)
+                if provider_errors
+                else (
+                    "Server-side TTS is unavailable. Configure GEMINI_API_KEY, OPENAI_API_KEY, "
+                    "or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
+                ),
                 "fallback_mode": "browser",
             }
 
@@ -186,13 +259,13 @@ class TTSService:
             if not fallback_result.get("error"):
                 fallback_result["error"] = " | ".join(
                     error
-                    for error in [gemini_error, azure_error]
+                    for error in [gemini_error, azure_error, openai_error]
                     if error
                 ) or None
             return fallback_result
 
         fallback_error = str(fallback_result.get("error") or "").strip()
-        provider_errors = [error for error in [gemini_error, azure_error] if error]
+        provider_errors = [error for error in [gemini_error, azure_error, openai_error] if error]
         if provider_errors and fallback_error:
             fallback_result["error"] = f"{'. '.join(provider_errors)}. Fallback TTS failed: {fallback_error}"
         elif provider_errors:
@@ -241,6 +314,44 @@ class TTSService:
             "audio_extension": "wav",
             "duration": len(audio_bytes) / 32000,
             "provider": "azure_speech",
+            "error": None,
+        }
+
+    def _synthesize_openai(
+        self,
+        text: str,
+        *,
+        voice_name: Optional[str],
+        speaking_style: Optional[str],
+    ) -> Optional[dict[str, Any]]:
+        if not self._openai_tts_available() or not text.strip():
+            return None
+
+        resolved_voice = self._resolve_openai_voice_name(voice_name)
+        instructions = (
+            speaking_style.strip()
+            if isinstance(speaking_style, str) and speaking_style.strip()
+            else "Speak in a professional and natural customer-service tone."
+        )
+        response = self.openai_client.audio.speech.create(
+            model=self.openai_tts_model,
+            voice=resolved_voice,
+            input=text,
+            instructions=instructions,
+            response_format="wav",
+        )
+        audio_bytes = response.read()
+        if not audio_bytes:
+            raise RuntimeError("OpenAI TTS completed without returning audio data.")
+
+        return {
+            "audio_url": None,
+            "audio_base64": base64.b64encode(audio_bytes).decode("utf-8"),
+            "audio_bytes": audio_bytes,
+            "audio_content_type": "audio/wav",
+            "audio_extension": "wav",
+            "duration": len(audio_bytes) / 32000,
+            "provider": "openai_tts",
             "error": None,
         }
 

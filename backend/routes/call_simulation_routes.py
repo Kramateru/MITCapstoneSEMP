@@ -6009,12 +6009,20 @@ async def synthesize_member_speech(
             audio_url = uploaded_audio_url
             storage_mode = "local" if uploaded_audio_url.startswith("/media/") else "supabase"
         else:
-            audio_url = None
-            storage_mode = "browser-fallback"
-            storage_warning = browser_fallback_message
+            if upload_bytes:
+                audio_url = _build_audio_data_url(upload_bytes, audio_content_type)
+                storage_mode = "embedded"
+                storage_warning = (
+                    "Generated speech was embedded directly in the scenario because cloud storage was unavailable."
+                )
+            else:
+                audio_url = None
+                storage_mode = "browser-fallback"
+                storage_warning = browser_fallback_message
             logger.warning(
-                "Call Simulation TTS asset upload failed, so runtime browser fallback will be used instead. "
+                "Call Simulation TTS asset upload failed. Falling back to %s delivery instead. "
                 "trainer_id=%s scenario_segment=%s asset_kind=%s",
+                storage_mode,
                 current_user.id,
                 scenario_segment,
                 asset_kind,

@@ -1913,6 +1913,11 @@ export default function TrainerSimFloorPage() {
         toast.info(result.warning || 'AI voice is using browser fallback mode.');
       } else if (result.storageMode === 'local') {
         toast.success('Member speech generated and saved to the local media folder.');
+      } else if (result.storageMode === 'embedded') {
+        toast.success('Member speech generated and embedded directly in the scenario.');
+        if (result.warning) {
+          toast.info(result.warning);
+        }
       } else if (result.warning) {
         toast.success('Member speech generated and saved for trainee playback.');
         toast.info(result.warning);
@@ -1944,6 +1949,7 @@ export default function TrainerSimFloorPage() {
     let failedCount = 0;
     let browserFallbackCount = 0;
     let localStorageCount = 0;
+    let embeddedStorageCount = 0;
     let firstFailureMessage: string | null = null;
 
     try {
@@ -1965,6 +1971,8 @@ export default function TrainerSimFloorPage() {
             browserFallbackCount += 1;
           } else if (result.storageMode === 'local') {
             localStorageCount += 1;
+          } else if (result.storageMode === 'embedded') {
+            embeddedStorageCount += 1;
           }
           successCount += 1;
         } catch (error) {
@@ -1986,12 +1994,24 @@ export default function TrainerSimFloorPage() {
               ? 'AI voice is using browser fallback mode.'
               : `${browserFallbackCount} Member row${browserFallbackCount === 1 ? '' : 's'} will use browser fallback mode during live playback.`,
           );
+        } else if (embeddedStorageCount === successCount) {
+          toast.success(
+            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and embedded it directly in the scenario.`,
+          );
         } else if (localStorageCount === successCount) {
           toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved it to the local media folder.`);
+        } else if (embeddedStorageCount > 0 && localStorageCount > 0) {
+          toast.success(
+            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} with ${embeddedStorageCount} embedded and ${localStorageCount} saved locally.`,
+          );
+        } else if (embeddedStorageCount > 0) {
+          toast.success(
+            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} with ${embeddedStorageCount} embedded directly in the scenario.`,
+          );
         } else if (localStorageCount > 0) {
           toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved ${localStorageCount} locally.`);
         } else {
-          toast.success(`Generated Gemini speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
+          toast.success(`Generated server-side speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
         }
         return;
       }
@@ -3220,7 +3240,7 @@ export default function TrainerSimFloorPage() {
                           <div>
                             <div className="text-sm font-medium text-cyan-950">Member AI Speech</div>
                             <p className="mt-1 text-xs text-cyan-900/80">
-                              Generate Gemini speech for this Member row and store the playable asset in Supabase storage. If server audio is unavailable, the live trainee call will use browser voice fallback instead.
+                              Generate server-side AI speech for this Member row and store the playable asset for trainee playback. If cloud storage is unavailable, the generated audio can still be embedded directly in the saved scenario.
                             </p>
                           </div>
                           <Button
@@ -3239,7 +3259,7 @@ export default function TrainerSimFloorPage() {
                           <Input
                             value={formatGeneratedAudioValue(row.audio_url)}
                             onChange={(event) => updateScenarioRow(index, 'audio_url', event.target.value)}
-                            placeholder="Stored Supabase audio URL"
+                            placeholder="Stored or embedded audio for trainee playback"
                             readOnly={isEmbeddedAudioDataUrl(row.audio_url)}
                           />
                           {isEmbeddedAudioDataUrl(row.audio_url) ? (
