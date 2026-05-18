@@ -34,6 +34,10 @@ interface TrainingSession {
   accuracy: number;
   fluency: number;
   is_verified: boolean;
+  training_state_code: string;
+  training_state_label: string;
+  training_state_summary: string;
+  attempt_number: number;
   created_at?: string | null;
 }
 
@@ -54,6 +58,39 @@ interface CoachingCompliance {
   not_competent_logs: number;
 }
 
+interface CoachingHubSummary {
+  completed_categories: number;
+  ready_for_coaching: number;
+  pending_acknowledgement: number;
+  acknowledged: number;
+  competent: number;
+  not_competent: number;
+}
+
+interface CoachingHubCategory {
+  sim_session_id?: string | null;
+  trainee_name?: string | null;
+  scenario_title?: string | null;
+  overall_score?: number | null;
+  scores?: {
+    accuracy?: number | null;
+    fluency?: number | null;
+  } | null;
+  is_verified?: boolean;
+  training_state?: {
+    code?: string | null;
+    label?: string | null;
+    summary?: string | null;
+  } | null;
+  attempt_number?: number | null;
+  created_at?: string | null;
+}
+
+interface CoachingHubResponse {
+  summary?: CoachingHubSummary | null;
+  completed_categories?: CoachingHubCategory[];
+}
+
 interface BatchItem {
   id: string;
   name: string;
@@ -68,8 +105,6 @@ interface BatchSnapshot extends BatchItem {
   average_score: number;
 }
 
-const COACHING_QUEUE_CUTOFF_DATE = '2026-04-20';
-
 function formatDateTime(value?: string | null) {
   if (!value) {
     return 'No activity yet';
@@ -81,24 +116,6 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString();
-}
-
-function isOnOrAfterCoachingQueueCutoff(value?: string | null) {
-  if (!value) {
-    return false;
-  }
-
-  const normalizedDate = value.slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(normalizedDate)) {
-    return normalizedDate >= COACHING_QUEUE_CUTOFF_DATE;
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return false;
-  }
-
-  return parsed >= new Date(`${COACHING_QUEUE_CUTOFF_DATE}T00:00:00`);
 }
 
 function formatBatchLabel(batch: Pick<BatchItem, 'name' | 'wave_number'>) {
@@ -117,6 +134,39 @@ function scoreVariant(score: number) {
     return 'warning' as const;
   }
   return 'danger' as const;
+}
+
+function trainingStateVariant(code: string) {
+  if (code === 'competent') {
+    return 'success' as const;
+  }
+  if (code === 'needs_retake') {
+    return 'danger' as const;
+  }
+  if (code === 'pending_acknowledgement' || code === 'awaiting_coaching') {
+    return 'warning' as const;
+  }
+  if (code === 'acknowledged') {
+    return 'info' as const;
+  }
+  return 'neutral' as const;
+}
+
+function coachingQueuePriority(session: TrainingSession) {
+  switch (session.training_state_code) {
+    case 'awaiting_coaching':
+      return 0;
+    case 'needs_retake':
+      return 1;
+    case 'pending_acknowledgement':
+      return 2;
+    case 'acknowledged':
+      return 3;
+    case 'competent':
+      return 4;
+    default:
+      return 5;
+  }
 }
 
 function batchHealth(batch: BatchSnapshot) {
@@ -160,6 +210,7 @@ export default function TrainerDashboardPage() {
   const [stats, setStats] = useState<TrainerStats | null>(null);
   const [sessions, setSessions] = useState<TrainingSession[]>([]);
   const [coachingStats, setCoachingStats] = useState<CoachingCompliance | null>(null);
+  const [coachingSummary, setCoachingSummary] = useState<CoachingHubSummary | null>(null);
   const [batches, setBatches] = useState<BatchSnapshot[]>([]);
   const [liveStatus, setLiveStatus] = useState('');
   const [error, setError] = useState('');
@@ -179,9 +230,9 @@ export default function TrainerDashboardPage() {
       }
 
       const authHeaders = { Authorization: `Bearer ${token}` };
-      const [statsRes, sessionsRes, coachingRes, batchesRes] = await Promise.all([
+      const [statsRes, coachingHubRes, coachingRes, batchesRes] = await Promise.all([
         fetch('/api/trainer/stats', { headers: authHeaders, cache: 'no-store' }),
-        fetch('/api/trainer/interaction-history?limit=12', { headers: authHeaders, cache: 'no-store' }),
+        fetch('/api/certification/coaching/hub', { headers: authHeaders, cache: 'no-store' }),
         fetch('/api/certification/coaching/compliance', { headers: authHeaders, cache: 'no-store' }),
         fetch('/api/trainer/batches', { headers: authHeaders, cache: 'no-store' }),
       ]);
@@ -191,20 +242,23 @@ export default function TrainerDashboardPage() {
         setStats(statsData);
       }
 
-      if (sessionsRes.ok) {
-        const sessionsData = await sessionsRes.json();
-        const nextSessions: TrainingSession[] = (sessionsData.sessions || [])
-          .filter((session: any) => isOnOrAfterCoachingQueueCutoff(session.created_at))
-          .map((session: any) => ({
-            id: session.id,
-            user_name: session.user_name || 'Trainee',
-            scenario_title: session.scenario_title || 'Scenario',
-            overall_score: Number(session.overall_score || 0),
-            accuracy: Number(session.accuracy || 0),
-            fluency: Number(session.fluency || 0),
-            is_verified: Boolean(session.is_verified),
-            created_at: session.created_at,
-          }));
+      if (coachingHubRes.ok) {
+        const coachingHubData: CoachingHubResponse = await coachingHubRes.json();
+        setCoachingSummary(coachingHubData.summary || null);
+        const nextSessions: TrainingSession[] = (coachingHubData.completed_categories || []).map((session) => ({
+          id: session.sim_session_id || `${session.trainee_name || 'trainee'}-${session.scenario_title || 'scenario'}`,
+          user_name: session.trainee_name || 'Trainee',
+          scenario_title: session.scenario_title || 'Scenario',
+          overall_score: Number(session.overall_score || 0),
+          accuracy: Number(session.scores?.accuracy || 0),
+          fluency: Number(session.scores?.fluency || 0),
+          is_verified: Boolean(session.is_verified),
+          training_state_code: session.training_state?.code || 'pending',
+          training_state_label: session.training_state?.label || 'Pending',
+          training_state_summary: session.training_state?.summary || 'Waiting for trainer review.',
+          attempt_number: Number(session.attempt_number || 1),
+          created_at: session.created_at,
+        }));
         setSessions(nextSessions);
       }
 
@@ -293,11 +347,15 @@ export default function TrainerDashboardPage() {
         const message = JSON.parse(event.data) as {
           type?: string;
           session?: { user_name?: string; scenario_title?: string };
+          details?: { trainee_name?: string; scenario_title?: string };
         };
 
-        if (message.type === 'practice_session_completed') {
+        if (
+          message.type === 'practice_session_completed'
+          || message.type === 'call_simulation_completed'
+        ) {
           setLiveStatus(
-            `${message.session?.user_name || 'A trainee'} completed ${message.session?.scenario_title || 'a scenario'}.`,
+            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} completed ${message.session?.scenario_title || message.details?.scenario_title || 'a scenario'}.`,
           );
           void fetchTrainerData();
         }
@@ -331,8 +389,9 @@ export default function TrainerDashboardPage() {
     () =>
       [...sessions]
         .sort((left, right) => {
-          if (left.is_verified !== right.is_verified) {
-            return Number(left.is_verified) - Number(right.is_verified);
+          const priorityDiff = coachingQueuePriority(left) - coachingQueuePriority(right);
+          if (priorityDiff !== 0) {
+            return priorityDiff;
           }
 
           if (left.overall_score !== right.overall_score) {
@@ -347,7 +406,8 @@ export default function TrainerDashboardPage() {
     [sessions],
   );
 
-  const sidebarItems = trainerSidebarItems(stats?.pending_reviews);
+  const pendingReviewCount = coachingSummary?.ready_for_coaching ?? stats?.pending_reviews ?? 0;
+  const sidebarItems = trainerSidebarItems(pendingReviewCount);
 
   return (
     <DashboardLayout sidebarItems={sidebarItems} userRole="trainer">
@@ -368,7 +428,7 @@ export default function TrainerDashboardPage() {
           }
         >
           <div className="grid gap-3 sm:grid-cols-3">
-            <SoftStat label="Pending Reviews" value={stats?.pending_reviews ?? 0} tone="amber" />
+            <SoftStat label="Pending Reviews" value={pendingReviewCount} tone="amber" />
             <SoftStat label="Coaching Acknowledged" value={coachingStats?.acknowledged_logs ?? 0} tone="green" />
             <SoftStat label="Retake Required" value={coachingStats?.not_competent_logs ?? 0} tone="rose" />
           </div>
@@ -408,8 +468,8 @@ export default function TrainerDashboardPage() {
           />
           <MetricCard
             label="Needs Coaching"
-            value={stats?.pending_reviews ?? 0}
-            hint="Sessions still waiting for trainer review"
+            value={pendingReviewCount}
+            hint="Completed mock calls still waiting for trainer review"
             icon={<AlertCircle className="size-5" />}
             tone="amber"
           />
@@ -487,7 +547,7 @@ export default function TrainerDashboardPage() {
 
           <SectionPanel
             title="Coaching queue"
-            description="Recent trainee interactions sorted so unverified and lower-scoring attempts appear first."
+            description="Latest finished mock calls, prioritized by coaching state and score, all loaded from the live call-simulation review hub."
             action={
               <Button asChild variant="outline">
                 <Link href="/trainer/coaching">Open Coaching</Link>
@@ -497,7 +557,7 @@ export default function TrainerDashboardPage() {
             {loading && !coachingQueue.length ? (
               <EmptyStatePanel
                 title="Loading coaching queue..."
-                description="Fetching the latest trainee attempts and verification status."
+                description="Fetching the latest completed mock calls and coaching states."
               />
             ) : coachingQueue.length ? (
               <div className="space-y-4">
@@ -508,11 +568,12 @@ export default function TrainerDashboardPage() {
                         <div className="flex flex-wrap items-center gap-2">
                           <h3 className="text-base font-semibold text-foreground">{session.user_name}</h3>
                           <Badge variant="outline">{session.scenario_title}</Badge>
-                          <Badge variant={session.is_verified ? 'success' : 'warning'}>
-                            {session.is_verified ? 'Verified' : 'Needs coaching'}
+                          <Badge variant={trainingStateVariant(session.training_state_code)}>
+                            {session.training_state_label}
                           </Badge>
                         </div>
                         <p className="text-sm text-muted-foreground">{formatDateTime(session.created_at)}</p>
+                        <p className="text-sm leading-6 text-muted-foreground">{session.training_state_summary}</p>
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -524,7 +585,7 @@ export default function TrainerDashboardPage() {
 
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
                       <SoftStat label="Accuracy" value={`${session.accuracy.toFixed(1)}%`} tone="blue" />
-                      <SoftStat label="Fluency" value={`${session.fluency.toFixed(1)}%`} tone="green" />
+                      <SoftStat label="Attempt / Fluency" value={`#${session.attempt_number} | ${session.fluency.toFixed(1)}%`} tone="green" />
                     </div>
 
                     <div className="mt-5 flex justify-end">
@@ -540,8 +601,8 @@ export default function TrainerDashboardPage() {
               </div>
             ) : (
               <EmptyStatePanel
-                title="No trainee interactions are available yet"
-                description="Once trainees start completing work, their latest attempts will appear here for review."
+                title="No finished mock calls are available yet"
+                description="Once trainees complete assigned call simulations, their latest attempts will appear here for trainer review."
               />
             )}
           </SectionPanel>

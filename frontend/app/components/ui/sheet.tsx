@@ -58,11 +58,11 @@ function SheetContent({
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(
-          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 border-border/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(249,251,253,0.95))] shadow-[0_28px_80px_-34px_rgba(15,23,42,0.32)] transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500",
+          "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 border-border/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(249,251,253,0.95))] text-[0.97rem] shadow-[0_28px_80px_-34px_rgba(15,23,42,0.32)] transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 [&_input]:text-base [&_textarea]:text-base [&_[data-slot=label]]:text-[0.98rem] [&_[data-slot=label]]:leading-6",
           side === "right" &&
-            "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-[min(94vw,520px)] border-l sm:max-w-none",
+            "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-[95vw] border-l md:w-[86vw] lg:w-[72vw] xl:w-[64vw] 2xl:w-[60vw] sm:max-w-none",
           side === "left" &&
-            "data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-[min(94vw,520px)] border-r sm:max-w-none",
+            "data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-[95vw] border-r md:w-[86vw] lg:w-[72vw] xl:w-[64vw] 2xl:w-[60vw] sm:max-w-none",
           side === "top" &&
             "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b",
           side === "bottom" &&
@@ -87,7 +87,7 @@ function SheetHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-header"
-      className={cn("flex flex-col gap-2 border-b border-border/70 p-5 sm:p-6", className)}
+      className={cn("flex flex-col gap-3 border-b border-border/70 p-6 sm:p-7", className)}
       {...props}
     />
   );
@@ -97,7 +97,7 @@ function SheetFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="sheet-footer"
-      className={cn("mt-auto flex flex-col gap-2 border-t border-border/70 bg-white/72 p-5 sm:p-6", className)}
+      className={cn("mt-auto flex flex-col gap-3 border-t border-border/70 bg-white/72 p-6 sm:p-7", className)}
       {...props}
     />
   );
@@ -110,7 +110,7 @@ function SheetTitle({
   return (
     <SheetPrimitive.Title
       data-slot="sheet-title"
-      className={cn("text-foreground text-[1.02rem] font-semibold tracking-[-0.02em]", className)}
+      className={cn("text-foreground text-[clamp(1.2rem,1rem+0.4vw,1.7rem)] font-semibold tracking-[-0.02em]", className)}
       {...props}
     />
   );
@@ -123,7 +123,7 @@ function SheetDescription({
   return (
     <SheetPrimitive.Description
       data-slot="sheet-description"
-      className={cn("text-muted-foreground text-sm leading-6", className)}
+      className={cn("text-muted-foreground text-sm leading-7 sm:text-[1.01rem]", className)}
       {...props}
     />
   );

@@ -67,11 +67,11 @@ export function DashboardLayout({
     trainer: 'Manage learning flow, reviews, and follow-up across your trainees.',
     admin: 'Track system readiness, learning delivery, and organization-wide signals.',
   } as const;
-  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-7xl xl:max-w-[1500px]' : 'max-w-none';
+  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1680px] 2xl:max-w-[1820px]' : 'max-w-none';
   const contentOuterSpacingClass = dashboardSettings.boxedLayout
-    ? 'px-3 py-3 sm:px-5 sm:py-5 lg:px-7 lg:py-7 xl:px-8 xl:py-8'
-    : 'px-3 py-3 sm:px-4 sm:py-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6';
-  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-4 sm:p-6 lg:p-8 xl:p-9' : 'p-4 sm:p-5 lg:p-7 xl:p-8';
+    ? 'px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-7 xl:px-10 xl:py-8'
+    : 'px-4 py-4 sm:px-5 sm:py-5 lg:px-6 lg:py-6 xl:px-7 xl:py-7';
+  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-5 sm:p-7 lg:p-9 xl:p-10' : 'p-5 sm:p-6 lg:p-8 xl:p-9';
 
   let desktopSidebarStateClass = 'lg:translate-x-0 lg:relative';
   if (isTopNavigation) {
@@ -306,7 +306,7 @@ export function DashboardLayout({
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[88vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[18rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[90vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[19rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
@@ -326,12 +326,12 @@ export function DashboardLayout({
                 />
               </div>
               <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
-                <h1 className="text-[0.98rem] font-bold text-white">Speech-Enabled BPO Platform</h1>
-                <p className="mt-1 text-xs leading-5 text-sidebar-foreground/72">St. Peter Velle Technical Training Center</p>
+                <h1 className="text-[1.02rem] font-bold tracking-[-0.015em] text-white">Speech-Enabled BPO Platform</h1>
+                <p className="mt-1 text-[0.8rem] leading-6 text-sidebar-foreground/74">St. Peter Velle Technical Training Center</p>
                 <div className="mt-3 inline-flex rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/88">
                   {roleLabelMap[resolvedUserRole]}
                 </div>
-                <p className="mt-3 max-w-[15rem] text-xs leading-5 text-sidebar-foreground/68">
+                <p className="mt-3 max-w-[16.5rem] text-[0.82rem] leading-6 text-sidebar-foreground/70">
                   {roleWorkspaceHintMap[resolvedUserRole]}
                 </p>
               </div>
@@ -339,11 +339,11 @@ export function DashboardLayout({
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 space-y-5 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
+          <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
             {groupedSidebarItems.map((group) => (
-              <div key={group.section} className="space-y-2">
+              <div key={group.section} className="space-y-2.5">
                 {!isMinifiedSidebar ? (
-                  <div className="px-3 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-sidebar-foreground/50">
+                  <div className="px-3 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/54">
                     {group.section}
                   </div>
                 ) : null}
@@ -353,7 +353,7 @@ export function DashboardLayout({
                     href={item.href}
                     prefetch={true}
                     onClick={handleSidebarLinkClick}
-                    className={`group relative flex items-center gap-3 rounded-2xl px-4 py-3 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
+                    className={`group relative flex items-center gap-3.5 rounded-2xl px-4 py-3.5 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
                       isActivePath(item.href)
                         ? 'border border-white/10 bg-white/11 text-white font-medium shadow-[0_18px_34px_-24px_rgba(0,0,0,0.55)] ring-1 ring-white/10'
                         : 'border border-transparent text-sidebar-foreground/82 hover:border-white/6 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
@@ -365,7 +365,7 @@ export function DashboardLayout({
                     <span className={isActivePath(item.href) ? 'text-white' : 'text-sidebar-foreground/82'}>
                       {item.icon}
                     </span>
-                    <span className={`flex-1 text-sm ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
+                    <span className={`flex-1 text-[0.98rem] leading-6 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
                     {item.badge && !isMinifiedSidebar ? (
                       <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
                         {item.badge}
@@ -381,7 +381,7 @@ export function DashboardLayout({
           <div className="border-t border-sidebar-border p-4">
             <button
               onClick={handleLogout}
-              className="flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3 text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              className="flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3.5 text-[0.98rem] text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
             >
               <LogOut size={20} />
               <span>Logout</span>
@@ -393,7 +393,7 @@ export function DashboardLayout({
       {/* Main Content */}
       <div className="relative z-10 flex-1 flex flex-col min-w-0">
         {/* Top Navigation Bar */}
-        <header className={`workspace-topbar flex items-center justify-between gap-3 border-b border-border/80 px-3 py-3 shadow-sm sm:px-5 sm:py-4 lg:px-6 ${
+        <header className={`workspace-topbar flex items-center justify-between gap-4 border-b border-border/80 px-4 py-3.5 shadow-sm sm:px-6 sm:py-4 lg:px-7 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
           <div className="flex min-w-0 items-center gap-3">
@@ -411,24 +411,24 @@ export function DashboardLayout({
 
             <div className="min-w-0">
               <div className="hidden items-center gap-2 md:flex">
-                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-primary">
+                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
                   {roleLabelMap[resolvedUserRole]}
                 </span>
                 <Badge variant="info" className="text-[0.7rem]">
                   Live Workspace
                 </Badge>
               </div>
-              <h1 className="truncate text-lg font-bold text-foreground lg:text-xl">
+              <h1 className="truncate text-[1.08rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.2rem] lg:text-[1.35rem] xl:text-[1.55rem]">
                 {currentPageLabel}
               </h1>
-              <p className="hidden text-xs text-muted-foreground md:block">
+              <p className="hidden text-sm leading-6 text-muted-foreground md:block">
                 {roleDescriptionMap[resolvedUserRole]}
               </p>
             </div>
           </div>
 
           {/* Right Section */}
-          <div className="flex items-center gap-3 rounded-2xl border border-border/70 bg-white/72 px-3 py-2 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:gap-4 lg:gap-5">
+          <div className="flex items-center gap-3 rounded-2xl border border-border/70 bg-white/80 px-3.5 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:gap-4 lg:gap-5">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>
@@ -437,13 +437,13 @@ export function DashboardLayout({
         {isTopNavigation ? (
           <div className="hidden border-b border-border bg-background/88 backdrop-blur lg:block">
             <div className={`mx-auto w-full px-4 sm:px-5 lg:px-6 ${contentWidthClass}`}>
-              <nav className="overflow-x-auto py-3">
-                <div className="flex min-w-max items-center gap-2">
+              <nav className="overflow-x-auto py-3.5">
+                <div className="flex min-w-max items-center gap-2.5">
                   {resolvedSidebarItems.map((item) => (
                     <Link
                       key={`top-${item.href}`}
                       href={item.href}
-                      className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
+                      className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-2.5 text-[0.96rem] font-medium transition-colors ${
                         isActivePath(item.href)
                           ? 'bg-primary text-primary-foreground shadow-sm'
                           : 'text-muted-foreground hover:bg-secondary hover:text-foreground'

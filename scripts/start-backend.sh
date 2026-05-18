@@ -19,8 +19,16 @@ cd "$APP_ROOT"
 # Use the PORT provided by Render, or default to 8000.
 PORT="${PORT:-8000}"
 HOST="${HOST:-0.0.0.0}"
-export BACKEND_URL="${BACKEND_URL:-http://$HOST:$PORT}"
-export FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3000}"
+DEFAULT_BACKEND_URL="${RENDER_EXTERNAL_URL:-http://$HOST:$PORT}"
+export BACKEND_URL="${BACKEND_URL:-$DEFAULT_BACKEND_URL}"
+
+if [ -z "${FRONTEND_URL:-}" ]; then
+    if [ -n "${RENDER:-}" ]; then
+        export FRONTEND_URL=""
+    else
+        export FRONTEND_URL="http://127.0.0.1:3000"
+    fi
+fi
 
 # Mirror legacy/public aliases into the backend-friendly names when needed.
 if [ -z "${SUPABASE_URL:-}" ]; then

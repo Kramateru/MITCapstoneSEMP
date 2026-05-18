@@ -1,13 +1,13 @@
 'use client';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
-import InteractionReview from '@/app/components/trainer/interaction-review';
+import TrainerCoachingHub from '@/app/components/trainer/coaching-hub';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 
 export default function TrainerGradingPage() {
   return (
     <DashboardLayout sidebarItems={trainerSidebarItems()} userRole="trainer">
-      <InteractionReview />
+      <TrainerCoachingHub defaultTab="logs" />
     </DashboardLayout>
   );
 }

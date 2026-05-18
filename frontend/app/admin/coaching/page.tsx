@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Loader2, Save } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { adminSidebarItems } from '@/app/admin/nav';
+import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
+import { Input } from '@/app/components/ui/input';
 
 type CoachingTemplate = {
   id?: string;
@@ -58,6 +60,17 @@ function headers() {
   };
 }
 
+function statusVariant(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === 'acknowledged') {
+    return 'success' as const;
+  }
+  if (normalized === 'sent') {
+    return 'warning' as const;
+  }
+  return 'info' as const;
+}
+
 export default function AdminCoachingPage() {
   const [template, setTemplate] = useState<CoachingTemplate>({
     name: 'Default Coaching Template',
@@ -77,10 +90,20 @@ export default function AdminCoachingPage() {
   const load = async () => {
     setIsLoading(true);
     try {
+      const requestHeaders = headers();
       const [templateRes, complianceRes, logsRes] = await Promise.all([
-        fetch('/api/certification/coaching/template', { headers: headers() }),
-        fetch('/api/certification/coaching/compliance', { headers: headers() }),
-        fetch('/api/certification/coaching/logs', { headers: headers() }),
+        fetch('/api/certification/coaching/template', {
+          headers: requestHeaders,
+          cache: 'no-store',
+        }),
+        fetch('/api/certification/coaching/compliance', {
+          headers: requestHeaders,
+          cache: 'no-store',
+        }),
+        fetch('/api/certification/coaching/logs', {
+          headers: requestHeaders,
+          cache: 'no-store',
+        }),
       ]);
 
       const [templateData, complianceData, logsData] = await Promise.all([
@@ -154,13 +177,28 @@ export default function AdminCoachingPage() {
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
       <div className="space-y-6">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-900">Coaching Configuration</h2>
-          <p className="mt-2 text-sm text-gray-600">
-            Maintain the coaching template and monitor real acknowledgments from the
-            shared certification tables.
-          </p>
-        </div>
+        <section className="rounded-[2rem] border border-border bg-card/95 p-6 shadow-sm sm:p-8">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="space-y-3">
+              <div className="inline-flex rounded-full border border-primary/12 bg-primary/6 px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-primary">
+                Admin Coaching Oversight
+              </div>
+              <div>
+                <h2 className="text-[clamp(1.85rem,1.25rem+1vw,2.8rem)] font-bold tracking-[-0.03em] text-foreground">
+                  Coaching Configuration
+                </h2>
+                <p className="mt-3 max-w-4xl text-sm leading-7 text-muted-foreground sm:text-[1.02rem]">
+                  Maintain the live coaching template, monitor acknowledgment health, and review trainer-to-trainee coaching records saved in the shared Supabase-backed certification flow.
+                </p>
+              </div>
+            </div>
+
+            <Button type="button" variant="outline" onClick={() => void load()} disabled={isLoading}>
+              {isLoading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              Refresh Coaching Data
+            </Button>
+          </div>
+        </section>
 
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard label="Total Logs" value={compliance.total_logs} />
@@ -169,11 +207,11 @@ export default function AdminCoachingPage() {
           <StatCard label="Ack Rate" value={`${compliance.acknowledgment_rate}%`} />
         </div>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5">
-          <div className="mb-4 flex items-center justify-between gap-3">
+        <section className="rounded-[1.75rem] border border-border bg-card/95 p-6 shadow-sm sm:p-7">
+          <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h3 className="font-semibold text-gray-900">Active Coaching Template</h3>
-              <p className="text-sm text-gray-500">
+              <h3 className="text-lg font-semibold text-foreground">Active Coaching Template</h3>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground">
                 Trainers and admins use this live configuration from the shared database.
               </p>
             </div>
@@ -188,16 +226,16 @@ export default function AdminCoachingPage() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <input
-              className="rounded-md border px-3 py-2"
+            <Input
+              className="h-12"
               placeholder="Template name"
               value={template.name}
               onChange={(event) =>
                 setTemplate((current) => ({ ...current, name: event.target.value }))
               }
             />
-            <input
-              className="rounded-md border px-3 py-2"
+            <Input
+              className="h-12"
               type="number"
               min={1}
               value={template.acknowledgment_window_hours}
@@ -210,7 +248,7 @@ export default function AdminCoachingPage() {
             />
           </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {AVAILABLE_FIELDS.map((field) => {
               const isChecked = template.mandatory_fields.includes(field.id);
               return (
@@ -218,21 +256,21 @@ export default function AdminCoachingPage() {
                   key={field.id}
                   type="button"
                   onClick={() => toggleField(field.id)}
-                  className={`rounded-lg border p-4 text-left transition ${
+                  className={`rounded-2xl border p-5 text-left transition ${
                     isChecked
-                      ? 'border-emerald-300 bg-emerald-50'
-                      : 'border-gray-200 bg-white hover:bg-gray-50'
+                      ? 'border-emerald-300 bg-emerald-50 shadow-[0_18px_40px_-34px_rgba(16,185,129,0.45)]'
+                      : 'border-border bg-card hover:border-primary/24 hover:bg-muted/18'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium text-gray-900">{field.label}</span>
+                    <span className="text-[0.98rem] font-medium text-foreground">{field.label}</span>
                     {isChecked ? (
                       <CheckCircle2 className="size-4 text-emerald-600" />
                     ) : (
-                      <span className="size-4 rounded-full border border-gray-300" />
+                      <span className="size-4 rounded-full border border-border" />
                     )}
                   </div>
-                  <p className="mt-2 text-xs text-gray-500">
+                  <p className="mt-3 text-sm leading-6 text-muted-foreground">
                     {isChecked ? 'Required in coaching logs' : 'Optional field'}
                   </p>
                 </button>
@@ -241,32 +279,30 @@ export default function AdminCoachingPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5">
-          <div className="mb-4">
-            <h3 className="font-semibold text-gray-900">Recent Coaching Logs</h3>
-            <p className="text-sm text-gray-500">
+        <section className="rounded-[1.75rem] border border-border bg-card/95 p-6 shadow-sm sm:p-7">
+          <div className="mb-5">
+            <h3 className="text-lg font-semibold text-foreground">Recent Coaching Logs</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Latest records pulled from the database for admin monitoring.
             </p>
           </div>
 
           {isLoading ? (
-            <div className="flex items-center justify-center py-14 text-sm text-gray-500">
+            <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
               <Loader2 className="mr-2 size-4 animate-spin" />
               Loading coaching records...
             </div>
           ) : logs.length ? (
             <div className="space-y-3">
               {logs.slice(0, 8).map((log) => (
-                <div key={log.id} className="rounded-lg border border-gray-200 p-4">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div className="space-y-2">
+                <div key={log.id} className="rounded-2xl border border-border p-5">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div className="space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <h4 className="font-semibold text-gray-900">{log.coaching_id}</h4>
-                        <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                          {log.status}
-                        </span>
+                        <h4 className="text-[1rem] font-semibold text-foreground">{log.coaching_id}</h4>
+                        <Badge variant={statusVariant(log.status)}>{log.status}</Badge>
                       </div>
-                      <div className="space-y-1 text-sm text-gray-600">
+                      <div className="space-y-2 text-sm leading-6 text-muted-foreground">
                         <p>
                           Trainee: {log.trainee_name || log.trainee_id} | Trainer:{' '}
                           {log.trainer_name || log.trainer_id}
@@ -281,7 +317,8 @@ export default function AdminCoachingPage() {
                         <p>Action Plan: {log.action_plan || 'Not provided yet.'}</p>
                       </div>
                     </div>
-                    <div className="text-xs text-gray-500">
+
+                    <div className="space-y-2 text-sm leading-6 text-muted-foreground md:max-w-[18rem]">
                       <div>Created: {log.created_at ? new Date(log.created_at).toLocaleString() : 'N/A'}</div>
                       <div>Acknowledged: {log.acknowledged_at ? new Date(log.acknowledged_at).toLocaleString() : 'Pending'}</div>
                       <div>Target Date: {log.target_date ? new Date(log.target_date).toLocaleDateString() : 'N/A'}</div>
@@ -291,7 +328,7 @@ export default function AdminCoachingPage() {
               ))}
             </div>
           ) : (
-            <div className="rounded-lg border border-dashed border-gray-300 p-8 text-sm text-gray-500">
+            <div className="rounded-2xl border border-dashed border-border p-10 text-sm leading-6 text-muted-foreground">
               No coaching logs are stored in the database yet.
             </div>
           )}
@@ -303,9 +340,9 @@ export default function AdminCoachingPage() {
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5">
-      <div className="text-sm text-gray-500">{label}</div>
-      <div className="mt-2 text-3xl font-semibold text-gray-900">{value}</div>
+    <div className="rounded-[1.5rem] border border-border bg-card/95 p-5 shadow-sm">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="mt-2 text-3xl font-semibold text-foreground">{value}</div>
     </div>
   );
 }

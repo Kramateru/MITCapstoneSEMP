@@ -120,6 +120,26 @@ def _require_supabase_storage(detail: str) -> Any:
     return supabase
 
 
+def _is_missing_supabase_table_error(error: Exception) -> bool:
+    normalized_error = str(error or "").strip().lower()
+    if not normalized_error:
+        return False
+
+    return (
+        "pgrst205" in normalized_error
+        or "schema cache" in normalized_error
+        or "could not find the table" in normalized_error
+    )
+
+
+def _log_legacy_supabase_mirror_skip(context: str, error: Exception) -> None:
+    logger.info(
+        "Skipping legacy Call Simulation Supabase mirror for %s because the optional PostgREST tables are not present in this project. Core data is already saved through the primary Supabase Postgres connection. Details: %s",
+        context,
+        error,
+    )
+
+
 def _normalize_keyword_list(keywords: Optional[list[str]]) -> list[str]:
     return [keyword.strip() for keyword in (keywords or []) if keyword and keyword.strip()]
 
@@ -2050,43 +2070,51 @@ def _sync_supabase_scenario_authoring_tables(
         "is_draft": not bool(is_published),
         "updated_at": datetime.utcnow().isoformat(),
     }
+    try:
+        supabase.table("scenarios").upsert(scenario_payload, on_conflict="id").execute()
+        supabase.table("scenario_groups").upsert(
+            {
+                "id": scenario_id,
+                "title": resolved_title,
+                "topic": resolved_topic,
+                "description": resolved_description,
+                "created_by": trainer_uuid,
+            },
+            on_conflict="id",
+        ).execute()
 
-    supabase.table("scenarios").upsert(scenario_payload, on_conflict="id").execute()
-    supabase.table("scenario_groups").upsert(
-        {
-            "id": scenario_id,
-            "title": resolved_title,
-            "topic": resolved_topic,
-            "description": resolved_description,
-            "created_by": trainer_uuid,
-        },
-        on_conflict="id",
-    ).execute()
+        supabase.table("scripts").delete().eq("scenario_id", scenario_id).execute()
+        script_rows = _build_supabase_authoring_script_rows(scenario_id, script_flow)
+        if script_rows:
+            supabase.table("scripts").insert(script_rows).execute()
 
-    supabase.table("scripts").delete().eq("scenario_id", scenario_id).execute()
-    script_rows = _build_supabase_authoring_script_rows(scenario_id, script_flow)
-    if script_rows:
-        supabase.table("scripts").insert(script_rows).execute()
+        supabase.table("scenario_scripts").delete().eq("scenario_group_id", scenario_id).execute()
+        scenario_script_rows = [
+            {
+                "scenario_group_id": scenario_id,
+                "actor_type": row["actor_type"],
+                "script_text": row["content"],
+                "score_value": max(0, round(float(row.get("score_weight") or 0))),
+                "order_index": int(row.get("sequence_order") or 0),
+                "audio_url": _normalize_optional_url(row.get("audio_url")),
+            }
+            for row in script_rows
+        ]
+        if scenario_script_rows:
+            supabase.table("scenario_scripts").insert(scenario_script_rows).execute()
 
-    supabase.table("scenario_scripts").delete().eq("scenario_group_id", scenario_id).execute()
-    scenario_script_rows = [
-        {
-            "scenario_group_id": scenario_id,
-            "actor_type": row["actor_type"],
-            "script_text": row["content"],
-            "score_value": max(0, round(float(row.get("score_weight") or 0))),
-            "order_index": int(row.get("sequence_order") or 0),
-            "audio_url": _normalize_optional_url(row.get("audio_url")),
-        }
-        for row in script_rows
-    ]
-    if scenario_script_rows:
-        supabase.table("scenario_scripts").insert(scenario_script_rows).execute()
-
-    supabase.table("kpi_metrics").delete().eq("scenario_group_id", scenario_id).execute()
-    kpi_metric_rows = _build_supabase_kpi_metric_rows_from_target_kpis(scenario_id, target_kpis)
-    if kpi_metric_rows:
-        supabase.table("kpi_metrics").insert(kpi_metric_rows).execute()
+        supabase.table("kpi_metrics").delete().eq("scenario_group_id", scenario_id).execute()
+        kpi_metric_rows = _build_supabase_kpi_metric_rows_from_target_kpis(scenario_id, target_kpis)
+        if kpi_metric_rows:
+            supabase.table("kpi_metrics").insert(kpi_metric_rows).execute()
+    except Exception as exc:
+        if _is_missing_supabase_table_error(exc):
+            _log_legacy_supabase_mirror_skip(
+                f"scenario authoring sync for scenario {source_scenario_id}",
+                exc,
+            )
+            return
+        raise
 
 
 def _sync_call_simulation_scenario_to_supabase_from_db(
@@ -2137,6 +2165,28 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
             ignore_duplicates=False,
         ).execute()
     except Exception as supabase_error:
+        if _is_missing_supabase_table_error(supabase_error):
+            _log_legacy_supabase_mirror_skip(
+                f"scenario sync for {scenario.id}",
+                supabase_error,
+            )
+            _sync_supabase_scenario_authoring_tables(
+                supabase,
+                source_scenario_id=scenario_sync_data["source_scenario_id"],
+                trainer_id=scenario_sync_data["trainer_id"],
+                title=scenario_sync_data.get("title"),
+                description=scenario_sync_data.get("description"),
+                topic=str(scenario_sync_data.get("topic") or ""),
+                target_kpis=_normalize_json_object(scenario_sync_data.get("target_kpis")),
+                script_flow=_sanitize_supabase_script_flow(scenario_sync_data.get("script_flow")),
+                ringer_audio_url=_normalize_optional_url(scenario_sync_data.get("ringer_audio_url")),
+                hold_audio_url=_normalize_optional_url(scenario_sync_data.get("hold_audio_url")),
+                difficulty=_normalize_optional_url(scenario_sync_data.get("difficulty")),
+                estimated_duration_seconds=scenario_sync_data.get("estimated_duration_seconds"),
+                is_published=bool(scenario_sync_data.get("is_published", True)),
+                metadata=_normalize_json_object(scenario_sync_data.get("metadata")),
+            )
+            return scenario_sync_data
         logger.warning(
             "Call Simulation Supabase upsert failed for scenario %s. Retrying with insert/update flow: %s",
             scenario.id,
@@ -2160,10 +2210,35 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
                     scenario_sync_data
                 ).execute()
         except Exception:
-            legacy_existing = supabase.table("call_scenarios").select("id").eq(
-                "scenario_id",
-                scenario_sync_data["source_scenario_id"],
-            ).execute()
+            try:
+                legacy_existing = supabase.table("call_scenarios").select("id").eq(
+                    "scenario_id",
+                    scenario_sync_data["source_scenario_id"],
+                ).execute()
+            except Exception as legacy_error:
+                if _is_missing_supabase_table_error(legacy_error):
+                    _log_legacy_supabase_mirror_skip(
+                        f"scenario sync fallback for {scenario.id}",
+                        legacy_error,
+                    )
+                    _sync_supabase_scenario_authoring_tables(
+                        supabase,
+                        source_scenario_id=scenario_sync_data["source_scenario_id"],
+                        trainer_id=scenario_sync_data["trainer_id"],
+                        title=scenario_sync_data.get("title"),
+                        description=scenario_sync_data.get("description"),
+                        topic=str(scenario_sync_data.get("topic") or ""),
+                        target_kpis=_normalize_json_object(scenario_sync_data.get("target_kpis")),
+                        script_flow=_sanitize_supabase_script_flow(scenario_sync_data.get("script_flow")),
+                        ringer_audio_url=_normalize_optional_url(scenario_sync_data.get("ringer_audio_url")),
+                        hold_audio_url=_normalize_optional_url(scenario_sync_data.get("hold_audio_url")),
+                        difficulty=_normalize_optional_url(scenario_sync_data.get("difficulty")),
+                        estimated_duration_seconds=scenario_sync_data.get("estimated_duration_seconds"),
+                        is_published=bool(scenario_sync_data.get("is_published", True)),
+                        metadata=_normalize_json_object(scenario_sync_data.get("metadata")),
+                    )
+                    return scenario_sync_data
+                raise
 
             if legacy_existing.data and len(legacy_existing.data) > 0:
                 supabase.table("call_scenarios").update(
@@ -2195,6 +2270,107 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
     return scenario_sync_data
 
 
+def _get_latest_active_batch_mapping_for_scenario(
+    db: Session,
+    scenario_id: str,
+) -> Optional[BatchScenarioMapping]:
+    return (
+        db.query(BatchScenarioMapping)
+        .filter(
+            BatchScenarioMapping.scenario_id == scenario_id,
+            BatchScenarioMapping.is_active == True,
+        )
+        .order_by(BatchScenarioMapping.assigned_at.desc())
+        .first()
+    )
+
+
+def _sync_call_simulation_scenario_mirror_or_raise(
+    db: Session,
+    *,
+    scenario: Scenario,
+    trainer_id: str,
+    batch_id: Optional[str] = None,
+    detail: str,
+) -> None:
+    try:
+        supabase = _require_supabase_storage(detail)
+        resolved_batch_id = batch_id
+        if not resolved_batch_id:
+            latest_mapping = _get_latest_active_batch_mapping_for_scenario(db, scenario.id)
+            resolved_batch_id = latest_mapping.batch_id if latest_mapping else None
+
+        _sync_call_simulation_scenario_to_supabase_from_db(
+            supabase,
+            db=db,
+            scenario=scenario,
+            trainer_id=trainer_id,
+            batch_id=resolved_batch_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Call Simulation Supabase mirror sync failed for scenario %s: %s",
+            getattr(scenario, "id", None),
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"{detail.rstrip('.')} Details: {exc}",
+        ) from exc
+
+
+def _sync_call_simulation_batch_mirror_or_raise(
+    db: Session,
+    *,
+    batch_id: str,
+    fallback_trainer_id: str,
+    detail: str,
+) -> None:
+    try:
+        supabase = _require_supabase_storage(detail)
+        mappings = (
+            db.query(BatchScenarioMapping)
+            .filter(
+                BatchScenarioMapping.batch_id == batch_id,
+                BatchScenarioMapping.is_active == True,
+            )
+            .order_by(BatchScenarioMapping.assigned_at.desc())
+            .all()
+        )
+
+        synced_scenario_ids: set[str] = set()
+        for mapping in mappings:
+            if not mapping.scenario_id or mapping.scenario_id in synced_scenario_ids:
+                continue
+            scenario = db.query(Scenario).filter(Scenario.id == mapping.scenario_id).first()
+            if not scenario or not scenario.is_published:
+                continue
+            _sync_call_simulation_scenario_to_supabase_from_db(
+                supabase,
+                db=db,
+                scenario=scenario,
+                trainer_id=str(scenario.created_by or fallback_trainer_id),
+                batch_id=batch_id,
+            )
+            synced_scenario_ids.add(mapping.scenario_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Call Simulation Supabase batch mirror sync failed for batch %s: %s",
+            batch_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"{detail.rstrip('.')} Details: {exc}",
+        ) from exc
+
+
 def _delete_supabase_scenario_mirror(
     supabase: Any,
     *,
@@ -2202,18 +2378,59 @@ def _delete_supabase_scenario_mirror(
 ) -> None:
     try:
         supabase.table("call_scenarios").delete().eq("source_scenario_id", source_scenario_id).execute()
-    except Exception:
+    except Exception as exc:
+        if _is_missing_supabase_table_error(exc):
+            _log_legacy_supabase_mirror_skip(
+                f"scenario delete for {source_scenario_id}",
+                exc,
+            )
+            return
         supabase.table("call_scenarios").delete().eq("scenario_id", source_scenario_id).execute()
 
     normalized_scenario_id = _normalize_uuid_candidate(source_scenario_id)
     if not normalized_scenario_id:
         return
 
-    supabase.table("scenario_scripts").delete().eq("scenario_group_id", normalized_scenario_id).execute()
-    supabase.table("scripts").delete().eq("scenario_id", normalized_scenario_id).execute()
-    supabase.table("kpi_metrics").delete().eq("scenario_group_id", normalized_scenario_id).execute()
-    supabase.table("scenario_groups").delete().eq("id", normalized_scenario_id).execute()
-    supabase.table("scenarios").delete().eq("id", normalized_scenario_id).execute()
+    try:
+        supabase.table("scenario_scripts").delete().eq("scenario_group_id", normalized_scenario_id).execute()
+        supabase.table("scripts").delete().eq("scenario_id", normalized_scenario_id).execute()
+        supabase.table("kpi_metrics").delete().eq("scenario_group_id", normalized_scenario_id).execute()
+        supabase.table("scenario_groups").delete().eq("id", normalized_scenario_id).execute()
+        supabase.table("scenarios").delete().eq("id", normalized_scenario_id).execute()
+    except Exception as exc:
+        if _is_missing_supabase_table_error(exc):
+            _log_legacy_supabase_mirror_skip(
+                f"scenario authoring delete for {source_scenario_id}",
+                exc,
+            )
+            return
+        raise
+
+
+def _delete_call_simulation_scenario_mirror_or_raise(
+    *,
+    source_scenario_id: str,
+    detail: str,
+) -> None:
+    try:
+        supabase = _require_supabase_storage(detail)
+        _delete_supabase_scenario_mirror(
+            supabase,
+            source_scenario_id=source_scenario_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Call Simulation Supabase mirror cleanup failed for scenario %s: %s",
+            source_scenario_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"{detail.rstrip('.')} Details: {exc}",
+        ) from exc
 
 
 def _get_trainer_call_audio_settings(current_user: User) -> dict[str, Any]:
@@ -2230,6 +2447,49 @@ def _get_trainer_call_audio_settings(current_user: User) -> dict[str, Any]:
 
 def _serialize_trainer_call_audio_settings(current_user: User) -> CallSimulationAudioSettingsResponse:
     return CallSimulationAudioSettingsResponse(**_get_trainer_call_audio_settings(current_user))
+
+
+def _coerce_call_simulation_bool(value: Any, *, fallback: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return fallback
+
+
+def _resolve_scenario_audio_urls(
+    *,
+    call_simulation_config: Optional[dict[str, Any]],
+    trainer_audio_settings: dict[str, Any],
+    current_ringer_audio_url: Any = None,
+    current_hold_audio_url: Any = None,
+    incoming_ringer_audio_url: Any = _UNSET,
+    incoming_hold_audio_url: Any = _UNSET,
+) -> tuple[Optional[str], Optional[str]]:
+    resolved_config = _normalize_json_object(call_simulation_config)
+    use_shared_ringer_audio = _coerce_call_simulation_bool(
+        resolved_config.get("use_shared_ringer_audio"),
+        fallback=True,
+    )
+    use_shared_hold_audio = _coerce_call_simulation_bool(
+        resolved_config.get("use_shared_hold_audio"),
+        fallback=True,
+    )
+
+    trainer_ringer_audio_url = _normalize_optional_url(trainer_audio_settings.get("ringer_audio_url"))
+    trainer_hold_audio_url = _normalize_optional_url(trainer_audio_settings.get("hold_audio_url"))
+
+    ringer_candidate = current_ringer_audio_url if incoming_ringer_audio_url is _UNSET else incoming_ringer_audio_url
+    hold_candidate = current_hold_audio_url if incoming_hold_audio_url is _UNSET else incoming_hold_audio_url
+
+    return (
+        trainer_ringer_audio_url if use_shared_ringer_audio else _normalize_optional_url(ringer_candidate),
+        trainer_hold_audio_url if use_shared_hold_audio else _normalize_optional_url(hold_candidate),
+    )
 
 
 def _persist_trainer_call_audio_settings(
@@ -2253,6 +2513,7 @@ def _persist_trainer_call_audio_settings(
     }
     previous_settings = dict(settings)
     scenario_updates: dict[str, Optional[str]] = {}
+    impacted_scenarios: list[Scenario] = []
 
     if ringer_audio_url is not _UNSET:
         next_url = _normalize_optional_url(ringer_audio_url)
@@ -2272,7 +2533,43 @@ def _persist_trainer_call_audio_settings(
     db.add(current_user)
 
     if scenario_updates:
-        db.query(Scenario).filter(Scenario.created_by == current_user.id).update(scenario_updates, synchronize_session=False)
+        trainer_scenarios = (
+            db.query(Scenario)
+            .filter(Scenario.created_by == current_user.id)
+            .all()
+        )
+        for scenario in trainer_scenarios:
+            scenario_config = _resolve_call_simulation_config(scenario)
+            scenario_changed = False
+            if (
+                "ringer_audio_url" in scenario_updates
+                and _coerce_call_simulation_bool(
+                    scenario_config.get("use_shared_ringer_audio"),
+                    fallback=True,
+                )
+            ):
+                scenario.ringer_audio_url = settings["ringer_audio_url"]
+                scenario_changed = True
+            if (
+                "hold_audio_url" in scenario_updates
+                and _coerce_call_simulation_bool(
+                    scenario_config.get("use_shared_hold_audio"),
+                    fallback=True,
+                )
+            ):
+                scenario.hold_audio_url = settings["hold_audio_url"]
+                scenario_changed = True
+            if scenario_changed:
+                impacted_scenarios.append(scenario)
+
+    db.flush()
+    for scenario in impacted_scenarios:
+        _sync_call_simulation_scenario_mirror_or_raise(
+            db,
+            scenario=scenario,
+            trainer_id=str(scenario.created_by or current_user.id),
+            detail="Supabase sync is required before saving Call Simulation audio settings.",
+        )
 
     db.commit()
     db.refresh(current_user)
@@ -3490,6 +3787,23 @@ async def create_call_simulation_scenario(
         kpi_config=_get_effective_kpi_config(db, batch.id),
         batch_id=batch.id,
     )
+    call_simulation_config = {
+        **call_simulation_config,
+        "use_shared_ringer_audio": _coerce_call_simulation_bool(
+            call_simulation_config.get("use_shared_ringer_audio"),
+            fallback=True,
+        ),
+        "use_shared_hold_audio": _coerce_call_simulation_bool(
+            call_simulation_config.get("use_shared_hold_audio"),
+            fallback=True,
+        ),
+    }
+    resolved_ringer_audio_url, resolved_hold_audio_url = _resolve_scenario_audio_urls(
+        call_simulation_config=call_simulation_config,
+        trainer_audio_settings=trainer_audio_settings,
+        incoming_ringer_audio_url=scenario_data.ringer_audio_url,
+        incoming_hold_audio_url=scenario_data.hold_audio_url,
+    )
 
     new_scenario = Scenario(
         id=str(uuid.uuid4()),
@@ -3504,8 +3818,8 @@ async def create_call_simulation_scenario(
         member_profile=member_profile,
         cxone_metadata=cxone_metadata,
         call_simulation_config=call_simulation_config,
-        ringer_audio_url=trainer_audio_settings.get("ringer_audio_url"),
-        hold_audio_url=trainer_audio_settings.get("hold_audio_url"),
+        ringer_audio_url=resolved_ringer_audio_url,
+        hold_audio_url=resolved_hold_audio_url,
         created_by=current_user.id,
         is_published=True,
         is_draft=False,
@@ -3580,6 +3894,13 @@ async def create_call_simulation_scenario(
 
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, new_scenario.id)
+    _sync_call_simulation_scenario_mirror_or_raise(
+        db,
+        scenario=new_scenario,
+        trainer_id=str(current_user.id),
+        batch_id=batch.id,
+        detail="Supabase sync is required before creating a Call Simulation scenario.",
+    )
     db.commit()
     db.refresh(new_scenario)
     db.refresh(mapping)
@@ -3772,6 +4093,7 @@ async def update_call_simulation_scenario(
     _require_trainer(current_user)
     scenario = _get_accessible_scenario(db, current_user, scenario_id)
     trainer_audio_settings = _get_trainer_call_audio_settings(current_user)
+    update_fields = set(scenario_update.model_fields_set or set())
     normalized_expected_keywords = (
         _normalize_keyword_list(scenario_update.expected_keywords)
         if scenario_update.expected_keywords is not None
@@ -3828,8 +4150,6 @@ async def update_call_simulation_scenario(
         scenario.cxone_metadata = _normalize_json_object(scenario_update.cxone_metadata)
     if scenario_update.call_simulation_config is not None:
         scenario.call_simulation_config = _normalize_json_object(scenario_update.call_simulation_config)
-    scenario.ringer_audio_url = trainer_audio_settings.get("ringer_audio_url")
-    scenario.hold_audio_url = trainer_audio_settings.get("hold_audio_url")
     if scenario_update.is_published is not None:
         scenario.is_published = scenario_update.is_published
         scenario.is_draft = not scenario_update.is_published
@@ -3877,6 +4197,26 @@ async def update_call_simulation_scenario(
             "show_actor_script_overlay": True,
             "require_hold_before_member_response": True,
         }
+
+    scenario.call_simulation_config = {
+        **_normalize_json_object(scenario.call_simulation_config),
+        "use_shared_ringer_audio": _coerce_call_simulation_bool(
+            _normalize_json_object(scenario.call_simulation_config).get("use_shared_ringer_audio"),
+            fallback=True,
+        ),
+        "use_shared_hold_audio": _coerce_call_simulation_bool(
+            _normalize_json_object(scenario.call_simulation_config).get("use_shared_hold_audio"),
+            fallback=True,
+        ),
+    }
+    scenario.ringer_audio_url, scenario.hold_audio_url = _resolve_scenario_audio_urls(
+        call_simulation_config=scenario.call_simulation_config,
+        trainer_audio_settings=trainer_audio_settings,
+        current_ringer_audio_url=scenario.ringer_audio_url,
+        current_hold_audio_url=scenario.hold_audio_url,
+        incoming_ringer_audio_url=scenario_update.ringer_audio_url if "ringer_audio_url" in update_fields else _UNSET,
+        incoming_hold_audio_url=scenario_update.hold_audio_url if "hold_audio_url" in update_fields else _UNSET,
+    )
 
     active_mapping = (
         db.query(BatchScenarioMapping)
@@ -3980,6 +4320,13 @@ async def update_call_simulation_scenario(
 
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
+    _sync_call_simulation_scenario_mirror_or_raise(
+        db,
+        scenario=scenario,
+        trainer_id=str(scenario.created_by or current_user.id),
+        batch_id=resolved_batch_id,
+        detail="Supabase sync is required before updating a Call Simulation scenario.",
+    )
     db.commit()
     db.refresh(scenario)
 
@@ -4035,6 +4382,10 @@ async def delete_call_simulation_scenario(
         variation.is_active = False
 
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
+    _delete_call_simulation_scenario_mirror_or_raise(
+        source_scenario_id=scenario.id,
+        detail="Supabase sync is required before archiving a Call Simulation scenario.",
+    )
     db.commit()
     return SuccessResponse(message="Scenario archived successfully")
 
@@ -4155,6 +4506,14 @@ async def sync_scenario_to_supabase(
             
             logger.info("Synced scenario %s to Supabase", scenario_sync_data.get("source_scenario_id"))
         except Exception as supabase_error:
+            if _is_missing_supabase_table_error(supabase_error):
+                _log_legacy_supabase_mirror_skip(
+                    f"manual scenario sync for {scenario_sync_data.get('source_scenario_id')}",
+                    supabase_error,
+                )
+                return SuccessResponse(
+                    message="Scenario saved through the primary Supabase Postgres connection. Legacy mirror tables are not enabled in this project."
+                )
             # If upsert fails, try insert or update separately
             logger.warning("Upsert failed, trying insert/update approach: %s", supabase_error)
             try:
@@ -4176,6 +4535,14 @@ async def sync_scenario_to_supabase(
                     ).execute()
                     logger.info("Inserted scenario %s into Supabase", scenario_sync_data.get("source_scenario_id"))
             except Exception as fallback_error:
+                if _is_missing_supabase_table_error(fallback_error):
+                    _log_legacy_supabase_mirror_skip(
+                        f"manual scenario sync fallback for {scenario_sync_data.get('source_scenario_id')}",
+                        fallback_error,
+                    )
+                    return SuccessResponse(
+                        message="Scenario saved through the primary Supabase Postgres connection. Legacy mirror tables are not enabled in this project."
+                    )
                 logger.error("Fallback insert/update failed: %s", fallback_error)
                 raise fallback_error
 
@@ -4296,20 +4663,31 @@ async def sync_kpi_to_supabase(
         if not normalized_metrics:
             raise HTTPException(status_code=400, detail="metrics must contain at least one named KPI weight")
 
-        supabase.table("kpi_metrics").delete().in_(
-            "scenario_group_id",
-            normalized_scenario_group_ids,
-        ).execute()
+        try:
+            supabase.table("kpi_metrics").delete().in_(
+                "scenario_group_id",
+                normalized_scenario_group_ids,
+            ).execute()
 
-        metric_rows = [
-            {
-                "scenario_group_id": scenario_group_id,
-                **metric,
-            }
-            for scenario_group_id in normalized_scenario_group_ids
-            for metric in normalized_metrics
-        ]
-        supabase.table("kpi_metrics").insert(metric_rows).execute()
+            metric_rows = [
+                {
+                    "scenario_group_id": scenario_group_id,
+                    **metric,
+                }
+                for scenario_group_id in normalized_scenario_group_ids
+                for metric in normalized_metrics
+            ]
+            supabase.table("kpi_metrics").insert(metric_rows).execute()
+        except Exception as exc:
+            if _is_missing_supabase_table_error(exc):
+                _log_legacy_supabase_mirror_skip(
+                    f"kpi sync for scenario groups {', '.join(normalized_scenario_group_ids)}",
+                    exc,
+                )
+                return SuccessResponse(
+                    message="KPI settings are already saved in Supabase Postgres. Legacy mirror tables are not enabled in this project."
+                )
+            raise
 
         return SuccessResponse(message="KPI sync completed successfully")
     except HTTPException:
@@ -4550,6 +4928,15 @@ async def create_batch_mapping(
 
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, mapping_data.scenario_id)
+    scenario = db.query(Scenario).filter(Scenario.id == mapping_data.scenario_id).first()
+    if scenario:
+        _sync_call_simulation_scenario_mirror_or_raise(
+            db,
+            scenario=scenario,
+            trainer_id=str(scenario.created_by or current_user.id),
+            batch_id=mapping_data.batch_id,
+            detail="Supabase sync is required before updating the Call Simulation batch mapping.",
+        )
     db.commit()
     return BatchScenarioMappingCreate(
         batch_id=mapping_data.batch_id,
@@ -4705,6 +5092,13 @@ async def assign_call_simulation_to_trainees(
 
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
+    _sync_call_simulation_scenario_mirror_or_raise(
+        db,
+        scenario=scenario,
+        trainer_id=str(scenario.created_by or current_user.id),
+        batch_id=batch.id,
+        detail="Supabase sync is required before saving Call Simulation assignments.",
+    )
     db.commit()
 
     return CallSimulationAssignmentResponse(
@@ -4762,6 +5156,13 @@ async def create_kpi_config(
         target_dead_air_seconds=config_data.target_dead_air_seconds,
     )
     db.add(new_config)
+    db.flush()
+    _sync_call_simulation_batch_mirror_or_raise(
+        db,
+        batch_id=config_data.batch_id,
+        fallback_trainer_id=str(current_user.id),
+        detail="Supabase sync is required before creating the Call Simulation KPI rubric.",
+    )
     db.commit()
     db.refresh(new_config)
     return BatchKPIConfigResponse.model_validate(new_config)
@@ -4807,6 +5208,13 @@ async def update_kpi_config(
         setattr(config, field, _normalize_keyword_list(value) if field in list_fields else value)
 
     _validate_kpi_weights(config)
+    db.flush()
+    _sync_call_simulation_batch_mirror_or_raise(
+        db,
+        batch_id=batch_id,
+        fallback_trainer_id=str(current_user.id),
+        detail="Supabase sync is required before updating the Call Simulation KPI rubric.",
+    )
     db.commit()
     db.refresh(config)
     return BatchKPIConfigResponse.model_validate(config)
@@ -5031,53 +5439,14 @@ async def bulk_upload_scenarios(
     for retired_scenario_id in retired_scenario_ids:
         if retired_scenario_id != target_scenario.id:
             _sync_call_simulation_assignments_for_scenario(db, retired_scenario_id)
-
-    # After creating scenario, sync to Supabase
-    try:
-        supabase = get_supabase_client()
-        scenario_sync_data = {
-            "source_scenario_id": str(target_scenario.id),
-            "trainer_id": str(current_user.id),
-            "title": target_scenario.title,
-            "topic": target_scenario.lob or target_scenario.title,
-            "description": target_scenario.description,
-            "target_kpis": target_scenario.call_simulation_config.get("target_kpis", {}) if target_scenario.call_simulation_config else {},
-            "script_flow": target_scenario.call_simulation_config.get("script_flow", []) if target_scenario.call_simulation_config else [],
-            "ringer_audio_url": target_scenario.ringer_audio_url,
-            "hold_audio_url": target_scenario.hold_audio_url,
-            "difficulty": target_scenario.difficulty or "intermediate",
-            "estimated_duration_seconds": target_scenario.estimated_duration or 300,
-            "passing_score": float(target_scenario.call_simulation_config.get("certification_threshold", 80)) if target_scenario.call_simulation_config else 80.0,
-            "is_published": bool(target_scenario.is_published),
-            "is_active": True,
-            "metadata": target_scenario.call_simulation_config or {},
-        }
-        
-        try:
-            # Check if record exists and update or insert accordingly
-            existing = supabase.table("call_scenarios").select("id").eq(
-                "source_scenario_id", str(target_scenario.id)
-            ).execute()
-            
-            if existing.data and len(existing.data) > 0:
-                # Update existing
-                result = supabase.table("call_scenarios").update(
-                    scenario_sync_data
-                ).eq("source_scenario_id", str(target_scenario.id)).execute()
-                logger.info("Updated bulk uploaded scenario %s in Supabase", target_scenario.id)
-            else:
-                # Insert new
-                result = supabase.table("call_scenarios").insert(
-                    scenario_sync_data
-                ).execute()
-                logger.info("Inserted bulk uploaded scenario %s into Supabase", target_scenario.id)
-        except Exception as supabase_error:
-            logger.warning("Failed to sync bulk uploaded scenario to Supabase: %s", supabase_error)
-            # Don't fail the bulk upload if Supabase sync fails
-    except Exception as sync_error:
-        logger.warning("Error preparing scenario sync data: %s", sync_error)
-        # Don't fail the bulk upload if sync preparation fails
-
+    db.flush()
+    _sync_call_simulation_scenario_mirror_or_raise(
+        db,
+        scenario=target_scenario,
+        trainer_id=str(current_user.id),
+        batch_id=batch.id,
+        detail="Supabase sync is required before finishing the Call Simulation bulk upload.",
+    )
     db.commit()
 
     return BulkUploadResponse(
@@ -5218,7 +5587,7 @@ async def upload_call_simulation_audio_asset(
     _require_trainer(current_user)
 
     normalized_asset_kind = (asset_kind or "").strip().lower()
-    allowed_asset_kinds = {"member-step", "ringer", "hold"}
+    allowed_asset_kinds = {"member-step", "ringer", "hold", "scenario-ringer", "scenario-hold"}
     if normalized_asset_kind not in allowed_asset_kinds:
         raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
 
@@ -5640,14 +6009,11 @@ async def synthesize_member_speech(
             audio_url = uploaded_audio_url
             storage_mode = "local" if uploaded_audio_url.startswith("/media/") else "supabase"
         else:
-            audio_url = _build_audio_data_url(upload_bytes, audio_content_type)
-            storage_mode = "embedded"
-            storage_warning = (
-                "Supabase storage could not save the generated speech asset, "
-                "so the audio was embedded directly in the saved scenario data."
-            )
+            audio_url = None
+            storage_mode = "browser-fallback"
+            storage_warning = browser_fallback_message
             logger.warning(
-                "Call Simulation TTS persisted as embedded audio because Supabase storage upload failed. "
+                "Call Simulation TTS asset upload failed, so runtime browser fallback will be used instead. "
                 "trainer_id=%s scenario_segment=%s asset_kind=%s",
                 current_user.id,
                 scenario_segment,

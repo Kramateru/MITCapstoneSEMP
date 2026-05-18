@@ -1,6 +1,6 @@
 'use client'
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000'
+const API_BASE_URL = ''
 
 async function apiCall<T>(endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', body?: any): Promise<T> {
   const url = `${API_BASE_URL}/api/assessment${endpoint}`

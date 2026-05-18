@@ -239,6 +239,7 @@ interface ScenarioRowForm {
 interface ScenarioFormState {
   title: string;
   topic: string;
+  category: string;
   description: string;
   scenario_group_label: string;
   opening_prompt: string;
@@ -253,6 +254,10 @@ interface ScenarioFormState {
   verification_status: string;
   problem_statement: string;
   difficulty: string;
+  ringer_audio_url: string;
+  hold_audio_url: string;
+  use_shared_ringer_audio: boolean;
+  use_shared_hold_audio: boolean;
   rows: ScenarioRowForm[];
 }
 
@@ -340,6 +345,7 @@ const createStarterScenarioRows = (): ScenarioRowForm[] => ([
 const createDefaultScenarioForm = (): ScenarioFormState => ({
   title: '',
   topic: '',
+  category: '',
   description: '',
   scenario_group_label: '',
   opening_prompt: '',
@@ -354,6 +360,10 @@ const createDefaultScenarioForm = (): ScenarioFormState => ({
   verification_status: '',
   problem_statement: '',
   difficulty: 'intermediate',
+  ringer_audio_url: '',
+  hold_audio_url: '',
+  use_shared_ringer_audio: true,
+  use_shared_hold_audio: true,
   rows: createStarterScenarioRows(),
 });
 
@@ -381,6 +391,22 @@ const splitKeywords = (value: string) =>
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+
+function readBooleanFlag(value: unknown, fallback = false) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'on'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'off'].includes(normalized)) {
+      return false;
+    }
+  }
+  return fallback;
+}
 
 function formatDateTime(value?: string | null) {
   if (!value) return 'No attempts yet';
@@ -583,6 +609,11 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
   return {
     title: scenario.title || '',
     topic: String(readString(scenarioConfig.topic) || scenario.title || 'Call scenario'),
+    category: String(
+      readString(scenarioConfig.category)
+      || readString(scenarioConfig.scenario_category)
+      || '',
+    ),
     description: scenario.description || '',
     scenario_group_label: String(
       readString(scenarioConfig.scenario_group_label)
@@ -607,6 +638,10 @@ function createScenarioFormFromScenario(scenario: Scenario): ScenarioFormState {
       scenario.member_profile?.problem_statement || scenario.cxone_metadata?.problem_statement || scenario.description || '',
     ),
     difficulty: scenario.difficulty || 'intermediate',
+    ringer_audio_url: String(scenario.ringer_audio_url || ''),
+    hold_audio_url: String(scenario.hold_audio_url || ''),
+    use_shared_ringer_audio: readBooleanFlag(scenarioConfig.use_shared_ringer_audio, true),
+    use_shared_hold_audio: readBooleanFlag(scenarioConfig.use_shared_hold_audio, true),
     rows: sourceRows.length > 0 ? sourceRows : [createScenarioRow()],
   };
 }
@@ -785,6 +820,7 @@ export default function TrainerSimFloorPage() {
   const [loadingCallToneSettings, setLoadingCallToneSettings] = useState(false);
   const [savingCallToneTarget, setSavingCallToneTarget] = useState<string | null>(null);
   const [uploadingAudioTarget, setUploadingAudioTarget] = useState<string | null>(null);
+  const [uploadingScenarioAudioTarget, setUploadingScenarioAudioTarget] = useState<string | null>(null);
   const [generatingSpeechRowIndex, setGeneratingSpeechRowIndex] = useState<number | null>(null);
   const [isGeneratingAllMemberSpeech, setIsGeneratingAllMemberSpeech] = useState(false);
   const [memberSpeechGenerationProgress, setMemberSpeechGenerationProgress] = useState<{ current: number; total: number } | null>(null);
@@ -1381,6 +1417,8 @@ export default function TrainerSimFloorPage() {
         call_simulation_config: {
           mode: 'dialer_call_scenario',
           topic: scenarioForm.topic.trim() || scenarioForm.title.trim(),
+          category: scenarioForm.category.trim() || null,
+          scenario_category: scenarioForm.category.trim() || null,
           scenario_group_label: scenarioForm.scenario_group_label.trim() || null,
           target_kpis: targetKpis,
           passing_score: scenarioPassingScore,
@@ -1393,8 +1431,12 @@ export default function TrainerSimFloorPage() {
           member_talk_icon: true,
           show_actor_script_overlay: true,
           require_hold_before_member_response: true,
+          use_shared_ringer_audio: scenarioForm.use_shared_ringer_audio,
+          use_shared_hold_audio: scenarioForm.use_shared_hold_audio,
         },
         difficulty: scenarioForm.difficulty || 'intermediate',
+        ringer_audio_url: scenarioForm.use_shared_ringer_audio ? null : (scenarioForm.ringer_audio_url.trim() || null),
+        hold_audio_url: scenarioForm.use_shared_hold_audio ? null : (scenarioForm.hold_audio_url.trim() || null),
         steps,
         variations,
       };
@@ -1764,6 +1806,59 @@ export default function TrainerSimFloorPage() {
     }
   }, [applyCallToneSettings, authedFetch, refreshScenarioData, syncCallToneSettingsToSupabase]);
 
+  const handleUploadScenarioAudioAsset = useCallback(
+    (target: 'scenario-ringer' | 'scenario-hold') => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'audio/*';
+
+      input.onchange = async () => {
+        const selectedFile = input.files?.[0];
+        if (!selectedFile) {
+          input.remove();
+          return;
+        }
+
+        setUploadingScenarioAudioTarget(target);
+
+        try {
+          const formData = new FormData();
+          formData.append('file', selectedFile);
+          formData.append('asset_kind', target);
+          if (editingScenarioId) {
+            formData.append('scenario_id', editingScenarioId);
+          }
+
+          const response = await authedFetch('/api/call-simulation/assets/audio', {
+            method: 'POST',
+            body: formData,
+          });
+          const payload = (await response.json().catch(() => null)) as AudioAssetUploadResponse | { detail?: string } | null;
+          if (!response.ok || !payload || !('audio_url' in payload)) {
+            throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to upload the scenario audio asset.');
+          }
+
+          setScenarioForm((previous) => ({
+            ...previous,
+            ...(target === 'scenario-ringer'
+              ? { ringer_audio_url: payload.audio_url, use_shared_ringer_audio: false }
+              : { hold_audio_url: payload.audio_url, use_shared_hold_audio: false }),
+          }));
+          toast.success(`${target === 'scenario-ringer' ? 'Scenario ringer' : 'Scenario hold'} audio uploaded.`);
+        } catch (error) {
+          console.error(error);
+          toast.error(error instanceof Error ? error.message : 'Unable to upload the scenario audio asset.');
+        } finally {
+          setUploadingScenarioAudioTarget(null);
+          input.remove();
+        }
+      };
+
+      input.click();
+    },
+    [authedFetch, editingScenarioId],
+  );
+
   const requestMemberSpeechAsset = useCallback(async (script: string, rowIndex: number) => {
       const params = new URLSearchParams({
         text: script.trim(),
@@ -2110,6 +2205,14 @@ export default function TrainerSimFloorPage() {
   const memberAudioReadyCount = useMemo(
     () => memberRows.filter((row) => row.audio_url.trim()).length,
     [memberRows],
+  );
+  const activeScenarioRingerAudioUrl = useMemo(
+    () => (scenarioForm.use_shared_ringer_audio ? callToneSettings.ringer_audio_url : scenarioForm.ringer_audio_url).trim(),
+    [callToneSettings.ringer_audio_url, scenarioForm.ringer_audio_url, scenarioForm.use_shared_ringer_audio],
+  );
+  const activeScenarioHoldAudioUrl = useMemo(
+    () => (scenarioForm.use_shared_hold_audio ? callToneSettings.hold_audio_url : scenarioForm.hold_audio_url).trim(),
+    [callToneSettings.hold_audio_url, scenarioForm.hold_audio_url, scenarioForm.use_shared_hold_audio],
   );
   const updateScenarioRow = useCallback((index: number, field: keyof ScenarioRowForm, value: string) => {
     setScenarioForm((previous) => ({
@@ -2780,6 +2883,32 @@ export default function TrainerSimFloorPage() {
                       placeholder="Verification, billing, eligibility, escalation"
                     />
                   </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Scenario Category</Label>
+                      <Input
+                        value={scenarioForm.category}
+                        onChange={(event) => setScenarioForm((previous) => ({ ...previous, category: event.target.value }))}
+                        placeholder="Billing, eligibility, escalation"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Difficulty</Label>
+                      <Select
+                        value={scenarioForm.difficulty}
+                        onValueChange={(value) => setScenarioForm((previous) => ({ ...previous, difficulty: value }))}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select difficulty" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="basic">Basic</SelectItem>
+                          <SelectItem value="intermediate">Intermediate</SelectItem>
+                          <SelectItem value="advanced">Advanced</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
                   <div className="space-y-2">
                     <Label>Description</Label>
                     <Textarea
@@ -2885,7 +3014,106 @@ export default function TrainerSimFloorPage() {
                   </div>
                   <div className="rounded-2xl border border-sky-200 bg-sky-50/70 p-4 text-sm text-sky-950">
                     Shared ringer and hold audio now live in <span className="font-semibold">Call Simulation Management</span> above.
-                    Any change there is saved to Supabase and applied automatically to every scenario you create.
+                    Keep the shared defaults enabled below, or switch them off to attach custom audio for this scenario only.
+                  </div>
+                  <div className="grid gap-4 xl:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-950">Scenario Ringer Override</div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Use the shared trainer ringer or attach a different incoming call tone for this scenario.
+                          </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                          <Checkbox
+                            checked={scenarioForm.use_shared_ringer_audio}
+                            onCheckedChange={(value) =>
+                              setScenarioForm((previous) => ({ ...previous, use_shared_ringer_audio: value === true }))
+                            }
+                          />
+                          Use shared
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-col gap-3">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => handleUploadScenarioAudioAsset('scenario-ringer')}
+                          disabled={scenarioForm.use_shared_ringer_audio || uploadingScenarioAudioTarget === 'scenario-ringer'}
+                        >
+                          <Upload className="mr-2 h-4 w-4" />
+                          {uploadingScenarioAudioTarget === 'scenario-ringer' ? 'Uploading...' : 'Upload Scenario Ringer'}
+                        </Button>
+                        <Input
+                          value={scenarioForm.ringer_audio_url}
+                          onChange={(event) => setScenarioForm((previous) => ({ ...previous, ringer_audio_url: event.target.value }))}
+                          placeholder="Paste a scenario-specific ringer audio URL"
+                          disabled={scenarioForm.use_shared_ringer_audio}
+                        />
+                        <div className="text-xs text-slate-500">
+                          {scenarioForm.use_shared_ringer_audio
+                            ? 'The shared trainer workspace ringer will play for this scenario.'
+                            : 'This custom ringer is stored on the scenario and overrides the shared workspace tone.'}
+                        </div>
+                        {activeScenarioRingerAudioUrl ? (
+                          <audio controls preload="metadata" className="w-full" src={activeScenarioRingerAudioUrl}>
+                            Your browser does not support audio preview.
+                          </audio>
+                        ) : (
+                          <div className="text-xs text-slate-500">No ringer audio is currently attached.</div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium text-slate-950">Scenario Hold Audio Override</div>
+                          <p className="mt-1 text-xs text-slate-500">
+                            Keep the shared hold loop or upload a different hold experience for this call flow.
+                          </p>
+                        </div>
+                        <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                          <Checkbox
+                            checked={scenarioForm.use_shared_hold_audio}
+                            onCheckedChange={(value) =>
+                              setScenarioForm((previous) => ({ ...previous, use_shared_hold_audio: value === true }))
+                            }
+                          />
+                          Use shared
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-col gap-3">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => handleUploadScenarioAudioAsset('scenario-hold')}
+                          disabled={scenarioForm.use_shared_hold_audio || uploadingScenarioAudioTarget === 'scenario-hold'}
+                        >
+                          <Upload className="mr-2 h-4 w-4" />
+                          {uploadingScenarioAudioTarget === 'scenario-hold' ? 'Uploading...' : 'Upload Scenario Hold'}
+                        </Button>
+                        <Input
+                          value={scenarioForm.hold_audio_url}
+                          onChange={(event) => setScenarioForm((previous) => ({ ...previous, hold_audio_url: event.target.value }))}
+                          placeholder="Paste a scenario-specific hold audio URL"
+                          disabled={scenarioForm.use_shared_hold_audio}
+                        />
+                        <div className="text-xs text-slate-500">
+                          {scenarioForm.use_shared_hold_audio
+                            ? 'The shared trainer workspace hold audio will play when the trainee places the call on hold.'
+                            : 'This custom hold audio is stored on the scenario and overrides the shared workspace loop.'}
+                        </div>
+                        {activeScenarioHoldAudioUrl ? (
+                          <audio controls preload="metadata" className="w-full" src={activeScenarioHoldAudioUrl}>
+                            Your browser does not support audio preview.
+                          </audio>
+                        ) : (
+                          <div className="text-xs text-slate-500">No hold audio is currently attached.</div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

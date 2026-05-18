@@ -206,7 +206,6 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
     try:
         authenticate_supabase_credentials(db, normalized_email, credentials.password)
-        supabase_session = issue_supabase_session(normalized_email, credentials.password)
     except SupabaseAuthInputError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -228,6 +227,21 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail=str(exc),
         ) from exc
 
+    supabase_session: dict[str, Any] = {}
+    try:
+        supabase_session = issue_supabase_session(normalized_email, credentials.password)
+    except (
+        SupabaseAuthenticationError,
+        SupabaseAuthConfigurationError,
+        SupabaseAuthServiceError,
+    ) as exc:
+        logger.warning(
+            "Supabase session issuance failed for %s after credentials were verified. "
+            "Continuing with backend session only: %s",
+            normalized_email,
+            exc,
+        )
+
     user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
 
     if not user:
@@ -242,7 +256,7 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive"
         )
     
-    # Create tokens only after both local auth and Supabase session issuance succeed.
+    # Platform login succeeds once the shared credential hash is verified.
     access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
     refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
     

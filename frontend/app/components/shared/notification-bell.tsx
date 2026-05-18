@@ -425,7 +425,7 @@ export default function NotificationBell() {
           setSelectedNotification(null);
         }
       }}>
-        <DialogContent>
+        <DialogContent size="lg">
           <DialogHeader>
             <DialogTitle>{selectedNotification?.title || 'Notification'}</DialogTitle>
             <DialogDescription>
