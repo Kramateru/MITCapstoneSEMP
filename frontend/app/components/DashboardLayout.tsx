@@ -67,7 +67,7 @@ export function DashboardLayout({
     trainer: 'Manage learning flow, reviews, and follow-up across your trainees.',
     admin: 'Track system readiness, learning delivery, and organization-wide signals.',
   } as const;
-  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1680px] 2xl:max-w-[1820px]' : 'max-w-none';
+  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1720px] 2xl:max-w-[1880px]' : 'max-w-none';
   const contentOuterSpacingClass = dashboardSettings.boxedLayout
     ? 'px-3 py-3 sm:px-6 sm:py-6 lg:px-8 lg:py-7 xl:px-10 xl:py-8'
     : 'px-3 py-3 sm:px-5 sm:py-5 lg:px-6 lg:py-6 xl:px-7 xl:py-7';
@@ -306,7 +306,7 @@ export function DashboardLayout({
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[90vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-20' : 'lg:w-[19rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-[19.5rem] max-w-[92vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-24' : 'lg:w-[19.5rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
@@ -318,7 +318,7 @@ export function DashboardLayout({
           {/* Logo Section */}
           <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6">
             <div className={`flex items-start gap-4 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[1.45rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-20 sm:w-20">
+              <div className="flex h-[4.75rem] w-[4.75rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.55rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-24 sm:w-24">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
@@ -326,10 +326,10 @@ export function DashboardLayout({
                 />
               </div>
               <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                <p className="text-[0.95rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/80">
+                <p className="text-[1rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/88">
                   St. Peter Velle
                 </p>
-                <p className="mt-1 text-sm leading-6 text-sidebar-foreground/68">
+                <p className="mt-1 text-[0.96rem] leading-6 text-sidebar-foreground/70">
                   Speech-Enabled BPO Platform
                 </p>
               </div>
@@ -408,7 +408,7 @@ export function DashboardLayout({
             </button>
 
             <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-[1.3rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-16 sm:w-16 lg:h-[4.5rem] lg:w-[4.5rem]">
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[1.35rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-20 sm:w-20 lg:h-[5rem] lg:w-[5rem]">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
@@ -424,10 +424,10 @@ export function DashboardLayout({
                     Live Workspace
                   </Badge>
                 </div>
-                <p className="hidden text-[0.74rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80 sm:block">
+                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80 sm:block">
                   Speech-Enabled BPO Platform
                 </p>
-                <h1 className="line-clamp-2 text-[1.08rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.2rem] lg:line-clamp-1 lg:text-[1.35rem] xl:text-[1.55rem]">
+                <h1 className="line-clamp-2 text-[1.12rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.28rem] lg:line-clamp-1 lg:text-[1.45rem] xl:text-[1.68rem]">
                   {currentPageLabel}
                 </h1>
                 <p className="hidden text-sm leading-6 text-muted-foreground sm:block">

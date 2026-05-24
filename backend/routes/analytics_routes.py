@@ -152,6 +152,7 @@ def _option_label(options: List[dict[str, Any]], option_id: Optional[str], fallb
 def _build_score_stats(insights: dict[str, Any]) -> dict[str, float]:
     module_rows = insights.get("module_assignments") or []
     assessment_rows = insights.get("assessment_results") or []
+    call_simulation_rows = insights.get("call_simulation_results") or []
     score_values: List[float] = []
     retake_rows = 0
     certificate_rows = 0
@@ -178,7 +179,16 @@ def _build_score_stats(insights: dict[str, Any]) -> dict[str, float]:
         if row.get("certificate_id"):
             certificate_rows += 1
 
-    total_rows = len(module_rows) + len(assessment_rows)
+    for row in call_simulation_rows:
+        score_value = row.get("score_value")
+        if score_value is not None:
+            score_values.append(float(score_value))
+        if max(int(row.get("attempt_count") or 0), int(row.get("latest_attempt_number") or 0)) > 1:
+            retake_rows += 1
+        if row.get("certificate_id"):
+            certificate_rows += 1
+
+    total_rows = len(module_rows) + len(assessment_rows) + len(call_simulation_rows)
     return {
         "highest_score": max(score_values) if score_values else 0.0,
         "lowest_score": min(score_values) if score_values else 0.0,
@@ -192,6 +202,10 @@ def _ensure_learning_report_has_data(insights: dict[str, Any]) -> None:
     if (summary.get("assigned_module_records") or 0) > 0:
         return
     if (summary.get("assigned_assessment_records") or 0) > 0:
+        return
+    if (summary.get("assigned_call_simulation_records") or 0) > 0:
+        return
+    if (summary.get("published_coaching_logs") or 0) > 0:
         return
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
@@ -285,6 +299,8 @@ def _trainer_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any
     improvement_rows = insights.get("trainees_needing_improvement") or []
     assessment_rows = insights.get("assessment_results") or []
     module_rows = insights.get("module_assignments") or []
+    call_simulation_rows = insights.get("call_simulation_performance") or []
+    coaching_notes = insights.get("coaching_notes_summary") or []
 
     low_categories = [
         f'{row.get("category_name")}: average score {_format_percent(row.get("average_score"))}, pass rate {_format_percent(row.get("pass_rate"))}.'
@@ -310,6 +326,32 @@ def _trainer_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any
             f'{row.get("trainee_name") or "Trainee"}: revisit "{row.get("module_title")}" '
             f'before the next attempt because completion is {_format_percent(row.get("completion_percentage"))} and average score is {_format_percent(row.get("average_score"))}.'
         )
+
+    weak_call_scenarios = sorted(
+        [
+            row for row in call_simulation_rows
+            if int(row.get("assigned_count") or 0) > 0 and int(row.get("completed_count") or 0) > 0
+        ],
+        key=lambda row: (
+            float(row.get("average_score") or 0.0),
+            float(row.get("pass_rate") or 0.0),
+            str(row.get("scenario_title") or "").lower(),
+        ),
+    )[:3]
+    call_simulation_notes = [
+        f'"{row.get("scenario_title")}" needs closer coaching because average score is {_format_percent(row.get("average_score"))}, '
+        f'pass rate is {_format_percent(row.get("pass_rate"))}, and only {_format_count(row.get("completed_count"))} '
+        f'of {_format_count(row.get("assigned_count"))} assigned attempts are complete.'
+        for row in weak_call_scenarios
+    ]
+    call_simulation_notes.extend(
+        [
+            f'{note.get("trainee_name") or "Trainee"} on "{note.get("scenario_title") or "Call Simulation"}": '
+            f'{_ensure_sentence(note.get("feedback_summary") or "No coaching note recorded")} '
+            f'Next action: {_ensure_sentence(note.get("action_plan") or "Review the scenario and schedule a follow-up session")}'
+            for note in coaching_notes[:2]
+        ]
+    )
 
     action_plan: List[str] = []
     if weakest_modules:
@@ -352,6 +394,11 @@ def _trainer_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any
             "empty_message": "No weak module pattern was detected in this scope.",
         },
         {
+            "title": "Call Simulation Coaching Notes",
+            "items": call_simulation_notes[:5],
+            "empty_message": "No Call Simulation coaching priority was detected in this scope.",
+        },
+        {
             "title": "Retake Recommendations",
             "items": retake_recommendations[:6],
             "empty_message": "No immediate retake recommendation is required for the current scope.",
@@ -375,6 +422,8 @@ def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]
     weakest_areas = insights.get("weakest_assessment_areas") or []
     at_risk_trainers = insights.get("at_risk_trainers") or []
     at_risk_batches = insights.get("at_risk_batches") or []
+    coaching_summary = insights.get("coaching_summary") or {}
+    coaching_notes = insights.get("coaching_notes_summary") or []
 
     intervention_suggestions: List[str] = []
     if at_risk_trainers:
@@ -399,6 +448,22 @@ def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]
             f'Audit the "{area.get("category_name")}" assessment content because pass rate is only {_format_percent(area.get("pass_rate"))}.'
         )
 
+    coaching_follow_up: List[str] = []
+    if int(coaching_summary.get("published_logs") or 0) > 0:
+        coaching_follow_up.append(
+            f'{_format_count(coaching_summary.get("published_logs"))} coaching logs are in scope, '
+            f'with {_format_count(coaching_summary.get("acknowledged_logs"))} acknowledged and '
+            f'{_format_count(coaching_summary.get("pending_logs"))} still waiting for acknowledgement.'
+        )
+    coaching_follow_up.extend(
+        [
+            f'{note.get("trainee_name") or "Trainee"} on "{note.get("scenario_title") or "Call Simulation"}": '
+            f'{_ensure_sentence(note.get("feedback_summary") or "No feedback recorded")} '
+            f'Next action: {_ensure_sentence(note.get("action_plan") or "Review trainer follow-up and remediation plan")}'
+            for note in coaching_notes[:2]
+        ]
+    )
+
     return [
         {
             "title": "Executive Overview",
@@ -416,6 +481,16 @@ def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]
             "empty_message": "No batch-performance notes were available for this scope.",
         },
         {
+            "title": "Module and Assessment Summary",
+            "items": ai_analysis.get("module_and_assessment") or [],
+            "empty_message": "No module or assessment summary was available for this scope.",
+        },
+        {
+            "title": "Exercise and Call Simulation",
+            "items": ai_analysis.get("exercise_performance") or [],
+            "empty_message": "No exercise or Call Simulation note was available for this scope.",
+        },
+        {
             "title": "Weak Areas",
             "items": ai_analysis.get("weak_areas") or [],
             "empty_message": "No weak-area notes were available for this scope.",
@@ -429,6 +504,11 @@ def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]
             "title": "Trainer Intervention Suggestions",
             "items": intervention_suggestions,
             "empty_message": "No trainer intervention suggestion was generated for this scope.",
+        },
+        {
+            "title": "Coaching Follow-Up",
+            "items": coaching_follow_up[:4],
+            "empty_message": "No coaching follow-up note was generated for this scope.",
         },
         {
             "title": "Recommended Action Plan",
@@ -1356,9 +1436,13 @@ async def download_admin_learning_insights_pdf(
         ["Trainees in Scope", _format_count(summary.get("total_trainees"))],
         ["Assigned Modules", _format_count(summary.get("assigned_module_records"))],
         ["Assigned Assessments", _format_count(summary.get("assigned_assessment_records"))],
+        ["Assigned Call Simulations", _format_count(summary.get("assigned_call_simulation_records"))],
+        ["Published Coaching Logs", _format_count(summary.get("published_coaching_logs"))],
         ["Completion Rate", _format_percent(summary.get("completion_rate"))],
         ["Average Assessment Score", _format_percent(summary.get("average_assessment_score"))],
         ["Average Exercise Score", _format_percent(summary.get("average_exercise_score"))],
+        ["Average Call Simulation Score", _format_percent(summary.get("average_call_simulation_score"))],
+        ["Coaching Completion Rate", _format_percent(summary.get("coaching_completion_rate"))],
         ["Overall Score", _format_percent(summary.get("overall_score"))],
         ["Pass Rate", _format_percent(summary.get("pass_rate"))],
         ["Fail Rate", _format_percent(max(0.0, 100.0 - float(summary.get("pass_rate") or 0.0)))],
@@ -1367,6 +1451,7 @@ async def download_admin_learning_insights_pdf(
         ["Lowest Score", _format_percent(stats.get("lowest_score"))],
         ["Certificates Issued", _format_count(summary.get("certificates_issued") or stats.get("certificates"))],
         ["Total Attempts", _format_count(summary.get("total_attempts"))],
+        ["Intervention Needed", _format_count(summary.get("intervention_needed_count"))],
     ]
 
     analytics_tables = [
@@ -1464,6 +1549,56 @@ async def download_admin_learning_insights_pdf(
             "col_widths": [2.35 * 72, 0.8 * 72, 0.85 * 72, 0.85 * 72, 0.9 * 72, 1.25 * 72],
             "empty_message": "No assessment category performance rows were available for this report scope.",
         },
+        {
+            "title": "Call Simulation Scenario Performance",
+            "description": "Assigned mock-call scenario performance aligned to the active admin report filters.",
+            "headers": ["Scenario", "Assigned", "Completed", "In Progress", "Average", "Pass Rate", "Avg Attempts", "Latest Activity"],
+            "rows": [
+                [
+                    row.get("scenario_title") or "Call Simulation",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_count(row.get("in_progress_count")),
+                    _format_percent(row.get("average_score")),
+                    _format_percent(row.get("pass_rate")),
+                    f'{float(row.get("average_attempts") or 0.0):.1f}',
+                    _format_datetime_label(row.get("latest_activity_at")),
+                ]
+                for row in insights.get("call_simulation_performance") or []
+            ],
+            "col_widths": [2.0 * 72, 0.72 * 72, 0.8 * 72, 0.82 * 72, 0.82 * 72, 0.88 * 72, 0.82 * 72, 1.36 * 72],
+            "empty_message": "No Call Simulation scenario rows were available for this report scope.",
+        },
+        {
+            "title": "Call Simulation KPI Breakdown",
+            "description": "Average mock-call KPI performance pulled from completed trainee attempts in scope.",
+            "headers": ["KPI", "Average", "Unit"],
+            "rows": [
+                [
+                    row.get("metric") or "KPI",
+                    f'{float(row.get("value") or 0.0):.1f}',
+                    row.get("unit") or "",
+                ]
+                for row in insights.get("call_simulation_kpi_breakdown") or []
+            ],
+            "col_widths": [2.8 * 72, 1.1 * 72, 0.9 * 72],
+            "empty_message": "No Call Simulation KPI rows were available for this report scope.",
+        },
+        {
+            "title": "Coaching Coverage Summary",
+            "description": "Acknowledgement and remediation coverage for published coaching logs in the selected scope.",
+            "headers": ["Metric", "Value", "Interpretation"],
+            "rows": [
+                ["Published Logs", _format_count((insights.get("coaching_summary") or {}).get("published_logs")), "Logs already shared with trainees."],
+                ["Acknowledged", _format_count((insights.get("coaching_summary") or {}).get("acknowledged_logs")), "Trainees have reviewed the coaching guidance."],
+                ["Pending Acknowledgement", _format_count((insights.get("coaching_summary") or {}).get("pending_logs")), "Follow-up needed before remediation is fully closed."],
+                ["Competent", _format_count((insights.get("coaching_summary") or {}).get("competent_logs")), "Coaching logs marking trainees as competent."],
+                ["Retake Required", _format_count((insights.get("coaching_summary") or {}).get("retake_required_logs")), "Logs identifying a retake or remediation need."],
+                ["Average Coaching Minutes", f'{float((insights.get("coaching_summary") or {}).get("average_minutes") or 0.0):.1f}', "Average time spent per coaching record."],
+            ],
+            "col_widths": [1.9 * 72, 0.85 * 72, 3.55 * 72],
+            "empty_message": "No coaching coverage rows were available for this report scope.",
+        },
     ]
 
     detail_tables = [
@@ -1512,8 +1647,48 @@ async def download_admin_learning_insights_pdf(
             "empty_message": "No assessment result rows were available for this report scope.",
         },
         {
+            "title": "Call Simulation Results",
+            "description": "Detailed mock-call results, attempts, and coaching states for the current report filters.",
+            "headers": ["Trainee", "Scenario", "Batch", "Result", "Score", "Attempts", "Coaching", "Completed", "Trainer"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("scenario_title") or "Call Simulation",
+                    row.get("batch_label") or "Direct assignment",
+                    _result_label(row.get("completion_status"), row.get("is_passed")),
+                    _format_percent(row.get("score_value")),
+                    _format_count(row.get("attempt_count")),
+                    _status_label(row.get("coaching_status") or "not_logged"),
+                    _format_datetime_label(row.get("completed_at") or row.get("activity_at")),
+                    row.get("assigned_by_name") or "Trainer-owned scenario",
+                ]
+                for row in insights.get("call_simulation_results") or []
+            ],
+            "col_widths": [1.0 * 72, 1.55 * 72, 1.0 * 72, 0.8 * 72, 0.7 * 72, 0.65 * 72, 0.9 * 72, 1.05 * 72, 1.25 * 72],
+            "empty_message": "No Call Simulation result rows were available for this report scope.",
+        },
+        {
+            "title": "Coaching Notes",
+            "description": "Published coaching notes and next actions linked to Call Simulation activity in scope.",
+            "headers": ["Trainee", "Scenario", "Trainer", "Status", "Competency", "Feedback", "Next Action"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("scenario_title") or "Coaching",
+                    row.get("trainer_name") or "Trainer",
+                    _status_label(row.get("status")),
+                    _status_label(row.get("competency_status")),
+                    row.get("feedback_summary") or "No feedback recorded.",
+                    row.get("action_plan") or "No action plan recorded.",
+                ]
+                for row in insights.get("coaching_notes_summary") or []
+            ],
+            "col_widths": [0.95 * 72, 1.2 * 72, 1.0 * 72, 0.72 * 72, 0.82 * 72, 1.85 * 72, 1.66 * 72],
+            "empty_message": "No coaching note rows were available for this report scope.",
+        },
+        {
             "title": "Recent Activity Log",
-            "description": "Latest report-driving events from module and assessment activity.",
+            "description": "Latest report-driving events from module, assessment, Call Simulation, and coaching activity.",
             "headers": ["Activity", "Detail", "Trainer", "Trainee", "Batch", "Status", "When"],
             "rows": [
                 [
@@ -1855,11 +2030,16 @@ async def download_trainer_learning_insights_pdf(
         ["Trainer-Created Modules", _format_count(summary.get("trainer_created_modules"))],
         ["Assigned Modules", _format_count(summary.get("assigned_module_records"))],
         ["Assigned Assessments", _format_count(summary.get("assigned_assessment_records"))],
+        ["Assigned Call Simulations", _format_count(summary.get("assigned_call_simulation_records"))],
+        ["Published Coaching Logs", _format_count(summary.get("published_coaching_logs"))],
         ["Completed Modules", _format_count(summary.get("completed_modules"))],
         ["Completed Assessments", _format_count(summary.get("completed_assessments"))],
+        ["Completed Call Simulations", _format_count(summary.get("completed_call_simulations"))],
         ["Completion Rate", _format_percent(summary.get("completion_rate"))],
         ["Average Assessment Score", _format_percent(summary.get("average_assessment_score"))],
         ["Average Exercise Score", _format_percent(summary.get("average_exercise_score"))],
+        ["Average Call Simulation Score", _format_percent(summary.get("average_call_simulation_score"))],
+        ["Coaching Completion Rate", _format_percent(summary.get("coaching_completion_rate"))],
         ["Pass Rate", _format_percent(summary.get("pass_rate"))],
         ["Fail Rate", _format_percent(max(0.0, 100.0 - float(summary.get("pass_rate") or 0.0)))],
         ["Retake Rate", _format_percent(stats.get("retake_rate"))],
@@ -1867,6 +2047,7 @@ async def download_trainer_learning_insights_pdf(
         ["Lowest Score", _format_percent(stats.get("lowest_score"))],
         ["Certificates Issued", _format_count(stats.get("certificates"))],
         ["Total Attempts", _format_count(summary.get("total_attempts"))],
+        ["Intervention Needed", _format_count(summary.get("intervention_needed_count"))],
     ]
 
     analytics_tables = [
@@ -1945,6 +2126,56 @@ async def download_trainer_learning_insights_pdf(
             "col_widths": [2.9 * 72, 0.85 * 72, 0.95 * 72, 1.0 * 72, 1.3 * 72],
             "empty_message": "No assessment category rows were available for this report scope.",
         },
+        {
+            "title": "Call Simulation Scenario Performance",
+            "description": "Assigned mock-call scenario performance using only the trainer's scoped report data.",
+            "headers": ["Scenario", "Assigned", "Completed", "In Progress", "Average", "Pass Rate", "Avg Attempts", "Latest Activity"],
+            "rows": [
+                [
+                    row.get("scenario_title") or "Call Simulation",
+                    _format_count(row.get("assigned_count")),
+                    _format_count(row.get("completed_count")),
+                    _format_count(row.get("in_progress_count")),
+                    _format_percent(row.get("average_score")),
+                    _format_percent(row.get("pass_rate")),
+                    f'{float(row.get("average_attempts") or 0.0):.1f}',
+                    _format_datetime_label(row.get("latest_activity_at")),
+                ]
+                for row in insights.get("call_simulation_performance") or []
+            ],
+            "col_widths": [2.0 * 72, 0.72 * 72, 0.8 * 72, 0.82 * 72, 0.82 * 72, 0.88 * 72, 0.82 * 72, 1.36 * 72],
+            "empty_message": "No Call Simulation scenario rows were available for this report scope.",
+        },
+        {
+            "title": "Call Simulation KPI Breakdown",
+            "description": "Average mock-call KPI performance pulled from completed trainer-scoped attempts.",
+            "headers": ["KPI", "Average", "Unit"],
+            "rows": [
+                [
+                    row.get("metric") or "KPI",
+                    f'{float(row.get("value") or 0.0):.1f}',
+                    row.get("unit") or "",
+                ]
+                for row in insights.get("call_simulation_kpi_breakdown") or []
+            ],
+            "col_widths": [2.8 * 72, 1.1 * 72, 0.9 * 72],
+            "empty_message": "No Call Simulation KPI rows were available for this report scope.",
+        },
+        {
+            "title": "Coaching Coverage Summary",
+            "description": "Acknowledgement and remediation coverage for coaching logs in the trainer's active scope.",
+            "headers": ["Metric", "Value", "Interpretation"],
+            "rows": [
+                ["Published Logs", _format_count((insights.get("coaching_summary") or {}).get("published_logs")), "Logs already shared with trainees."],
+                ["Acknowledged", _format_count((insights.get("coaching_summary") or {}).get("acknowledged_logs")), "Trainees have reviewed the coaching guidance."],
+                ["Pending Acknowledgement", _format_count((insights.get("coaching_summary") or {}).get("pending_logs")), "Follow-up needed before the remediation loop is closed."],
+                ["Competent", _format_count((insights.get("coaching_summary") or {}).get("competent_logs")), "Coaching logs confirming trainee competency."],
+                ["Retake Required", _format_count((insights.get("coaching_summary") or {}).get("retake_required_logs")), "Logs marking trainees for another attempt."],
+                ["Average Coaching Minutes", f'{float((insights.get("coaching_summary") or {}).get("average_minutes") or 0.0):.1f}', "Average time spent per coaching record."],
+            ],
+            "col_widths": [1.9 * 72, 0.85 * 72, 3.55 * 72],
+            "empty_message": "No coaching coverage rows were available for this report scope.",
+        },
     ]
 
     detail_tables = [
@@ -1993,8 +2224,46 @@ async def download_trainer_learning_insights_pdf(
             "empty_message": "No assessment result rows were available for this report scope.",
         },
         {
+            "title": "Call Simulation Results",
+            "description": "Detailed trainer-scoped mock-call results, attempts, and coaching states.",
+            "headers": ["Trainee", "Scenario", "Batch", "Result", "Score", "Attempts", "Coaching", "Completed"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("scenario_title") or "Call Simulation",
+                    row.get("batch_label") or "Direct assignment",
+                    _result_label(row.get("completion_status"), row.get("is_passed")),
+                    _format_percent(row.get("score_value")),
+                    _format_count(row.get("attempt_count")),
+                    _status_label(row.get("coaching_status") or "not_logged"),
+                    _format_datetime_label(row.get("completed_at") or row.get("activity_at")),
+                ]
+                for row in insights.get("call_simulation_results") or []
+            ],
+            "col_widths": [1.0 * 72, 1.75 * 72, 1.1 * 72, 0.82 * 72, 0.72 * 72, 0.68 * 72, 0.95 * 72, 1.18 * 72],
+            "empty_message": "No Call Simulation result rows were available for this report scope.",
+        },
+        {
+            "title": "Coaching Notes",
+            "description": "Published coaching notes and next actions linked to the trainer's scoped mock-call activity.",
+            "headers": ["Trainee", "Scenario", "Status", "Competency", "Feedback", "Next Action"],
+            "rows": [
+                [
+                    row.get("trainee_name") or "Trainee",
+                    row.get("scenario_title") or "Coaching",
+                    _status_label(row.get("status")),
+                    _status_label(row.get("competency_status")),
+                    row.get("feedback_summary") or "No feedback recorded.",
+                    row.get("action_plan") or "No action plan recorded.",
+                ]
+                for row in insights.get("coaching_notes_summary") or []
+            ],
+            "col_widths": [1.05 * 72, 1.3 * 72, 0.78 * 72, 0.9 * 72, 2.05 * 72, 1.92 * 72],
+            "empty_message": "No coaching note rows were available for this report scope.",
+        },
+        {
             "title": "Recent Activity Log",
-            "description": "Latest module and assessment events contributing to this trainer report.",
+            "description": "Latest module, assessment, Call Simulation, and coaching events contributing to this trainer report.",
             "headers": ["Activity", "Detail", "Trainee", "Batch", "Status", "When"],
             "rows": [
                 [

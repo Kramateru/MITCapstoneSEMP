@@ -9,6 +9,8 @@ import {
   Gauge,
   GraduationCap,
   Loader2,
+  MessageSquare,
+  Mic,
   RefreshCw,
   Target,
   TrendingDown,
@@ -75,6 +77,16 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString()
+}
+
+function formatMetricValue(value?: number | null, unit?: string | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return unit === 'wpm' || unit === 'sec' ? `0 ${unit}` : '0.0%'
+  }
+  if (unit === 'wpm' || unit === 'sec') {
+    return `${value.toFixed(1)} ${unit}`
+  }
+  return `${value.toFixed(1)}%`
 }
 
 function getErrorMessage(error: unknown) {
@@ -180,7 +192,9 @@ export default function ReportsPage() {
   const summary = data?.summary
   const hasTrainerData = Boolean(
     (summary?.assigned_module_records || 0) > 0
-      || (summary?.assigned_assessment_records || 0) > 0,
+      || (summary?.assigned_assessment_records || 0) > 0
+      || (summary?.assigned_call_simulation_records || 0) > 0
+      || (summary?.published_coaching_logs || 0) > 0,
   )
   const scopeLabel = data?.scope.label || 'Trainer scope'
 
@@ -191,6 +205,11 @@ export default function ReportsPage() {
   const assessmentRows = useMemo(() => data?.assessment_results || [], [data?.assessment_results])
   const assignmentRows = useMemo(() => data?.module_assignments || [], [data?.module_assignments])
   const recentRows = useMemo(() => data?.recent_activity || [], [data?.recent_activity])
+  const callSimulationRows = useMemo(() => data?.call_simulation_performance || [], [data?.call_simulation_performance])
+  const callSimulationResultRows = useMemo(() => data?.call_simulation_results || [], [data?.call_simulation_results])
+  const callSimulationKpis = useMemo(() => data?.call_simulation_kpi_breakdown || [], [data?.call_simulation_kpi_breakdown])
+  const coachingNotes = useMemo(() => data?.coaching_notes_summary || [], [data?.coaching_notes_summary])
+  const coachingSummary = data?.coaching_summary || null
   const improvementRows = useMemo(
     () => data?.trainees_needing_improvement || [],
     [data?.trainees_needing_improvement],
@@ -317,14 +336,14 @@ export default function ReportsPage() {
             <CardHeader>
               <CardTitle>No trainer-scoped report data yet</CardTitle>
               <CardDescription>
-                Reports will appear after this trainer assigns modules or assessments and trainees begin
-                generating real completion, exercise, or assessment results.
+                Reports will appear after this trainer assigns learning and trainees begin generating real module,
+                assessment, Call Simulation, or coaching results.
               </CardDescription>
             </CardHeader>
           </Card>
         ) : (
           <>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
               <SummaryCard
                 title="Total Trainees"
                 value={formatCount(summary?.total_trainees)}
@@ -364,14 +383,38 @@ export default function ReportsPage() {
               <SummaryCard
                 title="Pass Rate"
                 value={formatPercent(summary?.pass_rate)}
-                helper={`${formatCount(summary?.passed_assessments)} assessment passes tracked`}
+                helper="Completed items meeting the passing threshold across all tracked learning"
                 icon={GraduationCap}
               />
               <SummaryCard
                 title="Attempts"
                 value={formatCount(summary?.total_attempts)}
-                helper={`${formatCount(summary?.assigned_assessment_records)} assigned assessment records in scope`}
+                helper="Attempts recorded across modules, assessments, and Call Simulation"
                 icon={Activity}
+              />
+              <SummaryCard
+                title="Assigned Call Sim"
+                value={formatCount(summary?.assigned_call_simulation_records)}
+                helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} pending`}
+                icon={Mic}
+              />
+              <SummaryCard
+                title="Avg Call Sim Score"
+                value={formatPercent(summary?.average_call_simulation_score)}
+                helper={`${formatPercent(summary?.call_simulation_pass_rate)} pass rate across completed mock calls`}
+                icon={Mic}
+              />
+              <SummaryCard
+                title="Coaching Completion"
+                value={formatPercent(summary?.coaching_completion_rate)}
+                helper={`${formatCount(summary?.published_coaching_logs)} published coaching logs in scope`}
+                icon={MessageSquare}
+              />
+              <SummaryCard
+                title="Open Coaching"
+                value={formatCount(summary?.pending_coaching_logs)}
+                helper={`${formatCount(summary?.acknowledged_coaching_logs)} already acknowledged by trainees`}
+                icon={MessageSquare}
               />
             </div>
 
@@ -389,7 +432,8 @@ export default function ReportsPage() {
                   <CardHeader>
                     <CardTitle>AI Analysis</CardTitle>
                     <CardDescription>
-                      Professional notes generated from real module completion, exercise outcomes, and assessment results.
+                      Professional notes generated from real module completion, exercise outcomes, assessment results,
+                      assigned Call Simulation work, and coaching follow-up.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
@@ -430,72 +474,81 @@ export default function ReportsPage() {
 
                 <div className="grid gap-6 xl:grid-cols-2">
                   <Card className="border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Batch Performance Comparison</CardTitle>
-                      <CardDescription>
-                        Overall learning score and completion rate by batch for the current trainer scope.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      {batchRows.length ? (
-                        <ResponsiveContainer width="100%" height={320}>
-                          <BarChart data={batchRows} margin={{ top: 28, right: 12, left: 0, bottom: 56 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={70} />
-                            <YAxis domain={[0, 100]} />
-                            <Tooltip />
-                            <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
-                              <ChartPercentLabelList />
-                            </Bar>
-                            <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
-                              <ChartPercentLabelList />
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <SectionEmpty message="Batch comparison will appear once trainer-assigned learning is active." />
-                      )}
-                    </CardContent>
-                  </Card>
+                  <CardHeader>
+                    <CardTitle>Batch Performance Comparison</CardTitle>
+                    <CardDescription>
+                      Overall learning score and completion rate by batch for the current trainer scope.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {batchRows.length ? (
+                      <div className="chart-scroll-shell">
+                        <div className="chart-scroll-inner h-[320px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={batchRows} margin={{ top: 28, right: 12, left: 0, bottom: 56 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={70} />
+                              <YAxis domain={[0, 100]} />
+                              <Tooltip />
+                              <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                                <ChartPercentLabelList />
+                              </Bar>
+                              <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                                <ChartPercentLabelList />
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    ) : (
+                      <SectionEmpty message="Batch comparison will appear once trainer-assigned learning is active." />
+                    )}
+                  </CardContent>
+                </Card>
 
                   <Card className="border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Score Distribution</CardTitle>
-                      <CardDescription>
-                        Combined spread of saved exercise and assessment scores in the selected report scope.
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                      {(data?.score_distribution || []).some((row) => row.count > 0) ? (
-                        <ResponsiveContainer width="100%" height={320}>
-                          <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="range_label" />
-                            <YAxis allowDecimals={false} />
-                            <Tooltip />
-                            <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
-                              <ChartCountLabelList />
-                              {(data?.score_distribution || []).map((row, index) => (
-                                <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
-                              ))}
-                            </Bar>
-                          </BarChart>
-                        </ResponsiveContainer>
-                      ) : (
-                        <SectionEmpty message="Score distribution will populate once trainees complete exercises or assessments." />
-                      )}
-                    </CardContent>
+                  <CardHeader>
+                    <CardTitle>Score Distribution</CardTitle>
+                    <CardDescription>
+                      Combined spread of saved exercise, assessment, and Call Simulation scores in the selected report scope.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {(data?.score_distribution || []).some((row) => row.count > 0) ? (
+                      <div className="chart-scroll-shell">
+                        <div className="chart-scroll-inner h-[320px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="range_label" />
+                              <YAxis allowDecimals={false} />
+                              <Tooltip />
+                              <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                                <ChartCountLabelList />
+                                {(data?.score_distribution || []).map((row, index) => (
+                                  <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    ) : (
+                      <SectionEmpty message="Score distribution will populate once trainees complete exercises or assessments." />
+                    )}
+                  </CardContent>
                   </Card>
                 </div>
 
                 <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
                   <Card className="border-slate-200 shadow-sm">
-                    <CardHeader>
-                      <CardTitle>Recent Trainee Activity</CardTitle>
-                      <CardDescription>
-                        Latest module and assessment events connected to trainer-created and trainer-assigned learning.
-                      </CardDescription>
-                    </CardHeader>
+                  <CardHeader>
+                    <CardTitle>Recent Trainee Activity</CardTitle>
+                    <CardDescription>
+                      Latest module, assessment, Call Simulation, and coaching events connected to trainer-created and
+                      trainer-assigned learning.
+                    </CardDescription>
+                  </CardHeader>
                     <CardContent className="space-y-3">
                       {recentRows.length ? (
                         recentRows.slice(0, 8).map((row) => (
@@ -580,6 +633,106 @@ export default function ReportsPage() {
                       {!weakestModules.length && !weakestAreas.length && !improvementRows.length ? (
                         <SectionEmpty message="No current improvement flags are available for the selected report scope." />
                       ) : null}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Call Simulation Scenario Performance</CardTitle>
+                      <CardDescription>
+                        Average score and pass rate by assigned scenario for the current report scope.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      {callSimulationRows.length ? (
+                        <div className="chart-scroll-shell">
+                          <div className="chart-scroll-inner h-[340px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={callSimulationRows.slice(0, 8)} margin={{ top: 28, right: 12, left: 0, bottom: 76 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={96} />
+                                <YAxis domain={[0, 100]} />
+                                <Tooltip />
+                                <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
+                                  <ChartPercentLabelList />
+                                </Bar>
+                                <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
+                                  <ChartPercentLabelList />
+                                </Bar>
+                              </BarChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
+                      ) : (
+                        <SectionEmpty message="Call Simulation scenario analytics will appear once trainees complete assigned mock calls." />
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Call KPI and Coaching Snapshot</CardTitle>
+                      <CardDescription>
+                        KPI averages and coaching follow-up notes generated from saved trainer-scoped mock-call results.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {callSimulationKpis.length ? (
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          {callSimulationKpis.slice(0, 6).map((metric) => (
+                            <div key={metric.metric} className="rounded-2xl border bg-slate-50 px-4 py-4">
+                              <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{metric.metric}</div>
+                              <div className="mt-2 text-xl font-semibold text-slate-950">
+                                {formatMetricValue(metric.value, metric.unit)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <SectionEmpty message="KPI averages will appear after trainees complete scored Call Simulation attempts." />
+                      )}
+
+                      {(coachingSummary?.published_logs || 0) > 0 ? (
+                        <div className="grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Published</div>
+                            <div className="mt-2 text-xl font-semibold text-slate-950">{formatCount(coachingSummary?.published_logs)}</div>
+                          </div>
+                          <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Pending Ack</div>
+                            <div className="mt-2 text-xl font-semibold text-amber-700">{formatCount(coachingSummary?.pending_logs)}</div>
+                          </div>
+                          <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Retake Coaching</div>
+                            <div className="mt-2 text-xl font-semibold text-rose-700">{formatCount(coachingSummary?.retake_required_logs)}</div>
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {coachingNotes.length ? (
+                        <div className="space-y-3">
+                          {coachingNotes.slice(0, 4).map((note) => (
+                            <div key={note.id} className="rounded-2xl border p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                                  <div className="mt-1 text-xs text-slate-500">
+                                    {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                                  </div>
+                                </div>
+                                <Badge variant="outline" className="border-slate-300 text-slate-700">
+                                  {note.status.replace(/_/g, ' ')}
+                                </Badge>
+                              </div>
+                              <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <SectionEmpty message="Coaching notes will appear here after trainers publish feedback for completed mock calls." />
+                      )}
                     </CardContent>
                   </Card>
                 </div>
@@ -720,20 +873,24 @@ export default function ReportsPage() {
                     </CardHeader>
                     <CardContent>
                       {moduleRows.length ? (
-                        <ResponsiveContainer width="100%" height={340}>
-                          <LineChart data={moduleRows} margin={{ top: 28, right: 16, left: 0, bottom: 80 }}>
-                            <CartesianGrid strokeDasharray="3 3" />
-                            <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={96} />
-                            <YAxis domain={[0, 100]} />
-                            <Tooltip />
-                            <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
-                              <ChartPercentLabelList position="top" />
-                            </Line>
-                            <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
-                              <ChartPercentLabelList position="bottom" />
-                            </Line>
-                          </LineChart>
-                        </ResponsiveContainer>
+                        <div className="chart-scroll-shell">
+                          <div className="chart-scroll-inner h-[340px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <LineChart data={moduleRows} margin={{ top: 28, right: 16, left: 0, bottom: 80 }}>
+                                <CartesianGrid strokeDasharray="3 3" />
+                                <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={96} />
+                                <YAxis domain={[0, 100]} />
+                                <Tooltip />
+                                <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                                  <ChartPercentLabelList position="top" />
+                                </Line>
+                                <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                                  <ChartPercentLabelList position="bottom" />
+                                </Line>
+                              </LineChart>
+                            </ResponsiveContainer>
+                          </div>
+                        </div>
                       ) : (
                         <SectionEmpty message="Module progress will appear after trainees start trainer-assigned modules." />
                       )}
@@ -968,6 +1125,78 @@ export default function ReportsPage() {
                         })
                       ) : (
                         <SectionEmpty message="No assessment results are available for the current scope." />
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Call Simulation Result Rows</CardTitle>
+                      <CardDescription>
+                        Latest mock-call results, pass status, attempts, and coaching state for this report scope.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {callSimulationResultRows.length ? (
+                        callSimulationResultRows.slice(0, 10).map((row) => (
+                          <div key={row.id} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{row.scenario_title}</div>
+                                <div className="mt-1 text-sm text-slate-500">
+                                  {row.trainee_name || 'Trainee'} | {row.batch_label}
+                                </div>
+                              </div>
+                              <Badge variant={row.is_passed ? 'success' : row.completion_status === 'in_progress' ? 'warning' : 'outline'}>
+                                {row.status.replace(/_/g, ' ')}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 grid gap-2 text-sm text-slate-600 sm:grid-cols-2">
+                              <div>Score: {formatPercent(row.score_value)}</div>
+                              <div>Attempts: {formatCount(row.attempt_count)}</div>
+                              <div>Completed: {formatDateTime(row.completed_at || row.activity_at)}</div>
+                              <div>Coaching: {(row.coaching_status || 'not logged').replace(/_/g, ' ')}</div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="No Call Simulation result rows are available for this scope." />
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Coaching Follow-Up Notes</CardTitle>
+                      <CardDescription>
+                        Published coaching feedback linked to saved mock-call results in the current report scope.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {coachingNotes.length ? (
+                        coachingNotes.slice(0, 8).map((note) => (
+                          <div key={note.id} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                                <div className="mt-1 text-sm text-slate-500">
+                                  {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                                </div>
+                              </div>
+                              <Badge variant="outline" className="border-slate-300 text-slate-700">
+                                {note.competency_status.replace(/_/g, ' ')}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                            <div className="mt-3 text-xs text-slate-500">
+                              Recommended next action: {note.action_plan}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="No coaching notes are available for the current report scope." />
                       )}
                     </CardContent>
                   </Card>

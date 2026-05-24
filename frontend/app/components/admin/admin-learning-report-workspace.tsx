@@ -7,6 +7,8 @@ import {
   Download,
   FileBarChart,
   Loader2,
+  MessageSquare,
+  Mic,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -81,6 +83,16 @@ function formatDateTime(value?: string | null) {
   }
 
   return parsed.toLocaleString()
+}
+
+function formatMetricValue(value?: number | null, unit?: string | null) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return unit === 'wpm' || unit === 'sec' ? `0 ${unit}` : '0.0%'
+  }
+  if (unit === 'wpm' || unit === 'sec') {
+    return `${value.toFixed(1)} ${unit}`
+  }
+  return `${value.toFixed(1)}%`
 }
 
 function getErrorMessage(error: unknown) {
@@ -257,7 +269,9 @@ export function AdminLearningReportWorkspace() {
   const summary = data?.summary
   const hasLearningData = Boolean(
     (summary?.assigned_module_records || 0) > 0
-      || (summary?.assigned_assessment_records || 0) > 0,
+      || (summary?.assigned_assessment_records || 0) > 0
+      || (summary?.assigned_call_simulation_records || 0) > 0
+      || (summary?.published_coaching_logs || 0) > 0,
   )
 
   const handleDownloadPdf = useCallback(async () => {
@@ -302,6 +316,11 @@ export function AdminLearningReportWorkspace() {
   const recentActivityRows = useMemo(() => data?.recent_activity || [], [data?.recent_activity])
   const moduleAssignmentRows = useMemo(() => data?.module_assignments || [], [data?.module_assignments])
   const assessmentResultRows = useMemo(() => data?.assessment_results || [], [data?.assessment_results])
+  const callSimulationRows = useMemo(() => data?.call_simulation_performance || [], [data?.call_simulation_performance])
+  const callSimulationResultRows = useMemo(() => data?.call_simulation_results || [], [data?.call_simulation_results])
+  const callSimulationKpis = useMemo(() => data?.call_simulation_kpi_breakdown || [], [data?.call_simulation_kpi_breakdown])
+  const coachingNotes = useMemo(() => data?.coaching_notes_summary || [], [data?.coaching_notes_summary])
+  const coachingSummary = data?.coaching_summary || null
 
   const scopeBadges = useMemo(() => {
     if (!data?.scope) {
@@ -428,17 +447,17 @@ export function AdminLearningReportWorkspace() {
         </Card>
       ) : !hasLearningData ? (
         <Card className="border-dashed shadow-sm">
-          <CardHeader>
-            <CardTitle>No admin reports available yet</CardTitle>
-            <CardDescription>
-              Reports will populate after trainers assign modules or assessments and trainees start
-              producing saved results.
-            </CardDescription>
-          </CardHeader>
+            <CardHeader>
+              <CardTitle>No admin reports available yet</CardTitle>
+              <CardDescription>
+                Reports will populate after trainers assign learning and trainees start producing saved module,
+                assessment, Call Simulation, or coaching results.
+              </CardDescription>
+            </CardHeader>
         </Card>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
             <SummaryCard
               title="Trainers in Scope"
               value={formatCount(summary?.total_trainers)}
@@ -487,6 +506,30 @@ export function AdminLearningReportWorkspace() {
               helper={`${formatCount(summary?.completed_assessments)} completed | ${formatCount(summary?.pending_assessments)} pending`}
               icon={Sparkles}
             />
+            <SummaryCard
+              title="Assigned Call Sim"
+              value={formatCount(summary?.assigned_call_simulation_records)}
+              helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} pending`}
+              icon={Mic}
+            />
+            <SummaryCard
+              title="Avg Call Sim Score"
+              value={formatPercent(summary?.average_call_simulation_score)}
+              helper={`${formatPercent(summary?.call_simulation_pass_rate)} pass rate across completed mock calls`}
+              icon={Mic}
+            />
+            <SummaryCard
+              title="Coaching Completion"
+              value={formatPercent(summary?.coaching_completion_rate)}
+              helper={`${formatCount(summary?.published_coaching_logs)} published coaching logs in scope`}
+              icon={MessageSquare}
+            />
+            <SummaryCard
+              title="Open Coaching"
+              value={formatCount(summary?.pending_coaching_logs)}
+              helper={`${formatCount(summary?.acknowledged_coaching_logs)} already acknowledged`}
+              icon={MessageSquare}
+            />
           </div>
 
           <Tabs defaultValue="overview" className="space-y-6">
@@ -504,7 +547,7 @@ export function AdminLearningReportWorkspace() {
                   <CardTitle>Executive Summary</CardTitle>
                   <CardDescription>
                     AI-style reporting notes generated from the actual trainer, batch, module, assessment,
-                    exercise, and trainee results in this scope.
+                    exercise, Call Simulation, coaching, and trainee results in this scope.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -526,23 +569,27 @@ export function AdminLearningReportWorkspace() {
                   <CardHeader>
                     <CardTitle>Score Distribution</CardTitle>
                     <CardDescription>
-                      Distribution of saved exercise and assessment scores under the current report scope.
+                      Distribution of saved exercise, assessment, and Call Simulation scores under the current report scope.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
                     {(data?.score_distribution || []).some((row) => row.count > 0) ? (
-                      <ResponsiveContainer width="100%" height={320}>
-                        <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="range_label" />
-                          <YAxis allowDecimals={false} />
-                          <Tooltip />
-                          <Legend />
-                          <Bar dataKey="count" fill="#2563eb" radius={[8, 8, 0, 0]} name="Results">
-                            <ChartCountLabelList />
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
+                      <div className="chart-scroll-shell">
+                        <div className="chart-scroll-inner h-[320px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="range_label" />
+                              <YAxis allowDecimals={false} />
+                              <Tooltip />
+                              <Legend />
+                              <Bar dataKey="count" fill="#2563eb" radius={[8, 8, 0, 0]} name="Results">
+                                <ChartCountLabelList />
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
                     ) : (
                       <SectionEmpty message="Score distribution will appear once scored results are available in this scope." />
                     )}
@@ -581,18 +628,22 @@ export function AdminLearningReportWorkspace() {
                     </div>
 
                     {(data?.performance_breakdown || []).some((row) => row.count > 0) ? (
-                      <ResponsiveContainer width="100%" height={240}>
-                        <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis dataKey="label" />
-                          <YAxis allowDecimals={false} />
-                          <Tooltip />
-                          <Legend />
-                          <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
-                            <ChartCountLabelList />
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
+                      <div className="chart-scroll-shell">
+                        <div className="chart-scroll-inner h-[240px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="label" />
+                              <YAxis allowDecimals={false} />
+                              <Tooltip />
+                              <Legend />
+                              <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
+                                <ChartCountLabelList />
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
                     ) : (
                       <SectionEmpty message="Performance distribution will appear when scored results exist in this scope." />
                     )}
@@ -624,8 +675,125 @@ export function AdminLearningReportWorkspace() {
                     <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Average Exercise</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPercent(summary?.average_exercise_score)}</div>
                   </div>
+                  <div className="rounded-2xl border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Average Call Sim</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPercent(summary?.average_call_simulation_score)}</div>
+                  </div>
+                  <div className="rounded-2xl border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Coaching Completion</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPercent(summary?.coaching_completion_rate)}</div>
+                  </div>
+                  <div className="rounded-2xl border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Support Needed</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-950">{formatCount(summary?.intervention_needed_count)}</div>
+                  </div>
+                  <div className="rounded-2xl border bg-slate-50 p-4">
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Open Coaching</div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-950">{formatCount(summary?.pending_coaching_logs)}</div>
+                  </div>
                 </CardContent>
               </Card>
+
+              <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Call Simulation Scenario Performance</CardTitle>
+                    <CardDescription>
+                      Average score, pass rate, and throughput by assigned mock-call scenario in this report scope.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {callSimulationRows.length ? (
+                      <div className="chart-scroll-shell">
+                        <div className="chart-scroll-inner h-[340px]">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={callSimulationRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 82 }}>
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={102} />
+                              <YAxis domain={[0, 100]} />
+                              <Tooltip />
+                              <Legend />
+                              <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
+                                <ChartPercentLabelList />
+                              </Bar>
+                              <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
+                                <ChartPercentLabelList />
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    ) : (
+                      <SectionEmpty message="Call Simulation performance will appear once scoped mock-call results are available." />
+                    )}
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Call KPI and Coaching Coverage</CardTitle>
+                    <CardDescription>
+                      KPI averages and coaching coverage drawn from saved mock-call results and feedback records.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {callSimulationKpis.length ? (
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {callSimulationKpis.slice(0, 6).map((metric) => (
+                          <div key={metric.metric} className="rounded-2xl border bg-slate-50 px-4 py-4">
+                            <div className="text-xs uppercase tracking-[0.16em] text-slate-500">{metric.metric}</div>
+                            <div className="mt-2 text-xl font-semibold text-slate-950">
+                              {formatMetricValue(metric.value, metric.unit)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <SectionEmpty message="KPI averages will appear once scored mock-call attempts are available." />
+                    )}
+
+                    {(coachingSummary?.published_logs || 0) > 0 ? (
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                          <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Published</div>
+                          <div className="mt-2 text-xl font-semibold text-slate-950">{formatCount(coachingSummary?.published_logs)}</div>
+                        </div>
+                        <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                          <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Pending Ack</div>
+                          <div className="mt-2 text-xl font-semibold text-amber-700">{formatCount(coachingSummary?.pending_logs)}</div>
+                        </div>
+                        <div className="rounded-2xl border bg-slate-50 px-4 py-4">
+                          <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Retake Coaching</div>
+                          <div className="mt-2 text-xl font-semibold text-rose-700">{formatCount(coachingSummary?.retake_required_logs)}</div>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {coachingNotes.length ? (
+                      <div className="space-y-3">
+                        {coachingNotes.slice(0, 4).map((note) => (
+                          <div key={note.id} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                                </div>
+                              </div>
+                              <Badge variant="outline" className="border-slate-300 text-slate-700">
+                                {note.status.replace(/_/g, ' ')}
+                              </Badge>
+                            </div>
+                            <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <SectionEmpty message="Coaching feedback summaries will appear after trainers publish guidance in the current scope." />
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             </TabsContent>
 
             <TabsContent value="rankings" className="space-y-6">
@@ -1209,11 +1377,99 @@ export function AdminLearningReportWorkspace() {
                 </Card>
               </div>
 
+              <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Call Simulation Result Rows</CardTitle>
+                    <CardDescription>Newest mock-call result rows from the current report scope.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <ScrollArea className="h-[440px]">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Trainee</TableHead>
+                            <TableHead>Scenario</TableHead>
+                            <TableHead>Batch</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Score</TableHead>
+                            <TableHead>Attempts</TableHead>
+                            <TableHead>Coaching</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {callSimulationResultRows.length ? (
+                            callSimulationResultRows.map((row) => (
+                              <TableRow key={row.id}>
+                                <TableCell>
+                                  <div className="font-medium text-slate-950">{row.trainee_name || 'Trainee'}</div>
+                                  <div className="text-xs text-slate-500">{row.assigned_by_name || 'Trainer assignment'}</div>
+                                </TableCell>
+                                <TableCell>{row.scenario_title}</TableCell>
+                                <TableCell>{row.batch_label}</TableCell>
+                                <TableCell>
+                                  <Badge className={statusBadgeClass(row.completion_status)} variant="outline">
+                                    {statusLabel(row.status)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>
+                                  <Badge className={performanceBadgeClass(row.performance_level)} variant="outline">
+                                    {formatPercent(row.score_value)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell>{formatCount(row.attempt_count)}</TableCell>
+                                <TableCell>{statusLabel(row.coaching_status || 'not_logged')}</TableCell>
+                              </TableRow>
+                            ))
+                          ) : (
+                            <TableEmpty colSpan={7} message="No Call Simulation result rows are available for this report scope." />
+                          )}
+                        </TableBody>
+                      </Table>
+                    </ScrollArea>
+                  </CardContent>
+                </Card>
+
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Coaching Follow-Up Notes</CardTitle>
+                    <CardDescription>
+                      Published coaching feedback linked to the scoped mock-call results.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {coachingNotes.length ? (
+                      coachingNotes.slice(0, 10).map((note) => (
+                        <div key={note.id} className="rounded-2xl border p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="font-semibold text-slate-950">{note.scenario_title}</div>
+                              <div className="mt-1 text-sm text-slate-500">
+                                {note.trainee_name || 'Trainee'} | {note.trainer_name || 'Trainer'}
+                              </div>
+                            </div>
+                            <Badge variant="outline" className="border-slate-300 text-slate-700">
+                              {note.competency_status.replace(/_/g, ' ')}
+                            </Badge>
+                          </div>
+                          <div className="mt-3 text-sm text-slate-600">{note.feedback_summary}</div>
+                          <div className="mt-3 text-xs text-slate-500">
+                            Recommended next action: {note.action_plan}
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <SectionEmpty message="No coaching notes are available for the current report scope." />
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
               <Card className="border-slate-200 shadow-sm">
                 <CardHeader>
                   <CardTitle>Recent Activity Log</CardTitle>
                   <CardDescription>
-                    Latest module and assessment events contributing to the current report scope.
+                    Latest module, assessment, Call Simulation, and coaching events contributing to the current report scope.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
