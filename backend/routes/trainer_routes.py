@@ -84,6 +84,11 @@ SUPPORTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
 SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/mpeg",
     "audio/mp3",
+    "audio/mpga",
+    "audio/mpeg3",
+    "audio/x-mpeg-3",
+    "audio/x-mp3",
+    "audio/mpg",
     "audio/wav",
     "audio/x-wav",
     "audio/mp4",

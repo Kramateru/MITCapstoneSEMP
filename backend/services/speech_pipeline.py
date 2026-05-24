@@ -13,7 +13,11 @@ from typing import Any, Optional
 
 import requests
 
-from ..config_validation import is_usable_azure_speech_key, normalize_env_value
+from ..config_validation import (
+    is_usable_azure_speech_key,
+    normalize_env_value,
+    resolve_gemini_api_key,
+)
 
 try:
     import azure.cognitiveservices.speech as speechsdk
@@ -129,7 +133,7 @@ class ResponseProcessor:
     """Generates the text response for the processing stage."""
 
     def __init__(self) -> None:
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.api_key = resolve_gemini_api_key(os.getenv)
         self.model = (
             os.getenv("VOICE_PIPELINE_MODEL")
             or os.getenv("GEMINI_SUPPORT_MODEL")

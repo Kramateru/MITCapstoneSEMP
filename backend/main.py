@@ -127,6 +127,7 @@ try:
         is_usable_supabase_service_key,
         is_usable_supabase_url,
         normalize_env_value,
+        resolve_gemini_api_key,
         resolve_supabase_publishable_key,
         resolve_supabase_service_key,
         resolve_supabase_url,
@@ -141,6 +142,7 @@ except ImportError:
         is_usable_supabase_service_key,
         is_usable_supabase_url,
         normalize_env_value,
+        resolve_gemini_api_key,
         resolve_supabase_publishable_key,
         resolve_supabase_service_key,
         resolve_supabase_url,
@@ -246,7 +248,7 @@ def validate_environment():
 validate_environment()
 
 # Configure Gemini-related availability messaging.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = resolve_gemini_api_key(os.getenv)
 if GEMINI_API_KEY:
     logger.info("Gemini API key detected for Gemini-enabled features")
 elif GEMINI_AVAILABLE:
@@ -933,6 +935,256 @@ def ensure_call_simulation_scenario_schema() -> None:
 ensure_call_simulation_scenario_schema()
 
 
+def ensure_call_simulation_reporting_views() -> None:
+    """Expose stable Supabase-facing reporting views for the Call Simulation module."""
+    if engine.dialect.name != "postgresql":
+        return
+
+    view_statement = """
+    DO $$
+    BEGIN
+      IF to_regclass('public.scenarios') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_scenarios AS
+          SELECT
+            id,
+            title,
+            description,
+            opening_prompt,
+            expected_keywords,
+            estimated_duration,
+            difficulty,
+            purpose,
+            member_profile,
+            cxone_metadata,
+            call_simulation_config,
+            ringer_audio_url,
+            hold_audio_url,
+            created_by AS trainer_id,
+            is_published,
+            is_draft,
+            created_at,
+            updated_at
+          FROM public.scenarios;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.scenario_steps') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_script_turns AS
+          SELECT
+            id,
+            scenario_id,
+            step_number,
+            actor,
+            speaker_label,
+            script,
+            expected_keywords,
+            audio_url,
+            response_time_limit,
+            is_closing,
+            metadata,
+            created_at,
+            updated_at
+          FROM public.scenario_steps;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.batch_kpi_config') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_kpis AS
+          SELECT
+            id,
+            batch_id,
+            speech_to_text_weight,
+            aht_weight,
+            rate_of_speech_weight,
+            dead_air_weight,
+            empathy_statements_weight,
+            probing_questions_weight,
+            grammar_weight,
+            pronunciation_weight,
+            pacing_weight,
+            forbidden_words_penalty,
+            passing_score,
+            forbidden_words,
+            empathy_keywords,
+            probing_keywords,
+            target_aht_seconds,
+            target_ros_words_per_min,
+            target_dead_air_seconds,
+            created_at,
+            updated_at
+          FROM public.batch_kpi_config;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.call_simulation_assignment') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_assignments AS
+          SELECT
+            id,
+            scenario_id,
+            trainee_id,
+            assigned_by AS trainer_id,
+            batch_id,
+            max_attempts,
+            trainer_notes,
+            is_active,
+            assigned_at,
+            updated_at
+          FROM public.call_simulation_assignment;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.sim_session') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_attempts AS
+          SELECT
+            id,
+            trainee_id,
+            scenario_id,
+            assignment_id,
+            assigned_by_id AS trainer_id,
+            batch_id,
+            status,
+            attempt_number,
+            max_attempts,
+            transcript,
+            transcript_log,
+            turn_logs,
+            audio_url,
+            audio_duration_seconds AS call_duration_seconds,
+            speech_to_text_accuracy,
+            grammar_score,
+            pronunciation_score,
+            pacing_score,
+            rate_of_speech,
+            dead_air_seconds,
+            sentiment_score,
+            keyword_compliance,
+            weighted_score AS final_score,
+            pass_fail,
+            ai_feedback,
+            coaching_notes,
+            trainer_verdict_status,
+            trainer_verdict_notes,
+            trainer_evaluated_by,
+            trainer_evaluated_at,
+            certificate_id,
+            started_at,
+            completed_at,
+            created_at,
+            updated_at
+          FROM public.sim_session;
+        $view$;
+
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_recordings AS
+          SELECT
+            id,
+            trainee_id,
+            scenario_id,
+            assignment_id,
+            batch_id,
+            audio_url AS recording_url,
+            audio_duration_seconds AS call_duration_seconds,
+            started_at,
+            completed_at,
+            created_at,
+            updated_at
+          FROM public.sim_session
+          WHERE audio_url IS NOT NULL;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.call_simulation_scores') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_ai_evaluations AS
+          SELECT
+            id,
+            session_id,
+            scenario_id,
+            call_scenario_id,
+            trainee_id,
+            trainee_name,
+            scenario_topic,
+            total_score,
+            passing_score,
+            is_passed,
+            full_transcript,
+            feedback_report AS evaluation_payload,
+            certificate_id,
+            supabase_certificate_id,
+            created_at,
+            updated_at
+          FROM public.call_simulation_scores;
+        $view$;
+      END IF;
+
+      IF to_regclass('public.coaching_log') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_coaching_notes AS
+          SELECT
+            id,
+            coaching_id,
+            sim_session_id AS session_id,
+            trainer_id,
+            trainee_id,
+            batch_name,
+            lob,
+            coaching_minutes,
+            strengths,
+            opportunities,
+            action_plan,
+            target_date,
+            status,
+            competency_status,
+            trainer_remarks,
+            acknowledged_at,
+            created_at,
+            updated_at
+          FROM public.coaching_log;
+        $view$;
+      ELSIF to_regclass('public.coaching_logs') IS NOT NULL THEN
+        EXECUTE $view$
+          CREATE OR REPLACE VIEW public.call_simulation_coaching_notes AS
+          SELECT
+            id,
+            coaching_id,
+            session_id,
+            trainer_id,
+            trainee_id,
+            NULL::text AS batch_name,
+            NULL::text AS lob,
+            NULL::integer AS coaching_minutes,
+            strengths,
+            opportunities,
+            action_plan,
+            target_date::timestamp AS target_date,
+            status,
+            NULL::text AS competency_status,
+            NULL::text AS trainer_remarks,
+            acknowledged_at,
+            created_at,
+            updated_at
+          FROM public.coaching_logs;
+        $view$;
+      END IF;
+    END $$;
+    """
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(view_statement))
+        logger.info("Ensured Call Simulation reporting views are available in Supabase Postgres")
+    except Exception:
+        logger.exception("Failed to create Call Simulation reporting views")
+
+
+ensure_call_simulation_reporting_views()
+
+
 def ensure_certification_schema() -> None:
     """Backfill certificate settings and certificate record columns for older databases."""
     try:
@@ -1591,7 +1843,7 @@ async def speech_endpoint(websocket: WebSocket):
                 "pipeline": {
                     "stages": ["audio_in", "asr", "processing", "tts", "audio_out"],
                     "supports_audio_output": VOICE_PIPELINE_CONTROLLER.tts_engine.is_available(),
-                    "processor_uses_gemini": bool(os.getenv("GEMINI_API_KEY")),
+                    "processor_uses_gemini": bool(resolve_gemini_api_key(os.getenv)),
                 },
             }
         )

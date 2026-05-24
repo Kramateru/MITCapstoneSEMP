@@ -58,18 +58,21 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def _default_local_tts_enabled() -> bool:
     normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
-    if not normalized or normalized not in {"1", "true", "yes", "on"}:
+    if normalized in {"0", "false", "no", "off"}:
         return False
 
     # Offline local fallback is meant for local desktop development, not Render/Linux containers.
     is_render = normalize_env_value(os.getenv("RENDER")).lower() in {"1", "true", "yes", "on"}
     is_docker = os.path.exists("/.dockerenv")
     if is_render or is_docker or os.name != "nt":
-        logger.info(
-            "Ignoring ENABLE_LOCAL_TTS because offline server-side fallback is only supported in local Windows development."
-        )
+        if normalized in {"1", "true", "yes", "on"}:
+            logger.info(
+                "Ignoring ENABLE_LOCAL_TTS because offline server-side fallback is only supported in local Windows development."
+            )
         return False
 
+    # Default to enabled for local Windows development so trainer-generated member audio
+    # still works when Gemini/Azure/OpenAI speech is unavailable.
     return True
 
 
@@ -197,7 +200,7 @@ class TTSService:
                 gemini_error = str(e)
 
             if not gemini_error:
-                gemini_error = "Gemini TTS returned no audio."
+                gemini_error = self.gemini_tts.last_error or "Gemini TTS returned no audio."
 
         # Try Azure TTS next when it is configured.
         azure_error: Optional[str] = None
@@ -247,7 +250,7 @@ class TTSService:
                 "error": ". ".join(provider_errors)
                 if provider_errors
                 else (
-                    "Server-side TTS is unavailable. Configure GEMINI_API_KEY, OPENAI_API_KEY, "
+                    "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, OPENAI_API_KEY, "
                     "or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
                 ),
                 "fallback_mode": "browser",

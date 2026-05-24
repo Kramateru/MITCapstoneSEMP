@@ -83,6 +83,34 @@ create table if not exists public.scenario_steps (
   unique (scenario_id, step_number)
 );
 
+create table if not exists public.call_simulation_audio_assets (
+  id uuid primary key default gen_random_uuid(),
+  trainer_id uuid not null references public.profiles(id) on delete cascade,
+  scenario_id uuid references public.scenarios(id) on delete set null,
+  script_turn_id uuid references public.scenario_steps(id) on delete set null,
+  step_number integer,
+  asset_kind text not null check (
+    asset_kind in ('member-step', 'ringer', 'hold', 'scenario-ringer', 'scenario-hold', 'opening-prompts')
+  ),
+  source_type text not null default 'upload' check (
+    source_type in ('upload', 'generated_tts', 'manual_url')
+  ),
+  file_name text not null,
+  file_type text not null,
+  file_size bigint,
+  bucket_name text,
+  storage_path text,
+  public_url text not null,
+  voice_used text,
+  provider text,
+  generated_text text,
+  asset_metadata jsonb not null default '{}'::jsonb,
+  is_active boolean not null default true,
+  deleted_at timestamptz,
+  created_at timestamptz not null default timezone('utc', now()),
+  updated_at timestamptz not null default timezone('utc', now())
+);
+
 create table if not exists public.kpi_configurations (
   id uuid primary key default gen_random_uuid(),
   scenario_id uuid references public.scenarios(id) on delete cascade,
@@ -194,6 +222,10 @@ create index if not exists idx_scenarios_created_by on public.scenarios (created
 
 create index if not exists idx_scenario_steps_scenario on public.scenario_steps (scenario_id, step_number);
 
+create index if not exists idx_call_sim_audio_assets_trainer on public.call_simulation_audio_assets (trainer_id, updated_at desc);
+
+create index if not exists idx_call_sim_audio_assets_scenario on public.call_simulation_audio_assets (scenario_id, step_number);
+
 create index if not exists idx_kpi_configurations_scenario on public.kpi_configurations (scenario_id);
 
 create index if not exists idx_mock_call_attempts_trainee on public.mock_call_attempts (trainee_id, created_at desc);
@@ -224,6 +256,12 @@ create trigger trg_scenario_steps_updated_at
 before update on public.scenario_steps
 for each row execute function public.set_updated_at();
 
+drop trigger if exists trg_call_sim_audio_assets_updated_at on public.call_simulation_audio_assets;
+
+create trigger trg_call_sim_audio_assets_updated_at
+before update on public.call_simulation_audio_assets
+for each row execute function public.set_updated_at();
+
 drop trigger if exists trg_kpi_configurations_updated_at on public.kpi_configurations;
 
 create trigger trg_kpi_configurations_updated_at
@@ -241,6 +279,8 @@ alter table public.profiles enable row level security;
 alter table public.scenarios enable row level security;
 
 alter table public.scenario_steps enable row level security;
+
+alter table public.call_simulation_audio_assets enable row level security;
 
 alter table public.kpi_configurations enable row level security;
 
@@ -512,5 +552,277 @@ with
         and public.is_trainer_or_admin ()
     );
 
+drop policy if exists "call_sim_audio_assets_select_trainers" on public.call_simulation_audio_assets;
+
+create policy "call_sim_audio_assets_select_trainers" on public.call_simulation_audio_assets for
+select using (
+  public.is_trainer_or_admin()
+  and trainer_id = auth.uid()
+);
+
+drop policy if exists "call_sim_audio_assets_insert_trainers" on public.call_simulation_audio_assets;
+
+create policy "call_sim_audio_assets_insert_trainers" on public.call_simulation_audio_assets for
+insert with check (
+  public.is_trainer_or_admin()
+  and trainer_id = auth.uid()
+);
+
+drop policy if exists "call_sim_audio_assets_update_trainers" on public.call_simulation_audio_assets;
+
+create policy "call_sim_audio_assets_update_trainers" on public.call_simulation_audio_assets for
+update using (
+  public.is_trainer_or_admin()
+  and trainer_id = auth.uid()
+)
+with check (
+  public.is_trainer_or_admin()
+  and trainer_id = auth.uid()
+);
+
+drop policy if exists "call_sim_audio_assets_delete_trainers" on public.call_simulation_audio_assets;
+
+create policy "call_sim_audio_assets_delete_trainers" on public.call_simulation_audio_assets for
+delete using (
+  public.is_trainer_or_admin()
+  and trainer_id = auth.uid()
+);
+
 comment on
-table public.mock_call_attempts is 'Supabase storage path conventions: recordings/{trainee_id}/{scenario_id}/{attempt_id}/{timestamp}.webm for attempts and assets/{trainer_id}/{scenario_id_or_draft}/{asset_kind}/{timestamp}_{filename} for trainer-managed member/ringer/hold audio.';
+table public.mock_call_attempts is 'Supabase storage path conventions: recordings/{trainee_id}/{scenario_id}/{attempt_id}/{timestamp}.webm for attempts and assets/{trainer_id}/{scenario_id_or_draft}/{asset_kind}/{timestamp}_{filename} for trainer-managed member/ringer/hold audio. The live app defaults map recordings to the `call-recordings` bucket and trainer-managed assets to the `call-ringers` bucket unless overridden by env.';
+
+-- Compatibility reporting views
+-- These expose the exact entity names used by the Call Simulation module spec
+-- while preserving the app's existing normalized/runtime tables.
+
+do $$
+begin
+  if to_regclass('public.scenarios') is not null then
+    execute $view$
+      create or replace view public.call_simulation_scenarios as
+      select
+        id,
+        title,
+        description,
+        opening_prompt,
+        expected_keywords,
+        estimated_duration,
+        difficulty,
+        purpose,
+        member_profile,
+        cxone_metadata,
+        call_simulation_config,
+        ringer_audio_url,
+        hold_audio_url,
+        created_by as trainer_id,
+        is_published,
+        is_draft,
+        created_at,
+        updated_at
+      from public.scenarios;
+    $view$;
+  end if;
+
+  if to_regclass('public.scenario_steps') is not null then
+    execute $view$
+      create or replace view public.call_simulation_script_turns as
+      select
+        id,
+        scenario_id,
+        step_number,
+        actor,
+        speaker_label,
+        script,
+        expected_keywords,
+        audio_url,
+        response_time_limit,
+        is_closing,
+        metadata,
+        created_at,
+        updated_at
+      from public.scenario_steps;
+    $view$;
+  end if;
+
+  if to_regclass('public.batch_kpi_config') is not null then
+    execute $view$
+      create or replace view public.call_simulation_kpis as
+      select
+        id,
+        batch_id,
+        speech_to_text_weight,
+        aht_weight,
+        rate_of_speech_weight,
+        dead_air_weight,
+        empathy_statements_weight,
+        probing_questions_weight,
+        grammar_weight,
+        pronunciation_weight,
+        pacing_weight,
+        forbidden_words_penalty,
+        passing_score,
+        forbidden_words,
+        empathy_keywords,
+        probing_keywords,
+        target_aht_seconds,
+        target_ros_words_per_min,
+        target_dead_air_seconds,
+        created_at,
+        updated_at
+      from public.batch_kpi_config;
+    $view$;
+  end if;
+
+  if to_regclass('public.call_simulation_assignment') is not null then
+    execute $view$
+      create or replace view public.call_simulation_assignments as
+      select
+        id,
+        scenario_id,
+        trainee_id,
+        assigned_by as trainer_id,
+        batch_id,
+        max_attempts,
+        trainer_notes,
+        is_active,
+        assigned_at,
+        updated_at
+      from public.call_simulation_assignment;
+    $view$;
+  end if;
+
+  if to_regclass('public.sim_session') is not null then
+    execute $view$
+      create or replace view public.call_simulation_attempts as
+      select
+        id,
+        trainee_id,
+        scenario_id,
+        assignment_id,
+        assigned_by_id as trainer_id,
+        batch_id,
+        status,
+        attempt_number,
+        max_attempts,
+        transcript,
+        transcript_log,
+        turn_logs,
+        audio_url,
+        audio_duration_seconds as call_duration_seconds,
+        speech_to_text_accuracy,
+        grammar_score,
+        pronunciation_score,
+        pacing_score,
+        rate_of_speech,
+        dead_air_seconds,
+        sentiment_score,
+        keyword_compliance,
+        weighted_score as final_score,
+        pass_fail,
+        ai_feedback,
+        coaching_notes,
+        trainer_verdict_status,
+        trainer_verdict_notes,
+        trainer_evaluated_by,
+        trainer_evaluated_at,
+        certificate_id,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      from public.sim_session;
+    $view$;
+
+    execute $view$
+      create or replace view public.call_simulation_recordings as
+      select
+        id,
+        trainee_id,
+        scenario_id,
+        assignment_id,
+        batch_id,
+        audio_url as recording_url,
+        audio_duration_seconds as call_duration_seconds,
+        started_at,
+        completed_at,
+        created_at,
+        updated_at
+      from public.sim_session
+      where audio_url is not null;
+    $view$;
+  end if;
+
+  if to_regclass('public.call_simulation_scores') is not null then
+    execute $view$
+      create or replace view public.call_simulation_ai_evaluations as
+      select
+        id,
+        session_id,
+        scenario_id,
+        call_scenario_id,
+        trainee_id,
+        trainee_name,
+        scenario_topic,
+        total_score,
+        passing_score,
+        is_passed,
+        full_transcript,
+        feedback_report as evaluation_payload,
+        certificate_id,
+        supabase_certificate_id,
+        created_at,
+        updated_at
+      from public.call_simulation_scores;
+    $view$;
+  end if;
+
+  if to_regclass('public.coaching_log') is not null then
+    execute $view$
+      create or replace view public.call_simulation_coaching_notes as
+      select
+        id,
+        coaching_id,
+        sim_session_id as session_id,
+        trainer_id,
+        trainee_id,
+        batch_name,
+        lob,
+        coaching_minutes,
+        strengths,
+        opportunities,
+        action_plan,
+        target_date,
+        status,
+        competency_status,
+        trainer_remarks,
+        acknowledged_at,
+        created_at,
+        updated_at
+      from public.coaching_log;
+    $view$;
+  elsif to_regclass('public.coaching_logs') is not null then
+    execute $view$
+      create or replace view public.call_simulation_coaching_notes as
+      select
+        id,
+        coaching_id,
+        session_id,
+        trainer_id,
+        trainee_id,
+        null::text as batch_name,
+        null::text as lob,
+        null::integer as coaching_minutes,
+        strengths,
+        opportunities,
+        action_plan,
+        target_date::timestamp as target_date,
+        status,
+        null::text as competency_status,
+        null::text as trainer_remarks,
+        acknowledged_at,
+        created_at,
+        updated_at
+      from public.coaching_logs;
+    $view$;
+  end if;
+end $$;

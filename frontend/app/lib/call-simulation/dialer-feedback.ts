@@ -153,11 +153,11 @@ function normalizeEnvValue(value: string | undefined) {
 }
 
 function getGeminiApiKey() {
-  return normalizeEnvValue(process.env.GEMINI_API_KEY)
+  return normalizeEnvValue(process.env.GOOGLE_API_KEY) || normalizeEnvValue(process.env.GEMINI_API_KEY)
 }
 
 function getDialerGeminiModel() {
-  return normalizeEnvValue(process.env.GEMINI_CALL_SIM_MODEL) || 'gemini-1.5-flash'
+  return normalizeEnvValue(process.env.GEMINI_CALL_SIM_MODEL) || 'gemini-2.5-flash'
 }
 
 function safeRound(value: number, precision = 1) {
