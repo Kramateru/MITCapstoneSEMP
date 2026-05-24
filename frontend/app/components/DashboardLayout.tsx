@@ -326,20 +326,8 @@ export function DashboardLayout({
                 />
               </div>
               <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/66">
+                <p className="text-[0.95rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/80">
                   St. Peter Velle
-                </p>
-                <h1 className="mt-1 text-[1.08rem] font-bold leading-6 tracking-[-0.02em] text-white">
-                  Speech-Enabled BPO Platform
-                </h1>
-                <p className="mt-2 text-[0.82rem] leading-6 text-sidebar-foreground/74">
-                  Technical training, assessments, mock calls, coaching, and certification in one workspace.
-                </p>
-                <div className="mt-3 inline-flex rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/88">
-                  {roleLabelMap[resolvedUserRole]}
-                </div>
-                <p className="mt-3 max-w-[16.5rem] text-[0.82rem] leading-6 text-sidebar-foreground/70">
-                  {roleWorkspaceHintMap[resolvedUserRole]}
                 </p>
               </div>
             </div>
