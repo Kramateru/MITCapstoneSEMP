@@ -374,25 +374,25 @@ function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
 
 function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Select an assigned call scenario to begin the live mock-call workflow.';
+    return 'Select an assigned call scenario to review it and start the mock call.';
   }
   if (scenario.launch_block_reason?.trim()) {
     return scenario.launch_block_reason.trim();
   }
   if (scenario.active_session_id) {
-    return 'An in-progress mock call was found. Relaunching will reconnect you to the next pending scenario turn.';
+    return 'An in-progress mock call was found. Starting again will reconnect you to the next pending turn.';
   }
   if (scenario.attempt_count > 0 && !scenario.competent) {
     const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} attempt${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
     return `Your latest attempt did not meet the passing KPI yet.${attemptsLeft}`;
   }
   if (scenario.competent) {
-    return 'This assigned call scenario has already been passed and locked for review.';
+    return 'This assigned call scenario has already been passed and is now locked.';
   }
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `Starting the call plays the trainer ringer, begins the conversation recording, and auto-arms your CSR turn.${attemptWindow}`;
+  return `Starting the call plays the trainer ringer, begins the conversation recording, and prepares your first CSR turn.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -405,7 +405,7 @@ function getScenarioStatusText(scenario: ScenarioCard) {
   if (scenario.attempt_count > 0) {
     return 'Failed';
   }
-  return 'Not Started';
+  return 'Assigned';
 }
 
 function getScenarioStatusClasses(scenario: ScenarioCard) {
@@ -468,9 +468,9 @@ function getPreferredScenarioId(
 function statusLabel(callState: CallState, isOnHold: boolean) {
   if (isOnHold) return 'On Hold';
   if (callState === 'ringing') return 'Incoming Call';
-  if (callState === 'member-speaking') return 'Member AI Speaking';
+  if (callState === 'member-speaking') return 'Member Speaking';
   if (callState === 'csr-speaking') return 'CSR Speaking';
-  if (callState === 'processing') return 'Post-Call Analysis';
+  if (callState === 'processing') return 'Saving Result';
   if (callState === 'completed') return 'Call Complete';
   if (callState === 'idle') return 'Available';
   return 'Connected';
@@ -579,6 +579,7 @@ function TraineeSimFloorPageContent() {
   const [feedbackReport, setFeedbackReport] = useState<DialerFeedbackReport | null>(null);
   const [isLoadingFeedbackReport, setIsLoadingFeedbackReport] = useState(false);
   const [isGeneratingMemberAudio, setIsGeneratingMemberAudio] = useState(false);
+  const [sessionPlaybackUrl, setSessionPlaybackUrl] = useState<string | null>(null);
   const requestedScenarioId = searchParams.get('scenarioId')?.trim() || '';
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -748,6 +749,19 @@ function TraineeSimFloorPageContent() {
   ).trim();
   const needsHoldForMemberResponse = memberTurnState === 'awaiting-hold' && queuedMemberPlayback !== null;
   const canResumeMemberTurn = memberTurnState === 'awaiting-resume';
+  const canUseHoldControl =
+    isRecording
+    || needsHoldForMemberResponse
+    || canResumeMemberTurn
+    || isOnHold;
+  const holdControlLabel = canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold';
+  const holdControlNote = isRecording
+    ? 'Click Hold to save your CSR turn and play the Member response.'
+    : canResumeMemberTurn
+      ? 'Click Unhold to unlock the next CSR turn.'
+      : needsHoldForMemberResponse
+        ? 'Click Hold to hear the next Member response.'
+        : 'Hold becomes available after you record a CSR turn.';
 
   const isMicLocked =
     callState === 'ringing' ||
@@ -800,6 +814,22 @@ function TraineeSimFloorPageContent() {
       getPreferredScenarioId(nextScenarios, current, requestedScenarioId),
     );
   }, [requestedScenarioId]);
+
+  const loadSessionPlaybackUrl = useCallback(async (sessionId: string) => {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`/api/call-simulation/session/${sessionId}/audio`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      cache: 'no-store',
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || 'Unable to load the saved call recording.');
+    }
+    if (!payload?.audio_url) {
+      throw new Error('No playable call recording is available yet.');
+    }
+    setSessionPlaybackUrl(String(payload.audio_url));
+  }, []);
 
   const refreshCurrentSession = useCallback(async () => {
     if (!sessionData?.session_id) {
@@ -856,8 +886,9 @@ function TraineeSimFloorPageContent() {
 
     if (payload.status === 'completed' || payload.status === 'failed') {
       setCallState('completed');
+      void loadSessionPlaybackUrl(payload.id).catch(() => undefined);
     }
-  }, [sessionData?.session_id]);
+  }, [loadSessionPlaybackUrl, sessionData?.session_id]);
 
   const stopBrowserTranscript = useCallback(() => {
     recognitionRef.current?.stop();
@@ -1354,10 +1385,12 @@ function TraineeSimFloorPageContent() {
       setQueuedMemberPlayback(null);
       setMemberTurnState('idle');
       setCallState('completed');
+      setSessionPlaybackUrl(null);
       await fetchScenarios().catch(() => undefined);
       const transcriptLog = Array.isArray((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log)
         ? ((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log || [])
         : [];
+      await loadSessionPlaybackUrl(payload.id).catch(() => undefined);
       await fetchFeedbackReport({
         result: nextResult,
         transcriptLog,
@@ -1370,7 +1403,7 @@ function TraineeSimFloorPageContent() {
     } finally {
       setIsEndingCall(false);
     }
-  }, [fetchFeedbackReport, fetchScenarios, isEndingCall, sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
+  }, [fetchFeedbackReport, fetchScenarios, isEndingCall, loadSessionPlaybackUrl, sessionData?.session_id, stopBrowserTranscript, uploadFinalCallRecording]);
 
   const moveToStep = useCallback(
     async (stepIndex: number) => {
@@ -1465,6 +1498,7 @@ function TraineeSimFloorPageContent() {
       setQueuedMemberPlayback(null);
       setMemberTurnState('idle');
       setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
       silenceStartRef.current = null;
       setCallState('ringing');
       startRingtone(sessionPayload.ringer_audio_url);
@@ -1757,8 +1791,7 @@ function TraineeSimFloorPageContent() {
     }
 
     if (!queuedMemberPlayback || memberTurnState !== 'awaiting-hold') {
-      setIsOnHold(true);
-      toast.info('Line placed on hold.');
+      toast.info('Record your CSR turn first, then use Hold to play the Member response.');
       return;
     }
 
@@ -1904,6 +1937,7 @@ function TraineeSimFloorPageContent() {
     setQueuedMemberPlayback(null);
     setMemberTurnState('idle');
     setFeedbackReport(null);
+    setSessionPlaybackUrl(null);
     autoStartTurnAttemptKeyRef.current = null;
     silenceStartRef.current = null;
     setCallState('ringing');
@@ -1953,6 +1987,7 @@ function TraineeSimFloorPageContent() {
     setQueuedMemberPlayback(null);
     setMemberTurnState('idle');
     setFeedbackReport(null);
+    setSessionPlaybackUrl(null);
     autoStartTurnAttemptKeyRef.current = null;
     silenceStartRef.current = null;
     await fetchScenarios();
@@ -2223,7 +2258,7 @@ function TraineeSimFloorPageContent() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulations</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Select an assigned scenario, start the call, speak as the CSR, then use Hold and Unhold to move through the trainer script.
+              Select an assigned scenario, start the mock call, speak as the CSR, then use Hold and Unhold to move through the trainer script.
             </p>
           </div>
           <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
@@ -2559,7 +2594,7 @@ function TraineeSimFloorPageContent() {
                     <div className="mt-1 text-2xl font-semibold text-slate-950">{agentName}</div>
                   </div>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[540px]">
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:min-w-0">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Status Timer</div>
                     <div className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-950">
@@ -2587,9 +2622,9 @@ function TraineeSimFloorPageContent() {
               </div>
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-[112px,1fr,360px]">
+            <div className="grid gap-6 xl:grid-cols-[96px,minmax(0,1fr),minmax(280px,340px)] 2xl:grid-cols-[112px,minmax(0,1fr),360px]">
               <Card className="overflow-hidden border-slate-900 bg-slate-950 text-white">
-                <CardContent className="flex h-full flex-col gap-3 p-3">
+                <CardContent className="grid gap-3 p-3 sm:grid-cols-2 xl:flex xl:h-full xl:flex-col">
                   <Button
                     type="button"
                     className={cn(
@@ -2611,15 +2646,16 @@ function TraineeSimFloorPageContent() {
                     variant="secondary"
                     className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
                     onClick={() => void handleHoldToggle()}
-                    disabled={callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall}
+                    disabled={!canUseHoldControl || callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
-                      <span className="text-xs font-medium">
-                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold'}
-                      </span>
+                      <span className="text-xs font-medium">{holdControlLabel}</span>
                     </div>
                   </Button>
+                  <div className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-center text-[11px] leading-5 text-slate-300">
+                    {holdControlNote}
+                  </div>
                   <Button
                     type="button"
                     variant="secondary"
@@ -2649,7 +2685,7 @@ function TraineeSimFloorPageContent() {
                   <Button
                     type="button"
                     variant="destructive"
-                    className="mt-auto h-20 rounded-3xl"
+                    className="h-20 rounded-3xl sm:col-span-2 xl:mt-auto"
                     onClick={() => void handleEndCallRequest()}
                     disabled={isRecording || isUploadingCall || isEndingCall || callState === 'processing'}
                   >
@@ -2673,11 +2709,11 @@ function TraineeSimFloorPageContent() {
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3 text-emerald-800">
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
-                          <div>
-                            <div className="text-sm font-semibold">Member (AI) is calling...</div>
-                            <div className="text-xs">The line will connect automatically. Use Connect Now if you want to start the first CSR spiel immediately.</div>
-                          </div>
-                        </div>
+                      <div>
+                        <div className="text-sm font-semibold">Member (AI) is calling...</div>
+                        <div className="text-xs">The line will connect automatically. Use Connect Now if you want to start the first CSR turn immediately.</div>
+                      </div>
+                    </div>
                         <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
                           <Phone className="mr-2 h-4 w-4" />
                           Connect Now
@@ -2692,8 +2728,8 @@ function TraineeSimFloorPageContent() {
                         <div className="flex items-center gap-3">
                           <Headphones className="h-5 w-5 animate-pulse text-violet-600" />
                           <div>
-                            <div className="font-semibold">Generating Member (AI) Audio</div>
-                            <div>Gemini is preparing the member response for the next hold sequence.</div>
+                            <div className="font-semibold">Generating Member Audio</div>
+                            <div>Gemini is preparing the next Member response.</div>
                           </div>
                         </div>
                       </div>
@@ -2704,7 +2740,7 @@ function TraineeSimFloorPageContent() {
                           <PauseCircle className="h-5 w-5 text-sky-600" />
                           <div>
                             <div className="font-semibold">Hold Required</div>
-                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Unhold for the next CSR script.</div>
+                            <div>Click Hold to save your CSR turn, play the Member response, then click Unhold for the next CSR turn.</div>
                           </div>
                         </div>
                       </div>
@@ -2738,10 +2774,10 @@ function TraineeSimFloorPageContent() {
                       </div>
                     ) : null}
                     <Card className="border-slate-200 bg-white shadow-sm">
-                      <CardHeader>
-                        <CardTitle>Member Card</CardTitle>
-                        <CardDescription>Live customer context and actor cues from the assigned scenario.</CardDescription>
-                      </CardHeader>
+                        <CardHeader>
+                          <CardTitle>Member Card</CardTitle>
+                          <CardDescription>Live customer context from the assigned scenario.</CardDescription>
+                        </CardHeader>
                       <CardContent className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
                         <div className="space-y-4">
                           <div className="flex items-center gap-3">
@@ -2775,12 +2811,12 @@ function TraineeSimFloorPageContent() {
                         <div className="rounded-3xl border border-slate-200 bg-slate-950 p-5 text-white">
                           <div className="flex items-center justify-between gap-3">
                             <div>
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Call Simulation Icons</div>
+                              <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Live Talk Status</div>
                               <div className="mt-2 text-lg font-semibold">
                                 {callState === 'member-speaking'
                                   ? activePlaybackSpeaker === 'system'
-                                    ? 'Call Simulation prompt active'
-                                    : 'Member Actor talking'
+                                    ? 'Repeat prompt playing'
+                                    : 'Member speaking'
                                   : isRecording
                                     ? 'CSR talking'
                                     : 'CSR ready to speak'}
@@ -2796,7 +2832,7 @@ function TraineeSimFloorPageContent() {
                                 <div className="flex items-center gap-3">
                                   <Mic className={cn('h-5 w-5', isRecording ? 'animate-pulse text-emerald-400' : 'text-cyan-300')} />
                                   <div>
-                                    <div className="text-sm font-semibold">CSR Icon</div>
+                                    <div className="text-sm font-semibold">CSR</div>
                                     <div className="text-xs text-slate-300">
                                       {isRecording ? 'Talking now' : currentStep?.actor === 'csr' ? 'Should talk next' : 'Waiting'}
                                     </div>
@@ -2813,7 +2849,7 @@ function TraineeSimFloorPageContent() {
                                 <div className="flex items-center gap-3">
                                   <Headphones className={cn('h-5 w-5', callState === 'member-speaking' ? 'animate-pulse text-amber-300' : 'text-slate-300')} />
                                   <div>
-                                    <div className="text-sm font-semibold">Member Actor Icon</div>
+                                    <div className="text-sm font-semibold">Member / AI</div>
                                     <div className="text-xs text-slate-300">
                                       {callState === 'member-speaking'
                                         ? activePlaybackSpeaker === 'system'
@@ -2838,8 +2874,8 @@ function TraineeSimFloorPageContent() {
                     <div className="grid gap-5 lg:grid-cols-[1.05fr,0.95fr]">
                       <Card className="border-slate-200 bg-white shadow-sm">
                         <CardHeader>
-                          <CardTitle>Scripting Assistant</CardTitle>
-                          <CardDescription>Required spiel text turns green as speech is confirmed.</CardDescription>
+                          <CardTitle>CSR Script</CardTitle>
+                          <CardDescription>Required script text turns green as your saved speech matches it.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                           <Progress value={scriptProgress.percent} className="h-2.5" />
@@ -2869,8 +2905,8 @@ function TraineeSimFloorPageContent() {
                       </Card>
                       <Card className="border-slate-200 bg-white shadow-sm">
                         <CardHeader>
-                          <CardTitle>Member Response Overlay</CardTitle>
-                          <CardDescription>The actor script shows on screen while audio is playing.</CardDescription>
+                          <CardTitle>Member Response</CardTitle>
+                          <CardDescription>The current Member reply appears on screen while audio is playing.</CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -2901,11 +2937,11 @@ function TraineeSimFloorPageContent() {
                 )}
               </div>
               <div className="space-y-5">
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Floor Presence</CardTitle>
-                    <CardDescription>Visual cue cards for the CSR and Member Actor.</CardDescription>
-                  </CardHeader>
+                    <Card className="border-slate-200 bg-white shadow-sm">
+                      <CardHeader>
+                        <CardTitle>Call Guidance</CardTitle>
+                        <CardDescription>Quick reminders for the current part of the mock call.</CardDescription>
+                      </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                       {isRecording
@@ -2923,11 +2959,11 @@ function TraineeSimFloorPageContent() {
                     </div>
                   </CardContent>
                 </Card>
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Session Signals</CardTitle>
-                    <CardDescription>Realism controls that directly affect the live call scenario.</CardDescription>
-                  </CardHeader>
+                    <Card className="border-slate-200 bg-white shadow-sm">
+                      <CardHeader>
+                        <CardTitle>Call Status</CardTitle>
+                        <CardDescription>Microphone, hold, and recording states for this session.</CardDescription>
+                      </CardHeader>
                   <CardContent className="space-y-3 text-sm">
                     <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                       <span className="text-slate-600">Mute</span>
@@ -2955,7 +2991,7 @@ function TraineeSimFloorPageContent() {
                   <div>
                     <CardTitle>Post-Call Wrap Up</CardTitle>
                     <CardDescription>
-                      MAX session closed. Review the immediate KPI insight, compliance, and trainer outcome tracking.
+                      Your mock call is complete. Review the KPI score, Gemini analysis, transcript, and trainer follow-up.
                     </CardDescription>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -3111,9 +3147,9 @@ function TraineeSimFloorPageContent() {
                   <div className="space-y-5">
                     <Card className="border-slate-200 bg-slate-950 text-white">
                       <CardHeader>
-                        <CardTitle>Trainer Decision Block</CardTitle>
+                        <CardTitle>Trainer Review Status</CardTitle>
                         <CardDescription className="text-slate-300">
-                          Realtime trainer decisions will update your certificate and retake state here.
+                          Trainer decisions, coaching, retake requests, and certificate updates appear here.
                         </CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-4">
@@ -3357,13 +3393,13 @@ function TraineeSimFloorPageContent() {
                         <CardDescription>Playback for the full recorded call saved after hang up.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
-                        {sessionResult?.audio_url ? (
+                        {sessionPlaybackUrl || sessionResult?.audio_url ? (
                           <>
-                            <audio controls className="w-full" src={sessionResult.audio_url}>
+                            <audio controls className="w-full" src={sessionPlaybackUrl || sessionResult?.audio_url || undefined}>
                               Your browser does not support the audio player.
                             </audio>
                             <div className="text-xs text-slate-500">
-                              Attempt {sessionResult.attempt_number || 1}
+                              Attempt {sessionResult?.attempt_number || 1}
                               {sessionResult?.max_attempts ? ` of ${sessionResult.max_attempts}` : ''}
                               {sessionResult?.completed_at ? ` - Completed ${new Date(sessionResult.completed_at).toLocaleString()}` : ''}
                             </div>

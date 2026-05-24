@@ -19,9 +19,15 @@ type JwtPayload = {
 }
 
 function normalizeRole(value?: string | null): UserRole | null {
-  if (value === 'admin' || value === 'trainer' || value === 'trainee') {
-    return value
+  if (typeof value !== 'string') {
+    return null
   }
+
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'admin' || normalized === 'trainer' || normalized === 'trainee') {
+    return normalized
+  }
+
   return null
 }
 

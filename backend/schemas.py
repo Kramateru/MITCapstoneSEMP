@@ -28,6 +28,8 @@ class LoginRequest(BaseModel):
 class LoginResponse(BaseModel):
     """Login response"""
 
+    success: bool = True
+    message: str = "Login successful"
     access_token: str
     refresh_token: Optional[str] = None
     supabase_access_token: Optional[str] = None
@@ -37,6 +39,9 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     user: "UserResponse"
     must_change_password: bool = False
+    batch_id: Optional[str] = None
+    batch_name: Optional[str] = None
+    wave_number: Optional[int] = None
 
 
 class RefreshTokenRequest(BaseModel):

@@ -3194,16 +3194,16 @@ def _build_trainee_status(
     failed = bool(latest_attempt and latest_attempt.get("status") == "fail")
     can_retake = bool(failed and (maximum_attempts is None or attempt_count < maximum_attempts))
     can_start = bool(not passed and (attempt_count == 0 or can_retake))
-    is_completed = passed
+    is_completed = attempt_count > 0
 
     if passed:
         status_label = "Passed"
     elif failed and not can_retake:
-        status_label = "Attempts Used"
-    elif failed:
         status_label = "Failed"
+    elif failed:
+        status_label = "Completed"
     else:
-        status_label = "Not Started"
+        status_label = "Assigned"
 
     return {
         "attemptsRemaining": attempts_remaining,
@@ -3924,7 +3924,7 @@ def submit_trainee_workspace_attempt(
     attempt_record = _attempt_record(feed_row)
     attempt_record["attemptsRemaining"] = attempts_remaining
     attempt_record["canRetake"] = bool(not passed and (maximum_attempts is None or attempt_no < maximum_attempts))
-    attempt_record["statusLabel"] = "Passed" if passed else "Attempts Used" if attempts_remaining == 0 else "Failed"
+    attempt_record["statusLabel"] = "Passed" if passed else "Failed" if attempts_remaining == 0 else "Completed"
 
     certificate_payload = None
     if certificate_row:
