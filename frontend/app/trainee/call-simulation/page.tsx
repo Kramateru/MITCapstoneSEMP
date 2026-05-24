@@ -40,6 +40,7 @@ import { toast } from 'sonner';
 type CallState =
   | 'idle'
   | 'ringing'
+  | 'accepted'
   | 'connected'
   | 'member-speaking'
   | 'csr-speaking'
@@ -380,7 +381,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
     return scenario.launch_block_reason.trim();
   }
   if (scenario.active_session_id) {
-    return 'An in-progress mock call was found. Starting again will reconnect you to the next pending turn.';
+    return 'An in-progress mock call was found. Start the call, then accept the line to continue from the next pending turn.';
   }
   if (scenario.attempt_count > 0 && !scenario.competent) {
     const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} attempt${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
@@ -392,7 +393,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `Starting the call plays the trainer ringer, begins the conversation recording, and prepares your first CSR turn.${attemptWindow}`;
+  return `Starting the call plays the trainer ringer. After you accept the line, the conversation recording begins and the first CSR turn is prepared.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -467,13 +468,14 @@ function getPreferredScenarioId(
 
 function statusLabel(callState: CallState, isOnHold: boolean) {
   if (isOnHold) return 'On Hold';
-  if (callState === 'ringing') return 'Incoming Call';
-  if (callState === 'member-speaking') return 'Member Speaking';
-  if (callState === 'csr-speaking') return 'CSR Speaking';
-  if (callState === 'processing') return 'Saving Result';
-  if (callState === 'completed') return 'Call Complete';
-  if (callState === 'idle') return 'Available';
-  return 'Connected';
+  if (callState === 'ringing') return 'Ringing';
+  if (callState === 'accepted') return 'Call Accepted';
+  if (callState === 'member-speaking') return 'Member AI Speaking';
+  if (callState === 'csr-speaking') return 'Trainee Speaking';
+  if (callState === 'processing') return 'Saving Progress';
+  if (callState === 'completed') return 'Evaluation Complete';
+  if (callState === 'idle') return 'Waiting To Start';
+  return 'Ready For CSR Turn';
 }
 
 function readNumericValue(value: unknown, fallback = 0) {
@@ -765,6 +767,7 @@ function TraineeSimFloorPageContent() {
 
   const isMicLocked =
     callState === 'ringing' ||
+    callState === 'accepted' ||
     callState === 'member-speaking' ||
     callState === 'processing' ||
     isOnHold ||
@@ -813,6 +816,7 @@ function TraineeSimFloorPageContent() {
     setSelectedScenarioId((current) =>
       getPreferredScenarioId(nextScenarios, current, requestedScenarioId),
     );
+    return nextScenarios;
   }, [requestedScenarioId]);
 
   const loadSessionPlaybackUrl = useCallback(async (sessionId: string) => {
@@ -1504,9 +1508,9 @@ function TraineeSimFloorPageContent() {
       startRingtone(sessionPayload.ringer_audio_url);
 
       if (targetScenario?.active_session_id) {
-        toast.info('Resuming the in-progress call from your next pending scenario turn.');
+        toast.info('Resuming the in-progress call. Accept the line to continue from your next pending step.');
       } else if (targetScenario?.can_retake) {
-        toast.info('Retake attempt loaded. The line will connect automatically and re-arm your microphone.');
+        toast.info('Retake attempt loaded. Accept the line to restart the mock call flow.');
       }
     } finally {
       setIsStartingCall(false);
@@ -1523,7 +1527,17 @@ function TraineeSimFloorPageContent() {
     try {
       await startCapture();
       await fadeOutRingtone();
-      await moveToStep(currentStepIndex);
+      setShowIncomingAudio(true);
+      setActivePlaybackSpeaker('system');
+      setActivePlaybackScript('Call accepted. Prepare your opening spiel. Your microphone will open in a few seconds.');
+      setCallState('accepted');
+      autoConnectTimeoutRef.current = window.setTimeout(() => {
+        autoConnectTimeoutRef.current = null;
+        setShowIncomingAudio(false);
+        setActivePlaybackScript('');
+        setActivePlaybackSpeaker(null);
+        void moveToStep(currentStepIndex);
+      }, 5000);
     } catch {
       setCallState('ringing');
     } finally {
@@ -1531,23 +1545,8 @@ function TraineeSimFloorPageContent() {
     }
   }, [clearAutoConnectTimeout, currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
 
-  useEffect(() => {
-    clearAutoConnectTimeout();
-    if (callState !== 'ringing' || !sessionData?.session_id) {
-      return;
-    }
-
-    autoConnectTimeoutRef.current = window.setTimeout(() => {
-      void connectCall();
-    }, 1800);
-
-    return () => {
-      clearAutoConnectTimeout();
-    };
-  }, [callState, clearAutoConnectTimeout, connectCall, sessionData?.session_id]);
-
   const handleReplayInstruction = useCallback(async () => {
-    if (callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall) {
+    if (callState === 'ringing' || callState === 'accepted' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall) {
       return;
     }
     if (isRecording) {
@@ -1944,6 +1943,83 @@ function TraineeSimFloorPageContent() {
     startRingtone(sessionData.ringer_audio_url);
   }, [discardCapture, sessionData, sessionResult?.id, startRingtone]);
 
+  const handleTryAgain = useCallback(async () => {
+    if (!sessionData?.session_id || !selectedScenarioId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Restart this mock call from Step 1? The current in-progress attempt, temporary transcript, and unsaved recording will be cleared.',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    const scenarioIdToRestart = selectedScenarioId;
+
+    clearAutoConnectTimeout();
+    stopBrowserTranscript();
+    stopRingtone();
+    browserTtsService.stop();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (holdAudioRef.current) {
+      holdAudioRef.current.pause();
+      holdAudioRef.current.currentTime = 0;
+    }
+    await discardCapture();
+
+    const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/discard`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || payload?.message || 'Unable to reset the current call attempt.');
+    }
+
+    setSessionData(null);
+    setSessionResult(null);
+    setCallState('idle');
+    setCurrentStepIndex(0);
+    setCallTimer(0);
+    setLiveTranscript('');
+    setIsMuted(false);
+    setIsOnHold(false);
+    setShowIncomingAudio(false);
+    setShowSilenceAlert(false);
+    setActivePlaybackScript('');
+    setActivePlaybackSpeaker(null);
+    setQueuedMemberStepIndex(null);
+    setQueuedMemberPlayback(null);
+    setMemberTurnState('idle');
+    setFeedbackReport(null);
+    setSessionPlaybackUrl(null);
+    autoStartTurnAttemptKeyRef.current = null;
+    silenceStartRef.current = null;
+
+    const nextScenarios = await fetchScenarios();
+    const nextScenario = nextScenarios.find((scenario) => scenario.id === scenarioIdToRestart) || null;
+    setSelectedScenarioId(scenarioIdToRestart);
+
+    toast.success(payload?.message || 'The current attempt was cleared. Start the call again from Step 1.');
+    if (nextScenario) {
+      await startSimulation(nextScenario);
+    }
+  }, [
+    clearAutoConnectTimeout,
+    discardCapture,
+    fetchScenarios,
+    selectedScenarioId,
+    sessionData?.session_id,
+    startSimulation,
+    stopBrowserTranscript,
+    stopRingtone,
+  ]);
+
   const handleAcknowledgeCoaching = useCallback(async () => {
     if (!sessionResult?.coaching_id) {
       return;
@@ -2075,7 +2151,7 @@ function TraineeSimFloorPageContent() {
   }, [callState, fetchScenarios, refreshCurrentSession, sessionData?.session_id]);
 
   useEffect(() => {
-    if (['connected', 'member-speaking', 'csr-speaking', 'processing'].includes(callState)) {
+    if (['accepted', 'connected', 'member-speaking', 'csr-speaking', 'processing'].includes(callState)) {
       timerRef.current = setInterval(() => setCallTimer((previous) => previous + 1), 1000);
       return () => {
         if (timerRef.current) {
@@ -2094,9 +2170,12 @@ function TraineeSimFloorPageContent() {
     if (!showIncomingAudio) {
       return;
     }
-    const timeoutId = window.setTimeout(() => setShowIncomingAudio(false), 2600);
+    const timeoutId = window.setTimeout(
+      () => setShowIncomingAudio(false),
+      callState === 'accepted' ? 5000 : 2600,
+    );
     return () => window.clearTimeout(timeoutId);
-  }, [showIncomingAudio]);
+  }, [callState, showIncomingAudio]);
 
   useEffect(() => {
     if (!showIncomingAudio && callState !== 'member-speaking') {
@@ -2249,7 +2328,27 @@ function TraineeSimFloorPageContent() {
   }, [callState, currentStep, isOnHold, isRecording, memberTurnState]);
 
   const busyStatus = callState !== 'idle' && callState !== 'completed';
-  const currentStatus = callState === 'idle' ? 'Ready' : statusLabel(callState, isOnHold);
+  const currentStatus = canResumeMemberTurn
+    ? 'Click Unhold To Continue'
+    : memberTurnState === 'awaiting-hold'
+      ? 'Hold To Play Member Reply'
+      : statusLabel(callState, isOnHold);
+  const currentStepNumber = currentStep?.step_number || 0;
+  const currentStatusNote = callState === 'ringing'
+    ? 'The trainer ringer is active. Click Accept Call to begin the mock call.'
+    : callState === 'accepted'
+      ? 'The line is connected. Your first CSR turn will unlock after the short preparation cue.'
+      : canResumeMemberTurn
+        ? 'The member reply already played. Click Unhold to reactivate your microphone.'
+        : memberTurnState === 'awaiting-hold'
+          ? 'Your CSR turn was saved. Click Hold to hear the next member reply.'
+          : callState === 'member-speaking'
+            ? 'Listen to the Member AI voice. Your microphone is locked until the reply ends.'
+            : isRecording
+              ? 'You are live on the CSR turn. Click Hold to save the turn and play the member reply.'
+              : callState === 'processing'
+                ? 'The current turn or final call result is being saved to Supabase.'
+                : 'Use the controls below to move through the assigned scenario.';
 
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
@@ -2353,7 +2452,7 @@ function TraineeSimFloorPageContent() {
                     <div className="mt-3 grid gap-3 lg:grid-cols-3">
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">1. Incoming call</div>
-                        <div className="mt-1">The softphone rings, shows the customer card, then connects the live mock call automatically.</div>
+                        <div className="mt-1">The softphone rings first. You accept the line before the opening CSR turn begins.</div>
                       </div>
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">2. Turn-taking</div>
@@ -2372,7 +2471,7 @@ function TraineeSimFloorPageContent() {
                 <CardHeader>
                   <CardTitle>Start The Call</CardTitle>
                   <CardDescription className="text-slate-300">
-                    The ringer will play, the call recording will start, and your CSR turn will arm automatically after the line connects.
+                    The ringer will play first. Accept the call to start the full recording, then wait for the opening CSR cue.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -2530,7 +2629,7 @@ function TraineeSimFloorPageContent() {
                 <CardHeader>
                   <CardTitle>Selected Scenario</CardTitle>
                   <CardDescription className="text-slate-300">
-                    Review the loaded scenario, then start the call. Your microphone turn will begin automatically after the line connects.
+                    Review the loaded scenario, then start the call. The trainer ringer will play first, and you will accept the line before the CSR turn begins.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -2605,12 +2704,13 @@ function TraineeSimFloorPageContent() {
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Current Status</div>
                     <div className="mt-2 text-lg font-semibold text-slate-950">{currentStatus}</div>
+                    <div className="mt-2 text-xs leading-5 text-slate-500">{currentStatusNote}</div>
                   </div>
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">ASR State</div>
+                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Call Capture</div>
                     <div className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-950">
                       <Waves className={cn('h-4 w-4', isRecording ? 'animate-pulse text-emerald-600' : 'text-slate-400')} />
-                      {isRecording ? 'Google ASR Listening' : isProcessing || isUploadingCall ? 'Processing' : 'Standing By'}
+                      {isRecording ? 'CSR Recording Live' : isCapturing ? 'Full Call Recording Live' : isProcessing || isUploadingCall ? 'Processing' : 'Standing By'}
                     </div>
                     <div className="mt-2 text-xs text-slate-500">
                       {lastAsrProviderLabel
@@ -2624,7 +2724,7 @@ function TraineeSimFloorPageContent() {
 
             <div className="grid gap-6 xl:grid-cols-[96px,minmax(0,1fr),minmax(280px,340px)] 2xl:grid-cols-[112px,minmax(0,1fr),360px]">
               <Card className="overflow-hidden border-slate-900 bg-slate-950 text-white">
-                <CardContent className="grid gap-3 p-3 sm:grid-cols-2 xl:flex xl:h-full xl:flex-col">
+                <CardContent className="grid gap-3 p-3 sm:grid-cols-3 xl:flex xl:h-full xl:flex-col">
                   <Button
                     type="button"
                     className={cn(
@@ -2675,7 +2775,7 @@ function TraineeSimFloorPageContent() {
                     variant="secondary"
                     className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
                     onClick={() => void handleReplayInstruction()}
-                    disabled={callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isRecording || isEndingCall}
+                    disabled={callState === 'ringing' || callState === 'accepted' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isRecording || isEndingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       <RotateCcw className="h-6 w-6" />
@@ -2684,8 +2784,22 @@ function TraineeSimFloorPageContent() {
                   </Button>
                   <Button
                     type="button"
+                    variant="secondary"
+                    className="h-20 rounded-3xl border border-amber-300/20 bg-amber-400/10 text-white hover:bg-amber-400/20"
+                    onClick={() => void handleTryAgain().catch((error) => {
+                      toast.error(error instanceof Error ? error.message : 'Unable to restart the current call attempt.');
+                    })}
+                    disabled={isEndingCall || isUploadingCall || callState === 'processing'}
+                  >
+                    <div className="flex flex-col items-center gap-1">
+                      <RotateCcw className="h-6 w-6" />
+                      <span className="text-xs font-medium">Try Again</span>
+                    </div>
+                  </Button>
+                  <Button
+                    type="button"
                     variant="destructive"
-                    className="h-20 rounded-3xl sm:col-span-2 xl:mt-auto"
+                    className="h-20 rounded-3xl sm:col-span-3 xl:mt-auto"
                     onClick={() => void handleEndCallRequest()}
                     disabled={isRecording || isUploadingCall || isEndingCall || callState === 'processing'}
                   >
@@ -2709,14 +2823,14 @@ function TraineeSimFloorPageContent() {
                       <div className="flex items-center justify-between gap-4">
                         <div className="flex items-center gap-3 text-emerald-800">
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
-                      <div>
-                        <div className="text-sm font-semibold">Member (AI) is calling...</div>
-                        <div className="text-xs">The line will connect automatically. Use Connect Now if you want to start the first CSR turn immediately.</div>
-                      </div>
-                    </div>
+                          <div>
+                            <div className="text-sm font-semibold">Member AI is calling...</div>
+                            <div className="text-xs">Accept the line to stop the ringer, begin the full recording, and unlock the opening CSR step after the short cue.</div>
+                          </div>
+                        </div>
                         <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
                           <Phone className="mr-2 h-4 w-4" />
-                          Connect Now
+                          Accept Call
                         </Button>
                       </div>
                     </CardContent>
@@ -2755,7 +2869,9 @@ function TraineeSimFloorPageContent() {
                             </div>
                             <div>
                               {activePlaybackSpeaker === 'system'
-                                ? 'The platform is asking you to repeat the scripted CSR line before the call can continue.'
+                                ? callState === 'accepted'
+                                  ? 'The line is accepted. Get ready for the opening CSR cue.'
+                                  : 'The platform is asking you to repeat the scripted CSR line before the call can continue.'
                                 : 'The Member Actor is speaking. Your mic is temporarily locked.'}
                             </div>
                           </div>
@@ -2813,7 +2929,9 @@ function TraineeSimFloorPageContent() {
                             <div>
                               <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Live Talk Status</div>
                               <div className="mt-2 text-lg font-semibold">
-                                {callState === 'member-speaking'
+                                {callState === 'accepted'
+                                  ? 'Call accepted'
+                                  : callState === 'member-speaking'
                                   ? activePlaybackSpeaker === 'system'
                                     ? 'Repeat prompt playing'
                                     : 'Member speaking'
@@ -2937,32 +3055,59 @@ function TraineeSimFloorPageContent() {
                 )}
               </div>
               <div className="space-y-5">
-                    <Card className="border-slate-200 bg-white shadow-sm">
-                      <CardHeader>
-                        <CardTitle>Call Guidance</CardTitle>
-                        <CardDescription>Quick reminders for the current part of the mock call.</CardDescription>
-                      </CardHeader>
+                <Card className="border-slate-200 bg-white shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Scenario Queue</CardTitle>
+                    <CardDescription>Track the current step and who speaks next.</CardDescription>
+                  </CardHeader>
                   <CardContent className="space-y-3">
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                      {isRecording
-                        ? 'CSR talk icon is live and Google ASR is actively listening.'
-                        : currentStep?.actor === 'csr'
-                          ? 'CSR icon shows it is your turn to speak.'
-                          : 'CSR icon is waiting for the next member cue.'}
-                    </div>
-                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                      {callState === 'member-speaking'
-                        ? activePlaybackSpeaker === 'system'
-                          ? 'Call Simulation is playing a repeat prompt because the last saved CSR turn did not match the expected spiel.'
-                          : 'Member Actor icon is active while scripted audio is playing.'
-                        : 'Member Actor icon lights up whenever incoming audio or script overlay is active.'}
-                    </div>
+                    {steps.length ? (
+                      steps.map((step) => {
+                        const isCurrentStep = step.step_number === currentStepNumber;
+                        const isCompletedStep = step.step_number < currentStepNumber;
+                        const statusText = isCurrentStep
+                          ? step.actor === 'csr'
+                            ? 'Current CSR step'
+                            : 'Current Member step'
+                          : isCompletedStep
+                            ? 'Completed'
+                            : 'Queued';
+
+                        return (
+                          <div
+                            key={`${step.step_number}-${step.actor}`}
+                            className={cn(
+                              'rounded-2xl border px-4 py-3 text-sm',
+                              isCurrentStep
+                                ? 'border-cyan-200 bg-cyan-50'
+                                : isCompletedStep
+                                  ? 'border-emerald-200 bg-emerald-50'
+                                  : 'border-slate-200 bg-slate-50',
+                            )}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="font-semibold text-slate-950">
+                                Step {step.step_number} - {step.actor === 'csr' ? 'CSR / Trainee' : 'Member AI'}
+                              </div>
+                              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{statusText}</div>
+                            </div>
+                            <div className="mt-2 line-clamp-3 text-xs leading-6 text-slate-600">
+                              {step.script || 'Script not available.'}
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+                        Scenario steps will appear here after the call starts.
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
                     <Card className="border-slate-200 bg-white shadow-sm">
                       <CardHeader>
                         <CardTitle>Call Status</CardTitle>
-                        <CardDescription>Microphone, hold, and recording states for this session.</CardDescription>
+                        <CardDescription>Microphone, hold, recording, and member-audio states for this session.</CardDescription>
                       </CardHeader>
                   <CardContent className="space-y-3 text-sm">
                     <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
@@ -2976,6 +3121,20 @@ function TraineeSimFloorPageContent() {
                     <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                       <span className="text-slate-600">Recording</span>
                       <span className={cn('font-semibold', isCapturing ? 'text-emerald-600' : 'text-slate-900')}>{isCapturing ? 'Full call captured' : 'Not started'}</span>
+                    </div>
+                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                      <span className="text-slate-600">Member audio</span>
+                      <span className={cn('font-semibold', callState === 'member-speaking' || showIncomingAudio ? 'text-amber-600' : 'text-slate-900')}>
+                        {callState === 'member-speaking'
+                          ? activePlaybackSpeaker === 'system'
+                            ? 'System prompt playing'
+                            : 'Member AI speaking'
+                          : canResumeMemberTurn
+                            ? 'Waiting for unhold'
+                            : needsHoldForMemberResponse
+                              ? 'Queued on hold'
+                              : 'Idle'}
+                      </span>
                     </div>
                   </CardContent>
                 </Card>

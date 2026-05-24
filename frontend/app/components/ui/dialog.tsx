@@ -9,11 +9,11 @@ import { cn } from "./utils";
 type DialogContentSize = "sm" | "md" | "lg" | "xl" | "full";
 
 const dialogSizeClasses: Record<DialogContentSize, string> = {
-  sm: "!w-[95vw] md:!w-[88vw] lg:!w-[62vw] lg:!min-w-[min(60vw,1160px)] xl:!w-[60vw] xl:!max-w-[1180px]",
-  md: "!w-[95vw] md:!w-[90vw] lg:!w-[68vw] lg:!min-w-[min(62vw,1200px)] xl:!w-[65vw] xl:!max-w-[1260px]",
-  lg: "!w-[96vw] md:!w-[92vw] lg:!w-[73vw] lg:!min-w-[min(66vw,1280px)] xl:!w-[71vw] xl:!max-w-[1380px]",
-  xl: "!w-[96vw] md:!w-[93vw] lg:!w-[75vw] lg:!min-w-[min(68vw,1360px)] xl:!w-[74vw] xl:!max-w-[1480px] 2xl:!w-[70vw]",
-  full: "!w-[98vw] md:!w-[95vw] xl:!w-[90vw] !max-w-[1680px]",
+  sm: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[75vw] lg:!max-w-[1180px] 2xl:!max-w-[1240px]",
+  md: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[78vw] lg:!max-w-[1260px] 2xl:!max-w-[1340px]",
+  lg: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[82vw] lg:!max-w-[1380px] 2xl:!max-w-[1480px]",
+  xl: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[85vw] lg:!max-w-[1480px] 2xl:!max-w-[1600px]",
+  full: "!w-[calc(100vw-0.75rem)] sm:!w-[calc(100vw-1.5rem)] lg:!w-[92vw] !max-w-[1720px]",
 };
 
 function Dialog({
@@ -70,7 +70,7 @@ function DialogContent({
       <DialogPrimitive.Content
         data-slot="dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 flex max-h-[92vh] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-7 overflow-y-auto overscroll-contain rounded-[1.35rem] border border-slate-200/85 bg-white p-6 text-[0.96rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-8 sm:text-base xl:p-9 [&_input]:text-sm [&_textarea]:text-sm [&_button]:text-sm [&_[data-slot=label]]:text-sm [&_[data-slot=label]]:leading-6 [&_table]:text-sm [&_th]:text-xs [&_th]:font-semibold [&_td]:align-top [&_[data-slot=select-trigger]]:text-sm sm:[&_input]:text-base sm:[&_textarea]:text-base sm:[&_button]:text-base sm:[&_[data-slot=label]]:text-[0.98rem] sm:[&_table]:text-[0.98rem] sm:[&_[data-slot=select-trigger]]:text-base [&_p]:text-balance",
+          "fixed top-[50%] left-[50%] z-50 flex max-h-[92vh] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-6 overflow-y-auto overscroll-contain rounded-[1.2rem] border border-slate-200/85 bg-white p-4 pb-[max(1rem,env(safe-area-inset-bottom))] text-[0.95rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:rounded-[1.3rem] sm:p-6 sm:pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:text-base lg:p-8 xl:p-9 [&_input]:text-sm [&_textarea]:text-sm [&_button]:text-sm [&_[data-slot=label]]:text-sm [&_[data-slot=label]]:leading-6 [&_table]:text-sm [&_th]:text-xs [&_th]:font-semibold [&_td]:align-top [&_[data-slot=select-trigger]]:text-sm sm:[&_input]:text-base sm:[&_textarea]:text-base sm:[&_button]:text-base sm:[&_[data-slot=label]]:text-[0.98rem] sm:[&_table]:text-[0.98rem] sm:[&_[data-slot=select-trigger]]:text-base [&_p]:text-balance",
           dialogSizeClasses[size],
           className,
         )}
@@ -91,7 +91,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn(
-        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-6 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90",
+        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-4 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:pb-6",
         className,
       )}
       {...props}
@@ -104,7 +104,7 @@ function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-footer"
       className={cn(
-        "sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-6 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:flex-row sm:justify-end",
+        "sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:flex-row sm:justify-end sm:pt-6",
         className,
       )}
       {...props}
