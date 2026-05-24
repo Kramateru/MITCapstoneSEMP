@@ -9,10 +9,10 @@ import { buttonVariants } from "./button";
 type AlertDialogContentSize = "sm" | "md" | "lg" | "xl";
 
 const alertDialogSizeClasses: Record<AlertDialogContentSize, string> = {
-  sm: "!w-[95vw] md:!w-[88vw] lg:!w-[62vw] lg:!min-w-[min(60vw,1160px)] xl:!w-[60vw] xl:!max-w-[1180px]",
-  md: "!w-[95vw] md:!w-[90vw] lg:!w-[68vw] lg:!min-w-[min(62vw,1200px)] xl:!w-[65vw] xl:!max-w-[1260px]",
-  lg: "!w-[96vw] md:!w-[92vw] lg:!w-[73vw] lg:!min-w-[min(66vw,1280px)] xl:!w-[71vw] xl:!max-w-[1380px]",
-  xl: "!w-[96vw] md:!w-[93vw] lg:!w-[75vw] lg:!min-w-[min(68vw,1360px)] xl:!w-[74vw] xl:!max-w-[1480px] 2xl:!w-[70vw]",
+  sm: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[75vw] lg:!max-w-[1160px] 2xl:!max-w-[1240px]",
+  md: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[78vw] lg:!max-w-[1240px] 2xl:!max-w-[1320px]",
+  lg: "!w-[calc(100vw-1rem)] sm:!w-[calc(100vw-2rem)] lg:!w-[82vw] lg:!max-w-[1360px] 2xl:!max-w-[1460px]",
+  xl: "!w-[calc(100vw-0.75rem)] sm:!w-[calc(100vw-1.5rem)] lg:!w-[85vw] lg:!max-w-[1480px] 2xl:!max-w-[1600px]",
 };
 
 function AlertDialog({
@@ -67,8 +67,8 @@ function AlertDialogContent({
         data-slot="alert-dialog-content"
         className={cn(
           "fixed top-[50%] left-[50%] z-50 flex max-h-[92vh] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-7 overflow-y-auto overscroll-contain rounded-[1.35rem] border border-slate-200/85 bg-white p-6 text-[0.96rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-8 sm:text-base xl:p-9 [&_button]:text-sm [&_button]:sm:text-base [&_p]:text-balance",
-          alertDialogSizeClasses[size],
           className,
+          alertDialogSizeClasses[size],
         )}
         {...props}
       />

@@ -3930,6 +3930,12 @@ def _apply_evaluation_to_session(
     session.ai_feedback = ai_feedback
 
 
+def _session_outcome_label(session: SimSession) -> str:
+    if bool(session.pass_fail):
+        return "Passed / Completed"
+    return "Failed / For Retake"
+
+
 def _sync_call_simulation_certificate(
     db: Session,
     *,
@@ -6837,6 +6843,8 @@ async def synthesize_member_speech(
     normalized_asset_kind = str(asset_kind or "").strip().lower() or "member-step"
     persisted_scenario: Optional[Scenario] = None
     persisted_flow_step: Optional[ScenarioFlow] = None
+    persisted_script_flow_index: Optional[int] = None
+    persisted_script_flow_rows: Optional[list[dict[str, Any]]] = None
     resolved_asset_owner_id = str(current_user.id)
 
     if persist:
@@ -6922,6 +6930,22 @@ async def synthesize_member_speech(
                 ),
                 None,
             )
+            scenario_config = _normalize_json_object(getattr(persisted_scenario, "call_simulation_config", None))
+            configured_script_flow = scenario_config.get("script_flow")
+            if isinstance(configured_script_flow, list):
+                persisted_script_flow_rows = [
+                    _normalize_json_object(row)
+                    for row in configured_script_flow
+                    if isinstance(row, dict)
+                ]
+                for index, row in enumerate(persisted_script_flow_rows):
+                    candidate_step_number = row.get("member_step_number")
+                    try:
+                        if int(candidate_step_number) == int(step_number):
+                            persisted_script_flow_index = index
+                            break
+                    except (TypeError, ValueError):
+                        continue
 
         upload_bytes: Optional[bytes] = audio_bytes
         if upload_bytes is None and audio_base64:
@@ -7056,6 +7080,17 @@ async def synthesize_member_speech(
                     persisted_metadata["member_audio_url"] = uploaded_audio_url
                     persisted_flow_step.step_metadata = persisted_metadata
                     db.add(persisted_flow_step)
+                elif persisted_scenario and persisted_script_flow_rows is not None and persisted_script_flow_index is not None:
+                    persisted_script_flow_rows[persisted_script_flow_index] = {
+                        **persisted_script_flow_rows[persisted_script_flow_index],
+                        "member_audio_url": uploaded_audio_url,
+                    }
+                    persisted_config = _normalize_json_object(getattr(persisted_scenario, "call_simulation_config", None))
+                    persisted_scenario.call_simulation_config = {
+                        **persisted_config,
+                        "script_flow": persisted_script_flow_rows,
+                    }
+                    db.add(persisted_scenario)
                 db.commit()
 
             if (
@@ -8204,6 +8239,8 @@ async def get_interaction_history(
                 "batch_wave_number": batch.wave_number if batch else None,
                 "scenario_title": scenario.title if scenario else "Unknown",
                 "score": session.weighted_score or 0.0,
+                "status": session.status or ("completed" if session.pass_fail else "failed"),
+                "outcome_label": _session_outcome_label(session),
                 "pass_fail": session.pass_fail,
                 "attempt_number": session.attempt_number,
                 "audio_url": session.audio_url,

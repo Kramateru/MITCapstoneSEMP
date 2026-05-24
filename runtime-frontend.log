@@ -12,6 +12,8 @@ Creating turbopack project {
   dir: 'C:\\Users\\Mark Ureta\\Documents\\MIT CAPSTONE\\SYSTEM\\SYSTEM - Speech Enabled BPO Platform\\frontend',
   testMode: true
 }
-✓ Ready in 1608ms
+✓ Ready in 1199ms
 ○ Compiling /login ...
- GET /login 200 in 3.5s (compile: 3.2s, proxy.ts: 136ms, render: 159ms)
+ GET /login 200 in 4.8s (compile: 4.4s, proxy.ts: 117ms, render: 338ms)
+ GET /api/auth/provider-status 502 in 2.6s (compile: 1235ms, render: 1359ms)
+ GET /login 200 in 114ms (compile: 8ms, proxy.ts: 9ms, render: 97ms)

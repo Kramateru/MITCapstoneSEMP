@@ -160,8 +160,8 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
   }
 
   return (
-    <div className="rounded-3xl border bg-white/90 p-4 shadow-sm">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-10">
         <div className="space-y-2">
           <Label>Trainer</Label>
           <Select value={value.trainerId || NONE_VALUE} onValueChange={(nextValue) => setField('trainerId', nextValue === NONE_VALUE ? '' : nextValue)}>

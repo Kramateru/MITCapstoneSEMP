@@ -179,6 +179,8 @@ interface InteractionSession {
   batch_wave_number?: number | null;
   scenario_title: string;
   score: number;
+  status?: string;
+  outcome_label?: string;
   pass_fail: boolean;
   attempt_number: number;
   audio_url?: string;
@@ -659,6 +661,13 @@ function getVerdictLabel(value?: string | null) {
   if (normalized === 'competent') return 'Competent';
   if (normalized === 'retake') return 'Needs Retake';
   return 'Pending Review';
+}
+
+function getOutcomeLabel(interaction: Pick<InteractionSession, 'outcome_label' | 'pass_fail'>) {
+  if (interaction.outcome_label?.trim()) {
+    return interaction.outcome_label.trim();
+  }
+  return interaction.pass_fail ? 'Passed / Completed' : 'Failed / For Retake';
 }
 
 function buildScenarioRowsFromSteps(scenario: Scenario) {
@@ -3244,15 +3253,12 @@ export default function TrainerSimFloorPage() {
                       <TableCell>
                         <Badge
                           variant={
-                            normalizeVerdictStatus(session.trainer_verdict_status) === 'competent'
-                              ? 'default'
-                              : normalizeVerdictStatus(session.trainer_verdict_status) === 'retake'
-                                ? 'destructive'
-                                : session.pass_fail
-                                  ? 'secondary'
-                                  : 'outline'
+                            session.pass_fail ? 'default' : 'destructive'
                           }
                         >
+                          {getOutcomeLabel(session)}
+                        </Badge>
+                        <Badge variant="outline">
                           {getVerdictLabel(session.trainer_verdict_status)}
                         </Badge>
                         {session.coaching_status ? (

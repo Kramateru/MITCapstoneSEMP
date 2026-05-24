@@ -437,20 +437,24 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {trainerRows.length ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={trainerRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={84} />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
-                        <ChartPercentLabelList />
-                      </Bar>
-                      <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
-                        <ChartPercentLabelList />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[320px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={trainerRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="trainer_name" interval={0} angle={-18} textAnchor="end" height={84} />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="overall_score" fill="#1d4ed8" radius={[8, 8, 0, 0]} name="Overall Score">
+                            <ChartPercentLabelList />
+                          </Bar>
+                          <Bar dataKey="completion_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Completion Rate">
+                            <ChartPercentLabelList />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Trainer comparison will appear once trainer-owned learning data is available." />
                 )}
@@ -466,20 +470,24 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {batchRows.length ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={batchRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={80} />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Bar dataKey="overall_score" fill="#2563eb" radius={[8, 8, 0, 0]} name="Overall Score">
-                        <ChartPercentLabelList />
-                      </Bar>
-                      <Bar dataKey="completion_rate" fill="#f59e0b" radius={[8, 8, 0, 0]} name="Completion Rate">
-                        <ChartPercentLabelList />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[320px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={batchRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 64 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="batch_label" interval={0} angle={-14} textAnchor="end" height={80} />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="overall_score" fill="#2563eb" radius={[8, 8, 0, 0]} name="Overall Score">
+                            <ChartPercentLabelList />
+                          </Bar>
+                          <Bar dataKey="completion_rate" fill="#f59e0b" radius={[8, 8, 0, 0]} name="Completion Rate">
+                            <ChartPercentLabelList />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Batch comparison will appear after scoped batch results are recorded." />
                 )}
@@ -497,20 +505,24 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {moduleRows.length ? (
-                  <ResponsiveContainer width="100%" height={340}>
-                    <LineChart data={moduleRows.slice(0, 12)} margin={{ top: 28, right: 16, left: 0, bottom: 84 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={100} />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
-                        <ChartPercentLabelList position="top" />
-                      </Line>
-                      <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
-                        <ChartPercentLabelList position="bottom" />
-                      </Line>
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[340px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart data={moduleRows.slice(0, 12)} margin={{ top: 28, right: 16, left: 0, bottom: 84 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="module_title" interval={0} angle={-18} textAnchor="end" height={100} />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Line type="monotone" dataKey="completion_rate" stroke="#0f766e" strokeWidth={3} name="Completion Rate">
+                            <ChartPercentLabelList position="top" />
+                          </Line>
+                          <Line type="monotone" dataKey="average_score" stroke="#2563eb" strokeWidth={2} name="Average Score">
+                            <ChartPercentLabelList position="bottom" />
+                          </Line>
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Module trend analytics will appear after trainers assign modules and trainees start completing them." />
                 )}
@@ -526,20 +538,24 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {(data?.score_distribution || []).some((row) => row.count > 0) ? (
-                  <ResponsiveContainer width="100%" height={340}>
-                    <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="range_label" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
-                        <ChartCountLabelList />
-                        {(data?.score_distribution || []).map((row, index) => (
-                          <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[340px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="range_label" />
+                          <YAxis allowDecimals={false} />
+                          <Tooltip />
+                          <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
+                            <ChartCountLabelList />
+                            {(data?.score_distribution || []).map((row, index) => (
+                              <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Score distribution will populate once trainees complete scored exercises, assessments, or mock calls in this scope." />
                 )}
@@ -557,20 +573,24 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {callSimulationRows.length ? (
-                  <ResponsiveContainer width="100%" height={320}>
-                    <BarChart data={callSimulationRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 68 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={90} />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
-                        <ChartPercentLabelList />
-                      </Bar>
-                      <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
-                        <ChartPercentLabelList />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[320px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={callSimulationRows.slice(0, 10)} margin={{ top: 28, right: 12, left: 0, bottom: 68 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="scenario_title" interval={0} angle={-18} textAnchor="end" height={90} />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="average_score" fill="#6d28d9" radius={[8, 8, 0, 0]} name="Average Score">
+                            <ChartPercentLabelList />
+                          </Bar>
+                          <Bar dataKey="pass_rate" fill="#0f766e" radius={[8, 8, 0, 0]} name="Pass Rate">
+                            <ChartPercentLabelList />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Call Simulation scenario analytics will appear after scoped mock call results are saved." />
                 )}
@@ -683,17 +703,21 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {(data?.performance_breakdown || []).some((row) => row.count > 0) ? (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="label" />
-                      <YAxis allowDecimals={false} />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
-                        <ChartCountLabelList />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={data?.performance_breakdown || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="label" />
+                          <YAxis allowDecimals={false} />
+                          <Tooltip />
+                          <Bar dataKey="count" fill="#334155" radius={[8, 8, 0, 0]} name="Results">
+                            <ChartCountLabelList />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Performance banding will appear once scored results are available." />
                 )}
@@ -707,17 +731,21 @@ export default function AnalyticsDashboard() {
               </CardHeader>
               <CardContent>
                 {assessmentRows.length ? (
-                  <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={assessmentRows.slice(0, 8)} margin={{ top: 28, right: 10, left: 0, bottom: 72 }}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="assessment_title" interval={0} angle={-18} textAnchor="end" height={92} />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score">
-                        <ChartPercentLabelList />
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <div className="chart-scroll-shell">
+                    <div className="chart-scroll-inner h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={assessmentRows.slice(0, 8)} margin={{ top: 28, right: 10, left: 0, bottom: 72 }}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="assessment_title" interval={0} angle={-18} textAnchor="end" height={92} />
+                          <YAxis domain={[0, 100]} />
+                          <Tooltip />
+                          <Bar dataKey="average_score" fill="#7c3aed" radius={[8, 8, 0, 0]} name="Average Score">
+                            <ChartPercentLabelList />
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 ) : (
                   <SectionEmpty message="Assessment performance will appear once scoped assessment submissions exist." />
                 )}

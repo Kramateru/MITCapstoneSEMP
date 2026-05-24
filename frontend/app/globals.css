@@ -589,6 +589,16 @@
     background: #edf2f7;
     color: #475569;
   }
+
+  .chart-scroll-shell {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding-bottom: 0.35rem;
+  }
+
+  .chart-scroll-inner {
+    min-width: 620px;
+  }
 }
 
 @media (max-width: 1024px) {
@@ -650,5 +660,15 @@
   .dashboard-hero::after {
     height: 7.5rem;
     width: 7.5rem;
+  }
+
+  .chart-scroll-inner {
+    min-width: 680px;
+  }
+}
+
+@media (min-width: 768px) {
+  .chart-scroll-inner {
+    min-width: 0;
   }
 }

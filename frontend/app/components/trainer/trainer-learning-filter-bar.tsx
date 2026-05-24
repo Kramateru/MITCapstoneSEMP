@@ -98,8 +98,8 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
   }
 
   return (
-    <div className="rounded-3xl border bg-white/85 p-4 shadow-sm">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
         <div className="space-y-2">
           <Label>Batch</Label>
           <Select value={value.batchId || NONE_VALUE} onValueChange={(nextValue) => setField('batchId', nextValue === NONE_VALUE ? '' : nextValue)}>

@@ -184,9 +184,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -261,9 +261,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -316,9 +316,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -393,9 +393,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -448,9 +448,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -525,9 +525,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -580,9 +580,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -657,9 +657,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -712,9 +712,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -789,9 +789,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -844,9 +844,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -921,9 +921,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -976,9 +976,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1053,9 +1053,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1108,9 +1108,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1185,9 +1185,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1240,9 +1240,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1317,9 +1317,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1372,9 +1372,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1449,9 +1449,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1504,9 +1504,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1576,9 +1576,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1631,9 +1631,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1708,9 +1708,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1763,9 +1763,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1840,9 +1840,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -1895,9 +1895,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -1989,20 +1989,20 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
 INFO:main:Azure Speech credentials are not configured. Pronunciation assessment is disabled.
-INFO:     Started server process [18872]
+INFO:     Started server process [9992]
 INFO:     Waiting for application startup.
 ERROR:main:Failed to ensure admin user: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
@@ -2054,9 +2054,9 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 
@@ -2142,15 +2142,15 @@ Traceback (most recent call last):
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
-	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+	Is the server running on that host and accepting TCP/IP connections?
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 
 (Background on this error at: https://sqlalche.me/e/20/e3q8)
-ERROR:main:Failed to synchronize users to Supabase Auth: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+ERROR:main:Failed to synchronize users to Supabase Auth: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
@@ -2202,9 +2202,9 @@ Traceback (most recent call last):
   File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\backend\venv\Lib\site-packages\psycopg2\__init__.py", line 122, in connect
     conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+psycopg2.OperationalError: connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
@@ -2290,9 +2290,9 @@ Traceback (most recent call last):
   File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\backend\venv\Lib\site-packages\psycopg2\__init__.py", line 122, in connect
     conn = _connect(dsn, connection_factory=connection_factory, **kwasync)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+sqlalchemy.exc.OperationalError: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
-connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.213.155.45), port 6543 failed: Permission denied (0x0000271D/10013)
+connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
 connection to server at "aws-1-us-east-1.pooler.supabase.com" (3.227.209.82), port 6543 failed: Permission denied (0x0000271D/10013)
 	Is the server running on that host and accepting TCP/IP connections?
