@@ -11,6 +11,8 @@ const DEFAULT_LOOPBACK_BACKEND_URLS = [
 ]
 const DEFAULT_BACKEND_UNAVAILABLE_MESSAGE =
   'Unable to reach the backend service. Start the backend server and try again.'
+const UNEXPECTED_API_HTML_MESSAGE =
+  'The backend returned an unexpected HTML page instead of a JSON API response.'
 const BACKEND_URL_CONFIG_KEYS = [
   'BACKEND_URL',
   'NEXT_PUBLIC_BACKEND_URL',
@@ -160,6 +162,11 @@ function buildTargetUrl(baseUrl: string, request: Request, pathnameOverride?: st
   return targetUrl.toString()
 }
 
+function isHtmlContentType(contentType: string | null) {
+  const normalized = (contentType || '').toLowerCase()
+  return normalized.includes('text/html') || normalized.includes('application/xhtml+xml')
+}
+
 function canRetryBackendRequest(init: RequestInit) {
   const method = (init.method || 'GET').toUpperCase()
   return method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
@@ -273,6 +280,7 @@ export async function proxyRequestToBackend(
   const hasBody = method !== 'GET' && method !== 'HEAD'
   const forwardedBody = hasBody ? await request.arrayBuffer() : undefined
   try {
+    const requestedPathname = new URL(request.url).pathname
     const backendResponse = await fetchAcrossBackendCandidates(
       (baseUrl) => buildTargetUrl(baseUrl, request, options.pathnameOverride),
       {
@@ -282,6 +290,33 @@ export async function proxyRequestToBackend(
         redirect: 'manual',
       },
     )
+
+    if (requestedPathname.startsWith('/api/') && isHtmlContentType(backendResponse.headers.get('content-type'))) {
+      const htmlPreview = (await backendResponse.text())
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220)
+      const statusCode = backendResponse.ok ? 502 : backendResponse.status
+      const detail =
+        backendResponse.status >= 500
+          ? DEFAULT_BACKEND_UNAVAILABLE_MESSAGE
+          : UNEXPECTED_API_HTML_MESSAGE
+
+      console.error('Backend proxy received HTML for API request:', {
+        path: requestedPathname,
+        status: backendResponse.status,
+        preview: htmlPreview,
+      })
+
+      return Response.json(
+        {
+          success: false,
+          message: detail,
+          detail,
+        },
+        { status: statusCode || 502 },
+      )
+    }
 
     return new Response(backendResponse.body, {
       status: backendResponse.status,

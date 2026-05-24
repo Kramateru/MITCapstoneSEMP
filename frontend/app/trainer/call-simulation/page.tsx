@@ -899,6 +899,7 @@ export default function TrainerSimFloorPage() {
   const [editingScenarioId, setEditingScenarioId] = useState<string | null>(null);
   const [scenarioForm, setScenarioForm] = useState<ScenarioFormState>(createDefaultScenarioForm());
   const [selectedInteraction, setSelectedInteraction] = useState<InteractionSession | null>(null);
+  const [selectedInteractionPlaybackUrl, setSelectedInteractionPlaybackUrl] = useState<string | null>(null);
   const [coachingNotes, setCoachingNotes] = useState('');
   const [verdictStatus, setVerdictStatus] = useState<'pending' | 'competent' | 'retake'>('pending');
   const [bulkTitle, setBulkTitle] = useState('');
@@ -1141,6 +1142,18 @@ export default function TrainerSimFloorPage() {
     setInteractions(data.sessions || []);
   }, [authedFetch]);
 
+  const loadInteractionPlaybackUrl = useCallback(async (sessionId: string) => {
+    const response = await authedFetch(`/api/call-simulation/session/${sessionId}/audio`);
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.detail || 'Unable to load the saved call recording.');
+    }
+    if (!payload?.audio_url) {
+      throw new Error('No playable call recording is available for this session.');
+    }
+    setSelectedInteractionPlaybackUrl(String(payload.audio_url));
+  }, [authedFetch]);
+
   const fetchAssignmentTargets = useCallback(async (scenarioId: string, batchId: string) => {
     if (!scenarioId || !batchId) {
       setAssignmentTargets([]);
@@ -1322,6 +1335,17 @@ export default function TrainerSimFloorPage() {
       setSelectedInteraction(refreshedInteraction);
     }
   }, [interactions, selectedInteraction]);
+
+  useEffect(() => {
+    if (!selectedInteraction?.id) {
+      setSelectedInteractionPlaybackUrl(null);
+      return;
+    }
+
+    void loadInteractionPlaybackUrl(selectedInteraction.id).catch(() => {
+      setSelectedInteractionPlaybackUrl(null);
+    });
+  }, [loadInteractionPlaybackUrl, selectedInteraction?.id]);
 
   const openCreateScenario = () => {
     setEditingScenarioId(null);
@@ -3275,7 +3299,7 @@ export default function TrainerSimFloorPage() {
           }
         }}
       >
-        <DialogContent className="flex h-[94vh] max-h-[94vh] max-w-[98vw] flex-col overflow-hidden p-0 sm:max-w-7xl 2xl:max-w-[1800px]">
+        <DialogContent className="flex !max-h-[94vh] flex-col overflow-hidden p-0">
           <DialogHeader className="shrink-0 border-b bg-white px-6 py-5">
             <DialogTitle>{editingScenarioId ? 'Edit Scenario' : 'Create Scenario'}</DialogTitle>
             <DialogDescription>
@@ -3845,7 +3869,7 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showKpiDialog} onOpenChange={setShowKpiDialog}>
-        <DialogContent className="max-h-[90vh] h-[90vh] max-w-[96vw] overflow-hidden p-0 sm:max-w-6xl 2xl:max-w-7xl">
+        <DialogContent className="flex !max-h-[90vh] flex-col overflow-hidden p-0">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle>KPI Rubric Builder</DialogTitle>
             <DialogDescription>
@@ -4123,7 +4147,7 @@ export default function TrainerSimFloorPage() {
           }
         }}
       >
-        <DialogContent className="max-h-[88vh] max-w-[72vw] overflow-y-auto">
+        <DialogContent className="!max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Coaching Review</DialogTitle>
             <DialogDescription>
@@ -4253,7 +4277,7 @@ export default function TrainerSimFloorPage() {
                   </div>
                 </div>
               ) : null}
-              {selectedInteraction.audio_url ? (
+              {selectedInteractionPlaybackUrl || selectedInteraction.audio_url ? (
                 <div className="rounded-lg border p-4">
                   <p className="text-sm font-medium text-muted-foreground">Session Audio</p>
                   <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
@@ -4264,7 +4288,7 @@ export default function TrainerSimFloorPage() {
                     ref={sessionAudioRef}
                     controls
                     className="mt-3 w-full"
-                    src={selectedInteraction.audio_url}
+                    src={selectedInteractionPlaybackUrl || selectedInteraction.audio_url}
                     onTimeUpdate={(event) => setPlaybackTime(event.currentTarget.currentTime || 0)}
                     onEnded={() => setPlaybackTime(0)}
                   >

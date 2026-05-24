@@ -317,17 +317,24 @@ export function DashboardLayout({
         <div className="h-full flex flex-col">
           {/* Logo Section */}
           <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6">
-            <div className={`flex items-center gap-3 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl bg-white/92 ring-1 ring-white/15 shadow-sm">
+            <div className={`flex items-start gap-4 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-[1.35rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-16 sm:w-16">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
                   className="h-full w-full object-contain"
                 />
               </div>
-              <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
-                <h1 className="text-[1.02rem] font-bold tracking-[-0.015em] text-white">Speech-Enabled BPO Platform</h1>
-                <p className="mt-1 text-[0.8rem] leading-6 text-sidebar-foreground/74">St. Peter Velle Technical Training Center</p>
+              <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+                <p className="text-[0.72rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/66">
+                  St. Peter Velle
+                </p>
+                <h1 className="mt-1 text-[1.08rem] font-bold leading-6 tracking-[-0.02em] text-white">
+                  Speech-Enabled BPO Platform
+                </h1>
+                <p className="mt-2 text-[0.82rem] leading-6 text-sidebar-foreground/74">
+                  Technical training, assessments, mock calls, coaching, and certification in one workspace.
+                </p>
                 <div className="mt-3 inline-flex rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-sidebar-foreground/88">
                   {roleLabelMap[resolvedUserRole]}
                 </div>
@@ -393,10 +400,10 @@ export function DashboardLayout({
       {/* Main Content */}
       <div className="relative z-10 flex-1 flex flex-col min-w-0">
         {/* Top Navigation Bar */}
-        <header className={`workspace-topbar flex items-center justify-between gap-4 border-b border-border/80 px-4 py-3.5 shadow-sm sm:px-6 sm:py-4 lg:px-7 ${
+        <header className={`workspace-topbar flex flex-col gap-3 border-b border-border/80 px-4 py-3.5 shadow-sm sm:px-6 sm:py-4 lg:flex-row lg:items-center lg:justify-between lg:px-7 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
-          <div className="flex min-w-0 items-center gap-3">
+          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
             <button
               type="button"
               onClick={() => setSidebarOpen((prev) => !prev)}
@@ -409,26 +416,38 @@ export function DashboardLayout({
               {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
 
-            <div className="min-w-0">
-              <div className="hidden items-center gap-2 md:flex">
-                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
-                  {roleLabelMap[resolvedUserRole]}
-                </span>
-                <Badge variant="info" className="text-[0.7rem]">
-                  Live Workspace
-                </Badge>
+            <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[1.2rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-14 sm:w-14">
+                <img
+                  src="/st-peter-seal.png"
+                  alt="St. Peter Velle Technical Training Center"
+                  className="h-full w-full object-contain"
+                />
               </div>
-              <h1 className="truncate text-[1.08rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.2rem] lg:text-[1.35rem] xl:text-[1.55rem]">
-                {currentPageLabel}
-              </h1>
-              <p className="hidden text-sm leading-6 text-muted-foreground md:block">
-                {roleDescriptionMap[resolvedUserRole]}
-              </p>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
+                    {roleLabelMap[resolvedUserRole]}
+                  </span>
+                  <Badge variant="info" className="text-[0.7rem]">
+                    Live Workspace
+                  </Badge>
+                </div>
+                <p className="mt-2 hidden text-[0.74rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80 sm:block">
+                  Speech-Enabled BPO Platform
+                </p>
+                <h1 className="truncate text-[1.08rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.2rem] lg:text-[1.35rem] xl:text-[1.55rem]">
+                  {currentPageLabel}
+                </h1>
+                <p className="hidden text-sm leading-6 text-muted-foreground lg:block">
+                  {roleDescriptionMap[resolvedUserRole]}
+                </p>
+              </div>
             </div>
           </div>
 
           {/* Right Section */}
-          <div className="flex items-center gap-3 rounded-2xl border border-border/70 bg-white/80 px-3.5 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:gap-4 lg:gap-5">
+          <div className="flex w-full items-center justify-end gap-3 rounded-2xl border border-border/70 bg-white/80 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:gap-4 sm:px-3.5 lg:gap-5">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>

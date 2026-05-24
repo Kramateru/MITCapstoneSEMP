@@ -16,6 +16,11 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/app/context/AuthContext'
+import {
+  getHttpErrorMessage,
+  getUnexpectedJsonResponseMessage,
+  readHttpResponse,
+} from '@/app/utils/http-response'
 import { getPostLoginPath, navigateToPath } from '@/app/utils/auth-navigation'
 
 type AuthProviderStatus = {
@@ -58,13 +63,29 @@ export default function LoginPage() {
           cache: 'no-store',
           signal: controller.signal,
         })
+        const payload = await readHttpResponse<AuthProviderStatus>(response)
 
         if (!response.ok) {
-          throw new Error('Unable to verify the credential source right now.')
+          throw new Error(
+            getHttpErrorMessage(
+              response,
+              payload,
+              'Unable to verify the credential source right now.',
+            ),
+          )
         }
 
-        const data = (await response.json()) as AuthProviderStatus
-        setProviderStatus(data)
+        if (!payload.data) {
+          throw new Error(
+            getUnexpectedJsonResponseMessage(
+              response,
+              payload,
+              'Unable to verify the credential source right now.',
+            ),
+          )
+        }
+
+        setProviderStatus(payload.data)
       } catch (fetchError) {
         if (controller.signal.aborted) {
           return
@@ -108,7 +129,13 @@ export default function LoginPage() {
 
     try {
       const signedInUser = await login(normalizedEmail, password)
-      if (!navigateToPath(getPostLoginPath(signedInUser))) {
+      const redirectPath = getPostLoginPath(signedInUser)
+      console.info('Login redirect destination:', {
+        email: signedInUser.email,
+        role: signedInUser.user_role,
+        redirectPath,
+      })
+      if (!navigateToPath(redirectPath)) {
         setIsSubmitting(false)
       }
     } catch (err) {

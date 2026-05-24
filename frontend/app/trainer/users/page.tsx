@@ -595,9 +595,9 @@ export default function TrainerUsersPage() {
   return (
     <DashboardLayout sidebarItems={sidebarItems} userRole="trainer">
       <div className="space-y-6">
-        <div>
+        <div className="dashboard-hero p-5 sm:p-6 lg:p-7">
           <h2 className="mb-2 text-2xl font-bold text-gray-900">Trainee Access</h2>
-          <p className="text-gray-600">
+          <p className="max-w-3xl text-gray-600">
             Register trainees one by one, bulk upload accounts, activate or deactivate existing trainee records, and
             assign saved batch or wave records to your class list.
           </p>
@@ -605,7 +605,7 @@ export default function TrainerUsersPage() {
 
         {status && (
           <div
-            className={`rounded-lg border p-3 text-sm ${
+            className={`rounded-[1.15rem] border px-4 py-3 text-sm shadow-[0_16px_34px_-30px_rgba(15,23,42,0.24)] ${
               status.tone === 'success'
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                 : status.tone === 'info'
@@ -618,8 +618,8 @@ export default function TrainerUsersPage() {
         )}
 
         <div className="grid gap-6">
-          <section className="rounded-lg border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-center justify-between gap-4">
+          <section className="rounded-[1.4rem] border border-border/80 bg-white/95 p-5 shadow-sm sm:p-6">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="font-semibold text-gray-900">Saved Batches</h3>
                 <p className="mt-1 text-sm text-gray-600">
@@ -630,15 +630,15 @@ export default function TrainerUsersPage() {
               <button
                 type="button"
                 onClick={() => void loadData()}
-                className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
               >
                 Refresh
               </button>
             </div>
 
-            <div className="space-y-3 max-h-[340px] overflow-auto pr-1">
+            <div className="space-y-3 max-h-[340px] overflow-y-auto pr-1">
               {batches.map((batch) => (
-                <div key={batch.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <div key={batch.id} className="rounded-[1.1rem] border border-gray-200 bg-gray-50 p-3">
                   <div className="font-medium text-gray-900">{batch.name}</div>
                   <div className="mt-1 text-xs text-gray-600">{formatBatchLabel(batch)}</div>
                   {batch.description && (
@@ -658,8 +658,8 @@ export default function TrainerUsersPage() {
           </section>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
-          <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <div className="grid gap-6 lg:grid-cols-2 2xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <section className="rounded-[1.4rem] border border-border/80 bg-white/95 p-5 shadow-sm sm:p-6">
             <h3 className="mb-3 font-semibold text-gray-900">Create Trainee Account</h3>
             <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700">
               Default password: <span className="font-semibold">{DEFAULT_TRAINEE_PASSWORD}</span>
@@ -698,15 +698,15 @@ export default function TrainerUsersPage() {
               <button
                 onClick={createTrainee}
                 disabled={isCreatingTrainee || !form.email.trim() || !form.full_name.trim()}
-                className="rounded bg-blue-600 px-4 py-2 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+                className="rounded-xl bg-blue-600 px-4 py-2 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
               >
                 {isCreatingTrainee ? 'Creating Trainee...' : 'Create Trainee'}
               </button>
             </div>
           </section>
 
-          <section className="rounded-lg border border-gray-200 bg-white p-5">
-            <div className="mb-3 flex items-start justify-between gap-4">
+          <section className="rounded-[1.4rem] border border-border/80 bg-white/95 p-5 shadow-sm sm:p-6">
+            <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h3 className="font-semibold text-gray-900">Bulk Upload Trainees</h3>
                 <p className="mt-1 text-sm text-gray-600">
@@ -717,7 +717,7 @@ export default function TrainerUsersPage() {
                 type="button"
                 onClick={downloadTemplate}
                 disabled={isDownloadingTemplate}
-                className="rounded border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                className="rounded-xl border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
               >
                 {isDownloadingTemplate ? 'Downloading...' : 'Download CSV Template'}
               </button>
@@ -753,7 +753,7 @@ export default function TrainerUsersPage() {
                 type="button"
                 onClick={uploadBulkTrainees}
                 disabled={isUploadingBulk || !selectedFile}
-                className="rounded bg-emerald-600 px-4 py-2 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-300"
               >
                 {isUploadingBulk ? 'Uploading...' : 'Upload Bulk File'}
               </button>
@@ -771,7 +771,7 @@ export default function TrainerUsersPage() {
           </section>
         </div>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <section className="rounded-[1.4rem] border border-border/80 bg-white/95 p-5 shadow-sm sm:p-6">
           <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <div>
               <h3 className="font-semibold text-gray-900">Add Existing Registered Trainees</h3>
@@ -860,7 +860,7 @@ export default function TrainerUsersPage() {
               </div>
             </div>
 
-            <div className="grid gap-3 lg:grid-cols-[1.25fr_0.8fr_0.9fr_0.9fr]">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,0.8fr)_minmax(0,0.9fr)_minmax(0,0.9fr)]">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wide text-gray-600">
                   Search Name Or Email
@@ -945,7 +945,7 @@ export default function TrainerUsersPage() {
             </div>
           </div>
 
-          <div className="mt-4 space-y-2 max-h-[440px] overflow-auto">
+          <div className="mt-4 space-y-2 max-h-[440px] overflow-y-auto">
             {visibleRegisteredTrainees.map((trainee) => {
               const isSelected = selectedRegisteredIds.includes(trainee.id);
               const alreadyInTargetBatch = !!assignmentBatchId && trainee.batch_ids?.includes(assignmentBatchId);
@@ -1074,12 +1074,12 @@ export default function TrainerUsersPage() {
             )}
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
             <button
               type="button"
               onClick={assignRegisteredTrainees}
               disabled={isAssigningRegistered || !batches.length || !assignmentBatchId || !assignableRegisteredIds.length}
-              className="rounded bg-slate-900 px-4 py-2 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
+              className="rounded-xl bg-slate-900 px-4 py-2 text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-400"
             >
               {isAssigningRegistered ? 'Adding Trainees...' : 'Add Selected Trainees to Batch'}
             </button>
@@ -1089,11 +1089,11 @@ export default function TrainerUsersPage() {
           </div>
         </section>
 
-        <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <section className="rounded-[1.4rem] border border-border/80 bg-white/95 p-5 shadow-sm sm:p-6">
           <h3 className="mb-3 font-semibold text-gray-900">Assigned Trainees</h3>
-          <div className="space-y-2 max-h-[520px] overflow-auto">
+          <div className="space-y-2 max-h-[520px] overflow-y-auto">
             {trainees.map((trainee) => (
-              <div key={trainee.id} className="rounded border p-3">
+              <div key={trainee.id} className="rounded-[1.1rem] border p-3">
                 <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">

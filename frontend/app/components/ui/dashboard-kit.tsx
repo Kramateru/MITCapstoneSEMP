@@ -72,7 +72,7 @@ export function DashboardHero({
   className?: string;
 }) {
   return (
-    <section className={cn("dashboard-hero p-6 sm:p-7 lg:p-8", className)}>
+    <section className={cn("dashboard-hero p-5 sm:p-7 lg:p-8", className)}>
       <div className="relative z-10 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3 reading-width">
           {eyebrow ? <span className="dashboard-kicker">{eyebrow}</span> : null}
@@ -83,7 +83,7 @@ export function DashboardHero({
             </p>
           </div>
         </div>
-        {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+        {actions ? <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">{actions}</div> : null}
       </div>
       {children ? <div className="relative z-10 mt-6">{children}</div> : null}
     </section>

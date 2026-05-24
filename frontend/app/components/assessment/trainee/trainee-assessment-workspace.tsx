@@ -53,7 +53,21 @@ import { AssessmentPlayer } from './assessment-player'
 type AssessmentFilter = 'all' | 'assigned' | 'retake' | 'passed' | 'failed'
 type PlayerDisplayMode = 'overview' | 'review'
 
-function getAssessmentState(assessment: TraineeAssessmentCard) {
+function getAssessmentState(
+  assessment: TraineeAssessmentCard,
+  options?: {
+    isInProgress?: boolean
+  },
+) {
+  if (options?.isInProgress) {
+    return {
+      label: 'In Progress',
+      tone: 'border-sky-200 bg-sky-50 text-sky-700',
+      actionLabel: 'Continue',
+      disabled: false,
+    }
+  }
+
   if (assessment.latestAttempt?.status === 'pass') {
     return {
       label: 'Passed',
@@ -65,24 +79,24 @@ function getAssessmentState(assessment: TraineeAssessmentCard) {
 
   if (assessment.latestAttempt?.status === 'fail' && !assessment.canRetake) {
     return {
-      label: 'Attempts Used',
+      label: 'Failed',
       tone: 'border-rose-200 bg-rose-50 text-rose-700',
-      actionLabel: 'Attempts Used',
+      actionLabel: 'Failed',
       disabled: true,
     }
   }
 
   if (assessment.canRetake) {
     return {
-      label: 'Failed',
-      tone: 'border-amber-200 bg-amber-50 text-amber-700',
+      label: 'Completed',
+      tone: 'border-violet-200 bg-violet-50 text-violet-700',
       actionLabel: 'Retake',
       disabled: false,
     }
   }
 
   return {
-    label: 'Not Started',
+    label: 'Assigned',
     tone: 'border-sky-200 bg-sky-50 text-sky-700',
     actionLabel: 'Start',
     disabled: false,
@@ -404,10 +418,10 @@ export function TraineeAssessmentWorkspace() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All assigned items</SelectItem>
-                <SelectItem value="assigned">Not started</SelectItem>
+                <SelectItem value="assigned">Assigned</SelectItem>
                 <SelectItem value="retake">Retake available</SelectItem>
                 <SelectItem value="passed">Passed</SelectItem>
-                <SelectItem value="failed">Attempts used</SelectItem>
+                <SelectItem value="failed">Failed</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -421,7 +435,9 @@ export function TraineeAssessmentWorkspace() {
             <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
               <div className="space-y-3">
                 {filteredAssessments.map((assessment) => {
-                  const state = getAssessmentState(assessment)
+                  const state = getAssessmentState(assessment, {
+                    isInProgress: assessment.assignmentId === activeSession?.assignmentId && playerMode === 'in_progress',
+                  })
                   const isSelected = assessment.assignmentId === selectedAssessment?.assignmentId
 
                   return (
@@ -579,7 +595,9 @@ function FocusedAssessmentCard({
   onOpenReview: (assignmentId: string) => void
   onOpenCertificates: () => void
 }) {
-  const state = getAssessmentState(assessment)
+  const state = getAssessmentState(assessment, {
+    isInProgress: activeSession?.assignmentId === assessment.assignmentId && playerMode === 'in_progress',
+  })
   const isCurrentSession = activeSession?.assignmentId === assessment.assignmentId
   const isReviewing = isCurrentSession && playerDisplayMode === 'review'
   const showContinue = isCurrentSession && playerMode === 'in_progress' && !state.disabled
@@ -639,14 +657,14 @@ function FocusedAssessmentCard({
 
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <DetailChip label="Questions" value={String(assessment.questionCount)} />
-          <DetailChip label="Attempts Used" value={assessment.maximumAttempts ? `${assessment.attemptCount || 0}/${assessment.maximumAttempts}` : `${assessment.attemptCount || 0}/Unlimited`} />
+          <DetailChip label="Attempts Taken" value={assessment.maximumAttempts ? `${assessment.attemptCount || 0}/${assessment.maximumAttempts}` : `${assessment.attemptCount || 0}/Unlimited`} />
           <DetailChip
             label="Attempts Left"
             value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
           />
           <DetailChip
             label="Latest Score"
-            value={assessment.latestAttempt ? `${assessment.latestAttempt.score.toFixed(2)}%` : 'Not started'}
+            value={assessment.latestAttempt ? `${assessment.latestAttempt.score.toFixed(2)}%` : 'Assigned'}
           />
         </div>
 

@@ -544,152 +544,49 @@ async def bulk_upload_questions(
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
-    """Bulk upload questions via CSV to assessment_questions table"""
+    """Legacy alias for the assessment workspace CSV bulk upload route."""
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
-    
+
     try:
-        # Initialize Supabase client
-        supabase_client = SupabaseClient()
-        if not supabase_client.client:
-            raise HTTPException(status_code=500, detail="Database connection failed")
-        
-        # Read CSV file
         contents = await file.read()
-        stream = io.StringIO(contents.decode('utf-8'))
-        reader = csv.DictReader(stream)
-        
-        successful = 0
-        failed = 0
-        errors = []
-        created_question_ids = []
-        
-        if not reader.fieldnames:
-            raise HTTPException(status_code=400, detail="CSV file is empty or invalid")
-        
-        # Verify category exists
-        try:
-            category_response = supabase_client.client.table('assessment_categories').select('*').eq('id', category_id).single().execute()
-            if not category_response.data:
-                raise ValueError("Category not found")
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid category ID: {str(e)}")
-        
-        # Process each row
-        for row_num, row in enumerate(reader, start=2):  # Start at 2 (skip header)
-            try:
-                # Validate required fields from CSV
-                required_fields = ['Question Number', 'Question', 'Choice 1', 'Choice 2', 'Choice 3', 'Choice 4', 'Correct Answer']
-                missing_fields = []
-                for field in required_fields:
-                    if field not in reader.fieldnames:
-                        missing_fields.append(field)
-                    elif not row.get(field, '').strip():
-                        missing_fields.append(field)
-                
-                if missing_fields:
-                    raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
-                
-                # Parse and validate data
-                try:
-                    question_number = int(row['Question Number'].strip())
-                except ValueError:
-                    raise ValueError("Question Number must be an integer")
-                
-                question_text = row['Question'].strip()
-                choice_1 = row['Choice 1'].strip()
-                choice_2 = row['Choice 2'].strip()
-                choice_3 = row['Choice 3'].strip()
-                choice_4 = row['Choice 4'].strip()
-                correct_answer = row['Correct Answer'].strip().upper()
-                
-                # Validate answer format
-                if correct_answer not in ['A', 'B', 'C', 'D']:
-                    raise ValueError("Correct Answer must be one of: A, B, C, D")
-                
-                # Validate question text length
-                if len(question_text) < 5:
-                    raise ValueError("Question text must be at least 5 characters")
-                
-                # Check for duplicate question in category
-                try:
-                    dup_check = supabase_client.client.table('assessment_questions').select('id').eq(
-                        'category_id', category_id
-                    ).eq('question_number', question_number).execute()
-                    if dup_check.data and len(dup_check.data) > 0:
-                        raise ValueError(f"Question number {question_number} already exists in this category")
-                except Exception as e:
-                    if "already exists" not in str(e):
-                        logger.debug(f"Duplicate check error: {e}")
-                    if "already exists" in str(e):
-                        raise
-                
-                # Prepare question data
-                question_data = {
-                    'category_id': category_id,
-                    'question_number': question_number,
-                    'question_text': question_text,
-                    'option_a': choice_1,
-                    'option_b': choice_2,
-                    'option_c': choice_3,
-                    'option_d': choice_4,
-                    'correct_answer': correct_answer,
-                    'created_by': current_user.id,
-                    'created_at': datetime.utcnow().isoformat(),
-                    'updated_at': datetime.utcnow().isoformat(),
-                }
-                
-                # Insert into Supabase
-                insert_response = supabase_client.client.table('assessment_questions').insert(question_data).execute()
-                
-                if insert_response.data:
-                    successful += 1
-                    created_question_ids.append(insert_response.data[0]['id'] if isinstance(insert_response.data, list) else insert_response.data['id'])
-                    logger.info(f"Question {question_number} uploaded successfully")
-                else:
-                    failed += 1
-                    errors.append({
-                        "row": row_num,
-                        "question_number": question_number,
-                        "error": "Failed to insert question (no response data)",
-                    })
-                
-            except ValueError as e:
-                failed += 1
-                errors.append({
-                    "row": row_num,
-                    "question_number": row.get('Question Number', 'N/A'),
-                    "error": str(e),
-                })
-            except Exception as e:
-                failed += 1
-                error_msg = str(e)
-                # Clean up error message for sensitive details
-                if 'UNIQUE constraint failed' in error_msg:
-                    error_msg = "Question already exists in this category"
-                errors.append({
-                    "row": row_num,
-                    "question_number": row.get('Question Number', 'N/A'),
-                    "error": error_msg,
-                })
-        
-        logger.info(f"Bulk upload completed: {successful} successful, {failed} failed by trainer {current_user.email}")
-        
+        csv_text = contents.decode("utf-8-sig")
+        result = bulk_upload_questions_from_csv(db, current_user, csv_text)
+        logger.info(
+            "Legacy assessment bulk upload completed by %s for category hint %s: %s imported, %s failed",
+            current_user.email,
+            category_id,
+            result["successfulImports"],
+            result["failedRows"],
+        )
+
         return {
             "status": "completed",
-            "total_rows": successful + failed,
-            "successful": successful,
-            "failed": failed,
-            "created_question_ids": created_question_ids,
-            "errors": errors[:20],  # Return first 20 errors
-            "message": f"Uploaded {successful} question(s)" + (f" with {failed} error(s)" if failed > 0 else ""),
+            "total_rows": result["totalRows"],
+            "successful": result["successfulImports"],
+            "failed": result["failedRows"],
+            "created_question_ids": [question["id"] for question in result["importedQuestions"]],
+            "errors": [
+                {
+                    "row": error["rowNumber"],
+                    "question_number": error["questionNumber"],
+                    "error": error["error"],
+                }
+                for error in result["errors"][:20]
+            ],
+            "message": (
+                f"Uploaded {result['successfulImports']} question(s)"
+                + (f" with {result['failedRows']} error(s)" if result["failedRows"] > 0 else "")
+            ),
         }
-        
+
+    except UnicodeDecodeError as exc:
+        raise HTTPException(status_code=400, detail="The uploaded file must be a valid UTF-8 CSV.") from exc
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"CSV upload error: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"File processing error: {str(e)}")
+    except Exception as exc:
+        logger.error("Legacy CSV upload error: %s", exc)
+        raise HTTPException(status_code=400, detail=f"File processing error: {str(exc)}")
 
 # ==================== ASSIGNMENT ENDPOINTS ====================
 

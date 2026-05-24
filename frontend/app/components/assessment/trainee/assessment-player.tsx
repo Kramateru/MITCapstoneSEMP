@@ -453,12 +453,12 @@ export function AssessmentPlayer({
   )
   const overviewStatusLabel = mode === 'in_progress'
     ? 'In Progress'
-    : assessment?.statusLabel || (assessment?.isCompleted ? 'Passed' : assessment?.canRetake ? 'Failed' : 'Not Started')
-  const latestAttemptStatusLabel = assessment?.statusLabel === 'Attempts Used'
-    ? 'Attempts Used'
-    : latestAttempt?.status === 'pass'
+    : assessment?.statusLabel || (assessment?.isCompleted ? 'Completed' : 'Assigned')
+  const latestAttemptStatusLabel = latestAttempt?.status === 'pass'
       ? 'Passed'
-      : 'Failed'
+      : assessment?.canRetake
+        ? 'Completed'
+        : 'Failed'
 
   if (!assessment) {
     return (
@@ -496,7 +496,7 @@ export function AssessmentPlayer({
               <Badge variant="outline">{assessment.questionCount} questions</Badge>
               <Badge variant="outline">Pass at {assessment.passingScore}%</Badge>
               {assessment.maximumAttempts ? (
-                <Badge variant="outline">{assessment.attemptCount || 0}/{assessment.maximumAttempts} attempts used</Badge>
+                <Badge variant="outline">{assessment.attemptCount || 0}/{assessment.maximumAttempts} attempts taken</Badge>
               ) : (
                 <Badge variant="outline">Unlimited attempts</Badge>
               )}
@@ -558,7 +558,7 @@ export function AssessmentPlayer({
                   ) : (
                     <Button type="button" variant="outline" disabled>
                       {assessment.latestAttempt?.status === 'pass' ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
-                      {assessment.latestAttempt?.status === 'pass' ? 'Completed' : 'Attempts Used'}
+                      {assessment.latestAttempt?.status === 'pass' ? 'Passed' : 'Failed'}
                     </Button>
                   )}
                   {assessment.certificate ? (

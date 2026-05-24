@@ -15,13 +15,15 @@ import {
     Sparkles,
     Target,
     Trash2,
+    Upload,
     Users,
 } from 'lucide-react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 
 import {
+    AssessmentSectionNav,
     AssessmentWorkspaceHero,
     EmptyState,
     MetricCard,
@@ -67,6 +69,7 @@ import { Switch } from '@/app/components/ui/switch'
 import { Textarea } from '@/app/components/ui/textarea'
 import {
     archiveAssessmentCategory,
+    bulkUploadAssessmentQuestions,
     coachAssessmentAttemptRequest,
     createAssessmentDefinition,
     createAssessmentAssignment,
@@ -75,6 +78,7 @@ import {
     deleteAssessmentDefinition,
     deleteAssessmentAssignment,
     deleteAssessmentQuestion,
+    downloadAssessmentCsvTemplate,
     downloadTrainerAssessmentCsv,
     fetchTrainerAssessmentBootstrap,
     updateAssessmentDefinition,
@@ -88,15 +92,19 @@ import type {
     AssessmentQuestionRecord,
     AssignmentRecord,
     AttemptRecord,
+    BulkUploadQuestionsResponse,
     CategoryRecord,
     TrainerBootstrapResponse,
 } from '@/app/lib/assessment/types'
 
 type ManagementRole = 'trainer'
 type ManagementSection =
+  | 'overview'
   | 'builder'
   | 'questions'
+  | 'bulk-upload'
   | 'assessment-list'
+  | 'assign'
   | 'assignment-status'
   | 'results'
 
@@ -165,16 +173,38 @@ type DeleteTarget =
 
 const DEFAULT_PASSING_SCORE = '90'
 const QUESTION_CHOICE_KEYS = ['A', 'B', 'C', 'D'] as const
+const BULK_UPLOAD_TEMPLATE_COLUMNS = [
+  'Question Number',
+  'Assessment Title',
+  'Category',
+  'Question',
+  'Choice 1',
+  'Choice 2',
+  'Choice 3',
+  'Choice 4',
+  'Correct Answer',
+  'Difficulty Level',
+  'Points',
+] as const
 const SECTION_ANCHORS: Record<ManagementSection, string> = {
+  overview: 'assessment-overview',
   builder: 'assessment-builder',
   questions: 'assessment-questions',
+  'bulk-upload': 'assessment-bulk-upload',
   'assessment-list': 'assessment-list',
+  assign: 'assessment-assign',
   'assignment-status': 'assessment-assignment-status',
   results: 'assessment-results',
 }
 
 function getSections(role: ManagementRole) {
   return [
+    {
+      id: 'overview' as const,
+      label: 'Assessment Overview',
+      description: 'See workspace health, quick actions, and the active category summary before editing anything.',
+      icon: <Sparkles className="size-4" />,
+    },
     {
       id: 'builder' as const,
       label: 'Create/Edit Assessment',
@@ -188,10 +218,22 @@ function getSections(role: ManagementRole) {
       icon: <BookOpenCheck className="size-4" />,
     },
     {
+      id: 'bulk-upload' as const,
+      label: 'Bulk Upload Questions',
+      description: 'Download the CSV template, validate uploads, and push question banks into Supabase in one flow.',
+      icon: <Upload className="size-4" />,
+    },
+    {
       id: 'assessment-list' as const,
       label: 'Assessment List',
       description: 'Review the full assessment catalog with question counts, publishing state, and quick actions.',
       icon: <ClipboardList className="size-4" />,
+    },
+    {
+      id: 'assign' as const,
+      label: 'Assign Assessment to Trainee',
+      description: 'Prepare trainee, batch, or wave assignments with due dates, attempts, and scoring rules.',
+      icon: <Users className="size-4" />,
     },
     {
       id: 'assignment-status' as const,
@@ -210,16 +252,20 @@ function getSections(role: ManagementRole) {
 
 function normalizeSection(role: ManagementRole, value: string | null): ManagementSection {
   const legacyMap: Record<string, ManagementSection> = {
-    dashboard: 'builder',
+    overview: 'overview',
+    dashboard: 'overview',
     categories: 'builder',
     'question-bank': 'questions',
+    upload: 'bulk-upload',
+    bulk: 'bulk-upload',
+    assignment: 'assign',
     assignments: 'assignment-status',
   }
   const mappedValue = value ? (legacyMap[value] || value) : value
   const availableSections = getSections(role)
   return availableSections.some((section) => section.id === mappedValue)
     ? (mappedValue as ManagementSection)
-    : 'builder'
+    : 'overview'
 }
 
 function createEmptyCategoryDraft(): CategoryDraft {
@@ -317,6 +363,18 @@ function getAssignmentStatusBadgeClassName(statusLabel?: string | null) {
   }
 
   return 'border-slate-200 bg-slate-50 text-slate-700'
+}
+
+function downloadTextFile(filename: string, content: string, mimeType = 'text/plain;charset=utf-8') {
+  const blob = new Blob([content], { type: mimeType })
+  const downloadUrl = window.URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = downloadUrl
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  window.URL.revokeObjectURL(downloadUrl)
 }
 
 function createAssignmentDraft(
@@ -471,6 +529,11 @@ export function TrainerAssessmentStudio({
   })
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [saving, setSaving] = useState(false)
+  const bulkUploadInputRef = useRef<HTMLInputElement | null>(null)
+  const [bulkUploadFile, setBulkUploadFile] = useState<File | null>(null)
+  const [bulkUploadResult, setBulkUploadResult] = useState<BulkUploadQuestionsResponse | null>(null)
+  const [bulkUploadError, setBulkUploadError] = useState('')
+  const [bulkUploading, setBulkUploading] = useState(false)
 
   const scrollToSection = useCallback((section: ManagementSection) => {
     const element = document.getElementById(SECTION_ANCHORS[section])
@@ -494,6 +557,8 @@ export function TrainerAssessmentStudio({
   }, [pathname, router, scrollToSection, searchParams])
 
   const needsAssessmentSessionRefresh = /credentials are invalid|invalid api key|service-role key/i.test(error)
+  const activeSection = useMemo(() => normalizeSection(role, searchParams.get('section')), [role, searchParams])
+  const workspaceSections = useMemo(() => getSections(role), [role])
 
   const refreshWorkspace = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     try {
@@ -524,15 +589,14 @@ export function TrainerAssessmentStudio({
       return undefined
     }
 
-    const normalizedSection = normalizeSection(role, searchParams.get('section'))
     const timerId = window.setTimeout(() => {
-      scrollToSection(normalizedSection)
+      scrollToSection(activeSection)
     }, 80)
 
     return () => {
       window.clearTimeout(timerId)
     }
-  }, [loading, role, scrollToSection, searchParams])
+  }, [activeSection, loading, scrollToSection])
 
   useEffect(() => {
     if (!workspace?.categories.length) {
@@ -569,6 +633,35 @@ export function TrainerAssessmentStudio({
   const attempts = useMemo(() => workspace?.attempts || [], [workspace?.attempts])
   const certificates = useMemo(() => workspace?.certificates || [], [workspace?.certificates])
   const analytics = workspace?.analytics
+  const selectedCategory = useMemo(
+    () => categories.find((category) => category.id === selectedCategoryId) || categories[0] || null,
+    [categories, selectedCategoryId],
+  )
+  const selectedCategoryAssignments = useMemo(
+    () => assignments.filter((assignment) => assignment.categoryId === selectedCategory?.id),
+    [assignments, selectedCategory?.id],
+  )
+  const selectedCategoryAttempts = useMemo(
+    () => attempts.filter((attempt) => attempt.categoryId === selectedCategory?.id),
+    [attempts, selectedCategory?.id],
+  )
+  const selectedCategoryPassRate = useMemo(() => {
+    if (!selectedCategoryAttempts.length) {
+      return 0
+    }
+
+    const passedCount = selectedCategoryAttempts.filter((attempt) => attempt.status === 'pass').length
+    return Number(((passedCount / selectedCategoryAttempts.length) * 100).toFixed(2))
+  }, [selectedCategoryAttempts])
+  const assignmentTargetCounts = useMemo(
+    () => ({
+      batch: assignments.filter((assignment) => assignment.targetType === 'batch').length,
+      wave: assignments.filter((assignment) => assignment.targetType === 'wave').length,
+      trainee: assignments.filter((assignment) => assignment.targetType === 'trainee').length,
+    }),
+    [assignments],
+  )
+  const recentAssignments = useMemo(() => assignments.slice(0, 3), [assignments])
 
   const attemptById = useMemo(() => new Map(attempts.map((attempt) => [attempt.id, attempt])), [attempts])
   const availableBatchOptionsForAssignment = useMemo(() => {
@@ -1195,6 +1288,80 @@ export function TrainerAssessmentStudio({
     }
   }
 
+  const handleDownloadQuestionTemplate = async () => {
+    try {
+      await downloadAssessmentCsvTemplate()
+      toast.success('Assessment CSV template downloaded.')
+    } catch (downloadError) {
+      console.error(downloadError)
+      toast.error(downloadError instanceof Error ? downloadError.message : 'Unable to download the CSV template.')
+    }
+  }
+
+  const handleBulkUploadQuestions = async () => {
+    if (!bulkUploadFile) {
+      setBulkUploadError('Choose a CSV template file before uploading.')
+      toast.error('Choose a CSV template file before uploading.')
+      return
+    }
+
+    if (!/\.csv$/i.test(bulkUploadFile.name)) {
+      setBulkUploadError('Only CSV files are supported for bulk upload.')
+      toast.error('Only CSV files are supported for bulk upload.')
+      return
+    }
+
+    setBulkUploading(true)
+    setBulkUploadError('')
+
+    try {
+      const result = await bulkUploadAssessmentQuestions(bulkUploadFile)
+      setBulkUploadResult(result)
+
+      if (result.successfulImports > 0 && result.failedRows > 0) {
+        toast.success(`Imported ${result.successfulImports} question(s). ${result.failedRows} row(s) still need attention.`)
+      } else if (result.successfulImports > 0) {
+        toast.success(`Imported ${result.successfulImports} question(s) into Supabase.`)
+      } else {
+        toast.error('No questions were imported. Review the CSV errors below.')
+      }
+
+      await refreshWorkspace('refresh')
+
+      const importedCategoryId = result.importedQuestions[0]?.categoryId
+      if (importedCategoryId) {
+        setSelectedCategoryId(importedCategoryId)
+        setQuestionCategoryFilter(importedCategoryId)
+        setAssessmentListCategoryFilter(importedCategoryId)
+      }
+
+      if (result.importedQuestions.length) {
+        syncSection('questions')
+      }
+
+      setBulkUploadFile(null)
+      if (bulkUploadInputRef.current) {
+        bulkUploadInputRef.current.value = ''
+      }
+    } catch (uploadError) {
+      console.error(uploadError)
+      const message = uploadError instanceof Error ? uploadError.message : 'Unable to upload assessment questions.'
+      setBulkUploadError(message)
+      toast.error(message)
+    } finally {
+      setBulkUploading(false)
+    }
+  }
+
+  const handleDownloadBulkUploadErrors = () => {
+    if (!bulkUploadResult?.errorCsv) {
+      return
+    }
+
+    downloadTextFile('assessment-bulk-upload-errors.csv', bulkUploadResult.errorCsv, 'text/csv;charset=utf-8')
+    toast.success('Bulk upload error report downloaded.')
+  }
+
   useEffect(() => {
     setQuestionPage(1)
   }, [questionSearch, questionCategoryFilter, questionDifficultyFilter])
@@ -1311,13 +1478,136 @@ export function TrainerAssessmentStudio({
         />
       </div>
 
+      <section id={SECTION_ANCHORS.overview} className="scroll-mt-24 space-y-4">
+        <div className="space-y-1">
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Assessment Overview</div>
+          <div className="text-sm text-slate-600">Use this single workspace to create, upload, assign, and review assessment records without jumping through separate pages.</div>
+        </div>
+
+        <AssessmentSectionNav
+          activeSection={activeSection}
+          sections={workspaceSections}
+          onSelect={syncSection}
+        />
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)]">
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <CardTitle>Workspace Snapshot</CardTitle>
+              <CardDescription>
+                The current assessment module is fully database-driven. Every save, delete, assignment, and trainee result flows through the live Supabase-backed workspace routes.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <DetailLine label="Question Bank" value={String(analytics?.totalQuestions || questions.length)} />
+                <DetailLine label="Direct Assignments" value={String(assignmentTargetCounts.trainee)} />
+                <DetailLine label="Wave Assignments" value={String(assignmentTargetCounts.wave)} />
+                <DetailLine label="Batch Assignments" value={String(assignmentTargetCounts.batch)} />
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-slate-50/80 p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Selected Category</div>
+                    <div className="text-xl font-semibold text-slate-950">{selectedCategory?.title || 'No category selected yet'}</div>
+                    <div className="text-sm text-slate-600">
+                      {selectedCategory?.description || 'Choose a category from the builder section to inspect its assessments, questions, assignments, and pass rate.'}
+                    </div>
+                  </div>
+                  {selectedCategory ? (
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">Pass at {selectedCategory.passingScore}%</Badge>
+                      <Badge variant="outline">{selectedCategory.assessments.length} assessments</Badge>
+                      <Badge variant="outline">{selectedCategoryAssignments.length} assignments</Badge>
+                    </div>
+                  ) : null}
+                </div>
+
+                {selectedCategory ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <DetailLine
+                      label="Category Questions"
+                      value={String(selectedCategory.questionCount || questions.filter((question) => question.categoryId === selectedCategory.id).length)}
+                    />
+                    <DetailLine label="Category Attempts" value={String(selectedCategoryAttempts.length)} />
+                    <DetailLine label="Category Pass Rate" value={`${selectedCategoryPassRate.toFixed(2)}%`} />
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-white p-4">
+                <div className="text-sm font-semibold text-slate-950">Recent Assignment Activity</div>
+                <div className="mt-3 space-y-3">
+                  {recentAssignments.length ? recentAssignments.map((assignment) => (
+                    <div key={assignment.id} className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                      <div>
+                        <div className="font-medium text-slate-950">{assignment.title || assignment.assessmentTitle || assignment.categoryTitle}</div>
+                        <div className="text-sm text-slate-600">{assignment.targetLabel} | {formatDateTimeLabel(assignment.assignedAt)}</div>
+                      </div>
+                      <Badge className={getAssignmentStatusBadgeClassName(assignment.statusLabel)}>
+                        {assignment.statusLabel || 'Assigned'}
+                      </Badge>
+                    </div>
+                  )) : (
+                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                      Assignment activity appears here once the trainer starts sending assessments to batches, waves, or direct trainees.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <CardTitle>Quick Actions</CardTitle>
+              <CardDescription>
+                Launch the most common trainer actions from here, then keep working on the same page.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Button type="button" className="w-full justify-start" onClick={() => openCategoryDialog()}>
+                <Plus className="size-4" />
+                Create Category
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full justify-start"
+                onClick={() => openAssessmentDialog(undefined, selectedCategory?.id || categories[0]?.id || '')}
+              >
+                <ClipboardList className="size-4" />
+                Create Assessment
+              </Button>
+              <Button type="button" variant="outline" className="w-full justify-start" onClick={() => openQuestionDialog()}>
+                <BookOpenCheck className="size-4" />
+                Add Question Manually
+              </Button>
+              <Button type="button" variant="outline" className="w-full justify-start" onClick={() => syncSection('bulk-upload')}>
+                <Upload className="size-4" />
+                Open Bulk Upload
+              </Button>
+              <Button type="button" variant="outline" className="w-full justify-start" onClick={() => openAssignmentDialog()}>
+                <Users className="size-4" />
+                Assign Assessment
+              </Button>
+              <Button type="button" variant="outline" className="w-full justify-start" onClick={() => void handleExportCsv()}>
+                <Download className="size-4" />
+                Export Results CSV
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </section>
+
       <section id={SECTION_ANCHORS.builder} className="scroll-mt-24 space-y-4">
         <div className="space-y-1">
           <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Create / Edit Assessment</div>
           <div className="text-sm text-slate-600">Use the category list to manage trainer-owned assessment categories and open the related workflows.</div>
         </div>
-        <div className="max-w-[380px]">
-          <Card className="h-fit">
+        <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+          <Card className="h-fit border-slate-200 shadow-sm">
             <CardHeader>
               <div className="flex items-center justify-between gap-3">
                 <div>
@@ -1401,6 +1691,102 @@ export function TrainerAssessmentStudio({
               ) : null}
             </CardContent>
           </Card>
+
+          {selectedCategory ? (
+            <Card className="border-slate-200 shadow-sm">
+              <CardHeader>
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <CardTitle>{selectedCategory.title}</CardTitle>
+                    <CardDescription>
+                      {selectedCategory.description || 'Maintain the selected category, review its assessment definitions, and launch question or assignment work from one place.'}
+                    </CardDescription>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" onClick={() => openCategoryDialog(selectedCategory)}>
+                      <Save className="size-4" />
+                      Edit Category
+                    </Button>
+                    <Button type="button" onClick={() => openAssessmentDialog(undefined, selectedCategory.id)}>
+                      <Plus className="size-4" />
+                      New Assessment
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <DetailLine label="Passing Score" value={`${selectedCategory.passingScore}%`} />
+                  <DetailLine label="Assessments" value={String(selectedCategory.assessments.length)} />
+                  <DetailLine label="Questions" value={String(selectedCategory.questionCount || questions.filter((question) => question.categoryId === selectedCategory.id).length)} />
+                  <DetailLine label="Assignments" value={String(selectedCategoryAssignments.length)} />
+                </div>
+
+                {selectedCategory.assessments.length ? (
+                  <div className="space-y-4">
+                    {selectedCategory.assessments.map((assessment) => {
+                      const assessmentQuestionCount = questions.filter((question) => question.assessmentId === assessment.id).length
+                      const assessmentAssignmentCount = assignments.filter((assignment) => assignment.assessmentId === assessment.id && assignment.isActive).length
+
+                      return (
+                        <div key={assessment.id} className="rounded-3xl border border-slate-200 bg-slate-50/70 p-4">
+                          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <div className="font-semibold text-slate-950">{assessment.title}</div>
+                                <Badge variant="outline">{assessment.type.replace(/_/g, ' ')}</Badge>
+                                <Badge className={assessment.isPublished ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50 text-slate-700'}>
+                                  {assessment.isPublished ? 'Published' : 'Draft'}
+                                </Badge>
+                              </div>
+                              <div className="text-sm text-slate-600">{assessment.description || 'No assessment description yet.'}</div>
+                              <div className="grid gap-3 md:grid-cols-3">
+                                <DetailLine label="Questions" value={String(assessmentQuestionCount)} />
+                                <DetailLine label="Assignments" value={String(assessmentAssignmentCount)} />
+                                <DetailLine label="Updated" value={formatDateLabel(assessment.updatedAt)} />
+                              </div>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button type="button" variant="outline" size="sm" onClick={() => openAssessmentDialog(assessment)}>
+                                <Save className="size-4" />
+                                Edit
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setQuestionDraft(createQuestionDraft(selectedCategory.id, assessment.id))
+                                  setQuestionDialogOpen(true)
+                                }}
+                              >
+                                <BookOpenCheck className="size-4" />
+                                Add Question
+                              </Button>
+                              <Button type="button" size="sm" onClick={() => openAssignmentDialog(undefined, selectedCategory.id, assessment.id)}>
+                                <Users className="size-4" />
+                                Assign
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title="No assessments saved for this category yet"
+                    description="Create the first assessment definition here, then add questions manually or through the CSV upload workspace."
+                  />
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <EmptyState
+              title="Select a category to continue"
+              description="Once a category exists, its assessment definitions, question counts, and assignment shortcuts appear here."
+            />
+          )}
         </div>
       </section>
 
@@ -1416,10 +1802,20 @@ export function TrainerAssessmentStudio({
                 <CardTitle>Question Bank</CardTitle>
                 <CardDescription>Search, filter, edit, and review the assessment-based multiple-choice inventory.</CardDescription>
               </div>
-              <Button type="button" onClick={() => openQuestionDialog()}>
-                <Plus className="size-4" />
-                Add Question
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={() => void handleDownloadQuestionTemplate()}>
+                  <Download className="size-4" />
+                  Template
+                </Button>
+                <Button type="button" variant="outline" onClick={() => syncSection('bulk-upload')}>
+                  <Upload className="size-4" />
+                  Bulk Upload
+                </Button>
+                <Button type="button" onClick={() => openQuestionDialog()}>
+                  <Plus className="size-4" />
+                  Add Question
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1519,6 +1915,162 @@ export function TrainerAssessmentStudio({
             />
           </CardContent>
         </Card>
+      </section>
+
+      <section id={SECTION_ANCHORS['bulk-upload']} className="scroll-mt-24 space-y-4">
+        <div className="space-y-1">
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Bulk Upload Questions</div>
+          <div className="text-sm text-slate-600">Download the template, validate the CSV, and push new question banks straight into the live assessment tables.</div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle>CSV Upload Workspace</CardTitle>
+                  <CardDescription>
+                    The uploaded CSV can create or reuse assessment categories and assessment titles, then save each valid question to the linked Supabase-backed tables.
+                  </CardDescription>
+                </div>
+                <Button type="button" variant="outline" onClick={() => void handleDownloadQuestionTemplate()}>
+                  <Download className="size-4" />
+                  Download Template
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50/80 p-5">
+                <div className="text-sm font-semibold text-slate-950">Expected CSV columns</div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {BULK_UPLOAD_TEMPLATE_COLUMNS.map((column) => (
+                    <Badge key={column} variant="outline">
+                      {column}
+                    </Badge>
+                  ))}
+                </div>
+                <div className="mt-4 text-sm text-slate-600">
+                  Optional column: <span className="font-medium text-slate-900">Explanation</span>. Correct answers can use A-D, Choice 1-4, or the exact answer text.
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <Label htmlFor="assessment-bulk-upload">Upload CSV file</Label>
+                <Input
+                  id="assessment-bulk-upload"
+                  ref={bulkUploadInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0] || null
+                    setBulkUploadFile(file)
+                    setBulkUploadError('')
+                    if (file) {
+                      setBulkUploadResult(null)
+                    }
+                  }}
+                />
+                <div className="text-sm text-slate-600">
+                  {bulkUploadFile
+                    ? `Selected file: ${bulkUploadFile.name}`
+                    : 'Choose the filled-out assessment CSV template to begin validation and import.'}
+                </div>
+                {bulkUploadError ? (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                    {bulkUploadError}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button type="button" onClick={() => void handleBulkUploadQuestions()} disabled={bulkUploading}>
+                  {bulkUploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                  Upload Questions
+                </Button>
+                <Button type="button" variant="outline" onClick={() => syncSection('questions')}>
+                  <BookOpenCheck className="size-4" />
+                  Review Question Bank
+                </Button>
+              </div>
+
+              {bulkUploadResult ? (
+                <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4">
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <DetailLine label="Rows Read" value={String(bulkUploadResult.totalRows)} />
+                    <DetailLine label="Imported" value={String(bulkUploadResult.successfulImports)} />
+                    <DetailLine label="Failed Rows" value={String(bulkUploadResult.failedRows)} />
+                    <DetailLine label="New Categories" value={String(bulkUploadResult.createdCategories?.length || 0)} />
+                  </div>
+
+                  {bulkUploadResult.createdCategories?.length ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                      Created or reactivated categories: {bulkUploadResult.createdCategories.join(', ')}
+                    </div>
+                  ) : null}
+
+                  {bulkUploadResult.importedQuestions.length ? (
+                    <div className="space-y-3">
+                      <div className="text-sm font-semibold text-slate-950">Recently imported questions</div>
+                      {bulkUploadResult.importedQuestions.slice(0, 5).map((question) => (
+                        <div key={question.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                          <div className="font-medium text-slate-950">
+                            Q{question.questionNumber || question.orderIndex + 1}. {question.questionText}
+                          </div>
+                          <div className="mt-1 text-sm text-slate-600">
+                            {question.categoryName || 'Category'} | {question.assessmentTitle || 'Assessment'} | Correct answer: {question.correctAnswer}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <CardTitle>Validation Rules</CardTitle>
+              <CardDescription>
+                The assessment importer rejects incomplete, duplicate, or malformed rows before they are committed.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-3xl border border-slate-200 bg-slate-50/80 p-4 text-sm text-slate-700">
+                <div>Required checks:</div>
+                <ul className="mt-3 list-disc space-y-2 pl-5">
+                  <li>Every row needs Question Number, Assessment Title, Category, Question, Choice 1-4, Correct Answer, Difficulty Level, and Points.</li>
+                  <li>Correct answers must match A-D, Choice 1-4, or the exact choice text.</li>
+                  <li>Duplicate question numbers and duplicate question text are blocked per category.</li>
+                  <li>Difficulty must be easy, medium, or hard when provided, and points must be positive.</li>
+                </ul>
+              </div>
+
+              {bulkUploadResult?.errors.length ? (
+                <div className="space-y-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="text-sm font-semibold text-slate-950">CSV issues to fix</div>
+                    {bulkUploadResult.errorCsv ? (
+                      <Button type="button" variant="outline" size="sm" onClick={handleDownloadBulkUploadErrors}>
+                        <Download className="size-4" />
+                        Download Error CSV
+                      </Button>
+                    ) : null}
+                  </div>
+                  {bulkUploadResult.errors.slice(0, 8).map((errorRecord) => (
+                    <div key={`${errorRecord.rowNumber}-${errorRecord.questionNumber}-${errorRecord.error}`} className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                      Row {errorRecord.rowNumber} | {errorRecord.category || 'No category'} | Q{errorRecord.questionNumber || '?'}: {errorRecord.error}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-3xl border border-dashed border-slate-300 bg-white px-4 py-6 text-sm text-slate-600">
+                  Upload feedback appears here after each CSV import attempt, including any row-level issues that need correction.
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </section>
 
       <section id={SECTION_ANCHORS['assessment-list']} className="scroll-mt-24 space-y-4">
@@ -1640,6 +2192,94 @@ export function TrainerAssessmentStudio({
             />
           </CardContent>
         </Card>
+      </section>
+
+      <section id={SECTION_ANCHORS.assign} className="scroll-mt-24 space-y-4">
+        <div className="space-y-1">
+          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Assign Assessment to Trainee</div>
+          <div className="text-sm text-slate-600">Prepare the assignment target, due date, retake policy, and scoring rules before exposing the assessment to a trainee, batch, or wave.</div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                  <CardTitle>Assignment Builder</CardTitle>
+                  <CardDescription>
+                    Start a new trainer assignment from the selected category or jump straight into editing one from the status list below.
+                  </CardDescription>
+                </div>
+                <Button type="button" onClick={() => openAssignmentDialog(undefined, selectedCategory?.id || categories[0]?.id || '', selectedCategory?.assessments[0]?.id || '')}>
+                  <Plus className="size-4" />
+                  Create Assignment
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-3xl border border-slate-200 bg-slate-50/80 p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
+                    <div className="text-sm font-semibold text-slate-950">Recommended starting point</div>
+                    <div className="text-sm text-slate-600">
+                      {selectedCategory
+                        ? `Use ${selectedCategory.title} as the base category, then choose the specific assessment and target audience in the assignment dialog.`
+                        : 'Select a category first so the assignment dialog can prefill the matching assessment library.'}
+                    </div>
+                  </div>
+                  {selectedCategory ? (
+                    <Badge variant="outline">{selectedCategory.assessments.length} assessments ready</Badge>
+                  ) : null}
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <DetailLine label="Selected Category" value={selectedCategory?.title || 'None'} />
+                  <DetailLine label="Default Pass Rate" value={selectedCategory ? `${selectedCategory.passingScore}%` : `${DEFAULT_PASSING_SCORE}%`} />
+                  <DetailLine label="Available Trainees" value={String(workspace?.trainees?.length || 0)} />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                  <div className="font-semibold text-slate-950">Assignment options included</div>
+                  <div className="mt-3 text-sm text-slate-600">
+                    Set a due date, attempt limit, passing score, time limit, target scope, randomization, and question pool mode before saving.
+                  </div>
+                </div>
+                <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                  <div className="font-semibold text-slate-950">Trainee visibility rule</div>
+                  <div className="mt-3 text-sm text-slate-600">
+                    Only saved assignments appear in the trainee assessment page. Unassigned assessments stay hidden from the trainee role.
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-3">
+                <Button type="button" variant="outline" onClick={() => syncSection('assignment-status')}>
+                  <Users className="size-4" />
+                  View Assignment Status
+                </Button>
+                <Button type="button" variant="outline" onClick={() => syncSection('results')}>
+                  <CheckCircle2 className="size-4" />
+                  Review Results
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 shadow-sm">
+            <CardHeader>
+              <CardTitle>Target Coverage</CardTitle>
+              <CardDescription>
+                Quick counts for the targets currently supported by the assessment assignment flow.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <MetricCard label="Direct Trainee" value={String(assignmentTargetCounts.trainee)} hint="One-to-one assignments" icon={<Users className="size-4 text-sky-600" />} />
+              <MetricCard label="Wave" value={String(assignmentTargetCounts.wave)} hint={`${availableWaveOptions.length} available waves`} icon={<Target className="size-4 text-violet-600" />} />
+              <MetricCard label="Batch" value={String(assignmentTargetCounts.batch)} hint={`${workspace?.batches?.length || 0} trainer-visible batches`} icon={<ClipboardList className="size-4 text-amber-600" />} />
+            </CardContent>
+          </Card>
+        </div>
       </section>
 
       <section id={SECTION_ANCHORS['assignment-status']} className="scroll-mt-24 space-y-4">

@@ -7080,25 +7080,35 @@ async def start_simulation(
     if assignment.batch_id and assignment.batch_id not in trainee_batch_ids:
         raise HTTPException(status_code=403, detail="Assigned scenario batch is no longer active for this trainee")
 
-    batch_id = (
-        session_data.batch_id
-        if session_data.batch_id and session_data.batch_id == assignment.batch_id
-        else assignment.batch_id
-    )
-    if not batch_id:
-        raise HTTPException(status_code=400, detail="Assigned scenario is missing its batch context")
-
-    kpi_config = db.query(BatchKPIConfig).filter(BatchKPIConfig.batch_id == batch_id).first()
-    latest_session = (
+    latest_session_query = (
         db.query(SimSession)
         .filter(
             SimSession.trainee_id == current_user.id,
             SimSession.scenario_id == scenario.id,
-            SimSession.batch_id == batch_id,
         )
-        .order_by(SimSession.created_at.desc())
-        .first()
     )
+    if assignment.batch_id:
+        latest_session_query = latest_session_query.filter(
+            SimSession.batch_id == assignment.batch_id
+        )
+    latest_session = latest_session_query.order_by(SimSession.created_at.desc()).first()
+    batch_id = assignment.batch_id
+    if not batch_id and session_data.batch_id and session_data.batch_id in trainee_batch_ids:
+        batch_id = session_data.batch_id
+    if not batch_id and latest_session and latest_session.batch_id in trainee_batch_ids:
+        batch_id = latest_session.batch_id
+    if not batch_id and len(trainee_batch_ids) == 1:
+        batch_id = next(iter(trainee_batch_ids))
+    if not batch_id and len(trainee_batch_ids) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This Call Simulation assignment is missing its batch context. "
+                "Ask the trainer to reassign it from a batch or relaunch it with a batch selection."
+            ),
+        )
+
+    kpi_config = db.query(BatchKPIConfig).filter(BatchKPIConfig.batch_id == batch_id).first() if batch_id else None
     next_attempt_number = 1
     max_attempts = _resolve_call_assignment_max_attempts(
         assignment,

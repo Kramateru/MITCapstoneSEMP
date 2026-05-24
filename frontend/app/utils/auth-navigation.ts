@@ -11,12 +11,26 @@ const ROLE_HOME: Record<UserRole, string> = {
   trainee: '/trainee/dashboard',
 }
 
+function normalizeRole(role?: string | null): UserRole | null {
+  if (typeof role !== 'string') {
+    return null
+  }
+
+  const normalized = role.trim().toLowerCase()
+  if (normalized === 'admin' || normalized === 'trainer' || normalized === 'trainee') {
+    return normalized
+  }
+
+  return null
+}
+
 export function getRoleHomePath(role?: UserRole | null) {
-  if (!role) {
+  const normalizedRole = normalizeRole(role)
+  if (!normalizedRole) {
     return '/dashboard'
   }
 
-  return ROLE_HOME[role] ?? '/dashboard'
+  return ROLE_HOME[normalizedRole] ?? '/dashboard'
 }
 
 export function getPostLoginPath(user?: AuthenticatedUserLike | null) {
