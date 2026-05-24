@@ -1,0 +1,17 @@
+
+> frontend@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local
+
+✓ Starting...
+Creating turbopack project {
+  dir: 'C:\\Users\\Mark Ureta\\Documents\\MIT CAPSTONE\\SYSTEM\\SYSTEM - Speech Enabled BPO Platform\\frontend',
+  testMode: true
+}
+✓ Ready in 1608ms
+○ Compiling /login ...
+ GET /login 200 in 3.5s (compile: 3.2s, proxy.ts: 136ms, render: 159ms)

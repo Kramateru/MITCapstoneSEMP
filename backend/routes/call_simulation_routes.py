@@ -3358,7 +3358,7 @@ def _serialize_flow_step(step: ScenarioFlow) -> CallSimulationScenarioStepRespon
         speaker_label=step.speaker_label,
         script=script,
         expected_keywords=list(step.expected_keywords_for_step or []),
-        audio_url=step.prompt_audio,
+        audio_url=step.prompt_audio or _normalize_optional_url(_normalize_json_object(step.step_metadata).get("member_audio_url")),
         response_time_limit=step.response_time_limit,
         is_closing=bool(step.is_closing),
         metadata=_normalize_json_object(step.step_metadata),
@@ -6835,10 +6835,11 @@ async def synthesize_member_speech(
     storage_warning: Optional[str] = None
     audio_asset: Optional[CallSimulationAudioAsset] = None
     normalized_asset_kind = str(asset_kind or "").strip().lower() or "member-step"
+    persisted_scenario: Optional[Scenario] = None
+    persisted_flow_step: Optional[ScenarioFlow] = None
+    resolved_asset_owner_id = str(current_user.id)
 
     if persist:
-        if not is_trainer_request:
-            raise HTTPException(status_code=403, detail="Only trainers can persist Call Simulation member audio.")
         if normalized_asset_kind not in {"member-step", "ringer", "hold", "scenario-ringer", "scenario-hold"}:
             raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
         supabase = get_supabase_client()
@@ -6847,12 +6848,80 @@ async def synthesize_member_speech(
 
         normalized_replace_audio_url = _normalize_optional_url(replace_audio_url)
         scenario_segment = "draft"
-        scenario: Optional[Scenario] = None
-        if normalized_asset_kind in {"ringer", "hold"}:
-            scenario_segment = "global"
-        elif scenario_id:
-            scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
-            scenario_segment = scenario.id
+        if is_trainer_request:
+            if normalized_asset_kind in {"ringer", "hold"}:
+                scenario_segment = "global"
+            elif scenario_id:
+                persisted_scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
+                scenario_segment = persisted_scenario.id
+                if normalized_asset_kind == "member-step" and step_number is not None:
+                    persisted_flow_step = next(
+                        (
+                            step
+                            for step in list(getattr(persisted_scenario, "flow_steps", []) or [])
+                            if int(step.step_number or 0) == int(step_number)
+                        ),
+                        None,
+                    )
+        else:
+            if current_user.role != UserRole.TRAINEE:
+                raise HTTPException(status_code=403, detail="Only trainees or trainers can persist Call Simulation member audio.")
+            if normalized_asset_kind != "member-step":
+                raise HTTPException(status_code=403, detail="Trainees can only persist Member AI step audio.")
+            if not scenario_id or step_number is None:
+                raise HTTPException(status_code=400, detail="Scenario and step details are required to persist trainee member audio.")
+
+            persisted_scenario = (
+                db.query(Scenario)
+                .filter(
+                    Scenario.id == scenario_id,
+                    Scenario.is_published == True,
+                )
+                .first()
+            )
+            if not persisted_scenario:
+                raise HTTPException(status_code=404, detail="Scenario not found")
+
+            assignment = _get_active_call_simulation_assignment(
+                db,
+                trainee_id=current_user.id,
+                scenario_id=persisted_scenario.id,
+            )
+            if not assignment:
+                raise HTTPException(status_code=403, detail="Scenario is not assigned to your trainee workspace")
+
+            persisted_step = next(
+                (
+                    step
+                    for step in _build_scenario_steps(persisted_scenario)
+                    if int(step.step_number or 0) == int(step_number)
+                ),
+                None,
+            )
+            if not persisted_step or persisted_step.actor != "member":
+                raise HTTPException(status_code=400, detail="Only Member AI steps can generate persisted playback audio.")
+
+            scenario_segment = persisted_scenario.id
+            resolved_asset_owner_id = str(
+                assignment.assigned_by
+                or persisted_scenario.created_by
+                or _resolve_call_simulation_assignment_trainer_id(
+                    db,
+                    scenario=persisted_scenario,
+                )
+                or ""
+            ).strip()
+            if not resolved_asset_owner_id:
+                raise HTTPException(status_code=503, detail="A trainer owner could not be resolved for this Call Simulation audio asset.")
+
+            persisted_flow_step = next(
+                (
+                    step
+                    for step in list(getattr(persisted_scenario, "flow_steps", []) or [])
+                    if int(step.step_number or 0) == int(step_number)
+                ),
+                None,
+            )
 
         upload_bytes: Optional[bytes] = audio_bytes
         if upload_bytes is None and audio_base64:
@@ -6911,7 +6980,7 @@ async def synthesize_member_speech(
 
         uploaded_audio_url = supabase.upload_call_simulation_asset(
             file_data=upload_bytes,
-            trainer_id=current_user.id,
+            trainer_id=resolved_asset_owner_id,
             scenario_id=scenario_segment,
             asset_kind=normalized_asset_kind,
             filename=filename,
@@ -6926,14 +6995,14 @@ async def synthesize_member_speech(
             if normalized_asset_kind in {"ringer", "hold"}:
                 audio_asset = _find_active_call_simulation_audio_asset(
                     db,
-                    trainer_id=current_user.id,
+                    trainer_id=resolved_asset_owner_id,
                     public_url=uploaded_audio_url,
                     asset_kinds=[normalized_asset_kind],
                 )
                 if audio_asset is None:
                     audio_asset = _create_call_simulation_audio_asset_record(
                         db,
-                        trainer_id=current_user.id,
+                        trainer_id=resolved_asset_owner_id,
                         scenario_id=None,
                         script_turn_id=None,
                         step_number=None,
@@ -6966,9 +7035,9 @@ async def synthesize_member_speech(
             else:
                 audio_asset = _create_call_simulation_audio_asset_record(
                     db,
-                    trainer_id=current_user.id,
+                    trainer_id=resolved_asset_owner_id,
                     scenario_id=scenario_id,
-                    script_turn_id=None,
+                    script_turn_id=persisted_flow_step.id if persisted_flow_step else None,
                     step_number=step_number,
                     asset_kind=normalized_asset_kind,
                     source_type="generated_tts",
@@ -6981,6 +7050,12 @@ async def synthesize_member_speech(
                     generated_text=normalized_text,
                     asset_metadata={"storage_mode": storage_mode},
                 )
+                if persisted_flow_step:
+                    persisted_flow_step.prompt_audio = uploaded_audio_url
+                    persisted_metadata = _normalize_json_object(persisted_flow_step.step_metadata)
+                    persisted_metadata["member_audio_url"] = uploaded_audio_url
+                    persisted_flow_step.step_metadata = persisted_metadata
+                    db.add(persisted_flow_step)
                 db.commit()
 
             if (
@@ -6991,7 +7066,7 @@ async def synthesize_member_speech(
                     stale_shared_assets = (
                         db.query(CallSimulationAudioAsset)
                         .filter(
-                            CallSimulationAudioAsset.trainer_id == current_user.id,
+                            CallSimulationAudioAsset.trainer_id == resolved_asset_owner_id,
                             CallSimulationAudioAsset.public_url == normalized_replace_audio_url,
                             CallSimulationAudioAsset.asset_kind == normalized_asset_kind,
                             CallSimulationAudioAsset.is_active == True,
@@ -7010,7 +7085,7 @@ async def synthesize_member_speech(
                 else:
                     stale_asset = _find_active_call_simulation_audio_asset(
                         db,
-                        trainer_id=current_user.id,
+                        trainer_id=resolved_asset_owner_id,
                         public_url=normalized_replace_audio_url,
                         asset_kinds=[normalized_asset_kind],
                         scenario_id=scenario_id,
@@ -7040,7 +7115,7 @@ async def synthesize_member_speech(
                 "Call Simulation TTS asset upload failed. Falling back to %s delivery instead. "
                 "trainer_id=%s scenario_segment=%s asset_kind=%s",
                 storage_mode,
-                current_user.id,
+                resolved_asset_owner_id,
                 scenario_segment,
                 asset_kind,
             )
@@ -7529,8 +7604,28 @@ async def upload_session_recording(
 
     original_name = file.filename or "session-recording.wav"
     _, extension = os.path.splitext(original_name)
-    safe_extension = extension if extension else ".wav"
+    normalized_content_type = str(file.content_type or "").split(";", 1)[0].strip().lower()
+    recording_extension_by_content_type = {
+        "audio/mpeg": ".mp3",
+        "audio/mp3": ".mp3",
+        "audio/wav": ".wav",
+        "audio/x-wav": ".wav",
+        "audio/wave": ".wav",
+        "audio/ogg": ".ogg",
+        "audio/vorbis": ".ogg",
+        "audio/mp4": ".m4a",
+        "audio/x-m4a": ".m4a",
+        "audio/m4a": ".m4a",
+        "audio/aac": ".m4a",
+        "audio/webm": ".webm",
+    }
+    safe_extension = extension if extension else recording_extension_by_content_type.get(normalized_content_type, ".wav")
     storage_leaf = f"session_{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}{safe_extension}"
+    resolved_content_type = (
+        file.content_type
+        or CALL_SIMULATION_ALLOWED_AUDIO_EXTENSIONS.get(safe_extension.lower())
+        or ("audio/webm" if safe_extension.lower() == ".webm" else "audio/wav")
+    )
 
     supabase = get_supabase_client()
     audio_url = supabase.upload_sim_floor_audio(
@@ -7539,7 +7634,7 @@ async def upload_session_recording(
         scenario_id=scenario.id,
         session_id=session.id,
         filename=storage_leaf,
-        content_type=file.content_type or "audio/wav",
+        content_type=resolved_content_type,
     )
     if not audio_url:
         raise HTTPException(

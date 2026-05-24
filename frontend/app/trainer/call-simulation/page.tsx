@@ -4279,9 +4279,9 @@ export default function TrainerSimFloorPage() {
               ) : null}
               {selectedInteractionPlaybackUrl || selectedInteraction.audio_url ? (
                 <div className="rounded-lg border p-4">
-                  <p className="text-sm font-medium text-muted-foreground">Session Audio</p>
+                  <p className="text-sm font-medium text-muted-foreground">Full Call Recording</p>
                   <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>Synchronized with transcript timeline</span>
+                    <span>Synchronized with the saved conversation transcript</span>
                     <span>{formatClockTime(playbackTime)}</span>
                   </div>
                   <audio
@@ -4306,7 +4306,7 @@ export default function TrainerSimFloorPage() {
                 <div className="space-y-3 rounded-lg border p-4">
                   <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <Headphones className="h-4 w-4" />
-                    Recorded CSR Turns
+                    Saved CSR Turn Clips
                   </div>
                   {selectedInteraction.turn_logs.map((turn, index) => (
                     <div key={`${turn.turn_attempt_id || turn.step_number || index}-${index}`} className="rounded-lg bg-slate-50 p-3">
@@ -4414,7 +4414,7 @@ export default function TrainerSimFloorPage() {
                 </div>
               ) : null}
               <div className="rounded-lg border p-4">
-                <p className="text-sm font-medium text-muted-foreground">Transcript Timeline</p>
+                <p className="text-sm font-medium text-muted-foreground">Full Transcript Timeline</p>
                 {selectedTranscriptEntries.length ? (
                   <div className="mt-3 space-y-3">
                     {selectedTranscriptEntries.map((entry, index) => (
