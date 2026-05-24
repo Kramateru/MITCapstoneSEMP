@@ -11,9 +11,10 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from ..config_validation import normalize_env_value
+from ..config_validation import normalize_env_value, resolve_gemini_api_key
 
 logger = logging.getLogger(__name__)
+DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 
 def _default_local_tts_enabled() -> bool:
     normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
@@ -68,7 +69,8 @@ class TextToSpeechService:
 
     def __init__(self):
         # Gemini TTS configuration
-        self.gemini_api_key = normalize_env_value(os.getenv("GEMINI_API_KEY"))
+        self.gemini_api_key = resolve_gemini_api_key(os.getenv)
+        self.gemini_tts_model = normalize_env_value(os.getenv("GEMINI_TTS_MODEL")) or DEFAULT_GEMINI_TTS_MODEL
         self.enable_local_tts = _default_local_tts_enabled()
         self.gemini_client = None
         if GEMINI_TTS_AVAILABLE and self.gemini_api_key:
@@ -185,7 +187,7 @@ class TextToSpeechService:
             }
 
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash-exp",
+                model=self.gemini_tts_model,
                 contents=text,
                 config=types.GenerateContentConfig(
                     response_modalities=["AUDIO"],

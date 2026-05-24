@@ -21,16 +21,22 @@ except ImportError:
     types = None
     GEMINI_AVAILABLE = False
 
-from ..config_validation import normalize_env_value
+from ..config_validation import normalize_env_value, resolve_gemini_api_key
 
 logger = logging.getLogger(__name__)
+DEFAULT_GEMINI_EVALUATION_MODEL = "gemini-2.5-flash"
 
 
 class GeminiEvaluationEngine:
     """Gemini-powered evaluation engine for call simulation feedback."""
 
     def __init__(self) -> None:
-        self.api_key = normalize_env_value(os.getenv("GEMINI_API_KEY"))
+        self.api_key = resolve_gemini_api_key(os.getenv)
+        self.model_name = (
+            normalize_env_value(os.getenv("GEMINI_EVALUATION_MODEL"))
+            or normalize_env_value(os.getenv("GEMINI_CALL_SIM_MODEL"))
+            or DEFAULT_GEMINI_EVALUATION_MODEL
+        )
         self.client = None
         if GEMINI_AVAILABLE and self.api_key:
             try:
@@ -67,7 +73,7 @@ class GeminiEvaluationEngine:
 
         try:
             response = self.client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.3,

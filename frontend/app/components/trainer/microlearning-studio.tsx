@@ -130,6 +130,23 @@ function hasTrainerPlayableVideoReference(form: ModuleFormState) {
 }
 
 const MAX_TRAINER_MEDIA_UPLOAD_BYTES = 50 * 1024 * 1024;
+const SUPPORTED_TRAINER_AUDIO_MIME_TYPES = new Set([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mpga',
+  'audio/mpeg3',
+  'audio/x-mpeg-3',
+  'audio/x-mp3',
+  'audio/mpg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/ogg',
+  'audio/aac',
+  'audio/flac',
+  'audio/webm',
+]);
 
 function getTrainerMediaUploadSizeError(file: File, moduleType: ModuleFormState['module_type']) {
   if (file.size <= MAX_TRAINER_MEDIA_UPLOAD_BYTES) {
@@ -159,18 +176,7 @@ function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['mod
 
   if (moduleType === 'audio' || moduleType === 'case_study') {
     const isSupported =
-      [
-        'audio/mpeg',
-        'audio/mp3',
-        'audio/wav',
-        'audio/x-wav',
-        'audio/mp4',
-        'audio/x-m4a',
-        'audio/ogg',
-        'audio/aac',
-        'audio/flac',
-        'audio/webm',
-      ].includes(normalizedMimeType)
+      SUPPORTED_TRAINER_AUDIO_MIME_TYPES.has(normalizedMimeType)
       || /\.(mp3|wav|m4a|ogg|aac|flac|webm)$/i.test(normalizedName);
     return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.';
   }

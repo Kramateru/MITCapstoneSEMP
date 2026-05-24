@@ -28,6 +28,10 @@ SUPABASE_SERVICE_KEY_ENV_KEYS = (
     "SUPABASE_SERVICE_KEY",
     "SUPABASE_SERVICE_ROLE",
 )
+GEMINI_API_KEY_ENV_KEYS = (
+    "GOOGLE_API_KEY",
+    "GEMINI_API_KEY",
+)
 
 _PLACEHOLDER_VALUES = {
     "",
@@ -82,6 +86,10 @@ def resolve_supabase_publishable_key(value_provider) -> str:
 
 def resolve_supabase_service_key(value_provider) -> str:
     return resolve_first_configured_value([value_provider(key) for key in SUPABASE_SERVICE_KEY_ENV_KEYS])
+
+
+def resolve_gemini_api_key(value_provider) -> str:
+    return resolve_first_configured_value([value_provider(key) for key in GEMINI_API_KEY_ENV_KEYS])
 
 
 def is_placeholder_value(value: Optional[str]) -> bool:

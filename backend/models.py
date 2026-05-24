@@ -332,6 +332,38 @@ class ScenarioFlow(Base):
     scenario = relationship("Scenario", back_populates="flow_steps")
 
 
+class CallSimulationAudioAsset(Base):
+    """Trainer-managed Call Simulation audio asset metadata."""
+
+    __tablename__ = "call_simulation_audio_asset"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    trainer_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    scenario_id = Column(String(36), ForeignKey("scenario.id"), nullable=True, index=True)
+    script_turn_id = Column(String(36), ForeignKey("scenario_flow.id"), nullable=True, index=True)
+    step_number = Column(Integer, nullable=True)
+    asset_kind = Column(String(50), nullable=False)
+    source_type = Column(String(50), nullable=False, default="upload")
+    file_name = Column(String(255), nullable=False)
+    file_type = Column(String(100), nullable=False)
+    file_size = Column(Integer, nullable=True)
+    bucket_name = Column(String(100), nullable=True)
+    storage_path = Column(String(500), nullable=True)
+    public_url = Column(Text, nullable=False)
+    voice_used = Column(String(100), nullable=True)
+    provider = Column(String(100), nullable=True)
+    generated_text = Column(Text, nullable=True)
+    asset_metadata = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    is_active = Column(Boolean, default=True)
+    deleted_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    trainer = relationship("User", foreign_keys=[trainer_id])
+    scenario = relationship("Scenario", foreign_keys=[scenario_id])
+    script_turn = relationship("ScenarioFlow", foreign_keys=[script_turn_id])
+
+
 class AssessmentCategory(Base):
     """Assessment category for evaluating agent responses"""
 

@@ -15,6 +15,12 @@ from typing import Optional
 from ..config_validation import normalize_env_value
 
 logger = logging.getLogger(__name__)
+_MP3_MIME_MARKERS = (
+    "mp3",
+    "mpeg",
+    "mpga",
+    "mpg",
+)
 
 # Try to import providers
 try:
@@ -170,11 +176,13 @@ class SpeechToTextService:
         try:
             # Encode audio to base64
             audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+            normalized_mime_type = (mime_type or "").lower()
+            uses_mp3_encoding = any(marker in normalized_mime_type for marker in _MP3_MIME_MARKERS)
 
             # Configure recognition
             config = speech.RecognitionConfig(
                 encoding=speech.RecognitionConfig.AudioEncoding.MP3
-                if "mp3" in (mime_type or "").lower()
+                if uses_mp3_encoding
                 else speech.RecognitionConfig.AudioEncoding.LINEAR16,
                 sample_rate_hertz=16000,
                 language_code=language_code,

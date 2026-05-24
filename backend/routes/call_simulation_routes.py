@@ -18,6 +18,7 @@ from csv import reader as csv_reader
 from datetime import datetime
 from difflib import SequenceMatcher
 from typing import Any, Optional
+from urllib.parse import unquote, urlparse
 from xml.etree import ElementTree as ET
 
 import pandas as pd
@@ -25,7 +26,7 @@ import requests
 from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.responses import Response, StreamingResponse, FileResponse
 from openpyxl import Workbook
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
@@ -36,6 +37,7 @@ from ..models import (
     BatchScenarioMapping,
     CertificateRecord,
     CoachingLog,
+    CallSimulationAudioAsset,
     Scenario,
     ScenarioFlow,
     CallSimulationAssignment,
@@ -54,6 +56,8 @@ from ..schemas import (
     CallSimulationAssignmentTargetResponse,
     CallSimulationAudioSettingsResponse,
     CallSimulationAudioSettingsUpdate,
+    CallSimulationAudioAssetResponse,
+    CallSimulationAudioAssetUploadResponse,
     CallSimulationScenarioRowInput,
     CallSimulationScenarioStepResponse,
     BatchKPIConfigUpdate,
@@ -100,7 +104,29 @@ MIN_KEYWORD_COVERAGE_FOR_PROGRESS = 0.34
 CONTENT_SCORE_WEIGHT = 0.5
 KPI_SCORE_WEIGHT = 0.5
 CALL_SIMULATION_AUDIO_SETTINGS_KEY = "call_simulation_audio"
+CALL_SIMULATION_AUDIO_MAX_BYTES = 50 * 1024 * 1024
+CALL_SIMULATION_ALLOWED_AUDIO_EXTENSIONS = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".m4a": "audio/mp4",
+}
+CALL_SIMULATION_AUDIO_MIME_ALIASES = {
+    "audio/mpeg": "audio/mpeg",
+    "audio/mp3": "audio/mpeg",
+    "audio/wav": "audio/wav",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/ogg": "audio/ogg",
+    "audio/vorbis": "audio/ogg",
+    "audio/mp4": "audio/mp4",
+    "audio/x-m4a": "audio/mp4",
+    "audio/m4a": "audio/mp4",
+    "audio/aac": "audio/mp4",
+}
 _UNSET = object()
+_LEGACY_CALL_SIMULATION_RELATION_CACHE: dict[str, bool] = {}
+_LEGACY_CALL_SIMULATION_SKIP_LOG_CACHE: set[tuple[str, ...]] = set()
 
 
 def _require_trainer(current_user: User) -> None:
@@ -138,6 +164,71 @@ def _log_legacy_supabase_mirror_skip(context: str, error: Exception) -> None:
         context,
         error,
     )
+
+
+def _legacy_call_simulation_relation_exists(db: Session, relation_name: str) -> bool:
+    normalized_name = str(relation_name or "").strip().lower()
+    if not normalized_name:
+        return False
+
+    cached_value = _LEGACY_CALL_SIMULATION_RELATION_CACHE.get(normalized_name)
+    if cached_value is not None:
+        return cached_value
+
+    try:
+        exists = bool(
+            db.execute(
+                text("select to_regclass(:qualified_name) is not null"),
+                {"qualified_name": f"public.{normalized_name}"},
+            ).scalar()
+        )
+    except Exception as exc:
+        logger.warning(
+            "Unable to inspect optional legacy Call Simulation relation %s. Treating it as unavailable: %s",
+            normalized_name,
+            exc,
+        )
+        exists = False
+
+    _LEGACY_CALL_SIMULATION_RELATION_CACHE[normalized_name] = exists
+    return exists
+
+
+def _legacy_call_simulation_mirror_relations_ready(
+    db: Session,
+    relation_names: list[str] | tuple[str, ...],
+    *,
+    context: str,
+) -> bool:
+    normalized_names = tuple(
+        sorted(
+            {
+                str(relation_name or "").strip().lower()
+                for relation_name in relation_names
+                if str(relation_name or "").strip()
+            }
+        )
+    )
+    if not normalized_names:
+        return False
+
+    missing_relations = [
+        relation_name
+        for relation_name in normalized_names
+        if not _legacy_call_simulation_relation_exists(db, relation_name)
+    ]
+    if not missing_relations:
+        return True
+
+    missing_key = tuple(missing_relations)
+    if missing_key not in _LEGACY_CALL_SIMULATION_SKIP_LOG_CACHE:
+        logger.info(
+            "Skipping legacy Call Simulation Supabase mirror for %s because these optional relations are not present in this project: %s. Core data is already saved through the primary Supabase Postgres connection.",
+            context,
+            ", ".join(missing_relations),
+        )
+        _LEGACY_CALL_SIMULATION_SKIP_LOG_CACHE.add(missing_key)
+    return False
 
 
 def _normalize_keyword_list(keywords: Optional[list[str]]) -> list[str]:
@@ -560,6 +651,14 @@ def _build_call_simulation_row_assets(
     variations: list[dict[str, Any]] = []
 
     for group_index, group in enumerate(grouped_rows):
+        if len(group["member_rows"]) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Scenario group {group['scenario_key']} contains multiple Member rows. "
+                    "Each Scenario Group can contain only one Member row."
+                ),
+            )
         canonical_variant = max(
             group["csr_variants"],
             key=lambda item: (
@@ -590,18 +689,19 @@ def _build_call_simulation_row_assets(
             else "Member"
         )
         is_last_group = group_index == len(grouped_rows) - 1
+        has_member_reply = bool(member_script or member_audio_url)
 
         script_flow.append(
             {
                 "step_id": f"scenario-{group['scenario_key']}",
                 "suggested_csr_script": canonical_variant["script"],
-                "member_response_text": "" if is_last_group else member_script,
+                "member_response_text": member_script if has_member_reply else "",
                 "point_value": point_value,
                 "expected_keywords": aggregate_keywords,
                 "actor_name": member_actor_name,
-                "next_actor_name": None if is_last_group else member_actor_name,
+                "next_actor_name": member_actor_name if has_member_reply else None,
                 "scenario": group["scenario_key"],
-                "member_audio_url": None if is_last_group else member_audio_url,
+                "member_audio_url": member_audio_url if has_member_reply else None,
                 "accepted_variants": [
                     {
                         "actor_name": row["actor_name"],
@@ -623,7 +723,7 @@ def _build_call_simulation_row_assets(
                 "expected_keywords": aggregate_keywords,
                 "audio_url": None,
                 "response_time_limit": None,
-                "is_closing": is_last_group,
+                "is_closing": is_last_group and not has_member_reply,
                 "metadata": {
                     "point_value": point_value,
                     "script_flow_step_id": f"scenario-{group['scenario_key']}",
@@ -645,7 +745,7 @@ def _build_call_simulation_row_assets(
             }
         )
 
-        if member_script and not is_last_group:
+        if has_member_reply:
             steps.append(
                 {
                     "step_number": len(steps) + 1,
@@ -655,7 +755,7 @@ def _build_call_simulation_row_assets(
                     "expected_keywords": [],
                     "audio_url": member_audio_url,
                     "response_time_limit": None,
-                    "is_closing": False,
+                    "is_closing": is_last_group,
                     "metadata": {
                         "point_value": 0.0,
                         "actor_name": member_actor_name,
@@ -1852,6 +1952,454 @@ def _normalize_uuid_candidate(value: Any) -> Optional[str]:
     )
 
 
+def _get_owned_scenario_for_audio_management(
+    db: Session,
+    current_user: User,
+    scenario_id: str,
+) -> Scenario:
+    scenario = _get_accessible_scenario(db, current_user, scenario_id)
+    if current_user.role != UserRole.ADMIN and scenario.created_by != current_user.id:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only manage audio for Call Simulation scenarios that you created.",
+        )
+    return scenario
+
+
+def _normalize_call_simulation_audio_content_type(content_type: Optional[str]) -> Optional[str]:
+    normalized = str(content_type or "").split(";", 1)[0].strip().lower()
+    if not normalized:
+        return None
+    return CALL_SIMULATION_AUDIO_MIME_ALIASES.get(normalized)
+
+
+def _infer_call_simulation_audio_content_type_from_name(filename: Optional[str]) -> Optional[str]:
+    extension = os.path.splitext(os.path.basename(filename or ""))[1].lower()
+    return CALL_SIMULATION_ALLOWED_AUDIO_EXTENSIONS.get(extension)
+
+
+def _sanitize_call_simulation_audio_stem(value: Optional[str], *, fallback: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return normalized[:80] or fallback
+
+
+def _prepare_call_simulation_audio_upload(
+    *,
+    file: UploadFile,
+    file_bytes: bytes,
+    fallback_stem: str,
+) -> dict[str, Any]:
+    file_size = len(file_bytes or b"")
+    if file_size <= 0:
+        raise HTTPException(status_code=400, detail="Uploaded audio asset is empty")
+    if file_size > CALL_SIMULATION_AUDIO_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Call Simulation audio must be 50 MB or smaller.",
+        )
+
+    original_name = file.filename or fallback_stem
+    original_extension = os.path.splitext(os.path.basename(original_name))[1].lower()
+    canonical_content_type = _normalize_call_simulation_audio_content_type(file.content_type)
+    extension_from_name = CALL_SIMULATION_ALLOWED_AUDIO_EXTENSIONS.get(original_extension)
+
+    if extension_from_name and canonical_content_type and extension_from_name != canonical_content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded audio file type does not match its filename extension.",
+        )
+
+    resolved_content_type = canonical_content_type or extension_from_name
+    if not resolved_content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported audio format. Upload MP3, WAV, OGG, or M4A audio.",
+        )
+
+    resolved_extension = original_extension or next(
+        (
+            extension
+            for extension, content_type in CALL_SIMULATION_ALLOWED_AUDIO_EXTENSIONS.items()
+            if content_type == resolved_content_type
+        ),
+        ".mp3",
+    )
+    sanitized_stem = _sanitize_call_simulation_audio_stem(
+        os.path.splitext(os.path.basename(original_name))[0],
+        fallback=fallback_stem,
+    )
+
+    return {
+        "content_type": resolved_content_type,
+        "extension": resolved_extension,
+        "file_size": file_size,
+        "sanitized_stem": sanitized_stem,
+    }
+
+
+def _resolve_call_simulation_storage_location(public_url: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    normalized_url = _normalize_optional_url(public_url)
+    if not normalized_url or normalized_url.startswith("data:audio/"):
+        return None, None
+
+    parsed = urlparse(normalized_url)
+    parsed_path = parsed.path or ""
+    if normalized_url.startswith("/media/") or parsed_path.startswith("/media/"):
+        media_path = normalized_url if normalized_url.startswith("/media/") else parsed_path
+        return None, media_path.replace("\\", "/").lstrip("/")
+
+    supabase = get_supabase_client()
+    for bucket_name in (
+        supabase.bucket_name,
+        supabase.profile_bucket_name,
+        supabase.call_simulation_bucket_name,
+        supabase.call_simulation_asset_bucket_name,
+        supabase.microlearning_bucket_name,
+    ):
+        marker = f"/storage/v1/object/public/{bucket_name}/"
+        if marker not in parsed_path:
+            continue
+        relative_path = parsed_path.split(marker, 1)[1].lstrip("/")
+        return bucket_name, unquote(relative_path)
+
+    return None, None
+
+
+def _is_local_media_public_url(public_url: Optional[str]) -> bool:
+    normalized_url = _normalize_optional_url(public_url)
+    if not normalized_url:
+        return False
+    if normalized_url.startswith("/media/"):
+        return True
+    return (urlparse(normalized_url).path or "").startswith("/media/")
+
+
+def _infer_call_simulation_audio_filename_from_url(
+    public_url: Optional[str],
+    *,
+    fallback: str,
+) -> str:
+    normalized_url = _normalize_optional_url(public_url)
+    if not normalized_url:
+        return fallback
+    if normalized_url.startswith("data:audio/"):
+        return fallback
+
+    parsed = urlparse(normalized_url)
+    leaf = os.path.basename(parsed.path or normalized_url).strip()
+    return leaf or fallback
+
+
+def _serialize_call_simulation_audio_asset(
+    asset: CallSimulationAudioAsset,
+) -> CallSimulationAudioAssetResponse:
+    return CallSimulationAudioAssetResponse.model_validate(asset)
+
+
+def _create_call_simulation_audio_asset_record(
+    db: Session,
+    *,
+    trainer_id: str,
+    scenario_id: Optional[str],
+    script_turn_id: Optional[str],
+    step_number: Optional[int],
+    asset_kind: str,
+    source_type: str,
+    public_url: Optional[str],
+    file_name: Optional[str],
+    file_type: Optional[str],
+    file_size: Optional[int] = None,
+    voice_used: Optional[str] = None,
+    provider: Optional[str] = None,
+    generated_text: Optional[str] = None,
+    asset_metadata: Optional[dict[str, Any]] = None,
+) -> Optional[CallSimulationAudioAsset]:
+    normalized_url = _normalize_optional_url(public_url)
+    if not normalized_url or normalized_url.startswith("data:audio/"):
+        return None
+
+    resolved_file_name = str(file_name or "").strip() or _infer_call_simulation_audio_filename_from_url(
+        normalized_url,
+        fallback=f"{asset_kind}.mp3",
+    )
+    resolved_file_type = str(file_type or "").strip() or _infer_call_simulation_audio_content_type_from_name(
+        resolved_file_name,
+    ) or "audio/mpeg"
+    bucket_name, storage_path = _resolve_call_simulation_storage_location(normalized_url)
+
+    asset = CallSimulationAudioAsset(
+        id=str(uuid.uuid4()),
+        trainer_id=str(trainer_id),
+        scenario_id=_normalize_uuid_candidate(scenario_id),
+        script_turn_id=_normalize_uuid_candidate(script_turn_id),
+        step_number=int(step_number) if isinstance(step_number, int) or str(step_number or "").isdigit() else None,
+        asset_kind=str(asset_kind or "").strip().lower() or "member-step",
+        source_type=str(source_type or "").strip().lower() or "upload",
+        file_name=resolved_file_name,
+        file_type=resolved_file_type,
+        file_size=int(file_size) if isinstance(file_size, int) or str(file_size or "").isdigit() else None,
+        bucket_name=bucket_name,
+        storage_path=storage_path,
+        public_url=normalized_url,
+        voice_used=_normalize_optional_url(voice_used),
+        provider=_normalize_optional_url(provider),
+        generated_text=str(generated_text or "").strip() or None,
+        asset_metadata=_normalize_json_object(asset_metadata),
+        is_active=True,
+        deleted_at=None,
+    )
+    db.add(asset)
+    db.flush()
+    return asset
+
+
+def _find_active_call_simulation_audio_asset(
+    db: Session,
+    *,
+    trainer_id: str,
+    public_url: Optional[str],
+    asset_kinds: list[str],
+    scenario_id: Optional[str] = None,
+    step_number: Optional[int] = None,
+) -> Optional[CallSimulationAudioAsset]:
+    normalized_url = _normalize_optional_url(public_url)
+    normalized_asset_kinds = [str(kind or "").strip().lower() for kind in asset_kinds if str(kind or "").strip()]
+    if not normalized_url or not normalized_asset_kinds:
+        return None
+
+    candidates = (
+        db.query(CallSimulationAudioAsset)
+        .filter(
+            CallSimulationAudioAsset.trainer_id == str(trainer_id),
+            CallSimulationAudioAsset.public_url == normalized_url,
+            CallSimulationAudioAsset.asset_kind.in_(normalized_asset_kinds),
+            CallSimulationAudioAsset.is_active == True,
+        )
+        .order_by(CallSimulationAudioAsset.updated_at.desc(), CallSimulationAudioAsset.created_at.desc())
+        .all()
+    )
+    if not candidates:
+        return None
+
+    for candidate in candidates:
+        if scenario_id and candidate.scenario_id == scenario_id and (
+            step_number is None or candidate.step_number == step_number
+        ):
+            return candidate
+    for candidate in candidates:
+        if candidate.scenario_id is None:
+            return candidate
+    return candidates[0]
+
+
+def _deactivate_call_simulation_audio_asset_record(
+    db: Session,
+    *,
+    asset: Optional[CallSimulationAudioAsset],
+    delete_storage: bool,
+) -> bool:
+    if not asset or not asset.is_active:
+        return False
+
+    asset.is_active = False
+    asset.deleted_at = datetime.utcnow()
+    db.add(asset)
+
+    if delete_storage:
+        get_supabase_client().delete_by_public_url(asset.public_url)
+    return True
+
+
+def _sync_call_simulation_audio_assets_for_scenario(
+    db: Session,
+    *,
+    scenario: Scenario,
+    trainer_id: str,
+    use_shared_ringer_audio: bool,
+    use_shared_hold_audio: bool,
+) -> list[CallSimulationAudioAsset]:
+    linked_assets: list[CallSimulationAudioAsset] = []
+    steps_by_number = {
+        int(step.step_number or 0): step
+        for step in list(getattr(scenario, "flow_steps", []) or [])
+        if step and step.step_number is not None
+    }
+
+    target_bindings: list[dict[str, Any]] = []
+    for step_number, step in steps_by_number.items():
+        if (step.speaker_role or "").strip().lower() != "member":
+            continue
+        if not _normalize_optional_url(step.prompt_audio):
+            continue
+        target_bindings.append(
+            {
+                "allowed_asset_kinds": ["member-step"],
+                "asset_kind": "member-step",
+                "public_url": step.prompt_audio,
+                "step_number": step_number,
+                "script_turn_id": step.id,
+            }
+        )
+
+    if not use_shared_ringer_audio and _normalize_optional_url(scenario.ringer_audio_url):
+        target_bindings.append(
+            {
+                "allowed_asset_kinds": ["scenario-ringer", "ringer"],
+                "asset_kind": "scenario-ringer",
+                "public_url": scenario.ringer_audio_url,
+                "step_number": None,
+                "script_turn_id": None,
+            }
+        )
+    if not use_shared_hold_audio and _normalize_optional_url(scenario.hold_audio_url):
+        target_bindings.append(
+            {
+                "allowed_asset_kinds": ["scenario-hold", "hold"],
+                "asset_kind": "scenario-hold",
+                "public_url": scenario.hold_audio_url,
+                "step_number": None,
+                "script_turn_id": None,
+            }
+        )
+
+    for binding in target_bindings:
+        existing = _find_active_call_simulation_audio_asset(
+            db,
+            trainer_id=trainer_id,
+            public_url=binding["public_url"],
+            asset_kinds=binding["allowed_asset_kinds"],
+            scenario_id=scenario.id,
+            step_number=binding["step_number"],
+        )
+        if existing:
+            existing.scenario_id = scenario.id
+            existing.script_turn_id = _normalize_uuid_candidate(binding["script_turn_id"])
+            existing.step_number = binding["step_number"]
+            db.add(existing)
+            linked_assets.append(existing)
+            continue
+
+        created = _create_call_simulation_audio_asset_record(
+            db,
+            trainer_id=trainer_id,
+            scenario_id=scenario.id,
+            script_turn_id=binding["script_turn_id"],
+            step_number=binding["step_number"],
+            asset_kind=binding["asset_kind"],
+            source_type="manual_url",
+            public_url=binding["public_url"],
+            file_name=None,
+            file_type=None,
+            asset_metadata={"linked_from_scenario_save": True},
+        )
+        if created:
+            linked_assets.append(created)
+
+    return linked_assets
+
+
+def _collect_scenario_audio_bindings(
+    scenario: Scenario,
+    *,
+    use_shared_ringer_audio: bool,
+    use_shared_hold_audio: bool,
+) -> list[dict[str, Any]]:
+    bindings: list[dict[str, Any]] = []
+    if not use_shared_ringer_audio and _normalize_optional_url(scenario.ringer_audio_url):
+        bindings.append(
+            {
+                "asset_kind": "scenario-ringer",
+                "step_number": None,
+                "public_url": scenario.ringer_audio_url,
+            }
+        )
+    if not use_shared_hold_audio and _normalize_optional_url(scenario.hold_audio_url):
+        bindings.append(
+            {
+                "asset_kind": "scenario-hold",
+                "step_number": None,
+                "public_url": scenario.hold_audio_url,
+            }
+        )
+
+    for step in list(getattr(scenario, "flow_steps", []) or []):
+        if (step.speaker_role or "").strip().lower() != "member":
+            continue
+        if not _normalize_optional_url(step.prompt_audio):
+            continue
+        bindings.append(
+            {
+                "asset_kind": "member-step",
+                "step_number": int(step.step_number or 0) or None,
+                "public_url": step.prompt_audio,
+            }
+        )
+
+    return bindings
+
+
+def _cleanup_removed_scenario_audio_assets(
+    db: Session,
+    *,
+    trainer_id: str,
+    scenario_id: str,
+    previous_bindings: list[dict[str, Any]],
+    current_bindings: list[dict[str, Any]],
+) -> None:
+    current_keys = {
+        (
+            str(binding.get("asset_kind") or "").strip().lower(),
+            binding.get("step_number"),
+            _normalize_optional_url(binding.get("public_url")),
+        )
+        for binding in current_bindings
+        if _normalize_optional_url(binding.get("public_url"))
+    }
+
+    for binding in previous_bindings:
+        public_url = _normalize_optional_url(binding.get("public_url"))
+        asset_kind = str(binding.get("asset_kind") or "").strip().lower()
+        step_number = binding.get("step_number")
+        binding_key = (asset_kind, step_number, public_url)
+        if not public_url or binding_key in current_keys:
+            continue
+
+        stale_records_query = db.query(CallSimulationAudioAsset).filter(
+            CallSimulationAudioAsset.trainer_id == str(trainer_id),
+            CallSimulationAudioAsset.scenario_id == str(scenario_id),
+            CallSimulationAudioAsset.asset_kind == asset_kind,
+            CallSimulationAudioAsset.public_url == public_url,
+            CallSimulationAudioAsset.is_active == True,
+        )
+        if step_number is None:
+            stale_records_query = stale_records_query.filter(CallSimulationAudioAsset.step_number.is_(None))
+        else:
+            stale_records_query = stale_records_query.filter(CallSimulationAudioAsset.step_number == int(step_number))
+
+        stale_records = stale_records_query.all()
+        if not stale_records:
+            continue
+
+        stale_record_ids = {record.id for record in stale_records}
+        is_still_referenced = (
+            db.query(CallSimulationAudioAsset)
+            .filter(
+                CallSimulationAudioAsset.trainer_id == str(trainer_id),
+                CallSimulationAudioAsset.public_url == public_url,
+                CallSimulationAudioAsset.is_active == True,
+                ~CallSimulationAudioAsset.id.in_(stale_record_ids),
+            )
+            .first()
+            is not None
+        )
+        for stale_record in stale_records:
+            _deactivate_call_simulation_audio_asset_record(
+                db,
+                asset=stale_record,
+                delete_storage=not is_still_referenced,
+            )
+
+
 def _sanitize_supabase_script_flow(script_flow: Any) -> list[dict[str, Any]]:
     sanitized_steps: list[dict[str, Any]] = []
     for index, step in enumerate(script_flow if isinstance(script_flow, list) else [], start=1):
@@ -1992,6 +2540,7 @@ def _build_supabase_authoring_script_rows(
 
 
 def _sync_supabase_scenario_authoring_tables(
+    db: Session,
     supabase: Any,
     *,
     source_scenario_id: str,
@@ -2013,6 +2562,13 @@ def _sync_supabase_scenario_authoring_tables(
         raise RuntimeError(
             "Scenario sync requires a UUID-shaped scenario id before it can mirror the trainer record to Supabase."
         )
+
+    if not _legacy_call_simulation_mirror_relations_ready(
+        db,
+        ("scenarios", "scenario_groups", "scripts", "scenario_scripts", "kpi_metrics"),
+        context=f"scenario authoring sync for scenario {source_scenario_id}",
+    ):
+        return
 
     trainer_uuid = _normalize_uuid_candidate(trainer_id)
     resolved_topic = str(topic or "").strip() or str(title or "").strip() or "Call Scenario"
@@ -2159,6 +2715,13 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
         "metadata": scenario_config,
     }
 
+    if not _legacy_call_simulation_mirror_relations_ready(
+        db,
+        ("call_scenarios",),
+        context=f"scenario sync for {scenario.id}",
+    ):
+        return scenario_sync_data
+
     try:
         supabase.table("call_scenarios").upsert(
             scenario_sync_data,
@@ -2171,6 +2734,7 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
                 supabase_error,
             )
             _sync_supabase_scenario_authoring_tables(
+                db,
                 supabase,
                 source_scenario_id=scenario_sync_data["source_scenario_id"],
                 trainer_id=scenario_sync_data["trainer_id"],
@@ -2222,6 +2786,7 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
                         legacy_error,
                     )
                     _sync_supabase_scenario_authoring_tables(
+                        db,
                         supabase,
                         source_scenario_id=scenario_sync_data["source_scenario_id"],
                         trainer_id=scenario_sync_data["trainer_id"],
@@ -2251,6 +2816,7 @@ def _sync_call_simulation_scenario_to_supabase_from_db(
                 raise
 
     _sync_supabase_scenario_authoring_tables(
+        db,
         supabase,
         source_scenario_id=scenario_sync_data["source_scenario_id"],
         trainer_id=scenario_sync_data["trainer_id"],
@@ -2372,23 +2938,36 @@ def _sync_call_simulation_batch_mirror_or_raise(
 
 
 def _delete_supabase_scenario_mirror(
+    db: Session,
     supabase: Any,
     *,
     source_scenario_id: str,
 ) -> None:
-    try:
-        supabase.table("call_scenarios").delete().eq("source_scenario_id", source_scenario_id).execute()
-    except Exception as exc:
-        if _is_missing_supabase_table_error(exc):
-            _log_legacy_supabase_mirror_skip(
-                f"scenario delete for {source_scenario_id}",
-                exc,
-            )
-            return
-        supabase.table("call_scenarios").delete().eq("scenario_id", source_scenario_id).execute()
+    if _legacy_call_simulation_mirror_relations_ready(
+        db,
+        ("call_scenarios",),
+        context=f"scenario delete for {source_scenario_id}",
+    ):
+        try:
+            supabase.table("call_scenarios").delete().eq("source_scenario_id", source_scenario_id).execute()
+        except Exception as exc:
+            if _is_missing_supabase_table_error(exc):
+                _log_legacy_supabase_mirror_skip(
+                    f"scenario delete for {source_scenario_id}",
+                    exc,
+                )
+            else:
+                supabase.table("call_scenarios").delete().eq("scenario_id", source_scenario_id).execute()
 
     normalized_scenario_id = _normalize_uuid_candidate(source_scenario_id)
     if not normalized_scenario_id:
+        return
+
+    if not _legacy_call_simulation_mirror_relations_ready(
+        db,
+        ("scenario_scripts", "scripts", "kpi_metrics", "scenario_groups", "scenarios"),
+        context=f"scenario authoring delete for {source_scenario_id}",
+    ):
         return
 
     try:
@@ -2408,6 +2987,7 @@ def _delete_supabase_scenario_mirror(
 
 
 def _delete_call_simulation_scenario_mirror_or_raise(
+    db: Session,
     *,
     source_scenario_id: str,
     detail: str,
@@ -2415,6 +2995,7 @@ def _delete_call_simulation_scenario_mirror_or_raise(
     try:
         supabase = _require_supabase_storage(detail)
         _delete_supabase_scenario_mirror(
+            db,
             supabase,
             source_scenario_id=source_scenario_id,
         )
@@ -2571,6 +3152,57 @@ def _persist_trainer_call_audio_settings(
             detail="Supabase sync is required before saving Call Simulation audio settings.",
         )
 
+    for asset_kind in ("ringer", "hold"):
+        current_url = settings.get(f"{asset_kind}_audio_url")
+        current_source = settings.get(f"{asset_kind}_audio_source")
+        previous_url = previous_settings.get(f"{asset_kind}_audio_url")
+
+        if current_url:
+            existing_record = _find_active_call_simulation_audio_asset(
+                db,
+                trainer_id=current_user.id,
+                public_url=current_url,
+                asset_kinds=[asset_kind],
+            )
+            if existing_record is None:
+                source_type = "manual_url"
+                if current_source == "upload":
+                    source_type = "upload"
+                elif current_source == "generated_tts":
+                    source_type = "generated_tts"
+                _create_call_simulation_audio_asset_record(
+                    db,
+                    trainer_id=current_user.id,
+                    scenario_id=None,
+                    script_turn_id=None,
+                    step_number=None,
+                    asset_kind=asset_kind,
+                    source_type=source_type,
+                    public_url=current_url,
+                    file_name=None,
+                    file_type=None,
+                    asset_metadata={"scope": "shared"},
+                )
+
+        if previous_url and previous_url != current_url:
+            stale_records = (
+                db.query(CallSimulationAudioAsset)
+                .filter(
+                    CallSimulationAudioAsset.trainer_id == current_user.id,
+                    CallSimulationAudioAsset.public_url == previous_url,
+                    CallSimulationAudioAsset.asset_kind == asset_kind,
+                    CallSimulationAudioAsset.is_active == True,
+                    CallSimulationAudioAsset.scenario_id.is_(None),
+                )
+                .all()
+            )
+            for stale_record in stale_records:
+                _deactivate_call_simulation_audio_asset_record(
+                    db,
+                    asset=stale_record,
+                    delete_storage=False,
+                )
+
     db.commit()
     db.refresh(current_user)
 
@@ -2580,7 +3212,7 @@ def _persist_trainer_call_audio_settings(
             previous_url = previous_settings.get(f"{asset_kind}_audio_url")
             previous_source = previous_settings.get(f"{asset_kind}_audio_source")
             current_url = settings.get(f"{asset_kind}_audio_url")
-            if previous_source == "upload" and previous_url and previous_url != current_url:
+            if previous_source in {"upload", "generated_tts"} and previous_url and previous_url != current_url:
                 supabase.delete_by_public_url(previous_url)
 
     return _serialize_trainer_call_audio_settings(current_user)
@@ -3892,6 +4524,20 @@ async def create_call_simulation_scenario(
             steps=scenario_data.steps,
         )
 
+    _sync_call_simulation_audio_assets_for_scenario(
+        db,
+        scenario=new_scenario,
+        trainer_id=str(current_user.id),
+        use_shared_ringer_audio=_coerce_call_simulation_bool(
+            call_simulation_config.get("use_shared_ringer_audio"),
+            fallback=True,
+        ),
+        use_shared_hold_audio=_coerce_call_simulation_bool(
+            call_simulation_config.get("use_shared_hold_audio"),
+            fallback=True,
+        ),
+    )
+
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, new_scenario.id)
     _sync_call_simulation_scenario_mirror_or_raise(
@@ -4091,7 +4737,19 @@ async def update_call_simulation_scenario(
 ):
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
-    scenario = _get_accessible_scenario(db, current_user, scenario_id)
+    scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
+    previous_config = _resolve_call_simulation_config(scenario)
+    previous_audio_bindings = _collect_scenario_audio_bindings(
+        scenario,
+        use_shared_ringer_audio=_coerce_call_simulation_bool(
+            previous_config.get("use_shared_ringer_audio"),
+            fallback=True,
+        ),
+        use_shared_hold_audio=_coerce_call_simulation_bool(
+            previous_config.get("use_shared_hold_audio"),
+            fallback=True,
+        ),
+    )
     trainer_audio_settings = _get_trainer_call_audio_settings(current_user)
     update_fields = set(scenario_update.model_fields_set or set())
     normalized_expected_keywords = (
@@ -4318,6 +4976,34 @@ async def update_call_simulation_scenario(
             steps=scenario_update.steps,
         )
 
+    current_use_shared_ringer_audio = _coerce_call_simulation_bool(
+        _normalize_json_object(scenario.call_simulation_config).get("use_shared_ringer_audio"),
+        fallback=True,
+    )
+    current_use_shared_hold_audio = _coerce_call_simulation_bool(
+        _normalize_json_object(scenario.call_simulation_config).get("use_shared_hold_audio"),
+        fallback=True,
+    )
+    _sync_call_simulation_audio_assets_for_scenario(
+        db,
+        scenario=scenario,
+        trainer_id=str(scenario.created_by or current_user.id),
+        use_shared_ringer_audio=current_use_shared_ringer_audio,
+        use_shared_hold_audio=current_use_shared_hold_audio,
+    )
+    current_audio_bindings = _collect_scenario_audio_bindings(
+        scenario,
+        use_shared_ringer_audio=current_use_shared_ringer_audio,
+        use_shared_hold_audio=current_use_shared_hold_audio,
+    )
+    _cleanup_removed_scenario_audio_assets(
+        db,
+        trainer_id=str(scenario.created_by or current_user.id),
+        scenario_id=scenario.id,
+        previous_bindings=previous_audio_bindings,
+        current_bindings=current_audio_bindings,
+    )
+
     db.flush()
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
     _sync_call_simulation_scenario_mirror_or_raise(
@@ -4360,7 +5046,7 @@ async def delete_call_simulation_scenario(
 ):
     current_user = await auth_utils.get_current_user(authorization, db)
     _require_trainer(current_user)
-    scenario = _get_accessible_scenario(db, current_user, scenario_id)
+    scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
 
     scenario.is_published = False
     scenario.is_draft = True
@@ -4383,6 +5069,7 @@ async def delete_call_simulation_scenario(
 
     _sync_call_simulation_assignments_for_scenario(db, scenario.id)
     _delete_call_simulation_scenario_mirror_or_raise(
+        db,
         source_scenario_id=scenario.id,
         detail="Supabase sync is required before archiving a Call Simulation scenario.",
     )
@@ -4497,6 +5184,15 @@ async def sync_scenario_to_supabase(
                 "metadata": _normalize_json_object(scenario_data.get("metadata")),
             }
 
+        if not _legacy_call_simulation_mirror_relations_ready(
+            db,
+            ("call_scenarios",),
+            context=f"manual scenario sync for {scenario_sync_data.get('source_scenario_id')}",
+        ):
+            return SuccessResponse(
+                message="Scenario data already persists through the primary Supabase Postgres connection. Legacy mirror tables are not enabled in this project."
+            )
+
         try:
             # Try to upsert the scenario record - Supabase will use the unique index on source_scenario_id
             result = supabase.table("call_scenarios").upsert(
@@ -4547,6 +5243,7 @@ async def sync_scenario_to_supabase(
                 raise fallback_error
 
         _sync_supabase_scenario_authoring_tables(
+            db,
             supabase,
             source_scenario_id=scenario_sync_data["source_scenario_id"],
             trainer_id=scenario_sync_data["trainer_id"],
@@ -4594,6 +5291,7 @@ async def delete_scenario_from_supabase(
             "Supabase sync is required for call simulation scenario cleanup."
         )
         _delete_supabase_scenario_mirror(
+            db,
             supabase,
             source_scenario_id=scenario_id,
         )
@@ -4662,6 +5360,15 @@ async def sync_kpi_to_supabase(
 
         if not normalized_metrics:
             raise HTTPException(status_code=400, detail="metrics must contain at least one named KPI weight")
+
+        if not _legacy_call_simulation_mirror_relations_ready(
+            db,
+            ("kpi_metrics",),
+            context=f"kpi sync for scenario groups {', '.join(normalized_scenario_group_ids)}",
+        ):
+            return SuccessResponse(
+                message="KPI settings are already saved in Supabase Postgres. Legacy mirror tables are not enabled in this project."
+            )
 
         try:
             supabase.table("kpi_metrics").delete().in_(
@@ -5574,11 +6281,47 @@ async def delete_call_simulation_audio_setting(
     return _persist_trainer_call_audio_settings(db, current_user, hold_audio_url=None, hold_audio_source=None)
 
 
-@router.post("/assets/audio")
+@router.get("/audio-assets", response_model=list[CallSimulationAudioAssetResponse])
+async def list_call_simulation_audio_assets(
+    scenario_id: Optional[str] = Query(None),
+    scope: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    normalized_scope = str(scope or "").strip().lower()
+    if scenario_id:
+        _get_accessible_scenario(db, current_user, scenario_id)
+
+    query = (
+        db.query(CallSimulationAudioAsset)
+        .filter(
+            CallSimulationAudioAsset.trainer_id == current_user.id,
+            CallSimulationAudioAsset.is_active == True,
+        )
+        .order_by(CallSimulationAudioAsset.updated_at.desc(), CallSimulationAudioAsset.created_at.desc())
+    )
+
+    if scenario_id:
+        query = query.filter(CallSimulationAudioAsset.scenario_id == scenario_id)
+    elif normalized_scope == "shared":
+        query = query.filter(
+            CallSimulationAudioAsset.scenario_id.is_(None),
+            CallSimulationAudioAsset.asset_kind.in_(["ringer", "hold"]),
+        )
+
+    assets = query.all()
+    return [_serialize_call_simulation_audio_asset(asset) for asset in assets]
+
+
+@router.post("/assets/audio", response_model=CallSimulationAudioAssetUploadResponse)
 async def upload_call_simulation_audio_asset(
     asset_kind: str = Form(...),
     scenario_id: Optional[str] = Form(None),
     step_number: Optional[int] = Form(None),
+    replace_audio_url: Optional[str] = Form(None),
     file: UploadFile = File(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
@@ -5595,31 +6338,22 @@ async def upload_call_simulation_audio_asset(
     if normalized_asset_kind in {"ringer", "hold"}:
         scenario_segment = "global"
     elif scenario_id:
-        scenario = _get_accessible_scenario(db, current_user, scenario_id)
+        scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
         scenario_segment = scenario.id
 
     file_bytes = await file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Uploaded audio asset is empty")
-
-    mime_type = (file.content_type or "").strip().lower()
-    if mime_type and not mime_type.startswith("audio/"):
-        raise HTTPException(status_code=400, detail="Only audio files can be uploaded for Call Simulation assets")
-
-    original_name = file.filename or "call-simulation-asset"
-    base_name, extension = os.path.splitext(original_name)
-    safe_extension = extension if extension else ".mp3"
-    normalized_base = "".join(
-        character.lower() if character.isalnum() else "-"
-        for character in (base_name or "call-simulation-asset")
-    ).strip("-") or "call-simulation-asset"
+    upload_meta = _prepare_call_simulation_audio_upload(
+        file=file,
+        file_bytes=file_bytes,
+        fallback_stem="call-simulation-asset",
+    )
     step_prefix = (
         f"step-{max(int(step_number or 0), 0):02d}_"
         if normalized_asset_kind == "member-step" and step_number
         else ""
     )
     storage_leaf = (
-        f"{step_prefix}{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{normalized_base}{safe_extension}"
+        f"{step_prefix}{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{upload_meta['sanitized_stem']}{upload_meta['extension']}"
     )
 
     supabase = get_supabase_client()
@@ -5629,7 +6363,7 @@ async def upload_call_simulation_audio_asset(
         scenario_id=scenario_segment,
         asset_kind=normalized_asset_kind,
         filename=storage_leaf,
-        content_type=file.content_type or "audio/mpeg",
+        content_type=str(upload_meta["content_type"]),
     )
     if not audio_url:
         raise HTTPException(
@@ -5638,6 +6372,7 @@ async def upload_call_simulation_audio_asset(
         )
 
     settings_payload: Optional[CallSimulationAudioSettingsResponse] = None
+    audio_asset: Optional[CallSimulationAudioAsset] = None
     if normalized_asset_kind in {"ringer", "hold"}:
         if normalized_asset_kind == "ringer":
             settings_payload = _persist_trainer_call_audio_settings(
@@ -5653,14 +6388,143 @@ async def upload_call_simulation_audio_asset(
                 hold_audio_url=audio_url,
                 hold_audio_source="upload",
             )
+        audio_asset = _find_active_call_simulation_audio_asset(
+            db,
+            trainer_id=current_user.id,
+            public_url=audio_url,
+            asset_kinds=[normalized_asset_kind],
+        )
+    else:
+        audio_asset = _create_call_simulation_audio_asset_record(
+            db,
+            trainer_id=current_user.id,
+            scenario_id=scenario_id,
+            script_turn_id=None,
+            step_number=step_number,
+            asset_kind=normalized_asset_kind,
+            source_type="upload",
+            public_url=audio_url,
+            file_name=storage_leaf,
+            file_type=str(upload_meta["content_type"]),
+            file_size=int(upload_meta["file_size"]),
+            asset_metadata={"uploaded_filename": file.filename or storage_leaf},
+        )
+        db.commit()
 
-    return {
-        "audio_url": audio_url,
-        "asset_kind": normalized_asset_kind,
-        "filename": storage_leaf,
-        "scenario_id": scenario_segment,
-        "settings": settings_payload.model_dump() if settings_payload else None,
-    }
+    if replace_audio_url and replace_audio_url != audio_url:
+        if normalized_asset_kind in {"ringer", "hold"}:
+            stale_shared_assets = (
+                db.query(CallSimulationAudioAsset)
+                .filter(
+                    CallSimulationAudioAsset.trainer_id == current_user.id,
+                    CallSimulationAudioAsset.public_url == replace_audio_url,
+                    CallSimulationAudioAsset.asset_kind == normalized_asset_kind,
+                    CallSimulationAudioAsset.is_active == True,
+                    CallSimulationAudioAsset.scenario_id.is_(None),
+                )
+                .all()
+            )
+            for stale_asset in stale_shared_assets:
+                _deactivate_call_simulation_audio_asset_record(
+                    db,
+                    asset=stale_asset,
+                    delete_storage=True,
+                )
+            if stale_shared_assets:
+                db.commit()
+        else:
+            stale_asset = _find_active_call_simulation_audio_asset(
+                db,
+                trainer_id=current_user.id,
+                public_url=replace_audio_url,
+                asset_kinds=[normalized_asset_kind],
+                scenario_id=scenario_id,
+                step_number=step_number,
+            )
+            if stale_asset:
+                _deactivate_call_simulation_audio_asset_record(
+                    db,
+                    asset=stale_asset,
+                    delete_storage=True,
+                )
+                db.commit()
+
+    return CallSimulationAudioAssetUploadResponse(
+        audio_url=audio_url,
+        asset_kind=normalized_asset_kind,
+        filename=storage_leaf,
+        scenario_id=None if scenario_segment in {"draft", "global"} else scenario_segment,
+        settings=settings_payload,
+        audio_asset=_serialize_call_simulation_audio_asset(audio_asset) if audio_asset else None,
+    )
+
+
+@router.delete("/audio-assets", response_model=SuccessResponse)
+async def delete_call_simulation_audio_asset(
+    payload: dict[str, Any] = Body(...),
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainer(current_user)
+
+    normalized_asset_kind = str(payload.get("asset_kind") or "").strip().lower()
+    allowed_asset_kinds = {"member-step", "ringer", "hold", "scenario-ringer", "scenario-hold"}
+    if normalized_asset_kind not in allowed_asset_kinds:
+        raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
+
+    scenario_id = _normalize_uuid_candidate(payload.get("scenario_id"))
+    if scenario_id and normalized_asset_kind not in {"ringer", "hold"}:
+        _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
+
+    audio_url = _normalize_optional_url(payload.get("audio_url"))
+    if not audio_url:
+        raise HTTPException(status_code=400, detail="Audio URL is required to remove the asset.")
+
+    step_number_value = payload.get("step_number")
+    step_number = int(step_number_value) if isinstance(step_number_value, int) or str(step_number_value or "").isdigit() else None
+
+    query = db.query(CallSimulationAudioAsset).filter(
+        CallSimulationAudioAsset.trainer_id == current_user.id,
+        CallSimulationAudioAsset.public_url == audio_url,
+        CallSimulationAudioAsset.asset_kind == normalized_asset_kind,
+        CallSimulationAudioAsset.is_active == True,
+    )
+    if scenario_id:
+        query = query.filter(
+            (CallSimulationAudioAsset.scenario_id == scenario_id)
+            | (CallSimulationAudioAsset.scenario_id.is_(None))
+        )
+    if step_number is not None:
+        query = query.filter(CallSimulationAudioAsset.step_number == step_number)
+
+    matching_assets = query.all()
+    if not matching_assets:
+        get_supabase_client().delete_by_public_url(audio_url)
+        return SuccessResponse(message="Audio asset removed.")
+
+    matching_ids = {asset.id for asset in matching_assets}
+    is_still_referenced = (
+        db.query(CallSimulationAudioAsset)
+        .filter(
+            CallSimulationAudioAsset.trainer_id == current_user.id,
+            CallSimulationAudioAsset.public_url == audio_url,
+            CallSimulationAudioAsset.is_active == True,
+            ~CallSimulationAudioAsset.id.in_(matching_ids),
+        )
+        .first()
+        is not None
+    )
+
+    for asset in matching_assets:
+        _deactivate_call_simulation_audio_asset_record(
+            db,
+            asset=asset,
+            delete_storage=not is_still_referenced,
+        )
+
+    db.commit()
+    return SuccessResponse(message="Audio asset removed.")
 
 
 # ==================== Trainee Simulation ====================
@@ -5888,9 +6752,11 @@ async def get_available_scenarios(
 async def synthesize_member_speech(
     text: str = Query(...),
     persist: bool = Query(False),
+    require_supabase: bool = Query(False),
     scenario_id: Optional[str] = Query(None),
     step_number: Optional[int] = Query(None, ge=1),
     asset_kind: str = Query("member-step"),
+    replace_audio_url: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
@@ -5904,6 +6770,9 @@ async def synthesize_member_speech(
         raise HTTPException(status_code=400, detail="Text is required")
 
     browser_fallback_message = "AI voice is using browser fallback mode."
+    strict_persistence_message = (
+        "Generated speech must be saved to Supabase storage, but that upload did not complete."
+    )
 
     try:
         audio_result = await text_to_speech(
@@ -5937,16 +6806,25 @@ async def synthesize_member_speech(
 
     storage_mode = "inline"
     storage_warning: Optional[str] = None
+    audio_asset: Optional[CallSimulationAudioAsset] = None
+    normalized_asset_kind = str(asset_kind or "").strip().lower() or "member-step"
 
     if persist:
         if not is_trainer_request:
             raise HTTPException(status_code=403, detail="Only trainers can persist Call Simulation member audio.")
-        if asset_kind not in {"member-step", "ringer", "hold"}:
+        if normalized_asset_kind not in {"member-step", "ringer", "hold", "scenario-ringer", "scenario-hold"}:
             raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
+        supabase = get_supabase_client()
+        if require_supabase and not supabase.is_available:
+            raise HTTPException(status_code=503, detail=strict_persistence_message)
 
+        normalized_replace_audio_url = _normalize_optional_url(replace_audio_url)
         scenario_segment = "draft"
-        if scenario_id:
-            scenario = _get_accessible_scenario(db, current_user, scenario_id)
+        scenario: Optional[Scenario] = None
+        if normalized_asset_kind in {"ringer", "hold"}:
+            scenario_segment = "global"
+        elif scenario_id:
+            scenario = _get_owned_scenario_for_audio_management(db, current_user, scenario_id)
             scenario_segment = scenario.id
 
         upload_bytes: Optional[bytes] = audio_bytes
@@ -5973,6 +6851,14 @@ async def synthesize_member_speech(
                 upload_bytes = None
 
         if upload_bytes is None:
+            if require_supabase:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Generated speech could not be synthesized by the backend, "
+                        "so nothing was saved to Supabase."
+                    ),
+                )
             logger.warning(
                 "Call Simulation member audio will use browser fallback instead of a persisted asset. "
                 "scenario_id=%s step_number=%s provider=%s reason=%s",
@@ -5993,28 +6879,140 @@ async def synthesize_member_speech(
 
         timestamp = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
         safe_leaf = re.sub(r"[^a-z0-9]+", "-", normalized_text.lower()).strip("-") or "member-script"
-        prefix = f"step-{int(step_number):02d}_" if asset_kind == "member-step" and step_number else ""
+        prefix = f"step-{int(step_number):02d}_" if normalized_asset_kind == "member-step" and step_number else ""
         filename = f"{prefix}{timestamp}_{safe_leaf[:48]}.{audio_extension}"
 
-        supabase = get_supabase_client()
         uploaded_audio_url = supabase.upload_call_simulation_asset(
             file_data=upload_bytes,
             trainer_id=current_user.id,
             scenario_id=scenario_segment,
-            asset_kind=asset_kind,
+            asset_kind=normalized_asset_kind,
             filename=filename,
             content_type=audio_content_type,
         )
         if uploaded_audio_url:
+            if require_supabase and _is_local_media_public_url(uploaded_audio_url):
+                supabase.delete_by_public_url(uploaded_audio_url)
+                raise HTTPException(status_code=503, detail=strict_persistence_message)
             audio_url = uploaded_audio_url
-            storage_mode = "local" if uploaded_audio_url.startswith("/media/") else "supabase"
+            storage_mode = "local" if _is_local_media_public_url(uploaded_audio_url) else "supabase"
+            if normalized_asset_kind in {"ringer", "hold"}:
+                audio_asset = _find_active_call_simulation_audio_asset(
+                    db,
+                    trainer_id=current_user.id,
+                    public_url=uploaded_audio_url,
+                    asset_kinds=[normalized_asset_kind],
+                )
+                if audio_asset is None:
+                    audio_asset = _create_call_simulation_audio_asset_record(
+                        db,
+                        trainer_id=current_user.id,
+                        scenario_id=None,
+                        script_turn_id=None,
+                        step_number=None,
+                        asset_kind=normalized_asset_kind,
+                        source_type="generated_tts",
+                        public_url=uploaded_audio_url,
+                        file_name=filename,
+                        file_type=audio_content_type,
+                        file_size=len(upload_bytes),
+                        voice_used="Puck",
+                        provider=provider,
+                        generated_text=normalized_text,
+                        asset_metadata={"storage_mode": storage_mode, "scope": "shared"},
+                    )
+
+                if normalized_asset_kind == "ringer":
+                    _persist_trainer_call_audio_settings(
+                        db,
+                        current_user,
+                        ringer_audio_url=uploaded_audio_url,
+                        ringer_audio_source="generated_tts",
+                    )
+                else:
+                    _persist_trainer_call_audio_settings(
+                        db,
+                        current_user,
+                        hold_audio_url=uploaded_audio_url,
+                        hold_audio_source="generated_tts",
+                    )
+            else:
+                audio_asset = _create_call_simulation_audio_asset_record(
+                    db,
+                    trainer_id=current_user.id,
+                    scenario_id=scenario_id,
+                    script_turn_id=None,
+                    step_number=step_number,
+                    asset_kind=normalized_asset_kind,
+                    source_type="generated_tts",
+                    public_url=uploaded_audio_url,
+                    file_name=filename,
+                    file_type=audio_content_type,
+                    file_size=len(upload_bytes),
+                    voice_used="Puck",
+                    provider=provider,
+                    generated_text=normalized_text,
+                    asset_metadata={"storage_mode": storage_mode},
+                )
+                db.commit()
+
+            if (
+                normalized_replace_audio_url
+                and normalized_replace_audio_url != uploaded_audio_url
+            ):
+                if normalized_asset_kind in {"ringer", "hold"}:
+                    stale_shared_assets = (
+                        db.query(CallSimulationAudioAsset)
+                        .filter(
+                            CallSimulationAudioAsset.trainer_id == current_user.id,
+                            CallSimulationAudioAsset.public_url == normalized_replace_audio_url,
+                            CallSimulationAudioAsset.asset_kind == normalized_asset_kind,
+                            CallSimulationAudioAsset.is_active == True,
+                            CallSimulationAudioAsset.scenario_id.is_(None),
+                        )
+                        .all()
+                    )
+                    for stale_asset in stale_shared_assets:
+                        _deactivate_call_simulation_audio_asset_record(
+                            db,
+                            asset=stale_asset,
+                            delete_storage=True,
+                        )
+                    if stale_shared_assets:
+                        db.commit()
+                else:
+                    stale_asset = _find_active_call_simulation_audio_asset(
+                        db,
+                        trainer_id=current_user.id,
+                        public_url=normalized_replace_audio_url,
+                        asset_kinds=[normalized_asset_kind],
+                        scenario_id=scenario_id,
+                        step_number=step_number,
+                    )
+                    if stale_asset:
+                        _deactivate_call_simulation_audio_asset_record(
+                            db,
+                            asset=stale_asset,
+                            delete_storage=True,
+                        )
+                        db.commit()
         else:
-            audio_url = None
-            storage_mode = "browser-fallback"
-            storage_warning = browser_fallback_message
+            if require_supabase:
+                raise HTTPException(status_code=503, detail=strict_persistence_message)
+            if upload_bytes:
+                audio_url = _build_audio_data_url(upload_bytes, audio_content_type)
+                storage_mode = "embedded"
+                storage_warning = (
+                    "Generated speech was embedded directly in the scenario because cloud storage was unavailable."
+                )
+            else:
+                audio_url = None
+                storage_mode = "browser-fallback"
+                storage_warning = browser_fallback_message
             logger.warning(
-                "Call Simulation TTS asset upload failed, so runtime browser fallback will be used instead. "
+                "Call Simulation TTS asset upload failed. Falling back to %s delivery instead. "
                 "trainer_id=%s scenario_segment=%s asset_kind=%s",
+                storage_mode,
                 current_user.id,
                 scenario_segment,
                 asset_kind,
@@ -6042,6 +7040,7 @@ async def synthesize_member_speech(
         "storage_mode": storage_mode,
         "warning": storage_warning,
         "fallback_mode": fallback_mode,
+        "audio_asset": _serialize_call_simulation_audio_asset(audio_asset).model_dump() if audio_asset else None,
     }
 
 

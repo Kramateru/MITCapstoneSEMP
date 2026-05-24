@@ -374,6 +374,27 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
     case 'case_study':
       return {
         ...preserved,
+        asset_url: form.content_url || undefined,
+        audio_url: form.content_url || undefined,
+        asset_record_id: form.asset_record_id || undefined,
+        asset_storage_path: form.asset_storage_path || undefined,
+        audio_storage_path: form.asset_storage_path || undefined,
+        asset_bucket: form.asset_bucket_name || undefined,
+        audio_bucket: form.asset_bucket_name || undefined,
+        asset_content_type: form.asset_content_type || undefined,
+        audio_content_type: form.asset_content_type || undefined,
+        file_name: form.asset_file_name || undefined,
+        audio_original_filename: form.asset_file_name || undefined,
+        file_size: form.asset_file_size > 0 ? form.asset_file_size : undefined,
+        uploaded_at: form.asset_uploaded_at || undefined,
+        storage_backend: form.asset_storage_path
+          ? 'supabase_storage'
+          : form.asset_record_id
+            ? 'supabase_postgres'
+            : undefined,
+        signed_url_required: form.asset_storage_path
+          ? form.asset_signed_url_required !== false
+          : undefined,
         content: form.case_study_content,
         questions: form.case_study_questions.map(q => ({
           question: q.question,

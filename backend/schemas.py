@@ -829,6 +829,40 @@ class CallSimulationAudioSettingsResponse(BaseModel):
     updated_at: Optional[str] = None
 
 
+class CallSimulationAudioAssetResponse(BaseModel):
+    id: str
+    trainer_id: str
+    scenario_id: Optional[str] = None
+    script_turn_id: Optional[str] = None
+    step_number: Optional[int] = None
+    asset_kind: str
+    source_type: str
+    file_name: str
+    file_type: str
+    file_size: Optional[int] = None
+    bucket_name: Optional[str] = None
+    storage_path: Optional[str] = None
+    public_url: str
+    voice_used: Optional[str] = None
+    provider: Optional[str] = None
+    generated_text: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class CallSimulationAudioAssetUploadResponse(BaseModel):
+    audio_url: str
+    asset_kind: str
+    filename: str
+    scenario_id: Optional[str] = None
+    settings: Optional[CallSimulationAudioSettingsResponse] = None
+    audio_asset: Optional[CallSimulationAudioAssetResponse] = None
+
+
 class BatchScenarioMappingCreate(BaseModel):
     """Create batch-scenario mapping"""
 

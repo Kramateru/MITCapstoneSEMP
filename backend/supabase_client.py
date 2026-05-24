@@ -529,11 +529,13 @@ class SupabaseClient:
         relative_path = f"practice-audio/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
 
         if not self.is_available:
-            if self._allow_explicit_local_media_fallback():
-                logger.warning("Supabase not available. Using explicitly enabled local fallback for Call Simulation asset upload.")
-                return self._write_local_media_copy(
-                    relative_path=relative_path,
-                    file_data=file_data,
+            if self._allow_local_media_fallback():
+                logger.warning("Supabase not available. Using local media fallback for Call Simulation asset upload.")
+                return self._to_public_media_url(
+                    self._write_local_media_copy(
+                        relative_path=relative_path,
+                        file_data=file_data,
+                    )
                 )
             logger.warning("Supabase not available. Call Simulation asset upload was rejected.")
             return None
@@ -549,14 +551,16 @@ class SupabaseClient:
             logger.info(f"Call Simulation asset uploaded: {path}")
             return public_url
 
-        if self._allow_explicit_local_media_fallback():
+        if self._allow_local_media_fallback():
             logger.warning(
-                "Supabase upload failed. Using explicitly enabled local fallback for Call Simulation asset: %s",
+                "Supabase upload failed. Using local media fallback for Call Simulation asset: %s",
                 relative_path,
             )
-            return self._write_local_media_copy(
-                relative_path=relative_path,
-                file_data=file_data,
+            return self._to_public_media_url(
+                self._write_local_media_copy(
+                    relative_path=relative_path,
+                    file_data=file_data,
+                )
             )
 
         logger.error("Failed to upload Call Simulation asset to Supabase and local fallback is disabled.")

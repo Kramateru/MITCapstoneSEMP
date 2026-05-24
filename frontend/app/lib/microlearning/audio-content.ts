@@ -15,6 +15,23 @@ const GEMINI_READY_DELAY_MS = 1500
 const SIGNED_URL_TTL_SECONDS = 60 * 60
 const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 const SUPABASE_PUBLIC_OBJECT_MARKER = '/storage/v1/object/public/'
+const SUPPORTED_AUDIO_UPLOAD_MIME_TYPES = new Set([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mpga',
+  'audio/mpeg3',
+  'audio/x-mpeg-3',
+  'audio/x-mp3',
+  'audio/mpg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/ogg',
+  'audio/aac',
+  'audio/flac',
+  'audio/webm',
+])
 
 type AudioContentRow = {
   id: string
@@ -187,16 +204,7 @@ function isSupportedAudioUpload(fileName: string, mimeType: string) {
     || normalizedName.endsWith('.aac')
     || normalizedName.endsWith('.flac')
     || normalizedName.endsWith('.webm')
-    || normalizedMimeType === 'audio/mpeg'
-    || normalizedMimeType === 'audio/mp3'
-    || normalizedMimeType === 'audio/wav'
-    || normalizedMimeType === 'audio/x-wav'
-    || normalizedMimeType === 'audio/mp4'
-    || normalizedMimeType === 'audio/x-m4a'
-    || normalizedMimeType === 'audio/ogg'
-    || normalizedMimeType === 'audio/aac'
-    || normalizedMimeType === 'audio/flac'
-    || normalizedMimeType === 'audio/webm'
+    || SUPPORTED_AUDIO_UPLOAD_MIME_TYPES.has(normalizedMimeType)
   )
 }
 

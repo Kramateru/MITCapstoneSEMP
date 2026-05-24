@@ -358,18 +358,18 @@ function getScenarioPriorityScore(scenario: ScenarioCard) {
 
 function getScenarioLaunchLabel(scenario: ScenarioCard | null) {
   if (!scenario) {
-    return 'Start Call';
+    return 'Start the Call';
   }
   if (scenario.active_session_id) {
-    return 'Resume Call';
+    return 'Resume the Call';
   }
   if (scenario.launch_blocked && scenario.competent) {
     return 'Passed';
   }
   if (scenario.can_retake || (scenario.attempt_count > 0 && !scenario.competent && !scenario.launch_blocked)) {
-    return 'Retake';
+    return 'Retake the Call';
   }
-  return 'Start Call';
+  return 'Start the Call';
 }
 
 function getScenarioLaunchNote(scenario: ScenarioCard | null) {
@@ -380,11 +380,11 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
     return scenario.launch_block_reason.trim();
   }
   if (scenario.active_session_id) {
-    return 'An in-progress call was found. Relaunching will continue from your next pending scenario turn.';
+    return 'An in-progress mock call was found. Relaunching will reconnect you to the next pending scenario turn.';
   }
   if (scenario.attempt_count > 0 && !scenario.competent) {
     const attemptsLeft = typeof scenario.remaining_attempts === 'number' ? ` ${scenario.remaining_attempts} attempt${scenario.remaining_attempts === 1 ? '' : 's'} remaining.` : '';
-    return `Your latest scored attempt did not meet the passing KPI yet.${attemptsLeft}`;
+    return `Your latest attempt did not meet the passing KPI yet.${attemptsLeft}`;
   }
   if (scenario.competent) {
     return 'This assigned call scenario has already been passed and locked for review.';
@@ -392,7 +392,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `Start Call will trigger the ringer first, then Accept Call will start the microphone, timer, recording, and guided call workflow.${attemptWindow}`;
+  return `Starting the call plays the trainer ringer, begins the conversation recording, and auto-arms your CSR turn.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -468,10 +468,10 @@ function getPreferredScenarioId(
 function statusLabel(callState: CallState, isOnHold: boolean) {
   if (isOnHold) return 'On Hold';
   if (callState === 'ringing') return 'Incoming Call';
-  if (callState === 'member-speaking') return 'Busy - Member Audio';
-  if (callState === 'csr-speaking') return 'Busy - Mock Call';
+  if (callState === 'member-speaking') return 'Member AI Speaking';
+  if (callState === 'csr-speaking') return 'CSR Speaking';
   if (callState === 'processing') return 'Post-Call Analysis';
-  if (callState === 'completed') return 'Wrap Up';
+  if (callState === 'completed') return 'Call Complete';
   if (callState === 'idle') return 'Available';
   return 'Connected';
 }
@@ -564,7 +564,6 @@ function TraineeSimFloorPageContent() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [callTimer, setCallTimer] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState('');
-  const [isAvailable, setIsAvailable] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
   const [isOnHold, setIsOnHold] = useState(false);
   const [showIncomingAudio, setShowIncomingAudio] = useState(false);
@@ -589,10 +588,14 @@ function TraineeSimFloorPageContent() {
   const holdAudioRef = useRef<HTMLAudioElement | null>(null);
   const ringtoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
+  const autoConnectTimeoutRef = useRef<number | null>(null);
+  const isConnectingCallRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
   const synthesizedPlaybackCacheRef = useRef<Map<string, string>>(new Map());
   const invalidRequestedScenarioRef = useRef<string | null>(null);
   const browserTtsFallbackNoticeRef = useRef(false);
+  const holdAudioErrorNoticeRef = useRef(false);
+  const autoStartTurnAttemptKeyRef = useRef<string | null>(null);
 
   const steps = useMemo(
     () => [...(sessionData?.steps || [])].sort((left, right) => left.step_number - right.step_number),
@@ -907,11 +910,57 @@ function TraineeSimFloorPageContent() {
     osc.stop(now + 0.6);
   }, []);
 
+  const playResumeCue = useCallback(async () => {
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AudioContextClass) {
+      return;
+    }
+
+    const context = new AudioContextClass();
+    const gain = context.createGain();
+    gain.connect(context.destination);
+    gain.gain.value = 0.0001;
+
+    const firstTone = context.createOscillator();
+    firstTone.type = 'sine';
+    firstTone.frequency.value = 880;
+    firstTone.connect(gain);
+
+    const secondTone = context.createOscillator();
+    secondTone.type = 'sine';
+    secondTone.frequency.value = 1175;
+    secondTone.connect(gain);
+
+    const now = context.currentTime;
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.18);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.32);
+
+    firstTone.start(now);
+    firstTone.stop(now + 0.14);
+    secondTone.start(now + 0.14);
+    secondTone.stop(now + 0.34);
+
+    window.setTimeout(() => {
+      void context.close().catch(() => undefined);
+    }, 420);
+  }, []);
+
   const startRingtone = useCallback(
     (audioUrl?: string | null) => {
       const resolvedAudioUrl = audioUrl || DEFAULT_PHONE_RING_URL;
       const audio = new Audio(resolvedAudioUrl);
       audio.loop = true;
+      audio.onerror = () => {
+        ringtoneAudioRef.current = null;
+        playRingBurst();
+        if (!ringtoneIntervalRef.current) {
+          ringtoneIntervalRef.current = setInterval(playRingBurst, 1900);
+        }
+      };
       ringtoneAudioRef.current = audio;
       void audio.play().catch(() => {
         ringtoneAudioRef.current = null;
@@ -935,6 +984,13 @@ function TraineeSimFloorPageContent() {
     if (ringtoneContextRef.current) {
       void ringtoneContextRef.current.close();
       ringtoneContextRef.current = null;
+    }
+  }, []);
+
+  const clearAutoConnectTimeout = useCallback(() => {
+    if (autoConnectTimeoutRef.current !== null) {
+      window.clearTimeout(autoConnectTimeoutRef.current);
+      autoConnectTimeoutRef.current = null;
     }
   }, []);
 
@@ -1335,6 +1391,7 @@ function TraineeSimFloorPageContent() {
           audioUrl: step.audio_url,
           speaker: 'member',
         });
+        await playResumeCue();
 
         const nextIndex = stepIndex + 1;
         if (!steps[nextIndex]) {
@@ -1352,7 +1409,7 @@ function TraineeSimFloorPageContent() {
       }
       setCallState('connected');
     },
-    [finalizeSession, playPlaybackPrompt, steps],
+    [finalizeSession, playPlaybackPrompt, playResumeCue, steps],
   );
 
   const startSimulation = useCallback(async (scenarioOverride?: ScenarioCard | null) => {
@@ -1361,8 +1418,8 @@ function TraineeSimFloorPageContent() {
     if (isStartingCall) {
       return;
     }
-    if (!targetScenarioId || !isAvailable) {
-      toast.error('Select an assigned scenario and keep your status Available before starting the call.');
+    if (!targetScenarioId) {
+      toast.error('Select an assigned scenario before starting the mock call.');
       return;
     }
     if (targetScenario?.launch_blocked) {
@@ -1415,22 +1472,45 @@ function TraineeSimFloorPageContent() {
       if (targetScenario?.active_session_id) {
         toast.info('Resuming the in-progress call from your next pending scenario turn.');
       } else if (targetScenario?.can_retake) {
-        toast.info('Retake attempt loaded. Accept the call to begin the next scored attempt.');
+        toast.info('Retake attempt loaded. The line will connect automatically and re-arm your microphone.');
       }
     } finally {
       setIsStartingCall(false);
     }
-  }, [isAvailable, isStartingCall, selectedScenario, selectedScenarioId, startRingtone]);
+  }, [isStartingCall, selectedScenario, selectedScenarioId, startRingtone]);
 
-  const acceptCall = useCallback(async () => {
+  const connectCall = useCallback(async () => {
+    if (isConnectingCallRef.current) {
+      return;
+    }
+
+    isConnectingCallRef.current = true;
+    clearAutoConnectTimeout();
     try {
       await startCapture();
       await fadeOutRingtone();
       await moveToStep(currentStepIndex);
     } catch {
       setCallState('ringing');
+    } finally {
+      isConnectingCallRef.current = false;
     }
-  }, [currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
+  }, [clearAutoConnectTimeout, currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
+
+  useEffect(() => {
+    clearAutoConnectTimeout();
+    if (callState !== 'ringing' || !sessionData?.session_id) {
+      return;
+    }
+
+    autoConnectTimeoutRef.current = window.setTimeout(() => {
+      void connectCall();
+    }, 1800);
+
+    return () => {
+      clearAutoConnectTimeout();
+    };
+  }, [callState, clearAutoConnectTimeout, connectCall, sessionData?.session_id]);
 
   const handleReplayInstruction = useCallback(async () => {
     if (callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall) {
@@ -1512,10 +1592,6 @@ function TraineeSimFloorPageContent() {
     steps,
   ]);
 
-  const openScenarioDetails = useCallback((scenarioId: string) => {
-    router.push(`/trainee/call-simulation/${encodeURIComponent(scenarioId)}`);
-  }, [router]);
-
   const returnToModuleList = useCallback(() => {
     router.push('/trainee/call-simulation');
   }, [router]);
@@ -1545,9 +1621,10 @@ function TraineeSimFloorPageContent() {
       speaker: 'member',
     });
 
+    await playResumeCue();
     setMemberTurnState('awaiting-resume');
     setCallState('connected');
-  }, [playPlaybackPrompt]);
+  }, [playPlaybackPrompt, playResumeCue]);
 
   const handleTurnSubmissionResult = useCallback(async (
     result: SimFloorTurnResult,
@@ -1561,6 +1638,7 @@ function TraineeSimFloorPageContent() {
     );
 
     if (result.requires_repeat) {
+      autoStartTurnAttemptKeyRef.current = null;
       const repeatPrompt = getRepeatPromptMessage(result.repeat_prompt);
       setShowSilenceAlert(false);
       setShowIncomingAudio(true);
@@ -1604,14 +1682,14 @@ function TraineeSimFloorPageContent() {
 
       if (options?.autoPlayMemberResponse) {
         await playQueuedMemberResponse(nextPlayback);
-        toast.success('Member response delivered. Click Resume to continue to the next CSR step.');
+        toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
         return;
       }
 
       setMemberTurnState('awaiting-hold');
       setShowIncomingAudio(false);
       setCallState('connected');
-      toast.info('Turn saved. Click Hold to hear the member response, then click Resume to continue.');
+      toast.info('Turn saved. Click Hold to hear the member response, then click Unhold to continue.');
       return;
     }
 
@@ -1685,7 +1763,7 @@ function TraineeSimFloorPageContent() {
     }
 
     await playQueuedMemberResponse(queuedMemberPlayback);
-    toast.success('Member response delivered. Click Resume to continue to the next CSR step.');
+    toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
   }, [
     callState,
     currentStep,
@@ -1706,6 +1784,8 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
+    clearAutoConnectTimeout();
+
     const lastStepNumber = steps[steps.length - 1]?.step_number ?? null;
     const isEndingEarly = Boolean(
       currentStep
@@ -1724,7 +1804,7 @@ function TraineeSimFloorPageContent() {
     }
 
     await finalizeSession();
-  }, [callState, currentStep, finalizeSession, isEndingCall, isRecording, isUploadingCall, memberTurnState, steps]);
+  }, [callState, clearAutoConnectTimeout, currentStep, finalizeSession, isEndingCall, isRecording, isUploadingCall, memberTurnState, steps]);
 
   const handleMicClick = useCallback(async () => {
     if (!currentStep || currentStep.actor !== 'csr') {
@@ -1735,7 +1815,7 @@ function TraineeSimFloorPageContent() {
       return;
     }
     if (isOnHold) {
-      toast.error('Resume the call before recording.');
+      toast.error('Click Unhold before continuing your CSR response.');
       return;
     }
     if (callState === 'member-speaking') {
@@ -1824,6 +1904,7 @@ function TraineeSimFloorPageContent() {
     setQueuedMemberPlayback(null);
     setMemberTurnState('idle');
     setFeedbackReport(null);
+    autoStartTurnAttemptKeyRef.current = null;
     silenceStartRef.current = null;
     setCallState('ringing');
     startRingtone(sessionData.ringer_audio_url);
@@ -1872,6 +1953,7 @@ function TraineeSimFloorPageContent() {
     setQueuedMemberPlayback(null);
     setMemberTurnState('idle');
     setFeedbackReport(null);
+    autoStartTurnAttemptKeyRef.current = null;
     silenceStartRef.current = null;
     await fetchScenarios();
   }, [discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
@@ -1884,6 +1966,7 @@ function TraineeSimFloorPageContent() {
     const synthesizedPlaybackCache = synthesizedPlaybackCacheRef.current;
 
     return () => {
+      clearAutoConnectTimeout();
       stopBrowserTranscript();
       stopRingtone();
       if (timerRef.current) {
@@ -1904,7 +1987,7 @@ function TraineeSimFloorPageContent() {
       synthesizedPlaybackCache.clear();
       void discardCapture();
     };
-  }, [discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
+  }, [clearAutoConnectTimeout, discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
 
   useEffect(() => {
     if (!requestedScenarioId) {
@@ -1989,6 +2072,7 @@ function TraineeSimFloorPageContent() {
 
   useEffect(() => {
     setCapturePaused(false);
+    holdAudioErrorNoticeRef.current = false;
 
     if (!sessionData?.hold_audio_url) {
       if (holdAudioRef.current) {
@@ -2010,6 +2094,16 @@ function TraineeSimFloorPageContent() {
         const nextHoldAudio = new Audio();
         nextHoldAudio.crossOrigin = 'anonymous';
         nextHoldAudio.src = sessionData.hold_audio_url;
+        nextHoldAudio.onerror = () => {
+          if (holdAudioRef.current === nextHoldAudio) {
+            holdAudioRef.current.pause();
+            holdAudioRef.current = null;
+          }
+          if (!holdAudioErrorNoticeRef.current) {
+            holdAudioErrorNoticeRef.current = true;
+            toast.error('Hold audio could not be loaded. The call will continue without custom hold audio.');
+          }
+        };
         registerPlaybackElement(nextHoldAudio);
         nextHoldAudio.loop = true;
         holdAudioRef.current = nextHoldAudio;
@@ -2036,6 +2130,60 @@ function TraineeSimFloorPageContent() {
       toast.error(speechToTextError);
     }
   }, [speechToTextError]);
+
+  useEffect(() => {
+    const turnKey = sessionData?.session_id && currentStep
+      ? `${sessionData.session_id}:${currentStep.step_number}`
+      : null;
+
+    if (
+      !turnKey
+      || !currentStep
+      || currentStep.actor !== 'csr'
+      || callState !== 'connected'
+      || isRecording
+      || isProcessing
+      || isOnHold
+      || isMuted
+      || memberTurnState !== 'idle'
+      || isEndingCall
+      || isUploadingCall
+    ) {
+      return;
+    }
+
+    if (autoStartTurnAttemptKeyRef.current === turnKey) {
+      return;
+    }
+    autoStartTurnAttemptKeyRef.current = turnKey;
+
+    setLiveTranscript('');
+    setShowSilenceAlert(false);
+    silenceStartRef.current = null;
+
+    void (async () => {
+      try {
+        await startRecording();
+        startBrowserTranscript();
+        setCallState('csr-speaking');
+      } catch {
+        setCallState('connected');
+      }
+    })();
+  }, [
+    callState,
+    currentStep,
+    isEndingCall,
+    isMuted,
+    isOnHold,
+    isProcessing,
+    isRecording,
+    isUploadingCall,
+    memberTurnState,
+    sessionData?.session_id,
+    startBrowserTranscript,
+    startRecording,
+  ]);
 
   useEffect(() => {
     if (
@@ -2066,7 +2214,7 @@ function TraineeSimFloorPageContent() {
   }, [callState, currentStep, isOnHold, isRecording, memberTurnState]);
 
   const busyStatus = callState !== 'idle' && callState !== 'completed';
-  const currentStatus = isAvailable && callState === 'idle' ? 'Available' : statusLabel(callState, isOnHold);
+  const currentStatus = callState === 'idle' ? 'Ready' : statusLabel(callState, isOnHold);
 
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
@@ -2075,13 +2223,12 @@ function TraineeSimFloorPageContent() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulations</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Practice in a BPO softphone-style mock-call floor with live voice activity, script confirmation, Supabase-backed recordings,
-              and trainer coaching visibility.
+              Select an assigned scenario, start the call, speak as the CSR, then use Hold and Unhold to move through the trainer script.
             </p>
           </div>
-          <Button type="button" variant="outline" onClick={() => setIsAvailable((previous) => !previous)}>
-            {isAvailable ? 'Set Busy' : 'Set Available'}
-          </Button>
+          <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
+            Assigned scenarios only
+          </div>
         </div>
 
         {callState === 'idle' ? (
@@ -2171,7 +2318,7 @@ function TraineeSimFloorPageContent() {
                     <div className="mt-3 grid gap-3 lg:grid-cols-3">
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">1. Incoming call</div>
-                        <div className="mt-1">The softphone rings, shows the customer card, and waits for Accept Call or End Call.</div>
+                        <div className="mt-1">The softphone rings, shows the customer card, then connects the live mock call automatically.</div>
                       </div>
                       <div className="rounded-2xl bg-white/90 p-4 text-sm text-slate-700">
                         <div className="font-semibold text-slate-950">2. Turn-taking</div>
@@ -2188,9 +2335,9 @@ function TraineeSimFloorPageContent() {
 
               <Card className="border-slate-200 bg-slate-950 text-white">
                 <CardHeader>
-                  <CardTitle>Module Launch</CardTitle>
+                  <CardTitle>Start The Call</CardTitle>
                   <CardDescription className="text-slate-300">
-                    Stay Available, answer the call, then alternate between CSR microphone turns and customer playback.
+                    The ringer will play, the call recording will start, and your CSR turn will arm automatically after the line connects.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -2198,8 +2345,8 @@ function TraineeSimFloorPageContent() {
                     <div className="text-xs uppercase tracking-[0.26em] text-slate-400">Agent</div>
                     <div className="mt-2 text-xl font-semibold">{agentName}</div>
                     <div className="mt-3 flex items-center gap-3 text-sm text-slate-300">
-                      <span className={cn('inline-flex h-3 w-3 rounded-full', isAvailable ? 'bg-emerald-400' : 'bg-rose-400')} />
-                      {isAvailable ? 'Available' : 'Busy'}
+                      <span className="inline-flex h-3 w-3 rounded-full bg-emerald-400" />
+                      Ready for assigned mock calls
                     </div>
                   </div>
                   <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -2211,7 +2358,7 @@ function TraineeSimFloorPageContent() {
                     className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                     size="lg"
                     onClick={() => void startSimulation(selectedScenario)}
-                    disabled={!isAvailable || selectedScenarioStartDisabled}
+                    disabled={selectedScenarioStartDisabled}
                   >
                     <Phone className="mr-2 h-4 w-4" />
                     {selectedScenarioLaunchLabel}
@@ -2238,7 +2385,7 @@ function TraineeSimFloorPageContent() {
               <Card className="border-slate-200 bg-[linear-gradient(135deg,#f8fafc,white)]">
                 <CardHeader>
                   <CardTitle>Assigned Call Scenarios</CardTitle>
-                  <CardDescription>Choose the trainer-assigned module that should ring into your BPO softphone workspace.</CardDescription>
+                  <CardDescription>Select one trainer-assigned scenario to load it into your mock call workspace.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {scenarios.map((scenario) => (
@@ -2253,10 +2400,7 @@ function TraineeSimFloorPageContent() {
                     >
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedScenarioId(scenario.id);
-                          openScenarioDetails(scenario.id);
-                        }}
+                        onClick={() => setSelectedScenarioId(scenario.id)}
                         className="w-full text-left"
                       >
                         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2325,26 +2469,17 @@ function TraineeSimFloorPageContent() {
                           {scenario.launch_block_reason}
                         </div>
                       ) : null}
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          onClick={() => {
-                            setSelectedScenarioId(scenario.id);
-                            openScenarioDetails(scenario.id);
-                          }}
-                        >
-                          View Details
-                        </Button>
-                        <Button
-                          type="button"
-                          className="bg-cyan-500 text-slate-950 hover:bg-cyan-400"
-                          onClick={() => void startSimulation(scenario)}
-                          disabled={!isAvailable || Boolean(scenario.launch_blocked) || isStartingCall}
-                        >
-                          <Phone className="mr-2 h-4 w-4" />
-                          {isStartingCall && selectedScenarioId === scenario.id ? 'Starting Call...' : getScenarioLaunchLabel(scenario)}
-                        </Button>
+                      <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                        <span>
+                          {selectedScenarioId === scenario.id
+                            ? 'Selected for the next mock call.'
+                            : 'Select this scenario to preview it and start the call.'}
+                        </span>
+                        {selectedScenarioId === scenario.id ? (
+                          <Badge variant="outline" className="border-cyan-300 bg-cyan-50 text-cyan-700">
+                            Selected
+                          </Badge>
+                        ) : null}
                       </div>
                     </div>
                   ))}
@@ -2358,9 +2493,9 @@ function TraineeSimFloorPageContent() {
 
               <Card className="border-slate-200 bg-slate-950 text-white">
                 <CardHeader>
-                  <CardTitle>Ready Check</CardTitle>
+                  <CardTitle>Selected Scenario</CardTitle>
                   <CardDescription className="text-slate-300">
-                    Stay Available, launch the BPO softphone, answer the ring, then respond when the member finishes speaking.
+                    Review the loaded scenario, then start the call. Your microphone turn will begin automatically after the line connects.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
@@ -2368,12 +2503,12 @@ function TraineeSimFloorPageContent() {
                     <div className="text-xs uppercase tracking-[0.26em] text-slate-400">Agent</div>
                     <div className="mt-2 text-xl font-semibold">{agentName}</div>
                     <div className="mt-3 flex items-center gap-3 text-sm text-slate-300">
-                      <span className={cn('inline-flex h-3 w-3 rounded-full', isAvailable ? 'bg-emerald-400' : 'bg-rose-400')} />
-                      {isAvailable ? 'Available' : 'Busy'}
+                      <span className="inline-flex h-3 w-3 rounded-full bg-emerald-400" />
+                      Ready to answer assigned calls
                     </div>
                   </div>
                   <div className="rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-sm text-cyan-50">
-                    Google-first ASR scoring, Supabase recording storage, scripted turn guidance, and trainer playback are all wired into this flow.
+                    The full mock call is recorded, saved for coaching, scored with KPI rules, and summarized after you end the call.
                   </div>
                   {selectedScenario ? (
                     <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
@@ -2400,7 +2535,7 @@ function TraineeSimFloorPageContent() {
                     className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
                     size="lg"
                     onClick={() => void startSimulation()}
-                    disabled={!selectedScenarioId || !isAvailable || selectedScenarioStartDisabled || isStartingCall}
+                    disabled={!selectedScenarioId || selectedScenarioStartDisabled || isStartingCall}
                   >
                     <Phone className="mr-2 h-4 w-4" />
                     {isStartingCall ? 'Starting Call...' : selectedScenarioLaunchLabel}
@@ -2462,11 +2597,13 @@ function TraineeSimFloorPageContent() {
                       isRecording ? 'bg-emerald-600 hover:bg-emerald-600' : isMicLocked ? 'bg-slate-800 hover:bg-slate-800' : 'bg-cyan-500 text-slate-950 hover:bg-cyan-400',
                     )}
                     onClick={() => void handleMicClick()}
-                    disabled={isMicLocked}
+                    disabled={isMicLocked || isRecording}
                   >
                     <div className="flex flex-col items-center gap-1">
                       {isMicLocked ? <Lock className="h-6 w-6" /> : <Mic className={cn('h-6 w-6', isRecording && 'animate-pulse')} />}
-                      <span className="text-xs font-medium">{isRecording ? 'Listening' : 'Mic'}</span>
+                      <span className="text-xs font-medium">
+                        {isRecording ? 'Mic Live' : isMicLocked ? 'Mic Locked' : 'Enable Mic'}
+                      </span>
                     </div>
                   </Button>
                   <Button
@@ -2479,7 +2616,7 @@ function TraineeSimFloorPageContent() {
                     <div className="flex flex-col items-center gap-1">
                       {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
                       <span className="text-xs font-medium">
-                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Resume' : 'Hold'}
+                        {needsHoldForMemberResponse ? 'Hold' : canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold'}
                       </span>
                     </div>
                   </Button>
@@ -2538,12 +2675,12 @@ function TraineeSimFloorPageContent() {
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
                           <div>
                             <div className="text-sm font-semibold">Member (AI) is calling...</div>
-                            <div className="text-xs">Click Accept Call to start the scenario and speak the first CSR spiel.</div>
+                            <div className="text-xs">The line will connect automatically. Use Connect Now if you want to start the first CSR spiel immediately.</div>
                           </div>
                         </div>
-                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void acceptCall()}>
+                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
                           <Phone className="mr-2 h-4 w-4" />
-                          Accept Call
+                          Connect Now
                         </Button>
                       </div>
                     </CardContent>
@@ -2567,7 +2704,7 @@ function TraineeSimFloorPageContent() {
                           <PauseCircle className="h-5 w-5 text-sky-600" />
                           <div>
                             <div className="font-semibold">Hold Required</div>
-                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Resume for the next CSR script.</div>
+                            <div>Click Hold to save your CSR turn, let the AI Member respond, then click Unhold for the next CSR script.</div>
                           </div>
                         </div>
                       </div>
@@ -2749,7 +2886,7 @@ function TraineeSimFloorPageContent() {
                           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                             {isOnHold
                               ? canResumeMemberTurn
-                                ? 'The member response already played on hold. Click Resume to unlock the next CSR script.'
+                                ? 'The member response already played on hold. Click Unhold to unlock the next CSR script.'
                                 : 'The call is on hold while the full conversation recorder continues capturing the session.'
                               : needsHoldForMemberResponse
                                 ? 'The next member response is queued. Click Hold to play it before the next CSR turn.'
@@ -3055,7 +3192,7 @@ function TraineeSimFloorPageContent() {
                             disabled={Boolean(sessionResult?.pass_fail) || sessionResult?.coaching_status === 'sent'}
                           >
                             <RotateCcw className="mr-2 h-4 w-4" />
-                            Retake Scenario
+                            Retake the Call
                           </Button>
                         </div>
                       </CardContent>
@@ -3064,7 +3201,7 @@ function TraineeSimFloorPageContent() {
                     {sessionResult?.ai_feedback ? (
                       <Card className="border-slate-200">
                         <CardHeader>
-                          <CardTitle>AI Feedback</CardTitle>
+                          <CardTitle>Final AI Feedback</CardTitle>
                           <CardDescription>Immediate coaching summary generated after analysis.</CardDescription>
                         </CardHeader>
                         <CardContent>
@@ -3077,7 +3214,7 @@ function TraineeSimFloorPageContent() {
                     {isLoadingFeedbackReport ? (
                       <Card className="border-slate-200">
                         <CardHeader>
-                          <CardTitle>Final Feedback Report</CardTitle>
+                          <CardTitle>Gemini AI Evaluation</CardTitle>
                           <CardDescription>Gemini is preparing the structured wrap-up report.</CardDescription>
                         </CardHeader>
                         <CardContent className="text-sm text-slate-600">
@@ -3088,7 +3225,7 @@ function TraineeSimFloorPageContent() {
                     {feedbackReport ? (
                       <Card className="border-slate-200">
                         <CardHeader>
-                          <CardTitle>Final Feedback Report</CardTitle>
+                          <CardTitle>Gemini AI Evaluation</CardTitle>
                           <CardDescription>
                             {feedbackReport.provider === 'gemini'
                               ? `Generated with ${feedbackReport.model}.`
@@ -3097,6 +3234,7 @@ function TraineeSimFloorPageContent() {
                         </CardHeader>
                         <CardContent className="space-y-4">
                           <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-slate-700">
+                            <div className="mb-2 text-xs uppercase tracking-[0.22em] text-slate-500">Overall Mock Call Summary</div>
                             {feedbackReport.summary || feedbackReport.overallSummary}
                           </div>
                           <div className="grid gap-4 lg:grid-cols-[minmax(0,0.88fr)_minmax(0,1.12fr)]">
@@ -3111,7 +3249,7 @@ function TraineeSimFloorPageContent() {
                                 </div>
                               </div>
                               <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Transcript Summary</div>
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Conversation Transcript Summary</div>
                                 <div className="mt-2 text-sm leading-6 text-slate-700">
                                   {feedbackReport.transcript_summary || 'Transcript summary is still syncing.'}
                                 </div>
@@ -3131,7 +3269,7 @@ function TraineeSimFloorPageContent() {
                                 </div>
                               </div>
                               <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Areas for Improvement</div>
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Opportunities for Improvement</div>
                                 <div className="mt-3 space-y-2 text-sm text-slate-700">
                                   {(feedbackReport.areas_for_improvement || []).length ? (
                                     feedbackReport.areas_for_improvement.map((item, index) => (
@@ -3175,7 +3313,7 @@ function TraineeSimFloorPageContent() {
                             </div>
                           </div>
                           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">KPI Breakdown</div>
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">KPI-Based Evaluation</div>
                             <div className="mt-3 grid gap-3 lg:grid-cols-2">
                               {(feedbackReport.kpi_breakdown || []).length ? (
                                 feedbackReport.kpi_breakdown.map((item, index) => (
@@ -3193,13 +3331,13 @@ function TraineeSimFloorPageContent() {
                             </div>
                           </div>
                           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Coaching Recommendation</div>
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Recommended Coaching Plan</div>
                             <div className="mt-3 text-sm leading-7 text-slate-700">
                               {feedbackReport.coaching_recommendation || 'No coaching recommendation was returned yet.'}
                             </div>
                           </div>
                           <div className="rounded-2xl border border-dashed border-slate-200 p-4">
-                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Coaching Tips</div>
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Additional Coaching Tips</div>
                             <div className="mt-3 space-y-2 text-sm text-slate-700">
                               {(feedbackReport.coachingTips || []).length ? (
                                 feedbackReport.coachingTips.map((tip, index) => (
@@ -3450,12 +3588,12 @@ export default function TraineeSimFloorPage() {
                           <PhoneIncoming className="h-10 w-10 animate-pulse" />
                           <div>
                             <div className="text-sm font-semibold">MAX call waiting</div>
-                            <div className="text-xs">Answer to launch the active interaction panel.</div>
+                            <div className="text-xs">The line will connect automatically, or you can connect immediately from here.</div>
                           </div>
                         </div>
-                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void acceptCall()}>
+                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
                           <Phone className="mr-2 h-4 w-4" />
-                          Accept
+                          Connect
                         </Button>
                       </div>
                     </CardContent>
