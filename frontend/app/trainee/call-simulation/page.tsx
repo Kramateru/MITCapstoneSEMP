@@ -5,7 +5,6 @@ import VoiceActivityBars from '@/app/components/trainee/voice-activity-bars';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card';
-import { Progress } from '@/app/components/ui/progress';
 import { cn } from '@/app/components/ui/utils';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
@@ -270,40 +269,6 @@ function formatTime(totalSeconds: number) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function normalizeWord(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9']/g, '');
-}
-
-function buildScriptProgress(script: string, transcript: string) {
-  const scriptWords = script.split(/\s+/).filter(Boolean);
-  const transcriptWords = transcript.split(/\s+/).map(normalizeWord).filter(Boolean);
-  let cursor = 0;
-  let matchedCount = 0;
-
-  const items = scriptWords.map((word) => {
-    const expected = normalizeWord(word);
-    if (!expected) {
-      return { word, matched: false };
-    }
-
-    let matched = false;
-    for (let index = cursor; index < transcriptWords.length; index += 1) {
-      const candidate = transcriptWords[index];
-      if (candidate === expected || candidate.includes(expected) || expected.includes(candidate)) {
-        matched = true;
-        cursor = index + 1;
-        matchedCount += 1;
-        break;
-      }
-    }
-
-    return { word, matched };
-  });
-
-  const comparableWordCount = items.filter((item) => normalizeWord(item.word)).length || 1;
-  return { items, percent: Math.round((matchedCount / comparableWordCount) * 100) };
-}
-
 function sentimentDescriptor(score?: number | null) {
   if (typeof score !== 'number') {
     return 'Pending';
@@ -491,6 +456,22 @@ function readNumericValue(value: unknown, fallback = 0) {
   return fallback;
 }
 
+function readCueAudioUrl(config: Record<string, unknown> | undefined | null) {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+
+  const cueKeys = ['cue_audio_url', 'cueAudioUrl', 'resume_cue_audio_url', 'resumeCueAudioUrl'];
+  for (const key of cueKeys) {
+    const value = config[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return null;
+}
+
 function buildDialerScriptFlow(sessionData: SessionData | null) {
   const configuredFlow = Array.isArray(sessionData?.call_simulation_config?.script_flow)
     ? (sessionData?.call_simulation_config?.script_flow as Array<Record<string, unknown>>)
@@ -581,6 +562,7 @@ function TraineeSimFloorPageContent() {
   const [feedbackReport, setFeedbackReport] = useState<DialerFeedbackReport | null>(null);
   const [isLoadingFeedbackReport, setIsLoadingFeedbackReport] = useState(false);
   const [isGeneratingMemberAudio, setIsGeneratingMemberAudio] = useState(false);
+  const [memberAudioWarning, setMemberAudioWarning] = useState<string | null>(null);
   const [sessionPlaybackUrl, setSessionPlaybackUrl] = useState<string | null>(null);
   const requestedScenarioId = searchParams.get('scenarioId')?.trim() || '';
 
@@ -589,6 +571,7 @@ function TraineeSimFloorPageContent() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const holdAudioRef = useRef<HTMLAudioElement | null>(null);
+  const cueAudioRef = useRef<HTMLAudioElement | null>(null);
   const ringtoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ringtoneContextRef = useRef<AudioContext | null>(null);
   const autoConnectTimeoutRef = useRef<number | null>(null);
@@ -597,7 +580,9 @@ function TraineeSimFloorPageContent() {
   const synthesizedPlaybackCacheRef = useRef<Map<string, string>>(new Map());
   const invalidRequestedScenarioRef = useRef<string | null>(null);
   const browserTtsFallbackNoticeRef = useRef(false);
+  const recordingFallbackNoticeRef = useRef(false);
   const holdAudioErrorNoticeRef = useRef(false);
+  const cueAudioErrorNoticeRef = useRef(false);
   const autoStartTurnAttemptKeyRef = useRef<string | null>(null);
 
   const steps = useMemo(
@@ -654,10 +639,6 @@ function TraineeSimFloorPageContent() {
     error: callRecorderError,
   } = useWavCallRecorder();
 
-  const scriptProgress = useMemo(
-    () => buildScriptProgress(currentStep?.script || '', liveTranscript),
-    [currentStep?.script, liveTranscript],
-  );
   const lastAsrProviderLabel = getAsrProviderLabel(lastTurnResult?.asr_provider, lastTurnResult?.asr_provider_label);
   const lastTranscriptConfidence =
     typeof lastTurnResult?.transcript_confidence === 'number' ? Math.round(lastTurnResult.transcript_confidence * 100) : null;
@@ -764,6 +745,66 @@ function TraineeSimFloorPageContent() {
       : needsHoldForMemberResponse
         ? 'Click Hold to hear the next Member response.'
         : 'Hold becomes available after you record a CSR turn.';
+  const queueFocusIndex = useMemo(() => {
+    if (canResumeMemberTurn && typeof queuedMemberPlayback?.resumeStepIndex === 'number') {
+      return queuedMemberPlayback.resumeStepIndex;
+    }
+    if (
+      (needsHoldForMemberResponse || memberTurnState === 'playing')
+      && typeof queuedMemberPlayback?.sourceStepIndex === 'number'
+    ) {
+      return queuedMemberPlayback.sourceStepIndex;
+    }
+    if (typeof queuedMemberStepIndex === 'number' && memberTurnState === 'playing') {
+      return queuedMemberStepIndex;
+    }
+    return Math.max(0, Math.min(currentStepIndex, Math.max(steps.length - 1, 0)));
+  }, [
+    canResumeMemberTurn,
+    currentStepIndex,
+    memberTurnState,
+    needsHoldForMemberResponse,
+    queuedMemberPlayback?.resumeStepIndex,
+    queuedMemberPlayback?.sourceStepIndex,
+    queuedMemberStepIndex,
+    steps.length,
+  ]);
+  const queuePosition = steps.length ? Math.min(queueFocusIndex + 1, steps.length) : 1;
+  const queueProgressPercent = steps.length ? Math.round((queuePosition / steps.length) * 100) : 0;
+  const currentQueueStep = steps[queueFocusIndex] || null;
+  const currentQueueActorLabel = currentQueueStep
+    ? currentQueueStep.actor === 'member'
+      ? String(currentQueueStep.metadata?.actor_name || currentQueueStep.speaker_label || memberName).trim()
+      : String(currentQueueStep.speaker_label || 'CSR / Trainee').trim()
+    : 'No active step';
+  const queueStatusNote = canResumeMemberTurn
+    ? 'Member AI finished speaking. Click Unhold to continue with the next CSR response.'
+    : needsHoldForMemberResponse
+      ? 'Your CSR turn is saved. Click Hold to play the queued Member AI response.'
+      : callState === 'member-speaking'
+        ? 'Member AI is handling this step now. Wait for the cue before you continue.'
+        : callState === 'accepted'
+          ? 'The call is accepted. The first CSR step unlocks after the short preparation window.'
+          : currentQueueStep?.actor === 'csr'
+            ? 'This is your live CSR step. Speak naturally, then use Hold to continue the script.'
+            : 'This step is delivered automatically by the Member AI voice.';
+  const queuePreviewSteps = useMemo(() => {
+    if (!steps.length) {
+      return [];
+    }
+
+    const windowStart = Math.max(0, queueFocusIndex - 1);
+    const windowEnd = Math.min(steps.length, queueFocusIndex + 3);
+
+    return steps.slice(windowStart, windowEnd).map((step, offset) => {
+      const index = windowStart + offset;
+      return {
+        index,
+        step,
+        state: index < queueFocusIndex ? 'completed' : index === queueFocusIndex ? 'current' : 'upcoming',
+      };
+    });
+  }, [queueFocusIndex, steps]);
 
   const isMicLocked =
     callState === 'ringing' ||
@@ -780,6 +821,16 @@ function TraineeSimFloorPageContent() {
     }
     browserTtsFallbackNoticeRef.current = true;
     toast.info('AI voice is using browser fallback mode.');
+  }, []);
+
+  const showRecordingFallbackNotice = useCallback(() => {
+    if (recordingFallbackNoticeRef.current) {
+      return;
+    }
+    recordingFallbackNoticeRef.current = true;
+    const warningMessage = 'Member AI audio could not be saved to Supabase for this turn. Browser fallback will play, but the final recording may miss the member side.';
+    setMemberAudioWarning(warningMessage);
+    toast.warning(warningMessage);
   }, []);
 
   const speakWithBrowserFallback = useCallback(
@@ -946,6 +997,56 @@ function TraineeSimFloorPageContent() {
   }, []);
 
   const playResumeCue = useCallback(async () => {
+    const configuredCueAudioUrl = readCueAudioUrl(
+      (sessionData?.call_simulation_config as Record<string, unknown> | undefined) || undefined,
+    );
+
+    if (configuredCueAudioUrl) {
+      const playedConfiguredCue = await new Promise<boolean>((resolve) => {
+        if (cueAudioRef.current) {
+          cueAudioRef.current.pause();
+          cueAudioRef.current = null;
+        }
+
+        const cueAudio = new Audio();
+        cueAudio.crossOrigin = 'anonymous';
+        cueAudio.src = configuredCueAudioUrl;
+        registerPlaybackElement(cueAudio);
+        cueAudioRef.current = cueAudio;
+
+        const finish = (didPlay: boolean) => {
+          if (cueAudioRef.current === cueAudio) {
+            cueAudioRef.current.pause();
+            cueAudioRef.current = null;
+          }
+          cueAudio.onended = null;
+          cueAudio.onerror = null;
+          resolve(didPlay);
+        };
+
+        cueAudio.onended = () => finish(true);
+        cueAudio.onerror = () => {
+          if (!cueAudioErrorNoticeRef.current) {
+            cueAudioErrorNoticeRef.current = true;
+            toast.error('The trainer cue sound could not be loaded. The default continue cue will play instead.');
+          }
+          finish(false);
+        };
+
+        void cueAudio.play().catch(() => {
+          if (!cueAudioErrorNoticeRef.current) {
+            cueAudioErrorNoticeRef.current = true;
+            toast.error('The trainer cue sound could not be played. The default continue cue will play instead.');
+          }
+          finish(false);
+        });
+      });
+
+      if (playedConfiguredCue) {
+        return;
+      }
+    }
+
     const AudioContextClass =
       window.AudioContext ||
       (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -982,7 +1083,7 @@ function TraineeSimFloorPageContent() {
     window.setTimeout(() => {
       void context.close().catch(() => undefined);
     }, 420);
-  }, []);
+  }, [registerPlaybackElement, sessionData?.call_simulation_config]);
 
   const startRingtone = useCallback(
     (audioUrl?: string | null) => {
@@ -1063,13 +1164,24 @@ function TraineeSimFloorPageContent() {
   }, [stopRingtone]);
 
   const synthesizePlaybackAudio = useCallback(
-    async (script: string) => {
+    async (
+      script: string,
+      options?: {
+        scenarioId?: string | null;
+        stepNumber?: number | null;
+      },
+    ) => {
       const normalizedScript = script.trim();
       if (!normalizedScript) {
         return null;
       }
 
-      const cachedAudioUrl = synthesizedPlaybackCacheRef.current.get(normalizedScript);
+      const cacheKey = [
+        options?.scenarioId ? `scenario:${options.scenarioId}` : 'scenario:none',
+        typeof options?.stepNumber === 'number' ? `step:${options.stepNumber}` : 'step:none',
+        normalizedScript,
+      ].join('::');
+      const cachedAudioUrl = synthesizedPlaybackCacheRef.current.get(cacheKey);
       if (cachedAudioUrl) {
         return cachedAudioUrl;
       }
@@ -1077,23 +1189,63 @@ function TraineeSimFloorPageContent() {
       try {
         const token = localStorage.getItem('token');
         setIsGeneratingMemberAudio(true);
-        const response = await fetch(`/api/call-simulation/tts?text=${encodeURIComponent(normalizedScript)}`, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
-        const payload = (await response.json().catch(() => null)) as TtsResponsePayload | null;
-        if (!response.ok || !payload || payload.detail) {
-          console.warn('Call Simulation backend TTS was unavailable. Browser fallback will be used.');
-          showBrowserFallbackNotice();
-          return null;
+        let payload: TtsResponsePayload | null = null;
+
+        const canPersistForRecording = Boolean(
+          options?.scenarioId
+          && typeof options?.stepNumber === 'number'
+          && options.stepNumber > 0,
+        );
+
+        if (canPersistForRecording) {
+          const persistentParams = new URLSearchParams({
+            text: normalizedScript,
+            persist: 'true',
+            require_supabase: 'true',
+            scenario_id: String(options?.scenarioId),
+            step_number: String(options?.stepNumber),
+            asset_kind: 'member-step',
+          });
+
+          const persistentResponse = await fetch(`/api/call-simulation/tts?${persistentParams.toString()}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          const persistentPayload = (await persistentResponse.json().catch(() => null)) as TtsResponsePayload | null;
+          if (persistentResponse.ok && persistentPayload && !persistentPayload.detail) {
+            payload = persistentPayload;
+          } else {
+            console.warn(
+              'Call Simulation member audio could not be persisted for this step. Falling back to non-persistent playback.',
+              persistentPayload?.detail || persistentResponse.statusText,
+            );
+          }
+        }
+
+        if (!payload) {
+          const response = await fetch(`/api/call-simulation/tts?text=${encodeURIComponent(normalizedScript)}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          payload = (await response.json().catch(() => null)) as TtsResponsePayload | null;
+          if (!response.ok || !payload || payload.detail) {
+            console.warn('Call Simulation backend TTS was unavailable. Browser fallback will be used.');
+            showBrowserFallbackNotice();
+            if (canPersistForRecording) {
+              showRecordingFallbackNotice();
+            }
+            return null;
+          }
         }
 
         if (payload.warning || payload.fallback_mode === 'browser') {
           console.warn(payload.warning || 'Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
           showBrowserFallbackNotice();
+          if (canPersistForRecording) {
+            showRecordingFallbackNotice();
+          }
         }
 
         if (payload.audio_url) {
-          synthesizedPlaybackCacheRef.current.set(normalizedScript, payload.audio_url);
+          synthesizedPlaybackCacheRef.current.set(cacheKey, payload.audio_url);
           return payload.audio_url;
         }
 
@@ -1102,15 +1254,21 @@ function TraineeSimFloorPageContent() {
           const bytes = Uint8Array.from(binaryString, (character) => character.charCodeAt(0));
           const blob = new Blob([bytes], { type: 'audio/wav' });
           const objectUrl = window.URL.createObjectURL(blob);
-          synthesizedPlaybackCacheRef.current.set(normalizedScript, objectUrl);
+          synthesizedPlaybackCacheRef.current.set(cacheKey, objectUrl);
           return objectUrl;
         }
 
         console.warn('Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
         showBrowserFallbackNotice();
+        if (canPersistForRecording) {
+          showRecordingFallbackNotice();
+        }
       } catch (error) {
         console.warn('Call Simulation backend TTS request failed. Browser fallback will be used:', error);
         showBrowserFallbackNotice();
+        if (options?.scenarioId && typeof options?.stepNumber === 'number' && options.stepNumber > 0) {
+          showRecordingFallbackNotice();
+        }
         return null;
       } finally {
         setIsGeneratingMemberAudio(false);
@@ -1118,7 +1276,7 @@ function TraineeSimFloorPageContent() {
 
       return null;
     },
-    [showBrowserFallbackNotice],
+    [showBrowserFallbackNotice, showRecordingFallbackNotice],
   );
 
   const playPlaybackPrompt = useCallback(
@@ -1126,10 +1284,12 @@ function TraineeSimFloorPageContent() {
       script,
       audioUrl,
       speaker,
+      stepNumber,
     }: {
       script: string;
       audioUrl?: string | null;
       speaker: 'member' | 'system';
+      stepNumber?: number | null;
     }) => {
       const resolvedScript = script.trim();
       setActivePlaybackScript(resolvedScript);
@@ -1142,7 +1302,10 @@ function TraineeSimFloorPageContent() {
 
       let resolvedAudioUrl = audioUrl || null;
       if (!resolvedAudioUrl && speaker === 'member' && resolvedScript) {
-        resolvedAudioUrl = await synthesizePlaybackAudio(resolvedScript);
+        resolvedAudioUrl = await synthesizePlaybackAudio(resolvedScript, {
+          scenarioId: selectedScenarioId || null,
+          stepNumber,
+        });
       }
 
       if (resolvedAudioUrl) {
@@ -1192,7 +1355,7 @@ function TraineeSimFloorPageContent() {
         toast.error(BROWSER_TTS_UNSUPPORTED_MESSAGE);
       }
     },
-    [registerPlaybackElement, speakWithBrowserFallback, synthesizePlaybackAudio],
+    [registerPlaybackElement, selectedScenarioId, speakWithBrowserFallback, synthesizePlaybackAudio],
   );
 
   const uploadFinalCallRecording = useCallback(async () => {
@@ -1208,7 +1371,7 @@ function TraineeSimFloorPageContent() {
     const token = localStorage.getItem('token');
     const formData = new FormData();
     formData.append('audio_duration_seconds', recording.durationSeconds.toFixed(2));
-    formData.append('file', recording.blob, `session-${sessionData.session_id}.wav`);
+    formData.append('file', recording.blob, `session-${sessionData.session_id}.${recording.fileExtension || 'wav'}`);
 
     setIsUploadingCall(true);
     try {
@@ -1427,6 +1590,7 @@ function TraineeSimFloorPageContent() {
           script: step.script,
           audioUrl: step.audio_url,
           speaker: 'member',
+          stepNumber: step.step_number,
         });
         await playResumeCue();
 
@@ -1466,6 +1630,8 @@ function TraineeSimFloorPageContent() {
 
     setSelectedScenarioId(targetScenarioId);
     browserTtsFallbackNoticeRef.current = false;
+    recordingFallbackNoticeRef.current = false;
+    cueAudioErrorNoticeRef.current = false;
     const token = localStorage.getItem('token');
     setIsStartingCall(true);
     try {
@@ -1489,6 +1655,7 @@ function TraineeSimFloorPageContent() {
 
       setSessionData(sessionPayload);
       setSessionResult(null);
+      setMemberAudioWarning(null);
       setLiveTranscript('');
       setCurrentStepIndex(startStepIndex >= 0 ? startStepIndex : 0);
       setCallTimer(0);
@@ -1582,6 +1749,7 @@ function TraineeSimFloorPageContent() {
           script: queuedScript,
           audioUrl: queuedAudioUrl,
           speaker: 'member',
+          stepNumber: typeof queuedMemberStepIndex === 'number' ? steps[queuedMemberStepIndex]?.step_number ?? null : null,
         });
         toast.success('Queued member response replayed.');
         return;
@@ -1592,6 +1760,7 @@ function TraineeSimFloorPageContent() {
           script: currentStep.script,
           audioUrl: currentStep.audio_url,
           speaker: 'member',
+          stepNumber: currentStep.step_number,
         });
         toast.success('Member cue replayed.');
         return;
@@ -1652,6 +1821,7 @@ function TraineeSimFloorPageContent() {
       script: playback.script,
       audioUrl: playback.audioUrl,
       speaker: 'member',
+      stepNumber: typeof playback.sourceStepIndex === 'number' ? steps[playback.sourceStepIndex]?.step_number ?? null : null,
     });
 
     await playResumeCue();
@@ -1913,6 +2083,19 @@ function TraineeSimFloorPageContent() {
       throw new Error(payload?.detail || 'Unable to retake the scenario.');
     }
 
+    browserTtsService.stop();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (cueAudioRef.current) {
+      cueAudioRef.current.pause();
+      cueAudioRef.current = null;
+    }
+    if (holdAudioRef.current) {
+      holdAudioRef.current.pause();
+      holdAudioRef.current.currentTime = 0;
+    }
     await discardCapture();
     setSessionData({
       ...sessionData,
@@ -1923,9 +2106,12 @@ function TraineeSimFloorPageContent() {
       max_attempts: payload.max_attempts ?? sessionData.max_attempts,
     });
     setSessionResult(null);
+    setMemberAudioWarning(null);
     setCurrentStepIndex(0);
     setCallTimer(0);
     setLiveTranscript('');
+    browserTtsFallbackNoticeRef.current = false;
+    recordingFallbackNoticeRef.current = false;
     setIsMuted(false);
     setIsOnHold(false);
     setShowIncomingAudio(false);
@@ -1966,6 +2152,10 @@ function TraineeSimFloorPageContent() {
       audioRef.current.pause();
       audioRef.current = null;
     }
+    if (cueAudioRef.current) {
+      cueAudioRef.current.pause();
+      cueAudioRef.current = null;
+    }
     if (holdAudioRef.current) {
       holdAudioRef.current.pause();
       holdAudioRef.current.currentTime = 0;
@@ -1983,10 +2173,13 @@ function TraineeSimFloorPageContent() {
 
     setSessionData(null);
     setSessionResult(null);
+    setMemberAudioWarning(null);
     setCallState('idle');
     setCurrentStepIndex(0);
     setCallTimer(0);
     setLiveTranscript('');
+    browserTtsFallbackNoticeRef.current = false;
+    recordingFallbackNoticeRef.current = false;
     setIsMuted(false);
     setIsOnHold(false);
     setShowIncomingAudio(false);
@@ -2046,6 +2239,19 @@ function TraineeSimFloorPageContent() {
   const resetPage = useCallback(async () => {
     stopBrowserTranscript();
     stopRingtone();
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (cueAudioRef.current) {
+      cueAudioRef.current.pause();
+      cueAudioRef.current = null;
+    }
+    if (holdAudioRef.current) {
+      holdAudioRef.current.pause();
+      holdAudioRef.current.currentTime = 0;
+    }
+    browserTtsService.stop();
     await discardCapture();
     setSessionData(null);
     setSessionResult(null);
@@ -2085,6 +2291,9 @@ function TraineeSimFloorPageContent() {
       }
       if (audioRef.current) {
         audioRef.current.pause();
+      }
+      if (cueAudioRef.current) {
+        cueAudioRef.current.pause();
       }
       if (holdAudioRef.current) {
         holdAudioRef.current.pause();
@@ -2333,7 +2542,6 @@ function TraineeSimFloorPageContent() {
     : memberTurnState === 'awaiting-hold'
       ? 'Hold To Play Member Reply'
       : statusLabel(callState, isOnHold);
-  const currentStepNumber = currentStep?.step_number || 0;
   const currentStatusNote = callState === 'ringing'
     ? 'The trainer ringer is active. Click Accept Call to begin the mock call.'
     : callState === 'accepted'
@@ -2722,7 +2930,7 @@ function TraineeSimFloorPageContent() {
               </div>
             </div>
 
-            <div className="grid gap-6 xl:grid-cols-[96px,minmax(0,1fr),minmax(280px,340px)] 2xl:grid-cols-[112px,minmax(0,1fr),360px]">
+            <div className="grid gap-6 xl:grid-cols-[96px,minmax(0,1fr)] 2xl:grid-cols-[112px,minmax(0,1fr)]">
               <Card className="overflow-hidden border-slate-900 bg-slate-950 text-white">
                 <CardContent className="grid gap-3 p-3 sm:grid-cols-3 xl:flex xl:h-full xl:flex-col">
                   <Button
@@ -2848,6 +3056,17 @@ function TraineeSimFloorPageContent() {
                         </div>
                       </div>
                     ) : null}
+                    {memberAudioWarning ? (
+                      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 shadow-sm">
+                        <div className="flex items-center gap-3">
+                          <AlertTriangle className="h-5 w-5 text-amber-600" />
+                          <div>
+                            <div className="font-semibold">Member Audio Fallback</div>
+                            <div>{memberAudioWarning}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                     {needsHoldForMemberResponse ? (
                       <div className="rounded-3xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950 shadow-sm">
                         <div className="flex items-center gap-3">
@@ -2890,10 +3109,76 @@ function TraineeSimFloorPageContent() {
                       </div>
                     ) : null}
                     <Card className="border-slate-200 bg-white shadow-sm">
-                        <CardHeader>
-                          <CardTitle>Member Card</CardTitle>
-                          <CardDescription>Live customer context from the assigned scenario.</CardDescription>
-                        </CardHeader>
+                      <CardContent className="space-y-4 p-5">
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+                          <div>
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Scenario Queue</div>
+                            <div className="mt-2 text-2xl font-semibold text-slate-950">
+                              Step {queuePosition} of {steps.length || 1}
+                            </div>
+                            <div className="mt-2 text-sm text-slate-600">
+                              {currentQueueActorLabel} is the active queue focus for this turn.
+                            </div>
+                          </div>
+                          <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                            <div className="font-semibold text-slate-950">{queueProgressPercent}% through the assigned call</div>
+                            <div className="mt-1 text-xs leading-5 text-slate-500">{queueStatusNote}</div>
+                          </div>
+                        </div>
+                        <div className="h-2 rounded-full bg-slate-100">
+                          <div
+                            className="h-full rounded-full bg-cyan-500 transition-all"
+                            style={{ width: `${queueProgressPercent}%` }}
+                          />
+                        </div>
+                        <div className="grid gap-3 lg:grid-cols-3">
+                          {queuePreviewSteps.map(({ index, step, state }) => (
+                            <div
+                              key={`${step.step_number}-${state}`}
+                              className={cn(
+                                'rounded-3xl border p-4 transition',
+                                state === 'current'
+                                  ? 'border-cyan-200 bg-cyan-50'
+                                  : state === 'completed'
+                                    ? 'border-emerald-200 bg-emerald-50'
+                                    : 'border-slate-200 bg-slate-50',
+                              )}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Step {index + 1}</div>
+                                  <div className="mt-1 text-sm font-semibold text-slate-950">
+                                    {step.actor === 'member'
+                                      ? String(step.metadata?.actor_name || step.speaker_label || memberName).trim()
+                                      : String(step.speaker_label || 'CSR / Trainee').trim()}
+                                  </div>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className={cn(
+                                    state === 'current'
+                                      ? 'border-cyan-200 bg-cyan-100 text-cyan-800'
+                                      : state === 'completed'
+                                        ? 'border-emerald-200 bg-emerald-100 text-emerald-700'
+                                        : 'border-slate-200 bg-white text-slate-600',
+                                  )}
+                                >
+                                  {state === 'current' ? 'Live' : state === 'completed' ? 'Completed' : 'Up Next'}
+                                </Badge>
+                              </div>
+                              <div className="mt-3 max-h-[72px] overflow-hidden text-sm leading-6 text-slate-600">
+                                {step.script.trim() || 'No trainer script was saved for this step yet.'}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <Card className="border-slate-200 bg-white shadow-sm">
+                      <CardHeader>
+                        <CardTitle>Live Call Workspace</CardTitle>
+                        <CardDescription>Member profile, queue position, and turn-taking cues from the assigned Supabase scenario.</CardDescription>
+                      </CardHeader>
                       <CardContent className="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
                         <div className="space-y-4">
                           <div className="flex items-center gap-3">
@@ -2941,7 +3226,7 @@ function TraineeSimFloorPageContent() {
                               </div>
                             </div>
                             <Badge variant="outline" className="border-white/15 bg-white/10 text-white">
-                              Turn {Math.min(currentStepIndex + 1, steps.length)} / {steps.length || 1}
+                              Step {queuePosition} of {steps.length || 1}
                             </Badge>
                           </div>
                           <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -2989,155 +3274,8 @@ function TraineeSimFloorPageContent() {
                         </div>
                       </CardContent>
                     </Card>
-                    <div className="grid gap-5 lg:grid-cols-[1.05fr,0.95fr]">
-                      <Card className="border-slate-200 bg-white shadow-sm">
-                        <CardHeader>
-                          <CardTitle>CSR Script</CardTitle>
-                          <CardDescription>Required script text turns green as your saved speech matches it.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <Progress value={scriptProgress.percent} className="h-2.5" />
-                          <div className="rounded-2xl bg-slate-50 p-4 text-base leading-8 text-slate-700">
-                            {currentStep?.script ? (
-                              scriptProgress.items.map((item, index) => (
-                                <span key={`${item.word}-${index}`} className={cn('mr-1 inline', item.matched ? 'font-semibold text-emerald-600' : 'text-slate-500')}>
-                                  {item.word}
-                                </span>
-                              ))
-                            ) : (
-                              <span>No active spiel loaded.</span>
-                            )}
-                          </div>
-                          <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-600">
-                            Live transcript
-                            <div className="mt-2 rounded-2xl bg-slate-100 p-3 text-slate-800">
-                              {liveTranscript || 'Your recognized speech will appear here while Google ASR confirms the turn.'}
-                            </div>
-                            <div className="mt-2 text-xs text-slate-500">
-                              {lastAsrProviderLabel
-                                ? `Saved using ${lastAsrProviderLabel}${lastTranscriptConfidence !== null ? ` at ${lastTranscriptConfidence}% confidence` : ''}.`
-                                : 'Browser transcript guidance appears live, then the saved turn is confirmed by the backend ASR pipeline.'}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      <Card className="border-slate-200 bg-white shadow-sm">
-                        <CardHeader>
-                          <CardTitle>Member Response</CardTitle>
-                          <CardDescription>The current Member reply appears on screen while audio is playing.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-4">
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">On-screen actor script</div>
-                            <div className="mt-3 min-h-[168px] rounded-2xl bg-slate-950 p-4 text-sm leading-7 text-slate-100">
-                              {needsHoldForMemberResponse
-                                ? queuedMemberPlayback?.script || steps[queuedMemberStepIndex || 0]?.script || 'Member response is queued for the hold step.'
-                                : callState === 'member-speaking' || showIncomingAudio
-                                ? activePlaybackScript || 'Incoming audio is loading.'
-                                : 'No active member audio yet.'}
-                            </div>
-                          </div>
-                          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                            {isOnHold
-                              ? canResumeMemberTurn
-                                ? 'The member response already played on hold. Click Unhold to unlock the next CSR script.'
-                                : 'The call is on hold while the full conversation recorder continues capturing the session.'
-                              : needsHoldForMemberResponse
-                                ? 'The next member response is queued. Click Hold to play it before the next CSR turn.'
-                              : activePlaybackSpeaker === 'system'
-                                ? 'If the saved turn does not match the scripted spiel closely enough, Call Simulation asks for a repeat and keeps the same CSR step active.'
-                                : 'Ending the call uploads the full recording, finalizes the transcript, and calculates sentiment, keyword compliance, and AHT.'}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
                   </>
                 )}
-              </div>
-              <div className="space-y-5">
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Scenario Queue</CardTitle>
-                    <CardDescription>Track the current step and who speaks next.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {steps.length ? (
-                      steps.map((step) => {
-                        const isCurrentStep = step.step_number === currentStepNumber;
-                        const isCompletedStep = step.step_number < currentStepNumber;
-                        const statusText = isCurrentStep
-                          ? step.actor === 'csr'
-                            ? 'Current CSR step'
-                            : 'Current Member step'
-                          : isCompletedStep
-                            ? 'Completed'
-                            : 'Queued';
-
-                        return (
-                          <div
-                            key={`${step.step_number}-${step.actor}`}
-                            className={cn(
-                              'rounded-2xl border px-4 py-3 text-sm',
-                              isCurrentStep
-                                ? 'border-cyan-200 bg-cyan-50'
-                                : isCompletedStep
-                                  ? 'border-emerald-200 bg-emerald-50'
-                                  : 'border-slate-200 bg-slate-50',
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="font-semibold text-slate-950">
-                                Step {step.step_number} - {step.actor === 'csr' ? 'CSR / Trainee' : 'Member AI'}
-                              </div>
-                              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{statusText}</div>
-                            </div>
-                            <div className="mt-2 line-clamp-3 text-xs leading-6 text-slate-600">
-                              {step.script || 'Script not available.'}
-                            </div>
-                          </div>
-                        );
-                      })
-                    ) : (
-                      <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                        Scenario steps will appear here after the call starts.
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-                    <Card className="border-slate-200 bg-white shadow-sm">
-                      <CardHeader>
-                        <CardTitle>Call Status</CardTitle>
-                        <CardDescription>Microphone, hold, recording, and member-audio states for this session.</CardDescription>
-                      </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Mute</span>
-                      <span className={cn('font-semibold', isMuted ? 'text-rose-600' : 'text-slate-900')}>{isMuted ? 'Enabled' : 'Off'}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Hold</span>
-                      <span className={cn('font-semibold', isOnHold ? 'text-amber-600' : 'text-slate-900')}>{isOnHold ? 'Hold music active' : 'Live line'}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Recording</span>
-                      <span className={cn('font-semibold', isCapturing ? 'text-emerald-600' : 'text-slate-900')}>{isCapturing ? 'Full call captured' : 'Not started'}</span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Member audio</span>
-                      <span className={cn('font-semibold', callState === 'member-speaking' || showIncomingAudio ? 'text-amber-600' : 'text-slate-900')}>
-                        {callState === 'member-speaking'
-                          ? activePlaybackSpeaker === 'system'
-                            ? 'System prompt playing'
-                            : 'Member AI speaking'
-                          : canResumeMemberTurn
-                            ? 'Waiting for unhold'
-                            : needsHoldForMemberResponse
-                              ? 'Queued on hold'
-                              : 'Idle'}
-                      </span>
-                    </div>
-                  </CardContent>
-                </Card>
               </div>
             </div>
           </div>
@@ -3667,596 +3805,3 @@ export default function TraineeSimFloorPage() {
     </Suspense>
   );
 }
-
-/*
-        {sessionData && callState !== 'idle' && callState !== 'completed' ? (
-          <div className="space-y-5">
-            <div className="rounded-[32px] border border-slate-200 bg-[linear-gradient(145deg,#ffffff,#f1f5f9)] p-5 shadow-sm">
-              <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-                <div className="flex items-center gap-4">
-                  <span className={cn('inline-flex h-4 w-4 rounded-full ring-4 ring-white', busyStatus ? 'bg-rose-500' : 'bg-emerald-500')} />
-                  <div>
-                    <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Agent Status</div>
-                    <div className="mt-1 text-2xl font-semibold text-slate-950">{agentName}</div>
-                  </div>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[540px]">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Status Timer</div>
-                    <div className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-950">
-                      <Clock3 className="h-4 w-4 text-sky-600" />
-                      {formatTime(callTimer)}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Current Status</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950">{currentStatus}</div>
-                  </div>
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">ASR State</div>
-                    <div className="mt-2 flex items-center gap-2 text-lg font-semibold text-slate-950">
-                      <Waves className={cn('h-4 w-4', isRecording ? 'animate-pulse text-emerald-600' : 'text-slate-400')} />
-                      {isRecording ? 'Google ASR Listening' : isProcessing || isUploadingCall ? 'Processing' : 'Standing By'}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-500">
-                      {lastAsrProviderLabel
-                        ? `Last confirmed turn: ${lastAsrProviderLabel}${lastTranscriptConfidence !== null ? ` (${lastTranscriptConfidence}% confidence)` : ''}`
-                        : 'Confirmed turn metadata appears here after each saved CSR response.'}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid gap-6 xl:grid-cols-[112px,1fr,360px]">
-              <Card className="overflow-hidden border-slate-900 bg-slate-950 text-white">
-                <CardContent className="flex h-full flex-col gap-3 p-3">
-                  <Button
-                    type="button"
-                    className={cn(
-                      'h-20 rounded-3xl border border-white/10 text-white shadow-none',
-                      isRecording ? 'bg-emerald-600 hover:bg-emerald-600' : isMicLocked ? 'bg-slate-800 hover:bg-slate-800' : 'bg-cyan-500 text-slate-950 hover:bg-cyan-400',
-                    )}
-                    onClick={() => void handleMicClick()}
-                    disabled={isMicLocked}
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      {isMicLocked ? <Lock className="h-6 w-6" /> : <Mic className={cn('h-6 w-6', isRecording && 'animate-pulse')} />}
-                      <span className="text-xs font-medium">{isRecording ? 'Listening' : 'Mic'}</span>
-                    </div>
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
-                    onClick={() => setIsOnHold((previous) => !previous)}
-                    disabled={isRecording || callState === 'member-speaking' || callState === 'ringing'}
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
-                      <span className="text-xs font-medium">{isOnHold ? 'Resume' : 'Hold'}</span>
-                    </div>
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className={cn(
-                      'h-20 rounded-3xl border border-white/10 text-white hover:bg-white/15',
-                      isMuted ? 'bg-rose-500/80 hover:bg-rose-500/80' : 'bg-white/10',
-                    )}
-                    onClick={() => setIsMuted((previous) => !previous)}
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      {isMuted ? <MicOff className="h-6 w-6" /> : <Volume2 className="h-6 w-6" />}
-                      <span className="text-xs font-medium">{isMuted ? 'Muted' : 'Mute'}</span>
-                    </div>
-                  </Button>
-
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    className="mt-auto h-20 rounded-3xl"
-                    onClick={() => void finalizeSession()}
-                    disabled={isRecording || isUploadingCall}
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      <PhoneOff className="h-6 w-6" />
-                      <span className="text-xs font-medium">Hang Up</span>
-                    </div>
-                  </Button>
-                </CardContent>
-              </Card>
-
-              <div className="space-y-5">
-                {callState === 'ringing' ? (
-                  <Card className="overflow-hidden border-emerald-200 bg-[linear-gradient(145deg,#f0fdf4,#dcfce7)]">
-                    <CardContent className="flex min-h-[260px] flex-col justify-between p-6">
-                      <div>
-                        <div className="text-xs uppercase tracking-[0.28em] text-emerald-700">Incoming Call</div>
-                        <div className="mt-3 text-3xl font-bold text-emerald-950">{currentMemberActorLabel || memberName}</div>
-                        <div className="mt-2 text-sm text-emerald-900">{currentScenarioCue || memberIssue}</div>
-                      </div>
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 text-emerald-800">
-                          <PhoneIncoming className="h-10 w-10 animate-pulse" />
-                          <div>
-                            <div className="text-sm font-semibold">MAX call waiting</div>
-                            <div className="text-xs">The line will connect automatically, or you can connect immediately from here.</div>
-                          </div>
-                        </div>
-                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
-                          <Phone className="mr-2 h-4 w-4" />
-                          Connect
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <>
-                    {showIncomingAudio ? (
-                      <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950 shadow-sm">
-                        <div className="flex items-center gap-3">
-                          <Headphones className="h-5 w-5 text-amber-600" />
-                          <div>
-                            <div className="font-semibold">Incoming Audio</div>
-                            <div>The Member Actor is speaking. Your mic is temporarily locked.</div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    {showSilenceAlert ? (
-                      <div className="rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm">
-                        <div className="flex items-center gap-3">
-                          <AlertTriangle className="h-5 w-5 text-rose-600" />
-                          <div>
-                            <div className="font-semibold">Silence Alert</div>
-                            <div>Seconds matter. Start responding before AHT and dead-air penalties grow.</div>
-                          </div>
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <Card className="overflow-hidden border-slate-200 bg-white shadow-sm">
-                      <CardHeader className="border-b border-slate-100 bg-[linear-gradient(135deg,#f8fafc,#eef2ff)]">
-                        <CardTitle>Member Card</CardTitle>
-                        <CardDescription>Live customer context from the assigned trainer scenario.</CardDescription>
-                      </CardHeader>
-                      <CardContent className="grid gap-4 p-6 lg:grid-cols-[1.15fr,0.85fr]">
-                        <div className="space-y-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-950 text-white">
-                              <UserRound className="h-7 w-7" />
-                            </div>
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Member</div>
-                              <div className="mt-1 text-xl font-semibold text-slate-950">{currentMemberActorLabel || memberName}</div>
-                              <div className="text-sm text-slate-500">{currentScenarioCue || memberIssue}</div>
-                            </div>
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-3">
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Member ID</div>
-                              <div className="mt-2 text-sm font-semibold text-slate-950">{memberId}</div>
-                            </div>
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Plan Type</div>
-                              <div className="mt-2 text-sm font-semibold text-slate-950">{planType}</div>
-                            </div>
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Verification</div>
-                              <div className="mt-2 flex items-center gap-2 text-sm font-semibold text-slate-950">
-                                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                                {verificationStatus}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="rounded-[28px] border border-slate-200 bg-slate-950 p-5 text-white">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="text-xs uppercase tracking-[0.24em] text-slate-400">Talk State</div>
-                              <div className="mt-2 text-lg font-semibold">
-                                {callState === 'member-speaking'
-                                  ? 'Member Actor talking'
-                                  : isRecording
-                                    ? 'CSR live on mic'
-                                    : currentStep?.actor === 'csr'
-                                      ? 'CSR queued to speak'
-                                      : 'Waiting for next cue'}
-                              </div>
-                            </div>
-                            <Badge variant="outline" className="border-white/20 bg-white/10 text-white">
-                              Turn {Math.min(currentStepIndex + 1, steps.length)} / {steps.length || 1}
-                            </Badge>
-                          </div>
-                          <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                            <div
-                              className={cn(
-                                'rounded-3xl border p-4 transition',
-                                currentStep?.actor === 'csr' || isRecording
-                                  ? 'border-cyan-400/40 bg-cyan-400/10'
-                                  : 'border-white/10 bg-white/5',
-                              )}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-3">
-                                  <div
-                                    className={cn(
-                                      'flex h-11 w-11 items-center justify-center rounded-2xl',
-                                      isRecording
-                                        ? 'bg-emerald-500 text-white'
-                                        : currentStep?.actor === 'csr'
-                                          ? 'bg-cyan-500 text-slate-950'
-                                          : 'bg-white/10 text-white',
-                                    )}
-                                  >
-                                    <Mic className={cn('h-5 w-5', isRecording && 'animate-pulse')} />
-                                  </div>
-                                  <div>
-                                    <div className="text-sm font-semibold">CSR</div>
-                                    <div className="text-xs text-slate-300">
-                                      {isRecording ? 'Talking now' : currentStep?.actor === 'csr' ? 'Ready to respond' : 'Waiting'}
-                                    </div>
-                                  </div>
-                                </div>
-                                <span
-                                  className={cn(
-                                    'inline-flex h-3 w-3 rounded-full',
-                                    (currentStep?.actor === 'csr' || isRecording) && !isMicLocked ? 'bg-emerald-400' : 'bg-slate-500',
-                                  )}
-                                />
-                              </div>
-                              <div className="mt-4">
-                                <VoiceActivityBars level={isMuted ? 0 : audioLevel} isActive={isRecording} accent="csr" />
-                              </div>
-                            </div>
-                            <div
-                              className={cn(
-                                'rounded-3xl border p-4 transition',
-                                callState === 'member-speaking' || showIncomingAudio
-                                  ? 'border-amber-300/40 bg-amber-400/10'
-                                  : 'border-white/10 bg-white/5',
-                              )}
-                            >
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="flex items-center gap-3">
-                                  <div
-                                    className={cn(
-                                      'flex h-11 w-11 items-center justify-center rounded-2xl',
-                                      callState === 'member-speaking' || showIncomingAudio
-                                        ? 'bg-amber-400 text-slate-950'
-                                        : 'bg-white/10 text-white',
-                                    )}
-                                  >
-                                    <Headphones className={cn('h-5 w-5', callState === 'member-speaking' && 'animate-pulse')} />
-                                  </div>
-                                  <div>
-                                    <div className="text-sm font-semibold">Member Actor</div>
-                                    <div className="text-xs text-slate-300">
-                                      {callState === 'member-speaking'
-                                        ? 'Audio playing'
-                                        : showIncomingAudio
-                                          ? 'Recently spoke'
-                                          : currentStep?.actor === 'member'
-                                            ? 'Queued'
-                                            : 'Waiting'}
-                                    </div>
-                                  </div>
-                                </div>
-                                <span
-                                  className={cn(
-                                    'inline-flex h-3 w-3 rounded-full',
-                                    callState === 'member-speaking' || showIncomingAudio ? 'bg-amber-300' : 'bg-slate-500',
-                                  )}
-                                />
-                              </div>
-                              <div className="mt-4">
-                                <VoiceActivityBars
-                                  level={callState === 'member-speaking' || showIncomingAudio ? 0.8 : 0.12}
-                                  isActive={callState === 'member-speaking' || showIncomingAudio}
-                                  accent="member"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    <div className="grid gap-5 lg:grid-cols-[0.95fr,1.05fr]">
-                      <Card className="border-slate-200 bg-white shadow-sm">
-                        <CardHeader>
-                          <CardTitle>Real-time Waveform</CardTitle>
-                          <CardDescription>Voice activity visualization for the current floor state.</CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-5">
-                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">CSR channel</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-950">
-                                  {isRecording ? 'Open mic with Google ASR' : isMuted ? 'Muted' : 'Ready'}
-                                </div>
-                              </div>
-                              <Badge variant="outline" className={cn(isRecording ? 'border-emerald-200 text-emerald-700' : 'text-slate-500')}>
-                                {isRecording ? 'Listening' : 'Idle'}
-                              </Badge>
-                            </div>
-                            <div className="mt-4">
-                              <VoiceActivityBars level={isMuted ? 0 : audioLevel} isActive={isRecording} accent="csr" />
-                            </div>
-                          </div>
-
-                          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Member channel</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-950">
-                                  {callState === 'member-speaking' ? 'Incoming scripted audio' : 'Standing by'}
-                                </div>
-                              </div>
-                              <Badge
-                                variant="outline"
-                                className={cn(callState === 'member-speaking' ? 'border-amber-200 text-amber-700' : 'text-slate-500')}
-                              >
-                                {callState === 'member-speaking' ? 'Talking' : 'Idle'}
-                              </Badge>
-                            </div>
-                            <div className="mt-4">
-                              <VoiceActivityBars
-                                level={callState === 'member-speaking' || showIncomingAudio ? 0.8 : 0.1}
-                                isActive={callState === 'member-speaking' || showIncomingAudio}
-                                accent="member"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="rounded-3xl border border-dashed border-slate-200 p-4 text-sm text-slate-600">
-                            Live transcript
-                            <div className="mt-2 min-h-[78px] rounded-2xl bg-slate-100 p-3 text-slate-800">
-                              {liveTranscript || 'Your recognized speech will appear here while Google ASR confirms the turn.'}
-                            </div>
-                            <div className="mt-2 text-xs text-slate-500">
-                              {lastAsrProviderLabel
-                                ? `Saved using ${lastAsrProviderLabel}${lastTranscriptConfidence !== null ? ` at ${lastTranscriptConfidence}% confidence` : ''}.`
-                                : 'Browser transcript guidance appears live, then the saved turn is confirmed by the backend ASR pipeline.'}
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-
-                      <Card className="border-slate-200 bg-white shadow-sm">
-                        <CardHeader>
-                          <CardTitle>Scripting Assistant</CardTitle>
-                          <CardDescription>
-                            Required spiel words turn green as your live transcript confirms them.
-                          </CardDescription>
-                        </CardHeader>
-                        <CardContent className="space-y-5">
-                          <div className="rounded-3xl border border-cyan-100 bg-cyan-50 p-5">
-                            <div className="flex items-center justify-between gap-3">
-                              <div>
-                                <div className="text-xs uppercase tracking-[0.22em] text-cyan-700">Required spiel</div>
-                                <div className="mt-1 text-sm font-semibold text-slate-900">
-                                  {currentStep?.speaker_label || (currentStep?.actor === 'member' ? 'Member Actor' : 'CSR Script')}
-                                </div>
-                              </div>
-                              <div className="text-sm font-semibold text-cyan-800">{scriptProgress.percent}% matched</div>
-                            </div>
-                            <Progress value={scriptProgress.percent} className="mt-4 h-2.5 bg-white" />
-                            <div className="mt-4 rounded-2xl bg-white/90 p-4 text-base leading-8 text-slate-700">
-                              {currentStep?.script ? (
-                                scriptProgress.items.map((item, index) => (
-                                  <span
-                                    key={`${item.word}-${index}`}
-                                    className={cn(
-                                      'mr-1 inline transition-colors',
-                                      item.matched ? 'font-semibold text-emerald-600' : 'text-slate-500',
-                                    )}
-                                  >
-                                    {item.word}
-                                  </span>
-                                ))
-                              ) : (
-                                <span>No active spiel loaded.</span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="grid gap-4 sm:grid-cols-2">
-                            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Expected keywords</div>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                {(currentStep?.expected_keywords || []).length ? (
-                                  (currentStep?.expected_keywords || []).map((keyword) => {
-                                    const isMatched = liveTranscript.toLowerCase().includes(keyword.toLowerCase());
-                                    return (
-                                      <Badge
-                                        key={keyword}
-                                        variant="outline"
-                                        className={cn(
-                                          isMatched
-                                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                                            : 'border-slate-200 bg-white text-slate-600',
-                                        )}
-                                      >
-                                        {keyword}
-                                      </Badge>
-                                    );
-                                  })
-                                ) : (
-                                  <span className="text-sm text-slate-500">No extra keywords for this turn.</span>
-                                )}
-                              </div>
-                            </div>
-
-                            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-                              <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Turn pacing</div>
-                              <div className="mt-3 text-sm text-slate-700">
-                                {showSilenceAlert
-                                  ? 'Silence threshold hit. Tap Mic and continue the call.'
-                                  : isOnHold
-                                    ? canResumeMemberTurn
-                                      ? 'Member response completed on hold. Click Resume to continue.'
-                                      : 'Recording is paused while the call is on hold.'
-                                    : needsHoldForMemberResponse
-                                      ? 'Your turn is saved. Click Hold so the member response can play.'
-                                    : isRecording
-                                      ? 'Speak naturally and follow the closing script before hang up.'
-                                      : 'Wait for the member audio, then answer with the required spiel.'}
-                              </div>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="space-y-5">
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Floor Presence</CardTitle>
-                    <CardDescription>Visual cues for who should speak next during the mock call.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <div
-                      className={cn(
-                        'rounded-3xl border p-4 transition',
-                        currentStep?.actor === 'csr' && !isRecording
-                          ? 'border-cyan-200 bg-cyan-50'
-                          : isRecording
-                            ? 'border-emerald-200 bg-emerald-50'
-                            : 'border-slate-200 bg-slate-50',
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Mic className={cn('h-5 w-5', isRecording ? 'animate-pulse text-emerald-600' : 'text-cyan-600')} />
-                        <div>
-                          <div className="font-semibold text-slate-950">CSR Talk Icon</div>
-                          <div className="text-sm text-slate-600">
-                            {isRecording
-                              ? 'CSR is talking now.'
-                              : currentStep?.actor === 'csr'
-                                ? 'CSR should talk next.'
-                                : 'CSR is waiting.'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div
-                      className={cn(
-                        'rounded-3xl border p-4 transition',
-                        callState === 'member-speaking' || showIncomingAudio
-                          ? 'border-amber-200 bg-amber-50'
-                          : 'border-slate-200 bg-slate-50',
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Headphones
-                          className={cn('h-5 w-5', callState === 'member-speaking' ? 'animate-pulse text-amber-600' : 'text-slate-500')}
-                        />
-                        <div>
-                          <div className="font-semibold text-slate-950">Member Audio Icon</div>
-                          <div className="text-sm text-slate-600">
-                            {callState === 'member-speaking'
-                              ? 'Member Actor is talking now.'
-                              : showIncomingAudio
-                                ? 'Member Actor just finished speaking.'
-                                : 'Member audio is waiting.'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Member Response Overlay</CardTitle>
-                    <CardDescription>Show the actor script on screen while the audio is playing.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div
-                      className={cn(
-                        'rounded-3xl border p-4',
-                        callState === 'member-speaking'
-                          ? 'border-amber-200 bg-amber-50'
-                          : 'border-slate-200 bg-slate-50',
-                      )}
-                    >
-                      <div className="flex items-center gap-3">
-                        <Headphones className={cn('h-5 w-5', callState === 'member-speaking' ? 'animate-pulse text-amber-600' : 'text-slate-400')} />
-                        <div>
-                          <div className="font-semibold text-slate-950">
-                            {needsHoldForMemberResponse
-                              ? 'Member Response Queued'
-                              : callState === 'member-speaking'
-                                ? 'Incoming Audio'
-                                : 'Awaiting next member line'}
-                          </div>
-                          <div className="text-sm text-slate-600">
-                            {needsHoldForMemberResponse
-                              ? 'The next member line is ready. Click Hold to play it, then Resume to continue.'
-                              : callState === 'member-speaking'
-                                ? 'The CSR mic is locked while the member response is being delivered.'
-                                : 'The member script will appear here when the actor begins speaking.'}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="rounded-3xl border border-dashed border-slate-200 p-4">
-                      <div className="text-xs uppercase tracking-[0.22em] text-slate-500">On-screen actor script</div>
-                      <div className="mt-3 min-h-[144px] rounded-2xl bg-slate-950 p-4 text-sm leading-7 text-slate-100">
-                        {needsHoldForMemberResponse
-                          ? queuedMemberPlayback?.script || steps[queuedMemberStepIndex || 0]?.script || 'Member response is queued for the hold step.'
-                          : callState === 'member-speaking' && currentStep?.actor === 'member'
-                          ? currentStep.script
-                          : showIncomingAudio
-                            ? 'Member audio just completed. Prepare your response and speak when ready.'
-                            : 'No active member audio yet.'}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card className="border-slate-200 bg-white shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Session Signals</CardTitle>
-                    <CardDescription>Call controls that affect realism, timing, and scoring.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm">
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Mute</span>
-                      <span className={cn('font-semibold', isMuted ? 'text-rose-600' : 'text-slate-900')}>
-                        {isMuted ? 'Enabled' : 'Off'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Hold</span>
-                      <span className={cn('font-semibold', isOnHold ? 'text-amber-600' : 'text-slate-900')}>
-                        {isOnHold ? 'Hold music active' : 'Live line'}
-                      </span>
-                    </div>
-                    <div className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
-                      <span className="text-slate-600">Recording</span>
-                      <span className={cn('font-semibold', isCapturing ? 'text-emerald-600' : 'text-slate-900')}>
-                        {isCapturing ? 'Full call captured' : 'Not started'}
-                      </span>
-                    </div>
-                    <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-slate-600">
-                      Hanging up triggers Supabase upload, transcript finalization, sentiment scoring, keyword
-                      compliance checks, and updated trainer coaching data.
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </div>
-          </div>
-        ) : null}
-*/

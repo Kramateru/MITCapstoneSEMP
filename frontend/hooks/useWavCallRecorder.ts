@@ -5,7 +5,70 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export interface WavCallRecordingResult {
   blob: Blob;
   durationSeconds: number;
-  mimeType: 'audio/wav';
+  mimeType: string;
+  fileExtension: string;
+}
+
+type CaptureMode = 'media-recorder' | 'manual-wav' | null;
+
+type CaptureFormat = {
+  mimeType: string;
+  fileExtension: string;
+};
+
+const COMPRESSED_CAPTURE_FORMATS: CaptureFormat[] = [
+  { mimeType: 'audio/mpeg', fileExtension: 'mp3' },
+  { mimeType: 'audio/mp4', fileExtension: 'm4a' },
+  { mimeType: 'audio/webm;codecs=opus', fileExtension: 'webm' },
+  { mimeType: 'audio/webm', fileExtension: 'webm' },
+  { mimeType: 'audio/ogg;codecs=opus', fileExtension: 'ogg' },
+  { mimeType: 'audio/ogg', fileExtension: 'ogg' },
+];
+
+const MANUAL_WAV_FORMAT: CaptureFormat = {
+  mimeType: 'audio/wav',
+  fileExtension: 'wav',
+};
+
+function normalizeMimeType(value?: string | null) {
+  return String(value || '')
+    .split(';', 1)[0]
+    .trim()
+    .toLowerCase();
+}
+
+function resolveFileExtensionFromMimeType(value?: string | null) {
+  const normalized = normalizeMimeType(value);
+  if (!normalized) {
+    return '';
+  }
+  if (normalized === 'audio/mpeg' || normalized === 'audio/mp3') {
+    return 'mp3';
+  }
+  if (normalized === 'audio/mp4' || normalized === 'audio/m4a' || normalized === 'audio/x-m4a' || normalized === 'audio/aac') {
+    return 'm4a';
+  }
+  if (normalized === 'audio/ogg' || normalized === 'audio/vorbis') {
+    return 'ogg';
+  }
+  if (normalized === 'audio/webm') {
+    return 'webm';
+  }
+  if (normalized === 'audio/wav' || normalized === 'audio/x-wav' || normalized === 'audio/wave') {
+    return 'wav';
+  }
+  return '';
+}
+
+function resolvePreferredCaptureFormat() {
+  if (typeof MediaRecorder === 'undefined') {
+    return null;
+  }
+
+  return (
+    COMPRESSED_CAPTURE_FORMATS.find((candidate) => MediaRecorder.isTypeSupported(candidate.mimeType))
+    || null
+  );
 }
 
 function mergeBuffers(chunks: Float32Array[]) {
@@ -69,7 +132,7 @@ function encodeWav(samples: Float32Array, sampleRate: number) {
     offset += 2;
   }
 
-  return new Blob([view], { type: 'audio/wav' });
+  return new Blob([view], { type: MANUAL_WAV_FORMAT.mimeType });
 }
 
 export function useWavCallRecorder() {
@@ -79,10 +142,16 @@ export function useWavCallRecorder() {
   const mixGainRef = useRef<GainNode | null>(null);
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const gainRef = useRef<GainNode | null>(null);
+  const recordingDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const playbackSourcesRef = useRef<Map<HTMLMediaElement, MediaElementAudioSourceNode>>(new Map());
   const sampleRateRef = useRef(44100);
   const chunksRef = useRef<Float32Array[]>([]);
+  const mediaChunksRef = useRef<Blob[]>([]);
   const recordedSamplesRef = useRef(0);
+  const captureModeRef = useRef<CaptureMode>(null);
+  const captureFormatRef = useRef<CaptureFormat>(MANUAL_WAV_FORMAT);
+  const captureStartedAtRef = useRef<number | null>(null);
   const pausedRef = useRef(false);
 
   const [isCapturing, setIsCapturing] = useState(false);
@@ -90,6 +159,20 @@ export function useWavCallRecorder() {
   const [error, setError] = useState<string | null>(null);
 
   const cleanup = useCallback(async () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+      if (recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch {
+          // Best effort shutdown only.
+        }
+      }
+      mediaRecorderRef.current = null;
+    }
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current.onaudioprocess = null;
@@ -111,6 +194,15 @@ export function useWavCallRecorder() {
       gainRef.current.disconnect();
       gainRef.current = null;
     }
+    if (recordingDestinationRef.current) {
+      try {
+        recordingDestinationRef.current.disconnect();
+      } catch {
+        // MediaStream destinations can already be detached.
+      }
+      recordingDestinationRef.current.stream.getTracks().forEach((track) => track.stop());
+      recordingDestinationRef.current = null;
+    }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -119,6 +211,8 @@ export function useWavCallRecorder() {
       await audioContextRef.current.close().catch(() => undefined);
       audioContextRef.current = null;
     }
+    captureModeRef.current = null;
+    captureStartedAtRef.current = null;
   }, []);
 
   const startCapture = useCallback(async () => {
@@ -129,6 +223,7 @@ export function useWavCallRecorder() {
     try {
       setError(null);
       chunksRef.current = [];
+      mediaChunksRef.current = [];
       recordedSamplesRef.current = 0;
       pausedRef.current = false;
       setIsPaused(false);
@@ -152,31 +247,58 @@ export function useWavCallRecorder() {
       const audioContext = new AudioContextClass();
       const source = audioContext.createMediaStreamSource(stream);
       const mixGain = audioContext.createGain();
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      const monitorGain = audioContext.createGain();
-      monitorGain.gain.value = 0;
-
-      processor.onaudioprocess = (event) => {
-        if (pausedRef.current) {
-          return;
-        }
-        const input = event.inputBuffer.getChannelData(0);
-        chunksRef.current.push(new Float32Array(input));
-        recordedSamplesRef.current += input.length;
-      };
+      const recordingDestination = audioContext.createMediaStreamDestination();
+      const preferredCaptureFormat = resolvePreferredCaptureFormat();
 
       source.connect(mixGain);
-      mixGain.connect(processor);
-      processor.connect(monitorGain);
-      monitorGain.connect(audioContext.destination);
+      mixGain.connect(recordingDestination);
 
       streamRef.current = stream;
       audioContextRef.current = audioContext;
       sourceRef.current = source;
       mixGainRef.current = mixGain;
-      processorRef.current = processor;
-      gainRef.current = monitorGain;
-      sampleRateRef.current = audioContext.sampleRate || 44100;
+      recordingDestinationRef.current = recordingDestination;
+      captureStartedAtRef.current = performance.now();
+
+      if (preferredCaptureFormat) {
+        const recorder = new MediaRecorder(recordingDestination.stream, { mimeType: preferredCaptureFormat.mimeType });
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            mediaChunksRef.current.push(event.data);
+          }
+        };
+        recorder.onerror = (event) => {
+          console.error('Mixed call recorder failed.', event);
+        };
+        mediaRecorderRef.current = recorder;
+        captureModeRef.current = 'media-recorder';
+        captureFormatRef.current = preferredCaptureFormat;
+        recorder.start(250);
+      } else {
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const monitorGain = audioContext.createGain();
+        monitorGain.gain.value = 0;
+
+        processor.onaudioprocess = (event) => {
+          if (pausedRef.current) {
+            return;
+          }
+          const input = event.inputBuffer.getChannelData(0);
+          chunksRef.current.push(new Float32Array(input));
+          recordedSamplesRef.current += input.length;
+        };
+
+        mixGain.connect(processor);
+        processor.connect(monitorGain);
+        monitorGain.connect(audioContext.destination);
+
+        processorRef.current = processor;
+        gainRef.current = monitorGain;
+        sampleRateRef.current = audioContext.sampleRate || 44100;
+        captureModeRef.current = 'manual-wav';
+        captureFormatRef.current = MANUAL_WAV_FORMAT;
+      }
+
       setIsCapturing(true);
     } catch (captureError) {
       const message = getCaptureErrorMessage(captureError);
@@ -209,8 +331,8 @@ export function useWavCallRecorder() {
       playbackSource.connect(audioContext.destination);
       playbackSourcesRef.current.set(element, playbackSource);
       return true;
-    } catch (error) {
-      console.error('Unable to register playback audio for mixed recording.', error);
+    } catch (registerError) {
+      console.error('Unable to register playback audio for mixed recording.', registerError);
       return false;
     }
   }, []);
@@ -218,11 +340,59 @@ export function useWavCallRecorder() {
   const setCapturePaused = useCallback((paused: boolean) => {
     pausedRef.current = paused;
     setIsPaused(paused);
+
+    const recorder = mediaRecorderRef.current;
+    if (!recorder) {
+      return;
+    }
+
+    try {
+      if (paused && recorder.state === 'recording') {
+        recorder.pause();
+      } else if (!paused && recorder.state === 'paused') {
+        recorder.resume();
+      }
+    } catch {
+      // Browsers vary on pause/resume support for audio-only streams.
+    }
   }, []);
 
   const stopCapture = useCallback(async () => {
     if (!isCapturing) {
       return null;
+    }
+
+    const captureMode = captureModeRef.current;
+    if (captureMode === 'media-recorder' && mediaRecorderRef.current) {
+      const recorder = mediaRecorderRef.current;
+      const fallbackFormat = captureFormatRef.current;
+
+      return new Promise<WavCallRecordingResult | null>((resolve) => {
+        recorder.onstop = async () => {
+          const durationSeconds = captureStartedAtRef.current != null
+            ? Math.max((performance.now() - captureStartedAtRef.current) / 1000, 0)
+            : 0;
+          const fallbackMimeType = recorder.mimeType || fallbackFormat.mimeType;
+          const blob = new Blob(mediaChunksRef.current, { type: fallbackMimeType });
+          const resolvedMimeType = blob.type || fallbackMimeType;
+          const resolvedExtension = resolveFileExtensionFromMimeType(resolvedMimeType) || fallbackFormat.fileExtension;
+
+          await cleanup();
+          mediaChunksRef.current = [];
+          pausedRef.current = false;
+          setIsCapturing(false);
+          setIsPaused(false);
+
+          resolve({
+            blob,
+            durationSeconds,
+            mimeType: resolvedMimeType,
+            fileExtension: resolvedExtension,
+          });
+        };
+
+        recorder.stop();
+      });
     }
 
     const durationSeconds = recordedSamplesRef.current / Math.max(sampleRateRef.current, 1);
@@ -231,6 +401,7 @@ export function useWavCallRecorder() {
 
     await cleanup();
     chunksRef.current = [];
+    mediaChunksRef.current = [];
     recordedSamplesRef.current = 0;
     pausedRef.current = false;
     setIsCapturing(false);
@@ -239,12 +410,14 @@ export function useWavCallRecorder() {
     return {
       blob,
       durationSeconds,
-      mimeType: 'audio/wav' as const,
+      mimeType: MANUAL_WAV_FORMAT.mimeType,
+      fileExtension: MANUAL_WAV_FORMAT.fileExtension,
     } satisfies WavCallRecordingResult;
   }, [cleanup, isCapturing]);
 
   const discardCapture = useCallback(async () => {
     chunksRef.current = [];
+    mediaChunksRef.current = [];
     recordedSamplesRef.current = 0;
     pausedRef.current = false;
     setIsCapturing(false);
