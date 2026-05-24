@@ -9,7 +9,7 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "dashboard-card bg-card text-card-foreground flex flex-col gap-5 rounded-[1.3rem] border border-border/80",
+        "dashboard-card bg-card text-card-foreground flex min-w-0 flex-col gap-4 rounded-[1.2rem] border border-border/80 sm:gap-5 sm:rounded-[1.3rem]",
         className,
       )}
       {...props}
@@ -22,7 +22,7 @@ function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card-header"
       className={cn(
-        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-2.5 px-5 pt-5 sm:px-6 sm:pt-6 has-data-[slot=card-action]:grid-cols-[1fr_auto] [.border-b]:pb-5 sm:[.border-b]:pb-6",
+        "@container/card-header grid auto-rows-min grid-rows-[auto_auto] items-start gap-2.5 px-4 pt-4 sm:px-6 sm:pt-6 has-data-[slot=card-action]:grid-cols-[minmax(0,1fr)_auto] [.border-b]:pb-4 sm:[.border-b]:pb-6",
         className,
       )}
       {...props}
@@ -67,7 +67,7 @@ function CardContent({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-content"
-      className={cn("px-5 sm:px-6 [&:last-child]:pb-5 sm:[&:last-child]:pb-6", className)}
+      className={cn("min-w-0 px-4 sm:px-6 [&:last-child]:pb-4 sm:[&:last-child]:pb-6", className)}
       {...props}
     />
   );
@@ -77,7 +77,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="card-footer"
-      className={cn("flex items-center px-5 pb-5 sm:px-6 sm:pb-6 [.border-t]:pt-5 sm:[.border-t]:pt-6", className)}
+      className={cn("flex flex-wrap items-center gap-3 px-4 pb-4 sm:px-6 sm:pb-6 [.border-t]:pt-4 sm:[.border-t]:pt-6", className)}
       {...props}
     />
   );

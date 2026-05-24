@@ -1888,6 +1888,33 @@ def _serialize_sim_session_response(
     return payload
 
 
+def _collect_session_audio_urls(
+    session: SimSession,
+    response_records: Optional[list[SessionResponseRecord]] = None,
+) -> list[str]:
+    urls: list[str] = []
+
+    def add_url(candidate: Any) -> None:
+        normalized = str(candidate or "").strip()
+        if normalized and normalized not in urls:
+            urls.append(normalized)
+
+    add_url(session.audio_url)
+
+    for entry in _session_turn_logs(session):
+        if isinstance(entry, dict):
+            add_url(entry.get("audio_url"))
+
+    for entry in _session_transcript_log(session):
+        if isinstance(entry, dict):
+            add_url(entry.get("audio_url"))
+
+    for record in response_records or []:
+        add_url(record.audio_url)
+
+    return urls
+
+
 def _get_supabase_call_simulation_feedback_reports(
     session_ids: list[str],
 ) -> dict[str, dict[str, Any]]:
@@ -7930,6 +7957,49 @@ async def retake_session(
     db.commit()
     db.refresh(new_session)
     return SimSessionResponse.model_validate(new_session)
+
+
+@router.post("/session/{session_id}/discard", response_model=SuccessResponse)
+async def discard_session_attempt(
+    session_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    _require_trainee(current_user)
+    session = _get_accessible_session(db, current_user, session_id)
+
+    if session.status not in {"pending", "in_progress"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Only active Call Simulation attempts can be reset.",
+        )
+
+    response_records = (
+        db.query(SessionResponseRecord)
+        .filter(SessionResponseRecord.session_id == session.id)
+        .all()
+    )
+    audio_urls = _collect_session_audio_urls(session, response_records)
+    supabase = get_supabase_client()
+
+    for audio_url in audio_urls:
+        try:
+            supabase.delete_by_public_url(audio_url)
+        except Exception as exc:
+            logger.warning(
+                "Unable to delete discarded Call Simulation audio %s for session %s: %s",
+                audio_url,
+                session.id,
+                exc,
+            )
+
+    for record in response_records:
+        db.delete(record)
+
+    db.delete(session)
+    db.commit()
+    return SuccessResponse(message="The Call Simulation attempt was cleared. Start the call again to retry from step 1.")
 
 
 @router.get("/session/{session_id}/can-retake")

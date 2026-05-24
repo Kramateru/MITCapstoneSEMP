@@ -402,6 +402,9 @@
   }
 
   .workspace-shell {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
     border-radius: 1.55rem;
     border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
     background:
@@ -417,6 +420,16 @@
       linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 253, 0.92));
     backdrop-filter: blur(16px);
     box-shadow: 0 20px 44px -40px rgba(15, 23, 42, 0.24);
+  }
+
+  [data-slot="card"],
+  [data-slot="card-content"],
+  [data-slot="dialog-content"],
+  [data-slot="sheet-content"],
+  [data-slot="table-container"],
+  [data-slot="tabs"],
+  [data-slot="tabs-content"] {
+    min-width: 0;
   }
 
   .dashboard-grid {
@@ -575,6 +588,36 @@
   .status-pill-neutral {
     background: #edf2f7;
     color: #475569;
+  }
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --dashboard-gap: clamp(0.9rem, 0.78rem + 0.45vw, 1.2rem);
+    --dashboard-padding: clamp(0.9rem, 0.78rem + 0.5vw, 1.15rem);
+  }
+
+  .workspace-shell {
+    min-height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --dashboard-gap: 0.9rem;
+    --dashboard-padding: 0.95rem;
+  }
+
+  .workspace-shell {
+    border-radius: 1.1rem;
+  }
+
+  .workspace-topbar {
+    box-shadow: 0 16px 36px -34px rgba(15, 23, 42, 0.22);
+  }
+
+  [data-slot="dialog-content"] {
+    scrollbar-gutter: stable;
   }
 }
 
