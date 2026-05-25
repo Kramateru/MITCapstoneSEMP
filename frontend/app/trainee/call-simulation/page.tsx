@@ -11,7 +11,7 @@ import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simu
 import { BROWSER_TTS_UNSUPPORTED_MESSAGE, browserTtsService } from '@/app/lib/tts/ttsService';
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import { useSpeechToText, type SimFloorTurnResult } from '@/hooks/useSpeechToText';
-import { useWavCallRecorder } from '@/hooks/useWavCallRecorder';
+import { useWavCallRecorder, type WavCallRecordingResult } from '@/hooks/useWavCallRecorder';
 import {
     AlertTriangle,
     CheckCircle2,
@@ -126,6 +126,14 @@ interface QueuedMemberPlayback {
   script: string;
   audioUrl?: string | null;
   speakerLabel?: string | null;
+  playbackSteps?: Array<{
+    stepIndex: number | null;
+    stepNumber: number | null;
+    script: string;
+    audioUrl?: string | null;
+    speaker: 'member' | 'system';
+    speakerLabel?: string | null;
+  }>;
 }
 
 interface TtsResponsePayload {
@@ -150,6 +158,7 @@ interface SessionResult {
   assigned_by_id?: string | null;
   status?: string;
   audio_url?: string | null;
+  audio_duration_seconds?: number | null;
   transcript?: string | null;
   transcript_log?: Array<Record<string, unknown>>;
   weighted_score?: number | null;
@@ -258,8 +267,6 @@ declare global {
   }
 }
 
-const DEFAULT_PHONE_RING_URL = '/audio/phone-ring.wav';
-
 function formatTime(totalSeconds: number) {
   const mins = Math.floor(totalSeconds / 60);
   const secs = totalSeconds % 60;
@@ -333,7 +340,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `Starting the call plays the trainer ringer. After you accept the line, the conversation recording begins and the first CSR turn is prepared.${attemptWindow}`;
+  return `Starting the call loads the trainer ringer from Supabase and keeps the full conversation recording flow ready through hang up. After you accept the line, the first CSR turn is prepared.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -387,7 +394,74 @@ function getPreferredScenarioId(
   if (requestedScenarioId && scenarios.some((scenario) => scenario.id === requestedScenarioId)) {
     return requestedScenarioId;
   }
-  return '';
+  return currentScenarioId || scenarios[0]?.id || '';
+}
+
+function buildSessionResultFromPayload(payload: SessionRealtimePayload): SessionResult {
+  return {
+    id: payload.id,
+    assignment_id: payload.assignment_id,
+    assigned_by_id: payload.assigned_by_id,
+    status: payload.status,
+    audio_url: payload.audio_url,
+    transcript: payload.transcript,
+    transcript_log: payload.transcript_log || [],
+    weighted_score: payload.weighted_score,
+    pass_fail: payload.pass_fail,
+    ai_feedback: payload.ai_feedback,
+    speech_to_text_accuracy: payload.speech_to_text_accuracy,
+    grammar_score: payload.grammar_score,
+    pronunciation_score: payload.pronunciation_score,
+    pacing_score: payload.pacing_score,
+    rate_of_speech: payload.rate_of_speech,
+    dead_air_seconds: payload.dead_air_seconds,
+    aht_actual: payload.aht_actual,
+    empathy_statements_count: payload.empathy_statements_count,
+    probing_questions_count: payload.probing_questions_count,
+    forbidden_words_count: payload.forbidden_words_count,
+    sentiment_score: payload.sentiment_score,
+    keyword_compliance: payload.keyword_compliance,
+    turn_logs: payload.turn_logs || [],
+    attempt_number: payload.attempt_number,
+    max_attempts: payload.max_attempts,
+    trainer_verdict_status: payload.trainer_verdict_status,
+    trainer_verdict_notes: payload.trainer_verdict_notes,
+    coaching_notes: payload.coaching_notes,
+    feedback_report: payload.feedback_report || null,
+    certificate_id: payload.certificate_id,
+    coaching_id: payload.coaching_id,
+    coaching_status: payload.coaching_status,
+    coaching_acknowledged_at: payload.coaching_acknowledged_at,
+    completed_at: payload.completed_at,
+  };
+}
+
+function buildRestoredSessionData({
+  sessionId,
+  result,
+  scenario,
+}: {
+  sessionId: string;
+  result: SessionResult;
+  scenario: ScenarioCard;
+}): SessionData {
+  return {
+    session_id: sessionId,
+    assignment_id: result.assignment_id || scenario.assignment_id || null,
+    assigned_by_id: result.assigned_by_id || scenario.assigned_by_id || null,
+    attempt_number: result.attempt_number || null,
+    max_attempts: result.max_attempts || scenario.max_attempts || null,
+    scenario_title: scenario.title,
+    scenario_description: scenario.description || null,
+    current_step: 1,
+    passing_score: scenario.passing_score,
+    member_profile: {},
+    cxone_metadata: {},
+    call_simulation_config: {},
+    ringer_audio_url: null,
+    hold_audio_url: null,
+    steps: [],
+  };
 }
 
 function statusLabel(callState: CallState, isOnHold: boolean) {
@@ -499,6 +573,8 @@ function TraineeSimFloorPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [scenarios, setScenarios] = useState<ScenarioCard[]>([]);
+  const [isLoadingScenarios, setIsLoadingScenarios] = useState(true);
+  const [scenarioLoadError, setScenarioLoadError] = useState<string | null>(null);
   const [selectedScenarioId, setSelectedScenarioId] = useState('');
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionResult, setSessionResult] = useState<SessionResult | null>(null);
@@ -513,6 +589,7 @@ function TraineeSimFloorPageContent() {
   const [isUploadingCall, setIsUploadingCall] = useState(false);
   const [isStartingCall, setIsStartingCall] = useState(false);
   const [isEndingCall, setIsEndingCall] = useState(false);
+  const [isResettingCall, setIsResettingCall] = useState(false);
   const [activePlaybackScript, setActivePlaybackScript] = useState('');
   const [activePlaybackSpeaker, setActivePlaybackSpeaker] = useState<'member' | 'system' | null>(null);
   const [queuedMemberStepIndex, setQueuedMemberStepIndex] = useState<number | null>(null);
@@ -523,6 +600,11 @@ function TraineeSimFloorPageContent() {
   const [isGeneratingMemberAudio, setIsGeneratingMemberAudio] = useState(false);
   const [memberAudioWarning, setMemberAudioWarning] = useState<string | null>(null);
   const [sessionPlaybackUrl, setSessionPlaybackUrl] = useState<string | null>(null);
+  const [sessionPlaybackError, setSessionPlaybackError] = useState<string | null>(null);
+  const [isRestoringLatestAttempt, setIsRestoringLatestAttempt] = useState(false);
+  const [latestAttemptError, setLatestAttemptError] = useState<string | null>(null);
+  const [ringerStatus, setRingerStatus] = useState<'idle' | 'playing' | 'missing' | 'error'>('idle');
+  const [ignoredRestoredSessionId, setIgnoredRestoredSessionId] = useState<string | null>(null);
   const requestedScenarioId = searchParams.get('scenarioId')?.trim() || '';
 
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -531,8 +613,6 @@ function TraineeSimFloorPageContent() {
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const holdAudioRef = useRef<HTMLAudioElement | null>(null);
   const cueAudioRef = useRef<HTMLAudioElement | null>(null);
-  const ringtoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const ringtoneContextRef = useRef<AudioContext | null>(null);
   const autoConnectTimeoutRef = useRef<number | null>(null);
   const acceptedCountdownDeadlineRef = useRef<number | null>(null);
   const isConnectingCallRef = useRef(false);
@@ -544,7 +624,10 @@ function TraineeSimFloorPageContent() {
   const recordingFallbackNoticeRef = useRef(false);
   const holdAudioErrorNoticeRef = useRef(false);
   const cueAudioErrorNoticeRef = useRef(false);
+  const ringerAudioErrorNoticeRef = useRef(false);
   const autoStartTurnAttemptKeyRef = useRef<string | null>(null);
+  const pendingFinalRecordingRef = useRef<WavCallRecordingResult | null>(null);
+  const finalCallRecordingUploadedRef = useRef(false);
 
   const steps = useMemo(
     () => [...(sessionData?.steps || [])].sort((left, right) => left.step_number - right.step_number),
@@ -577,6 +660,15 @@ function TraineeSimFloorPageContent() {
     () => getScenarioLaunchNote(selectedScenario),
     [selectedScenario],
   );
+  const latestRestorableSessionId = useMemo(() => {
+    if (!selectedScenario || selectedScenario.active_session_id) {
+      return null;
+    }
+    if (selectedScenario.latest_status === 'completed' || selectedScenario.latest_status === 'failed') {
+      return selectedScenario.latest_session_id || null;
+    }
+    return null;
+  }, [selectedScenario]);
 
   const {
     startRecording,
@@ -692,6 +784,9 @@ function TraineeSimFloorPageContent() {
       || memberName,
   ).trim();
   const canResumeMemberTurn = memberTurnState === 'awaiting-resume';
+  const queuedMemberHasPlayback = Boolean(
+    queuedMemberPlayback?.script?.trim() || queuedMemberPlayback?.audioUrl,
+  );
   const canUseHoldControl =
     isRecording
     || canResumeMemberTurn
@@ -699,22 +794,24 @@ function TraineeSimFloorPageContent() {
   const holdControlLabel = canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold';
   const holdControlNote = isRecording
     ? 'Finish your CSR response, then click Hold to save it and automatically play the next Member AI reply.'
-    : memberTurnState === 'playing'
+    : memberTurnState === 'playing' && queuedMemberHasPlayback
       ? 'Member AI is speaking now. Wait for the cue sound, then click Unhold to continue the next CSR scenario.'
+    : memberTurnState === 'playing'
+      ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click Unhold to continue.'
     : canResumeMemberTurn
       ? 'The Member AI reply is done. Click Unhold to move the queue to the next CSR scenario.'
       : 'Hold becomes available as soon as your live CSR turn starts recording.';
   const queueFocusIndex = useMemo(() => {
-    if (canResumeMemberTurn && typeof queuedMemberPlayback?.resumeStepIndex === 'number') {
-      return queuedMemberPlayback.resumeStepIndex;
-    }
     if (
-      memberTurnState === 'playing'
+      (memberTurnState === 'playing' || canResumeMemberTurn)
       && typeof queuedMemberPlayback?.sourceStepIndex === 'number'
     ) {
       return queuedMemberPlayback.sourceStepIndex;
     }
-    if (typeof queuedMemberStepIndex === 'number' && memberTurnState === 'playing') {
+    if (
+      typeof queuedMemberStepIndex === 'number'
+      && (memberTurnState === 'playing' || canResumeMemberTurn)
+    ) {
       return queuedMemberStepIndex;
     }
     return Math.max(0, Math.min(currentStepIndex, Math.max(steps.length - 1, 0)));
@@ -722,14 +819,63 @@ function TraineeSimFloorPageContent() {
     canResumeMemberTurn,
     currentStepIndex,
     memberTurnState,
-    queuedMemberPlayback?.resumeStepIndex,
     queuedMemberPlayback?.sourceStepIndex,
     queuedMemberStepIndex,
     steps.length,
   ]);
-  const queuePosition = steps.length ? Math.min(queueFocusIndex + 1, steps.length) : 1;
-  const queueProgressPercent = steps.length ? Math.round((queuePosition / steps.length) * 100) : 0;
+  const selectedScenarioQueueTotal = Math.max(
+    selectedScenario?.scenario_groups_count || 0,
+    1,
+  );
+  const queueTotal = useMemo(() => {
+    if (dialerScriptFlow.length) {
+      return dialerScriptFlow.length;
+    }
+
+    const csrStepCount = steps.filter((step) => step.actor === 'csr').length;
+    return Math.max(selectedScenario?.scenario_groups_count || csrStepCount || 0, 1);
+  }, [dialerScriptFlow.length, selectedScenario?.scenario_groups_count, steps]);
   const currentQueueStep = steps[queueFocusIndex] || null;
+  const queuePosition = useMemo(() => {
+    if (!queueTotal) {
+      return 1;
+    }
+
+    const focusStepNumber =
+      currentQueueStep?.step_number
+      ?? queuedMemberPlayback?.stepNumber
+      ?? currentStep?.step_number
+      ?? null;
+
+    if (typeof focusStepNumber === 'number' && dialerScriptFlow.length) {
+      const matchingIndex = dialerScriptFlow.findIndex(
+        (step) => step.csr_step_number === focusStepNumber || step.member_step_number === focusStepNumber,
+      );
+      if (matchingIndex >= 0) {
+        return Math.min(matchingIndex + 1, queueTotal);
+      }
+    }
+
+    const csrStepNumbers = steps
+      .filter((step) => step.actor === 'csr')
+      .map((step) => step.step_number);
+    if (typeof focusStepNumber === 'number' && csrStepNumbers.length) {
+      const completedCount = csrStepNumbers.filter((stepNumber) => stepNumber <= focusStepNumber).length;
+      if (completedCount > 0) {
+        return Math.min(completedCount, queueTotal);
+      }
+    }
+
+    return 1;
+  }, [
+    currentQueueStep?.step_number,
+    currentStep?.step_number,
+    dialerScriptFlow,
+    queueTotal,
+    queuedMemberPlayback?.stepNumber,
+    steps,
+  ]);
+  const queueProgressPercent = queueTotal ? Math.round((queuePosition / queueTotal) * 100) : 0;
   const currentQueueActorLabel = currentQueueStep
     ? currentQueueStep.actor === 'member'
       ? String(currentQueueStep.metadata?.actor_name || currentQueueStep.speaker_label || memberName).trim()
@@ -737,6 +883,8 @@ function TraineeSimFloorPageContent() {
     : 'No active step';
   const queueStatusNote = canResumeMemberTurn
     ? 'Member AI finished speaking. Click Unhold to continue with the next CSR scenario.'
+    : memberTurnState === 'playing' && !queuedMemberHasPlayback
+      ? 'The next CSR scenario is being prepared. Wait for the cue sound before you continue.'
     : callState === 'member-speaking'
       ? 'Member AI is handling this step now. Wait for the cue before you continue.'
       : callState === 'accepted'
@@ -800,24 +948,35 @@ function TraineeSimFloorPageContent() {
   );
 
   const fetchScenarios = useCallback(async () => {
-    const token = localStorage.getItem('token');
-    const response = await fetch('/api/call-simulation/available', {
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-      cache: 'no-store',
-    });
-    const payload = await response.json().catch(() => ({ scenarios: [] }));
-    if (!response.ok) {
-      throw new Error(payload?.detail || 'Unable to load scenarios.');
+    setIsLoadingScenarios(true);
+    setScenarioLoadError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/call-simulation/available', {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        cache: 'no-store',
+      });
+      const payload = await response.json().catch(() => ({ scenarios: [] }));
+      if (!response.ok) {
+        throw new Error(payload?.detail || 'Unable to load your assigned scenarios from Supabase.');
+      }
+      const nextScenarios = (payload.scenarios || []) as ScenarioCard[];
+      setScenarios(nextScenarios);
+      setSelectedScenarioId((current) =>
+        getPreferredScenarioId(nextScenarios, current, requestedScenarioId),
+      );
+      return nextScenarios;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to load your assigned scenarios from Supabase.';
+      setScenarioLoadError(message);
+      throw error;
+    } finally {
+      setIsLoadingScenarios(false);
     }
-    const nextScenarios = (payload.scenarios || []) as ScenarioCard[];
-    setScenarios(nextScenarios);
-    setSelectedScenarioId((current) =>
-      getPreferredScenarioId(nextScenarios, current, requestedScenarioId),
-    );
-    return nextScenarios;
   }, [requestedScenarioId]);
 
   const loadSessionPlaybackUrl = useCallback(async (sessionId: string) => {
+    setSessionPlaybackError(null);
     const token = localStorage.getItem('token');
     const response = await fetch(`/api/call-simulation/session/${sessionId}/audio`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -825,13 +984,59 @@ function TraineeSimFloorPageContent() {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(payload?.detail || 'Unable to load the saved call recording.');
+      const message = payload?.detail || 'Unable to load the saved call recording.';
+      setSessionPlaybackError(message);
+      throw new Error(message);
     }
     if (!payload?.audio_url) {
-      throw new Error('No playable call recording is available yet.');
+      const message = 'No playable call recording is available yet.';
+      setSessionPlaybackError(message);
+      throw new Error(message);
     }
     setSessionPlaybackUrl(String(payload.audio_url));
   }, []);
+
+  const loadSessionSnapshot = useCallback(async (
+    sessionId: string,
+    options?: {
+      scenario?: ScenarioCard | null;
+      restoreCompletedWorkspace?: boolean;
+    },
+  ) => {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`/api/call-simulation/session/${sessionId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      cache: 'no-store',
+    });
+    const payload = (await response.json().catch(() => null)) as SessionRealtimePayload | { detail?: string } | null;
+    if (!response.ok || !payload || !('id' in payload)) {
+      throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to restore the saved call session.');
+    }
+
+    const nextResult = buildSessionResultFromPayload(payload);
+    setSessionResult(nextResult);
+    setFeedbackReport(payload.feedback_report || null);
+    setSessionPlaybackUrl(payload.audio_url || null);
+    setSessionPlaybackError(null);
+    setCallTimer(Math.round(payload.aht_actual || payload.audio_duration_seconds || 0));
+
+    if (options?.restoreCompletedWorkspace && options.scenario) {
+      setSessionData(buildRestoredSessionData({
+        sessionId: payload.id,
+        result: nextResult,
+        scenario: options.scenario,
+      }));
+      if (payload.status === 'completed' || payload.status === 'failed') {
+        setCallState('completed');
+      }
+    }
+
+    if (payload.status === 'completed' || payload.status === 'failed') {
+      await loadSessionPlaybackUrl(payload.id).catch(() => undefined);
+    }
+
+    return nextResult;
+  }, [loadSessionPlaybackUrl]);
 
   const refreshCurrentSession = useCallback(async () => {
     if (!sessionData?.session_id) {
@@ -848,43 +1053,11 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    setSessionResult({
-      id: payload.id,
-      assignment_id: payload.assignment_id,
-      assigned_by_id: payload.assigned_by_id,
-      status: payload.status,
-      audio_url: payload.audio_url,
-      transcript: payload.transcript,
-      transcript_log: payload.transcript_log || [],
-      weighted_score: payload.weighted_score,
-      pass_fail: payload.pass_fail,
-      ai_feedback: payload.ai_feedback,
-      speech_to_text_accuracy: payload.speech_to_text_accuracy,
-      grammar_score: payload.grammar_score,
-      pronunciation_score: payload.pronunciation_score,
-      pacing_score: payload.pacing_score,
-      rate_of_speech: payload.rate_of_speech,
-      dead_air_seconds: payload.dead_air_seconds,
-      aht_actual: payload.aht_actual,
-      empathy_statements_count: payload.empathy_statements_count,
-      probing_questions_count: payload.probing_questions_count,
-      forbidden_words_count: payload.forbidden_words_count,
-      sentiment_score: payload.sentiment_score,
-      keyword_compliance: payload.keyword_compliance,
-      turn_logs: payload.turn_logs || [],
-      attempt_number: payload.attempt_number,
-      max_attempts: payload.max_attempts,
-      trainer_verdict_status: payload.trainer_verdict_status,
-      trainer_verdict_notes: payload.trainer_verdict_notes,
-      coaching_notes: payload.coaching_notes,
-      feedback_report: payload.feedback_report || null,
-      certificate_id: payload.certificate_id,
-      coaching_id: payload.coaching_id,
-      coaching_status: payload.coaching_status,
-      coaching_acknowledged_at: payload.coaching_acknowledged_at,
-      completed_at: payload.completed_at,
-    });
+    setSessionResult(buildSessionResultFromPayload(payload));
     setFeedbackReport(payload.feedback_report || null);
+    setSessionPlaybackUrl(payload.audio_url || null);
+    setSessionPlaybackError(null);
+    setCallTimer(Math.round(payload.aht_actual || payload.audio_duration_seconds || 0));
 
     if (payload.status === 'completed' || payload.status === 'failed') {
       setCallState('completed');
@@ -919,28 +1092,6 @@ function TraineeSimFloorPageContent() {
     };
     recognitionRef.current = recognition;
     recognition.start();
-  }, []);
-
-  const playRingBurst = useCallback(() => {
-    const AudioContextClass =
-      window.AudioContext ||
-      (window as Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextClass) {
-      return;
-    }
-    const context = new AudioContextClass();
-    ringtoneContextRef.current = context;
-    const gain = context.createGain();
-    gain.connect(context.destination);
-    gain.gain.value = 0.0001;
-    const osc = context.createOscillator();
-    osc.frequency.value = 440;
-    osc.connect(gain);
-    const now = context.currentTime;
-    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
-    osc.start(now);
-    osc.stop(now + 0.6);
   }, []);
 
   const playResumeCue = useCallback(async () => {
@@ -1034,40 +1185,45 @@ function TraineeSimFloorPageContent() {
 
   const startRingtone = useCallback(
     (audioUrl?: string | null) => {
-      const resolvedAudioUrl = audioUrl || DEFAULT_PHONE_RING_URL;
+      const resolvedAudioUrl = String(audioUrl || '').trim();
+      if (!resolvedAudioUrl) {
+        setRingerStatus('missing');
+        return false;
+      }
+
       const audio = new Audio(resolvedAudioUrl);
       audio.loop = true;
+      registerPlaybackElement(audio);
       audio.onerror = () => {
         ringtoneAudioRef.current = null;
-        playRingBurst();
-        if (!ringtoneIntervalRef.current) {
-          ringtoneIntervalRef.current = setInterval(playRingBurst, 1900);
+        setRingerStatus('error');
+        if (!ringerAudioErrorNoticeRef.current) {
+          ringerAudioErrorNoticeRef.current = true;
+          toast.warning('The trainer ringer audio could not be played. Accept the line to continue, or ask your trainer to re-upload the Supabase asset.');
         }
       };
       ringtoneAudioRef.current = audio;
       void audio.play().catch(() => {
         ringtoneAudioRef.current = null;
-        playRingBurst();
-        ringtoneIntervalRef.current = setInterval(playRingBurst, 1900);
+        setRingerStatus('error');
+        if (!ringerAudioErrorNoticeRef.current) {
+          ringerAudioErrorNoticeRef.current = true;
+          toast.warning('The trainer ringer audio could not be played. Accept the line to continue, or ask your trainer to re-upload the Supabase asset.');
+        }
       });
+      setRingerStatus('playing');
+      return true;
     },
-    [playRingBurst],
+    [registerPlaybackElement],
   );
 
   const stopRingtone = useCallback(() => {
-    if (ringtoneIntervalRef.current) {
-      clearInterval(ringtoneIntervalRef.current);
-      ringtoneIntervalRef.current = null;
-    }
     if (ringtoneAudioRef.current) {
       ringtoneAudioRef.current.pause();
       ringtoneAudioRef.current.currentTime = 0;
       ringtoneAudioRef.current = null;
     }
-    if (ringtoneContextRef.current) {
-      void ringtoneContextRef.current.close();
-      ringtoneContextRef.current = null;
-    }
+    setRingerStatus('idle');
   }, []);
 
   const clearAutoConnectTimeout = useCallback(() => {
@@ -1080,11 +1236,6 @@ function TraineeSimFloorPageContent() {
   }, []);
 
   const fadeOutRingtone = useCallback(async () => {
-    if (ringtoneIntervalRef.current) {
-      clearInterval(ringtoneIntervalRef.current);
-      ringtoneIntervalRef.current = null;
-    }
-
     const activeRingtone = ringtoneAudioRef.current;
     if (!activeRingtone) {
       stopRingtone();
@@ -1134,6 +1285,79 @@ function TraineeSimFloorPageContent() {
     setActivePlaybackScript('');
     setActivePlaybackSpeaker(null);
   }, [clearAutoConnectTimeout, stopRingtone]);
+
+  const clearSynthesizedPlaybackCache = useCallback(() => {
+    const synthesizedPlaybackCache = synthesizedPlaybackCacheRef.current;
+    for (const audioUrl of synthesizedPlaybackCache.values()) {
+      if (audioUrl.startsWith('blob:')) {
+        window.URL.revokeObjectURL(audioUrl);
+      }
+    }
+    synthesizedPlaybackCache.clear();
+  }, []);
+
+  const resetSimulationWorkspace = useCallback(
+    async ({
+      preserveSelectedScenarioId = true,
+      clearPlaybackCache = false,
+    }: {
+      preserveSelectedScenarioId?: boolean;
+      clearPlaybackCache?: boolean;
+    } = {}) => {
+      acceptedCountdownDeadlineRef.current = null;
+      setAcceptedCountdown(null);
+
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+
+      stopBrowserTranscript();
+      stopActiveCallAudio();
+
+      if (clearPlaybackCache) {
+        clearSynthesizedPlaybackCache();
+      }
+
+      await discardCapture();
+
+      setSessionData(null);
+      setSessionResult(null);
+      setMemberAudioWarning(null);
+      setCallState('idle');
+      setCurrentStepIndex(0);
+      setCallTimer(0);
+      setLiveTranscript('');
+      browserTtsFallbackNoticeRef.current = false;
+      recordingFallbackNoticeRef.current = false;
+      cueAudioErrorNoticeRef.current = false;
+      holdAudioErrorNoticeRef.current = false;
+      setIsOnHold(false);
+      setShowIncomingAudio(false);
+      setShowSilenceAlert(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
+      setLatestAttemptError(null);
+      setIsRestoringLatestAttempt(false);
+      setRingerStatus('idle');
+      autoStartTurnAttemptKeyRef.current = null;
+      silenceStartRef.current = null;
+      pendingFinalRecordingRef.current = null;
+      finalCallRecordingUploadedRef.current = false;
+      ringerAudioErrorNoticeRef.current = false;
+
+      if (!preserveSelectedScenarioId) {
+        setSelectedScenarioId('');
+      }
+    },
+    [clearSynthesizedPlaybackCache, discardCapture, stopActiveCallAudio, stopBrowserTranscript],
+  );
 
   const synthesizePlaybackAudio = useCallback(
     async (
@@ -1331,19 +1555,31 @@ function TraineeSimFloorPageContent() {
   );
 
   const uploadFinalCallRecording = useCallback(async () => {
-    if (!sessionData?.session_id || !isCapturing) {
-      return;
+    if (!sessionData?.session_id) {
+      return false;
     }
 
-    const recording = await stopCapture();
+    if (finalCallRecordingUploadedRef.current) {
+      return true;
+    }
+
+    let recording = pendingFinalRecordingRef.current;
+    if (!recording && isCapturing) {
+      recording = await stopCapture();
+      if (!recording) {
+        return false;
+      }
+      pendingFinalRecordingRef.current = recording;
+    }
+
     if (!recording) {
-      return;
+      throw new Error('The final call recording is no longer available. Restart the call to capture a fresh recording.');
     }
 
     const token = localStorage.getItem('token');
     const formData = new FormData();
     formData.append('audio_duration_seconds', recording.durationSeconds.toFixed(2));
-    formData.append('file', recording.blob, `session-${sessionData.session_id}.${recording.fileExtension || 'wav'}`);
+    formData.append('file', recording.blob, `session-${sessionData.session_id}.${recording.fileExtension || 'mp3'}`);
 
     setIsUploadingCall(true);
     try {
@@ -1356,6 +1592,9 @@ function TraineeSimFloorPageContent() {
       if (!response.ok) {
         throw new Error(payload?.detail || 'Unable to upload the final call recording.');
       }
+      finalCallRecordingUploadedRef.current = true;
+      pendingFinalRecordingRef.current = null;
+      return true;
     } finally {
       setIsUploadingCall(false);
     }
@@ -1465,9 +1704,19 @@ function TraineeSimFloorPageContent() {
     stopActiveCallAudio();
 
     try {
-      await uploadFinalCallRecording();
+      const uploaded = await uploadFinalCallRecording();
+      if (!uploaded) {
+        throw new Error('The final call recording is still being prepared. Press End Call again in a moment.');
+      }
     } catch (uploadError) {
-      toast.error(uploadError instanceof Error ? uploadError.message : 'Unable to upload the final call recording.');
+      toast.error(
+        uploadError instanceof Error
+          ? `${uploadError.message} Press End Call again to retry the upload.`
+          : 'Unable to upload the final call recording. Press End Call again to retry.',
+      );
+      setCallState('connected');
+      setIsEndingCall(false);
+      return;
     }
 
     try {
@@ -1480,42 +1729,7 @@ function TraineeSimFloorPageContent() {
         throw new Error((payload && 'detail' in payload && payload.detail) || 'Unable to finalize the mock call.');
       }
 
-      const nextResult: SessionResult = {
-        id: payload.id,
-        assignment_id: payload.assignment_id,
-        assigned_by_id: payload.assigned_by_id,
-        status: payload.status,
-        audio_url: payload.audio_url,
-        transcript: payload.transcript,
-        transcript_log: payload.transcript_log || [],
-        weighted_score: payload.weighted_score,
-        pass_fail: payload.pass_fail,
-        ai_feedback: payload.ai_feedback,
-        speech_to_text_accuracy: payload.speech_to_text_accuracy,
-        grammar_score: payload.grammar_score,
-        pronunciation_score: payload.pronunciation_score,
-        pacing_score: payload.pacing_score,
-        rate_of_speech: payload.rate_of_speech,
-        dead_air_seconds: payload.dead_air_seconds,
-        aht_actual: payload.aht_actual,
-        empathy_statements_count: payload.empathy_statements_count,
-        probing_questions_count: payload.probing_questions_count,
-        forbidden_words_count: payload.forbidden_words_count,
-        sentiment_score: payload.sentiment_score,
-        keyword_compliance: payload.keyword_compliance,
-        turn_logs: payload.turn_logs || [],
-        attempt_number: payload.attempt_number,
-        max_attempts: payload.max_attempts,
-        trainer_verdict_status: payload.trainer_verdict_status,
-        trainer_verdict_notes: payload.trainer_verdict_notes,
-        coaching_notes: payload.coaching_notes,
-        feedback_report: payload.feedback_report || null,
-        certificate_id: payload.certificate_id,
-        coaching_id: payload.coaching_id,
-        coaching_status: payload.coaching_status,
-        coaching_acknowledged_at: payload.coaching_acknowledged_at,
-        completed_at: payload.completed_at,
-      };
+      const nextResult = buildSessionResultFromPayload(payload);
       setSessionResult(nextResult);
       setFeedbackReport(payload.feedback_report || null);
       setActivePlaybackScript('');
@@ -1524,7 +1738,8 @@ function TraineeSimFloorPageContent() {
       setQueuedMemberPlayback(null);
       setMemberTurnState('idle');
       setCallState('completed');
-      setSessionPlaybackUrl(null);
+      setSessionPlaybackUrl(payload.audio_url || null);
+      setSessionPlaybackError(null);
       await fetchScenarios().catch(() => undefined);
       const transcriptLog = Array.isArray((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log)
         ? ((payload as { transcript_log?: Array<Record<string, unknown>> }).transcript_log || [])
@@ -1539,6 +1754,9 @@ function TraineeSimFloorPageContent() {
       if (payload.certificate_id) {
         toast.success('Competency certificate is now being tracked in your certificates tab.');
       }
+    } catch (finalizeError) {
+      toast.error(finalizeError instanceof Error ? finalizeError.message : 'Unable to finalize the mock call.');
+      setCallState('connected');
     } finally {
       setIsEndingCall(false);
     }
@@ -1613,9 +1831,17 @@ function TraineeSimFloorPageContent() {
     browserTtsFallbackNoticeRef.current = false;
     recordingFallbackNoticeRef.current = false;
     cueAudioErrorNoticeRef.current = false;
+    ringerAudioErrorNoticeRef.current = false;
+    pendingFinalRecordingRef.current = null;
+    finalCallRecordingUploadedRef.current = false;
+    setIgnoredRestoredSessionId(null);
+    setLatestAttemptError(null);
+    setSessionPlaybackError(null);
     const token = localStorage.getItem('token');
     setIsStartingCall(true);
     try {
+      await startCapture();
+
       const response = await fetch('/api/call-simulation/start', {
         method: 'POST',
         headers: {
@@ -1650,6 +1876,7 @@ function TraineeSimFloorPageContent() {
       setMemberTurnState('idle');
       setFeedbackReport(null);
       setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
       silenceStartRef.current = null;
       setCallState('ringing');
       startRingtone(sessionPayload.ringer_audio_url);
@@ -1659,20 +1886,22 @@ function TraineeSimFloorPageContent() {
       } else if (targetScenario?.can_retake) {
         toast.info('Retake attempt loaded. Accept the line to restart the mock call flow.');
       }
+    } catch (error) {
+      await discardCapture().catch(() => undefined);
+      toast.error(error instanceof Error ? error.message : 'Unable to start the call simulation.');
     } finally {
       setIsStartingCall(false);
     }
-  }, [isStartingCall, selectedScenario, selectedScenarioId, startRingtone]);
+  }, [discardCapture, isStartingCall, selectedScenario, selectedScenarioId, startCapture, startRingtone]);
 
   const connectCall = useCallback(async () => {
-    if (isConnectingCallRef.current) {
+    if (isConnectingCallRef.current || isResettingCall) {
       return;
     }
 
     isConnectingCallRef.current = true;
     clearAutoConnectTimeout();
     try {
-      await startCapture();
       await fadeOutRingtone();
       setShowIncomingAudio(true);
       setActivePlaybackSpeaker('system');
@@ -1694,7 +1923,7 @@ function TraineeSimFloorPageContent() {
     } finally {
       isConnectingCallRef.current = false;
     }
-  }, [clearAutoConnectTimeout, currentStepIndex, fadeOutRingtone, moveToStep, startCapture]);
+  }, [clearAutoConnectTimeout, currentStepIndex, fadeOutRingtone, isResettingCall, moveToStep]);
 
   useEffect(() => {
     if (callState !== 'accepted' || !acceptedCountdownDeadlineRef.current) {
@@ -1718,10 +1947,25 @@ function TraineeSimFloorPageContent() {
   }, [callState]);
 
   const playQueuedMemberResponse = useCallback(async (playback: QueuedMemberPlayback) => {
-    if (!playback.script.trim() && !playback.audioUrl) {
+    const playbackSteps = (playback.playbackSteps || []).filter(
+      (step) => step.script.trim() || step.audioUrl,
+    );
+    const effectivePlaybackSteps = playbackSteps.length
+      ? playbackSteps
+      : [{
+          stepIndex: playback.sourceStepIndex,
+          stepNumber: playback.stepNumber,
+          script: playback.script,
+          audioUrl: playback.audioUrl,
+          speaker: 'member' as const,
+          speakerLabel: playback.speakerLabel,
+        }];
+
+    if (!effectivePlaybackSteps.length) {
       setQueuedMemberStepIndex(null);
       setQueuedMemberPlayback(null);
       setMemberTurnState('idle');
+      setIsOnHold(false);
       setShowIncomingAudio(false);
       setActivePlaybackScript('');
       setActivePlaybackSpeaker(null);
@@ -1730,23 +1974,46 @@ function TraineeSimFloorPageContent() {
 
     setIsOnHold(true);
     setMemberTurnState('playing');
-    if (typeof playback.sourceStepIndex === 'number') {
-      setCurrentStepIndex(playback.sourceStepIndex);
+    if (typeof effectivePlaybackSteps[0]?.stepIndex === 'number') {
+      setCurrentStepIndex(effectivePlaybackSteps[0].stepIndex);
     }
     setShowIncomingAudio(true);
     setCallState('member-speaking');
 
-    await playPlaybackPrompt({
-      script: playback.script,
-      audioUrl: playback.audioUrl,
-      speaker: 'member',
-      stepNumber: playback.stepNumber ?? (typeof playback.sourceStepIndex === 'number' ? steps[playback.sourceStepIndex]?.step_number ?? null : null),
-    });
+    for (const step of effectivePlaybackSteps) {
+      if (typeof step.stepIndex === 'number') {
+        setCurrentStepIndex(step.stepIndex);
+      }
+      await playPlaybackPrompt({
+        script: step.script,
+        audioUrl: step.audioUrl,
+        speaker: step.speaker,
+        stepNumber: step.stepNumber,
+      });
+    }
 
     await playResumeCue();
     setMemberTurnState('awaiting-resume');
     setCallState('connected');
   }, [playPlaybackPrompt, playResumeCue]);
+
+  const armNextScenarioResume = useCallback(async (nextIndex: number) => {
+    const nextStep = steps[nextIndex] || null;
+    setIsOnHold(true);
+    setQueuedMemberStepIndex(null);
+    setQueuedMemberPlayback({
+      sourceStepIndex: null,
+      resumeStepIndex: nextIndex,
+      stepNumber: nextStep?.step_number ?? null,
+      script: '',
+      audioUrl: null,
+      speakerLabel: nextStep?.speaker_label || 'CSR / Trainee',
+    });
+    setMemberTurnState('playing');
+    await playResumeCue();
+    setMemberTurnState('awaiting-resume');
+    setCallState('connected');
+  }, [playResumeCue, steps]);
 
   const handleTurnSubmissionResult = useCallback(async (result: SimFloorTurnResult) => {
     setLiveTranscript(result.transcript || '');
@@ -1758,6 +2025,10 @@ function TraineeSimFloorPageContent() {
 
     if (result.requires_repeat) {
       autoStartTurnAttemptKeyRef.current = null;
+      setIsOnHold(false);
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
       const repeatPrompt = getRepeatPromptMessage(result.repeat_prompt);
       setShowSilenceAlert(false);
       setShowIncomingAudio(true);
@@ -1773,6 +2044,10 @@ function TraineeSimFloorPageContent() {
     }
 
     if (result.is_complete || result.next_step == null) {
+      setIsOnHold(false);
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
       await finalizeSession();
       return;
     }
@@ -1781,33 +2056,63 @@ function TraineeSimFloorPageContent() {
     const resolvedNextIndex = nextIndex >= 0 ? nextIndex : currentStepIndex + 1;
     const nextStep = steps[resolvedNextIndex];
     const fallbackMemberResponse = currentDialerTurn?.member_response_text?.trim() || '';
-    const queuedScript = (nextStep?.actor === 'member' ? nextStep.script : '') || fallbackMemberResponse;
-    const queuedAudioUrl = (nextStep?.actor === 'member' ? nextStep.audio_url : null) || currentDialerTurn?.member_audio_url || null;
+    const queuedPlaybackSteps: NonNullable<QueuedMemberPlayback['playbackSteps']> = [];
+    let playbackIndex = resolvedNextIndex;
 
-    if (nextStep?.actor === 'member' || queuedScript) {
-      const resumeIndex = nextStep?.actor === 'member'
-        ? steps.findIndex((step, index) => index > resolvedNextIndex && step.actor === 'csr')
-        : resolvedNextIndex;
+    while (playbackIndex >= 0 && playbackIndex < steps.length) {
+      const playbackStep = steps[playbackIndex];
+      if (!playbackStep || playbackStep.actor === 'csr') {
+        break;
+      }
+
+      queuedPlaybackSteps.push({
+        stepIndex: playbackIndex,
+        stepNumber: playbackStep.step_number,
+        script: playbackStep.script,
+        audioUrl: playbackStep.audio_url || null,
+        speaker: playbackStep.actor === 'system' ? 'system' : 'member',
+        speakerLabel: playbackStep.speaker_label || (playbackStep.actor === 'system' ? 'System' : memberName),
+      });
+      playbackIndex += 1;
+    }
+
+    if (!queuedPlaybackSteps.length && fallbackMemberResponse) {
+      queuedPlaybackSteps.push({
+        stepIndex: null,
+        stepNumber: currentDialerTurn?.member_step_number ?? null,
+        script: fallbackMemberResponse,
+        audioUrl: currentDialerTurn?.member_audio_url || null,
+        speaker: 'member',
+        speakerLabel: memberName,
+      });
+    }
+
+    if (queuedPlaybackSteps.length) {
+      const firstPlaybackStep = queuedPlaybackSteps[0];
+      const resumeIndex = playbackIndex < steps.length
+        ? playbackIndex
+        : null;
       const nextPlayback: QueuedMemberPlayback = {
-        sourceStepIndex: nextStep?.actor === 'member' ? resolvedNextIndex : null,
-        resumeStepIndex: resumeIndex >= 0 ? resumeIndex : null,
-        stepNumber: nextStep?.actor === 'member'
-          ? nextStep.step_number
-          : currentDialerTurn?.member_step_number ?? null,
-        script: queuedScript,
-        audioUrl: queuedAudioUrl,
-        speakerLabel: nextStep?.speaker_label || memberName,
+        sourceStepIndex: firstPlaybackStep?.stepIndex ?? null,
+        resumeStepIndex: typeof resumeIndex === 'number' ? resumeIndex : null,
+        stepNumber: firstPlaybackStep?.stepNumber ?? null,
+        script: firstPlaybackStep?.script || '',
+        audioUrl: firstPlaybackStep?.audioUrl || null,
+        speakerLabel: firstPlaybackStep?.speakerLabel || memberName,
+        playbackSteps: queuedPlaybackSteps,
       };
 
-      setQueuedMemberStepIndex(nextStep?.actor === 'member' ? resolvedNextIndex : null);
+      setQueuedMemberStepIndex(firstPlaybackStep?.stepIndex ?? null);
       setQueuedMemberPlayback(nextPlayback);
       await playQueuedMemberResponse(nextPlayback);
       toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
       return;
     }
 
-    await moveToStep(resolvedNextIndex);
+    await armNextScenarioResume(resolvedNextIndex);
+    toast.success('Turn saved. Click Unhold to continue to the next CSR step.');
   }, [
+    armNextScenarioResume,
     currentDialerTurn,
     currentStepIndex,
     finalizeSession,
@@ -1819,7 +2124,7 @@ function TraineeSimFloorPageContent() {
   ]);
 
   const handleHoldToggle = useCallback(async () => {
-    if (callState === 'ringing' || memberTurnState === 'playing') {
+    if (isResettingCall || callState === 'ringing' || memberTurnState === 'playing') {
       return;
     }
 
@@ -1829,17 +2134,20 @@ function TraineeSimFloorPageContent() {
       }
 
       stopBrowserTranscript();
+      setIsOnHold(true);
       setCallState('processing');
 
       try {
         const result = await stopRecording({ stepNumber: currentStep.step_number, liveTranscript });
         if (!result) {
+          setIsOnHold(false);
           setCallState('connected');
           return;
         }
 
         await handleTurnSubmissionResult(result);
       } catch (recordError) {
+        setIsOnHold(false);
         toast.error(recordError instanceof Error ? recordError.message : 'Unable to process the recording.');
         setCallState('connected');
       }
@@ -1876,6 +2184,7 @@ function TraineeSimFloorPageContent() {
     finalizeSession,
     isOnHold,
     isRecording,
+    isResettingCall,
     liveTranscript,
     memberTurnState,
     handleTurnSubmissionResult,
@@ -1884,7 +2193,7 @@ function TraineeSimFloorPageContent() {
   ]);
 
   const handleEndCallRequest = useCallback(async () => {
-    if (isUploadingCall || isEndingCall || callState === 'processing') {
+    if (isUploadingCall || isEndingCall || isResettingCall || callState === 'processing') {
       return;
     }
 
@@ -1931,6 +2240,7 @@ function TraineeSimFloorPageContent() {
     finalizeSession,
     isEndingCall,
     isRecording,
+    isResettingCall,
     isUploadingCall,
     liveTranscript,
     memberTurnState,
@@ -1944,47 +2254,14 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    browserTtsService.stop();
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (cueAudioRef.current) {
-      cueAudioRef.current.pause();
-      cueAudioRef.current = null;
-    }
-    if (holdAudioRef.current) {
-      holdAudioRef.current.pause();
-      holdAudioRef.current.currentTime = 0;
-    }
-    await discardCapture();
-    setSessionData(null);
-    setSessionResult(null);
-    setMemberAudioWarning(null);
-    setCallState('idle');
-    setCurrentStepIndex(0);
-    setCallTimer(0);
-    setLiveTranscript('');
-    browserTtsFallbackNoticeRef.current = false;
-    recordingFallbackNoticeRef.current = false;
-    setIsOnHold(false);
-    setShowIncomingAudio(false);
-    setShowSilenceAlert(false);
-    setActivePlaybackScript('');
-    setActivePlaybackSpeaker(null);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback(null);
-    setMemberTurnState('idle');
-    setFeedbackReport(null);
-    setSessionPlaybackUrl(null);
-    autoStartTurnAttemptKeyRef.current = null;
-    silenceStartRef.current = null;
+    setIgnoredRestoredSessionId(sessionResult.id);
+    await resetSimulationWorkspace({ clearPlaybackCache: true });
     await fetchScenarios();
     toast.success('Retake is ready. Press Start the Call to launch the next attempt from Scenario 1.');
-  }, [discardCapture, fetchScenarios, sessionResult]);
+  }, [fetchScenarios, resetSimulationWorkspace, sessionResult]);
 
   const handleTryAgain = useCallback(async () => {
-    if (!sessionData?.session_id || !selectedScenarioId) {
+    if (!sessionData?.session_id || !selectedScenarioId || isResettingCall) {
       return;
     }
 
@@ -1997,68 +2274,32 @@ function TraineeSimFloorPageContent() {
 
     const token = localStorage.getItem('token');
     const scenarioIdToRestart = selectedScenarioId;
+    setIsResettingCall(true);
 
-    clearAutoConnectTimeout();
-    stopBrowserTranscript();
-    stopRingtone();
-    browserTtsService.stop();
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
+    try {
+      const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/discard`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(payload?.detail || payload?.message || 'Unable to reset the current call attempt.');
+      }
+
+      await resetSimulationWorkspace({ clearPlaybackCache: true });
+      await fetchScenarios();
+      setSelectedScenarioId(scenarioIdToRestart);
+
+      toast.success(payload?.message || 'The current attempt was cleared. Press Start the Call to begin again from Scenario 1.');
+    } finally {
+      setIsResettingCall(false);
     }
-    if (cueAudioRef.current) {
-      cueAudioRef.current.pause();
-      cueAudioRef.current = null;
-    }
-    if (holdAudioRef.current) {
-      holdAudioRef.current.pause();
-      holdAudioRef.current.currentTime = 0;
-    }
-    await discardCapture();
-
-    const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/discard`, {
-      method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    });
-    const payload = await response.json().catch(() => null);
-    if (!response.ok) {
-      throw new Error(payload?.detail || payload?.message || 'Unable to reset the current call attempt.');
-    }
-
-    setSessionData(null);
-    setSessionResult(null);
-    setMemberAudioWarning(null);
-    setCallState('idle');
-    setCurrentStepIndex(0);
-    setCallTimer(0);
-    setLiveTranscript('');
-    browserTtsFallbackNoticeRef.current = false;
-    recordingFallbackNoticeRef.current = false;
-    setIsOnHold(false);
-    setShowIncomingAudio(false);
-    setShowSilenceAlert(false);
-    setActivePlaybackScript('');
-    setActivePlaybackSpeaker(null);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback(null);
-    setMemberTurnState('idle');
-    setFeedbackReport(null);
-    setSessionPlaybackUrl(null);
-    autoStartTurnAttemptKeyRef.current = null;
-    silenceStartRef.current = null;
-
-    await fetchScenarios();
-    setSelectedScenarioId(scenarioIdToRestart);
-
-    toast.success(payload?.message || 'The current attempt was cleared. Press Start the Call to begin again from Scenario 1.');
   }, [
-    clearAutoConnectTimeout,
-    discardCapture,
     fetchScenarios,
+    isResettingCall,
+    resetSimulationWorkspace,
     selectedScenarioId,
     sessionData?.session_id,
-    stopBrowserTranscript,
-    stopRingtone,
   ]);
 
   const handleAcknowledgeCoaching = useCallback(async () => {
@@ -2085,52 +2326,46 @@ function TraineeSimFloorPageContent() {
   }, [refreshCurrentSession, sessionResult?.coaching_id]);
 
   const resetPage = useCallback(async () => {
-    stopBrowserTranscript();
-    stopRingtone();
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (cueAudioRef.current) {
-      cueAudioRef.current.pause();
-      cueAudioRef.current = null;
-    }
-    if (holdAudioRef.current) {
-      holdAudioRef.current.pause();
-      holdAudioRef.current.currentTime = 0;
-    }
-    browserTtsService.stop();
-    await discardCapture();
-    setSessionData(null);
-    setSessionResult(null);
-    setMemberAudioWarning(null);
-    setCallState('idle');
-    setCurrentStepIndex(0);
-    setCallTimer(0);
-    setLiveTranscript('');
-    browserTtsFallbackNoticeRef.current = false;
-    recordingFallbackNoticeRef.current = false;
-    setIsOnHold(false);
-    setShowIncomingAudio(false);
-    setShowSilenceAlert(false);
-    setActivePlaybackScript('');
-    setActivePlaybackSpeaker(null);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback(null);
-    setMemberTurnState('idle');
-    setFeedbackReport(null);
-    setSessionPlaybackUrl(null);
-    autoStartTurnAttemptKeyRef.current = null;
-    silenceStartRef.current = null;
+    setIgnoredRestoredSessionId(sessionResult?.id || null);
+    await resetSimulationWorkspace({ clearPlaybackCache: true });
     await fetchScenarios();
-  }, [discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
+  }, [fetchScenarios, resetSimulationWorkspace, sessionResult?.id]);
+
+  const restoreLatestSelectedScenarioAttempt = useCallback(async () => {
+    if (!selectedScenario || !latestRestorableSessionId) {
+      setSessionData(null);
+      setSessionResult(null);
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
+      setLatestAttemptError(null);
+      return;
+    }
+
+    setIsRestoringLatestAttempt(true);
+    setLatestAttemptError(null);
+    try {
+      await loadSessionSnapshot(latestRestorableSessionId, {
+        scenario: selectedScenario,
+        restoreCompletedWorkspace: true,
+      });
+    } catch (error) {
+      setSessionData(null);
+      setSessionResult(null);
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      const message = error instanceof Error ? error.message : 'Unable to restore the saved call attempt.';
+      setLatestAttemptError(message);
+      throw error;
+    } finally {
+      setIsRestoringLatestAttempt(false);
+    }
+  }, [latestRestorableSessionId, loadSessionSnapshot, selectedScenario]);
 
   useEffect(() => {
     void fetchScenarios().catch((error) => {
       toast.error(error instanceof Error ? error.message : 'Unable to load scenarios.');
     });
-
-    const synthesizedPlaybackCache = synthesizedPlaybackCacheRef.current;
 
     return () => {
       clearAutoConnectTimeout();
@@ -2149,15 +2384,10 @@ function TraineeSimFloorPageContent() {
         holdAudioRef.current.pause();
       }
       browserTtsService.stop();
-      for (const audioUrl of synthesizedPlaybackCache.values()) {
-        if (audioUrl.startsWith('blob:')) {
-          window.URL.revokeObjectURL(audioUrl);
-        }
-      }
-      synthesizedPlaybackCache.clear();
+      clearSynthesizedPlaybackCache();
       void discardCapture();
     };
-  }, [clearAutoConnectTimeout, discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
+  }, [clearAutoConnectTimeout, clearSynthesizedPlaybackCache, discardCapture, fetchScenarios, stopBrowserTranscript, stopRingtone]);
 
   useEffect(() => {
     if (!requestedScenarioId) {
@@ -2182,6 +2412,55 @@ function TraineeSimFloorPageContent() {
       router.replace('/trainee/call-simulation');
     }
   }, [requestedScenarioId, router, scenarios]);
+
+  useEffect(() => {
+    if (callState !== 'idle') {
+      return;
+    }
+
+    if (!selectedScenario) {
+      setSessionData(null);
+      setSessionResult(null);
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
+      setLatestAttemptError(null);
+      return;
+    }
+
+    if (selectedScenario.active_session_id) {
+      setSessionData(null);
+      setSessionResult(null);
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
+      setLatestAttemptError(null);
+      return;
+    }
+
+    if (ignoredRestoredSessionId && latestRestorableSessionId && ignoredRestoredSessionId !== latestRestorableSessionId) {
+      setIgnoredRestoredSessionId(null);
+      return;
+    }
+
+    if (!latestRestorableSessionId || ignoredRestoredSessionId === latestRestorableSessionId) {
+      setSessionData(null);
+      setSessionResult(null);
+      setFeedbackReport(null);
+      setSessionPlaybackUrl(null);
+      setSessionPlaybackError(null);
+      setLatestAttemptError(null);
+      return;
+    }
+
+    void restoreLatestSelectedScenarioAttempt().catch(() => undefined);
+  }, [
+    callState,
+    ignoredRestoredSessionId,
+    latestRestorableSessionId,
+    restoreLatestSelectedScenarioAttempt,
+    selectedScenario,
+  ]);
 
   useEffect(() => {
     let stream: EventSource | null = null;
@@ -2394,9 +2673,17 @@ function TraineeSimFloorPageContent() {
     ? 'Click Unhold to continue'
     : statusLabel(callState, isOnHold);
   const currentStatusNote = callState === 'ringing'
-    ? 'The trainer ringer is active. Click Accept Call to begin the mock call.'
+    ? ringerStatus === 'playing'
+      ? 'The trainer ringer is active. Click Accept Call to begin the mock call.'
+      : ringerStatus === 'missing'
+        ? 'No trainer ringer audio is attached to this scenario in Supabase. Accept the line to continue, or ask your trainer to upload one.'
+        : ringerStatus === 'error'
+          ? 'The trainer ringer asset could not be played. Accept the line to continue, or ask your trainer to re-upload it.'
+          : 'Preparing the trainer ringer. Click Accept Call once the line is ready.'
     : callState === 'accepted'
       ? `The line is connected. Your first CSR turn will unlock in ${acceptedCountdown ?? 5} second${(acceptedCountdown ?? 5) === 1 ? '' : 's'}.`
+      : memberTurnState === 'playing' && isOnHold && !queuedMemberHasPlayback
+        ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click Unhold.'
       : canResumeMemberTurn
         ? 'The member reply already played. Click Unhold to reactivate your microphone.'
         : callState === 'member-speaking'
@@ -2414,7 +2701,7 @@ function TraineeSimFloorPageContent() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulations</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Select an assigned scenario, start the mock call, speak as the CSR, then use Hold and Unhold to move through the trainer script.
+              Select an assigned scenario, start the call, act as the CSR, and move through the queue with Hold and Unhold while the full conversation is recorded and saved to Supabase.
             </p>
           </div>
           <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
@@ -2423,217 +2710,317 @@ function TraineeSimFloorPageContent() {
         </div>
 
         {callState === 'idle' ? (
-            <div className="grid gap-6 lg:grid-cols-[1.2fr,0.8fr]">
-              <Card className="border-slate-200 bg-[linear-gradient(135deg,#f8fafc,white)]">
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
+              <Card className="border-slate-200 bg-white shadow-sm">
                 <CardHeader>
                   <CardTitle>Assigned Call Scenarios</CardTitle>
-                  <CardDescription>Select one trainer-assigned scenario to load it into your mock call workspace.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {scenarios.map((scenario) => (
-                    <div
-                      key={scenario.id}
-                      className={cn(
-                        'rounded-3xl border p-4 transition',
-                        selectedScenarioId === scenario.id
-                          ? 'border-cyan-300 bg-cyan-50 shadow-sm'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setSelectedScenarioId(scenario.id)}
-                        className="w-full text-left"
-                      >
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                          <div className="space-y-2">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <div className="font-semibold text-slate-950">{scenario.topic || scenario.title}</div>
-                              <Badge variant="outline" className={cn('border', getScenarioStatusClasses(scenario))}>
-                                {getScenarioStatusText(scenario)}
-                              </Badge>
-                            </div>
-                            {scenario.topic && scenario.topic !== scenario.title ? (
-                              <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{scenario.title}</div>
-                            ) : null}
-                            <div className="text-sm text-slate-600">
-                              {scenario.description || 'Assigned call scenario.'}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Badge variant="outline">{scenario.scenario_groups_count} scenarios</Badge>
-                            <Badge variant="outline">{scenario.steps_count} turns</Badge>
-                          </div>
-                        </div>
-                      </button>
-                      <div className="mt-3 grid gap-3 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Batch / Wave</div>
-                          <div className="mt-1 font-medium text-slate-900">
-                            {formatBatchWave(scenario.assignment_batch_name, scenario.assignment_wave_number)}
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Passing Score</div>
-                          <div className="mt-1 font-medium text-slate-900">{scenario.passing_score.toFixed(0)}%</div>
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Attempts Used</div>
-                          <div className="mt-1 font-medium text-slate-900">{scenario.attempt_count}</div>
-                          {typeof scenario.max_attempts === 'number' ? (
-                            <div className="mt-1 text-xs text-slate-500">of {scenario.max_attempts} allowed</div>
-                          ) : null}
-                        </div>
-                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Latest Score</div>
-                          <div className="mt-1 font-medium text-slate-900">
-                            {scenario.latest_score > 0 ? `${scenario.latest_score.toFixed(1)}%` : 'No score yet'}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-3 flex flex-wrap gap-3 text-xs text-slate-500">
-                        <span>Assigned by {scenario.assigned_by_name || 'your trainer'}</span>
-                        {scenario.assigned_at ? <span>Assigned {new Date(scenario.assigned_at).toLocaleString()}</span> : null}
-                        {scenario.latest_completed_at ? <span>Completed {new Date(scenario.latest_completed_at).toLocaleString()}</span> : null}
-                        {typeof scenario.max_attempts === 'number' ? (
-                          <span>{scenario.max_attempts} total attempt{scenario.max_attempts === 1 ? '' : 's'} allowed</span>
-                        ) : null}
-                        {scenario.can_retake ? (
-                          <span className="text-amber-700">
-                            {typeof scenario.remaining_attempts === 'number'
-                              ? `${scenario.remaining_attempts} retake${scenario.remaining_attempts === 1 ? '' : 's'} left`
-                              : 'Retake available'}
-                          </span>
-                        ) : null}
-                      </div>
-                      {scenario.launch_block_reason ? (
-                        <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
-                          {scenario.launch_block_reason}
-                        </div>
-                      ) : null}
-                      <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-                        <span>
-                          {selectedScenarioId === scenario.id
-                            ? 'Selected for the next mock call.'
-                            : 'Select this scenario, then use Start the Call to launch it.'}
-                        </span>
-                        {selectedScenarioId === scenario.id ? (
-                          <Badge variant="outline" className="border-cyan-300 bg-cyan-50 text-cyan-700">
-                            Selected
-                          </Badge>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                  {!scenarios.length ? (
-                    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
-                      No call scenario has been assigned to your trainee workspace yet.
-                    </div>
-                  ) : null}
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200 bg-slate-950 text-white">
-                <CardHeader>
-                  <CardTitle>Start the Call</CardTitle>
-                  <CardDescription className="text-slate-300">
-                    Choose an assigned scenario, then start the call. The trainer ringer plays first, and you will accept the line before the CSR turn begins.
-                  </CardDescription>
+                  <CardDescription>Select an assigned scenario from the list or dropdown, review the queue, then start the call.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
-                    <label htmlFor="selected-scenario-list-card" className="text-xs uppercase tracking-[0.26em] text-slate-400">
+                  {scenarioLoadError ? (
+                    <div className="flex flex-col gap-3 rounded-3xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <div className="font-medium">Assigned scenarios could not be loaded.</div>
+                        <div className="mt-1 text-rose-800/90">{scenarioLoadError}</div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-rose-300 bg-white text-rose-900 hover:bg-rose-100"
+                        onClick={() => void fetchScenarios().catch(() => undefined)}
+                      >
+                        Reload Assignments
+                      </Button>
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-2">
+                    <label
+                      htmlFor="assigned-call-scenario"
+                      className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500"
+                    >
                       Assigned Scenario
                     </label>
                     <select
-                      id="selected-scenario-list-card"
+                      id="assigned-call-scenario"
                       value={selectedScenarioId}
                       onChange={(event) => setSelectedScenarioId(event.target.value)}
-                      className="mt-3 w-full rounded-2xl border border-white/10 bg-slate-900 px-4 py-3 text-sm text-white outline-none transition focus:border-cyan-300"
+                      disabled={isLoadingScenarios || !scenarios.length}
+                      className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 outline-none transition focus:border-cyan-400"
                     >
-                      <option value="" disabled className="text-slate-900">Select an assigned scenario</option>
+                      <option value="" disabled>{isLoadingScenarios ? 'Loading assigned scenarios...' : 'Select an assigned scenario'}</option>
                       {scenarios.map((scenario) => (
-                        <option key={scenario.id} value={scenario.id} className="text-slate-900">
+                        <option key={scenario.id} value={scenario.id}>
                           {(scenario.topic || scenario.title).trim()} - {getScenarioStatusText(scenario)}
                         </option>
                       ))}
                     </select>
-                    <div className="mt-2 text-xs text-slate-400">
-                      Choose the trainer-assigned scenario you want to launch next.
+                    <div className="text-xs text-slate-500">
+                      {isLoadingScenarios
+                        ? 'Fetching your trainer-assigned scenarios from Supabase.'
+                        : 'The trainer-assigned scenarios below are the only modules available for this trainee.'}
                     </div>
                   </div>
+
+                  {isLoadingScenarios && !scenarios.length ? (
+                    <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                      Loading your assigned scenarios from Supabase...
+                    </div>
+                  ) : selectedScenario ? (
+                    <div className="space-y-4 rounded-3xl border border-slate-200 bg-slate-50 p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-lg font-semibold text-slate-950">
+                              {selectedScenario.topic || selectedScenario.title}
+                            </div>
+                            <Badge variant="outline" className={cn('border', getScenarioStatusClasses(selectedScenario))}>
+                              {getScenarioStatusText(selectedScenario)}
+                            </Badge>
+                          </div>
+                          {selectedScenario.topic && selectedScenario.topic !== selectedScenario.title ? (
+                            <div className="text-xs uppercase tracking-[0.18em] text-slate-500">{selectedScenario.title}</div>
+                          ) : null}
+                          <div className="text-sm text-slate-600">
+                            {selectedScenario.description || 'Assigned call scenario.'}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-cyan-200 bg-cyan-50 px-4 py-3 text-right">
+                          <div className="text-xs uppercase tracking-[0.18em] text-cyan-700">Queue Progress</div>
+                          <div className="mt-1 text-base font-semibold text-cyan-950">
+                            Scenario 1 of {selectedScenarioQueueTotal}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid gap-3 text-sm text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Batch / Wave</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            {formatBatchWave(selectedScenario.assignment_batch_name, selectedScenario.assignment_wave_number)}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Passing Score</div>
+                          <div className="mt-1 font-medium text-slate-900">{selectedScenario.passing_score.toFixed(0)}%</div>
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Attempts Used</div>
+                          <div className="mt-1 font-medium text-slate-900">{selectedScenario.attempt_count}</div>
+                          {typeof selectedScenario.max_attempts === 'number' ? (
+                            <div className="mt-1 text-xs text-slate-500">of {selectedScenario.max_attempts} allowed</div>
+                          ) : null}
+                        </div>
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Call Queue</div>
+                          <div className="mt-1 font-medium text-slate-900">
+                            {selectedScenarioQueueTotal} live scenario{selectedScenarioQueueTotal === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div
+                          className="h-full min-w-[2.5rem] rounded-full bg-cyan-500"
+                          style={{ width: `${Math.max(100 / selectedScenarioQueueTotal, 14)}%` }}
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-3 text-xs text-slate-500">
+                        <span>Assigned by {selectedScenario.assigned_by_name || 'your trainer'}</span>
+                        {selectedScenario.assigned_at ? (
+                          <span>Assigned {new Date(selectedScenario.assigned_at).toLocaleString()}</span>
+                        ) : null}
+                        {selectedScenario.latest_completed_at ? (
+                          <span>Completed {new Date(selectedScenario.latest_completed_at).toLocaleString()}</span>
+                        ) : null}
+                        {typeof selectedScenario.max_attempts === 'number' ? (
+                          <span>
+                            {selectedScenario.max_attempts} total attempt{selectedScenario.max_attempts === 1 ? '' : 's'} allowed
+                          </span>
+                        ) : null}
+                        {selectedScenario.can_retake ? (
+                          <span className="text-amber-700">
+                            {typeof selectedScenario.remaining_attempts === 'number'
+                              ? `${selectedScenario.remaining_attempts} retake${selectedScenario.remaining_attempts === 1 ? '' : 's'} left`
+                              : 'Retake available'}
+                          </span>
+                        ) : null}
+                      </div>
+                      {selectedScenario.launch_block_reason ? (
+                        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                          {selectedScenario.launch_block_reason}
+                        </div>
+                      ) : null}
+                      <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+                        <span>Member responses are AI-voiced, full-call audio is recorded, and KPI scoring starts when you end the call.</span>
+                        <Badge variant="outline" className="border-cyan-300 bg-cyan-50 text-cyan-700">
+                          Ready to launch
+                        </Badge>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                      Select an assigned scenario to preview the queue and unlock the start controls.
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
+                      Assigned List
+                    </div>
+                    {isLoadingScenarios && !scenarios.length ? (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        Loading assigned scenarios...
+                      </div>
+                    ) : scenarios.length ? (
+                      scenarios.map((scenario) => (
+                        <button
+                          key={scenario.id}
+                          type="button"
+                          onClick={() => setSelectedScenarioId(scenario.id)}
+                          className={cn(
+                            'flex w-full items-start justify-between gap-3 rounded-2xl border px-4 py-3 text-left transition',
+                            selectedScenarioId === scenario.id
+                              ? 'border-cyan-300 bg-cyan-50'
+                              : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50',
+                          )}
+                        >
+                          <div className="space-y-1">
+                            <div className="font-medium text-slate-950">{scenario.topic || scenario.title}</div>
+                            <div className="text-xs text-slate-500">
+                              {formatBatchWave(scenario.assignment_batch_name, scenario.assignment_wave_number)}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className={cn('border', getScenarioStatusClasses(scenario))}>
+                              {getScenarioStatusText(scenario)}
+                            </Badge>
+                            <Badge variant="outline">
+                              {scenario.scenario_groups_count} scenario{scenario.scenario_groups_count === 1 ? '' : 's'}
+                            </Badge>
+                          </div>
+                        </button>
+                      ))
+                    ) : scenarioLoadError ? (
+                      <div className="rounded-2xl border border-dashed border-rose-200 bg-rose-50 px-4 py-8 text-center text-sm text-rose-900">
+                        Retry the assignment sync to reload your Supabase scenarios.
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                        No call scenario has been assigned to your trainee workspace yet.
+                      </div>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="border-slate-200 bg-slate-950 text-white shadow-sm">
+                <CardHeader>
+                  <CardTitle>Start the Call</CardTitle>
+                  <CardDescription className="text-slate-300">
+                    The member is handled by AI voice, the full conversation is recorded, and the completed session is saved for trainer coaching.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-5">
                   <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
-                    <div className="text-xs uppercase tracking-[0.26em] text-slate-400">Agent</div>
+                    <div className="text-xs uppercase tracking-[0.22em] text-slate-400">CSR Station</div>
                     <div className="mt-2 text-xl font-semibold">{agentName}</div>
                     <div className="mt-3 flex items-center gap-3 text-sm text-slate-300">
                       <span className="inline-flex h-3 w-3 rounded-full bg-emerald-400" />
-                      Ready to answer assigned calls
+                      Ready to accept an assigned mock call
                     </div>
                   </div>
-                  <div className="rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-4 text-sm text-cyan-50">
-                    The full mock call is recorded, saved for coaching, scored with KPI rules, and summarized after you end the call.
-                  </div>
-                  {selectedScenario ? (
+
+                  <div className="grid gap-3 sm:grid-cols-2">
                     <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
-                      <div className="text-xs uppercase tracking-[0.26em] text-slate-400">Loaded Module</div>
-                      <div className="mt-2 text-lg font-semibold text-white">{selectedScenario.topic || selectedScenario.title}</div>
-                      {selectedScenario.topic && selectedScenario.topic !== selectedScenario.title ? (
-                        <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-400">{selectedScenario.title}</div>
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Recording</div>
+                      <div className="mt-2 text-sm font-semibold text-white">Supabase storage</div>
+                      <div className="mt-2 text-xs leading-5 text-slate-300">
+                        Full-call audio and saved CSR turns upload to the Call Simulation storage flow.
+                      </div>
+                    </div>
+                    <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                      <div className="text-xs uppercase tracking-[0.22em] text-slate-400">Coaching</div>
+                      <div className="mt-2 text-sm font-semibold text-white">Trainer-ready review</div>
+                      <div className="mt-2 text-xs leading-5 text-slate-300">
+                        Transcript, KPI scoring, and AI feedback remain available in the trainer coaching workspace.
+                      </div>
+                    </div>
+                  </div>
+
+                  {isRestoringLatestAttempt && latestRestorableSessionId ? (
+                    <div className="rounded-3xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-200">
+                      Restoring your latest completed mock call from Supabase...
+                    </div>
+                  ) : null}
+
+                  {latestAttemptError ? (
+                    <div className="space-y-3 rounded-3xl border border-amber-300/40 bg-amber-400/10 p-4 text-sm text-amber-50">
+                      <div className="font-medium">The latest saved mock call could not be restored.</div>
+                      <div className="text-amber-50/90">{latestAttemptError}</div>
+                      {latestRestorableSessionId ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-amber-200/50 bg-transparent text-amber-50 hover:bg-amber-300/10"
+                          onClick={() => void restoreLatestSelectedScenarioAttempt().catch(() => undefined)}
+                        >
+                          Reload Saved Attempt
+                        </Button>
                       ) : null}
-                      <div className="mt-2 text-sm text-slate-300">
-                        {selectedScenario.description || 'Trainer-assigned call scenario.'}
+                    </div>
+                  ) : null}
+
+                  {selectedScenario ? (
+                    <div className="space-y-4 rounded-3xl border border-cyan-400/20 bg-cyan-400/10 p-5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-xs uppercase tracking-[0.22em] text-cyan-100">Loaded Scenario</div>
+                          <div className="mt-2 text-lg font-semibold text-white">
+                            {selectedScenario.topic || selectedScenario.title}
+                          </div>
+                          <div className="mt-2 text-sm text-cyan-50/90">
+                            {selectedScenario.description || 'Trainer-assigned call scenario.'}
+                          </div>
+                        </div>
+                        <PhoneIncoming className="h-8 w-8 text-cyan-200" />
                       </div>
-                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-300">
-                        <span>{formatBatchWave(selectedScenario.assignment_batch_name, selectedScenario.assignment_wave_number)}</span>
-                        <span>{selectedScenario.scenario_groups_count} scenarios</span>
-                        <span>{selectedScenario.steps_count} turns</span>
-                        <span>Pass at {selectedScenario.passing_score.toFixed(0)}%</span>
-                        {typeof selectedScenario.max_attempts === 'number' ? (
-                          <span>{selectedScenario.max_attempts} total attempt{selectedScenario.max_attempts === 1 ? '' : 's'}</span>
-                        ) : null}
-                      </div>
-                      <div className="mt-4 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+                      <div className="rounded-2xl border border-white/10 bg-black/15 p-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
                             <div className="text-xs uppercase tracking-[0.22em] text-cyan-100">Scenario Queue</div>
-                            <div className="mt-2 text-base font-semibold text-white">
-                              Scenario 1 of {Math.max(selectedScenario.steps_count, 1)}
+                            <div className="mt-1 text-base font-semibold text-white">
+                              Scenario 1 of {selectedScenarioQueueTotal}
                             </div>
                           </div>
-                          <Badge variant="outline" className="border-cyan-300/40 bg-white/10 text-cyan-50">
-                            Opening turn
+                          <Badge variant="outline" className="border-cyan-200/40 bg-white/10 text-cyan-50">
+                            Start at opening script
                           </Badge>
                         </div>
                         <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
                           <div
-                            className="h-full min-w-[2.25rem] rounded-full bg-cyan-300"
-                            style={{ width: `${Math.max(100 / Math.max(selectedScenario.steps_count, 1), 12)}%` }}
+                            className="h-full min-w-[2.5rem] rounded-full bg-cyan-300"
+                            style={{ width: `${Math.max(100 / selectedScenarioQueueTotal, 14)}%` }}
                           />
                         </div>
-                        <div className="mt-3 text-xs text-cyan-50/90">
-                          The call opens at Scenario 1. Each Hold and Unhold cycle advances the next queued scenario step.
+                        <div className="mt-3 text-xs leading-5 text-cyan-50/90">
+                          Use Hold to save each CSR turn and play the next Member AI response. Use Unhold to continue the next live CSR scenario.
                         </div>
                       </div>
-                    </div>
-                  ) : null}
-                  {selectedScenario ? (
-                    <>
                       <Button
-                        className="w-full bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                        className="w-full bg-cyan-400 text-slate-950 hover:bg-cyan-300"
                         size="lg"
                         onClick={() => void startSimulation()}
-                        disabled={selectedScenarioStartDisabled || isStartingCall}
+                        disabled={selectedScenarioStartDisabled || isStartingCall || isLoadingScenarios || Boolean(scenarioLoadError)}
                       >
                         <Phone className="mr-2 h-4 w-4" />
                         {isStartingCall ? 'Starting Call...' : selectedScenarioLaunchLabel}
                       </Button>
-                      <div className="text-xs text-slate-400">
+                      <div className="text-xs text-cyan-50/80">
                         {selectedScenarioLaunchNote}
                       </div>
-                    </>
+                    </div>
                   ) : (
-                    <div className="rounded-3xl border border-dashed border-white/15 bg-white/5 px-4 py-5 text-sm text-slate-300">
-                      Select an assigned scenario first, then the Start the Call button will appear here.
+                    <div className="rounded-3xl border border-dashed border-white/15 bg-white/5 px-4 py-8 text-sm text-slate-300">
+                      Choose a scenario first. The Start the Call button appears here once a module is selected.
                     </div>
                   )}
                 </CardContent>
@@ -2688,7 +3075,7 @@ function TraineeSimFloorPageContent() {
                     variant="secondary"
                     className="h-20 rounded-3xl border border-white/10 bg-white/10 text-white hover:bg-white/15"
                     onClick={() => void handleHoldToggle()}
-                    disabled={!canUseHoldControl || callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall}
+                    disabled={!canUseHoldControl || callState === 'ringing' || callState === 'processing' || isProcessing || memberTurnState === 'playing' || isEndingCall || isResettingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       {isOnHold ? <PlayCircle className="h-6 w-6" /> : <PauseCircle className="h-6 w-6" />}
@@ -2707,11 +3094,11 @@ function TraineeSimFloorPageContent() {
                     onClick={() => void handleTryAgain().catch((error) => {
                       toast.error(error instanceof Error ? error.message : 'Unable to restart the current call attempt.');
                     })}
-                    disabled={isEndingCall || isUploadingCall || callState === 'processing'}
+                    disabled={isEndingCall || isUploadingCall || callState === 'processing' || isResettingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       <RotateCcw className="h-6 w-6" />
-                      <span className="text-xs font-medium">Try Again</span>
+                      <span className="text-xs font-medium">{isResettingCall ? 'Clearing...' : 'Try Again'}</span>
                     </div>
                   </Button>
                   <Button
@@ -2719,7 +3106,7 @@ function TraineeSimFloorPageContent() {
                     variant="destructive"
                     className="h-20 rounded-3xl sm:col-span-2 xl:mt-auto"
                     onClick={() => void handleEndCallRequest()}
-                    disabled={isUploadingCall || isEndingCall || callState === 'processing'}
+                    disabled={isUploadingCall || isEndingCall || callState === 'processing' || isResettingCall}
                   >
                     <div className="flex flex-col items-center gap-1">
                       <PhoneOff className="h-6 w-6" />
@@ -2746,7 +3133,7 @@ function TraineeSimFloorPageContent() {
                             <div className="text-xs">Accept the line to stop the ringer, begin the full recording, and unlock the opening CSR step after the short cue.</div>
                           </div>
                         </div>
-                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()}>
+                        <Button className="bg-emerald-600 hover:bg-emerald-600" onClick={() => void connectCall()} disabled={isResettingCall}>
                           <Phone className="mr-2 h-4 w-4" />
                           Accept Call
                         </Button>
@@ -2813,7 +3200,7 @@ function TraineeSimFloorPageContent() {
                           <div>
                             <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Scenario Queue</div>
                             <div className="mt-2 text-2xl font-semibold text-slate-950">
-                              Scenario {queuePosition} of {steps.length || 1}
+                              Scenario {queuePosition} of {queueTotal}
                             </div>
                             <div className="mt-2 text-sm text-slate-600">
                               {currentQueueActorLabel} is the active queue focus for this turn.
@@ -2845,7 +3232,7 @@ function TraineeSimFloorPageContent() {
                             >
                               <div className="flex items-start justify-between gap-3">
                                 <div>
-                                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Scenario {index + 1}</div>
+                                  <div className="text-xs uppercase tracking-[0.18em] text-slate-500">Turn {step.step_number}</div>
                                   <div className="mt-1 text-sm font-semibold text-slate-950">
                                     {step.actor === 'member'
                                       ? String(step.metadata?.actor_name || step.speaker_label || memberName).trim()
@@ -2925,7 +3312,7 @@ function TraineeSimFloorPageContent() {
                               </div>
                             </div>
                             <Badge variant="outline" className="border-white/15 bg-white/10 text-white">
-                              Scenario {queuePosition} of {steps.length || 1}
+                              Scenario {queuePosition} of {queueTotal}
                             </Badge>
                           </div>
                           <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -3020,11 +3407,31 @@ function TraineeSimFloorPageContent() {
                 </div>
               </CardHeader>
               <CardContent className="space-y-6 p-6">
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-7">
                   <div className="rounded-3xl border border-slate-200 bg-white p-4">
                     <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Overall score</div>
                     <div className="mt-2 text-3xl font-bold text-slate-950">
                       {sessionResult?.weighted_score?.toFixed(1) ?? '0.0'}%
+                    </div>
+                  </div>
+                  <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Final Result</div>
+                    <div
+                      className={cn(
+                        'mt-2 text-2xl font-bold',
+                        sessionResult?.pass_fail ? 'text-emerald-700' : 'text-rose-700',
+                      )}
+                    >
+                      {sessionResult?.pass_fail ? 'Pass' : 'Fail'}
+                    </div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {sessionResult?.pass_fail ? 'Scenario completed' : 'Retake required'}
+                    </div>
+                  </div>
+                  <div className="rounded-3xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Passing Threshold</div>
+                    <div className="mt-2 text-3xl font-bold text-slate-950">
+                      {sessionData.passing_score.toFixed(0)}%
                     </div>
                   </div>
                   <div className="rounded-3xl border border-slate-200 bg-white p-4">
@@ -3069,8 +3476,8 @@ function TraineeSimFloorPageContent() {
                   <div className="space-y-5">
                     <Card className="border-slate-200">
                       <CardHeader>
-                        <CardTitle>Automatic KPI Insight</CardTitle>
-                        <CardDescription>Scoring generated immediately after hang up.</CardDescription>
+                        <CardTitle>KPI Breakdown</CardTitle>
+                        <CardDescription>Speech accuracy, grammar, pronunciation, pacing, speech rate, and soft-skill signals used in the final KPI score.</CardDescription>
                       </CardHeader>
                       <CardContent className="grid gap-4 sm:grid-cols-2">
                         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
@@ -3224,24 +3631,25 @@ function TraineeSimFloorPageContent() {
                             <CheckCircle2 className="mr-2 h-4 w-4" />
                             Open Certificates
                           </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="border-white/15 bg-transparent text-white hover:bg-white/10"
-                            onClick={() => void handleRetake()}
-                            disabled={
-                              Boolean(sessionResult?.pass_fail)
-                              || sessionResult?.coaching_status === 'sent'
-                              || (
-                                typeof sessionResult?.attempt_number === 'number'
-                                && typeof sessionResult?.max_attempts === 'number'
-                                && sessionResult.attempt_number >= sessionResult.max_attempts
-                              )
-                            }
-                          >
-                            <RotateCcw className="mr-2 h-4 w-4" />
-                            Retake the Call
-                          </Button>
+                          {!sessionResult?.pass_fail ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="border-white/15 bg-transparent text-white hover:bg-white/10"
+                              onClick={() => void handleRetake()}
+                              disabled={
+                                sessionResult?.coaching_status === 'sent'
+                                || (
+                                  typeof sessionResult?.attempt_number === 'number'
+                                  && typeof sessionResult?.max_attempts === 'number'
+                                  && sessionResult.attempt_number >= sessionResult.max_attempts
+                                )
+                              }
+                            >
+                              <RotateCcw className="mr-2 h-4 w-4" />
+                              Retake the Call
+                            </Button>
+                          ) : null}
                         </div>
                       </CardContent>
                     </Card>
@@ -3249,8 +3657,8 @@ function TraineeSimFloorPageContent() {
                     {sessionResult?.ai_feedback ? (
                       <Card className="border-slate-200">
                         <CardHeader>
-                          <CardTitle>Final AI Feedback</CardTitle>
-                          <CardDescription>Immediate coaching summary generated after analysis.</CardDescription>
+                          <CardTitle>Summary Analysis</CardTitle>
+                          <CardDescription>Immediate wrap-up of the mock call based on the saved transcript and KPI outcome.</CardDescription>
                         </CardHeader>
                         <CardContent>
                           <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4 text-sm leading-7 text-slate-700">
@@ -3263,7 +3671,7 @@ function TraineeSimFloorPageContent() {
                       <Card className="border-slate-200">
                         <CardHeader>
                           <CardTitle>Gemini AI Evaluation</CardTitle>
-                          <CardDescription>Gemini is preparing the structured wrap-up report.</CardDescription>
+                          <CardDescription>Gemini is preparing the structured similarity, completeness, tone, and compliance review.</CardDescription>
                         </CardHeader>
                         <CardContent className="text-sm text-slate-600">
                           Scoring, script matching, grammar notes, pacing analysis, and soft-skill coaching are still processing.
@@ -3276,7 +3684,7 @@ function TraineeSimFloorPageContent() {
                           <CardTitle>Gemini AI Evaluation</CardTitle>
                           <CardDescription>
                             {feedbackReport.provider === 'gemini'
-                              ? `Generated with ${feedbackReport.model}.`
+                              ? `Generated with ${feedbackReport.model} for script similarity, correctness, completeness, tone, and compliance.`
                               : 'Generated with the fallback evaluation summary.'}
                           </CardDescription>
                         </CardHeader>
@@ -3405,6 +3813,23 @@ function TraineeSimFloorPageContent() {
                         <CardDescription>Playback for the full recorded call saved after hang up.</CardDescription>
                       </CardHeader>
                       <CardContent className="space-y-3">
+                        {sessionPlaybackError ? (
+                          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            <div className="font-medium">The saved call recording could not be refreshed from Supabase.</div>
+                            <div className="mt-1">{sessionPlaybackError}</div>
+                            {sessionResult?.id ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-3 border-amber-300 bg-white text-amber-900 hover:bg-amber-100"
+                                onClick={() => void loadSessionPlaybackUrl(sessionResult.id).catch(() => undefined)}
+                              >
+                                Reload Recording
+                              </Button>
+                            ) : null}
+                          </div>
+                        ) : null}
                         {sessionPlaybackUrl || sessionResult?.audio_url ? (
                           <>
                             <audio controls className="w-full" src={sessionPlaybackUrl || sessionResult?.audio_url || undefined}>
@@ -3418,7 +3843,7 @@ function TraineeSimFloorPageContent() {
                           </>
                         ) : (
                           <div className="rounded-2xl border border-dashed border-slate-200 p-4 text-sm text-slate-500">
-                            The session recording is still syncing to storage.
+                            The session recording is still syncing to Supabase storage.
                           </div>
                         )}
                       </CardContent>

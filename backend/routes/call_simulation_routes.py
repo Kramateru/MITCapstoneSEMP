@@ -1930,27 +1930,39 @@ def _get_supabase_call_simulation_feedback_reports(
     if not supabase.is_available:
         return {}
 
-    try:
-        result = (
-            supabase.table("call_simulation_scores")
-            .select("session_id, feedback_report")
-            .in_("session_id", normalized_session_ids)
-            .execute()
-        )
-    except Exception as exc:
-        logger.warning("Unable to load Call Simulation feedback reports from Supabase: %s", exc)
-        return {}
+    query_sources = (
+        ("call_simulation_scores", "feedback_report"),
+        ("call_simulation_ai_evaluations", "evaluation_payload"),
+    )
+    last_error: Optional[Exception] = None
 
-    rows = result.data if isinstance(getattr(result, "data", None), list) else []
-    payload: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        if not isinstance(row, dict):
+    for relation_name, report_field in query_sources:
+        try:
+            result = (
+                supabase.table(relation_name)
+                .select(f"session_id, {report_field}")
+                .in_("session_id", normalized_session_ids)
+                .execute()
+            )
+        except Exception as exc:
+            last_error = exc
             continue
-        session_id = str(row.get("session_id") or "").strip()
-        feedback_report = row.get("feedback_report")
-        if session_id and isinstance(feedback_report, dict) and feedback_report:
-            payload[session_id] = feedback_report
-    return payload
+
+        rows = result.data if isinstance(getattr(result, "data", None), list) else []
+        payload: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            session_id = str(row.get("session_id") or "").strip()
+            feedback_report = row.get(report_field)
+            if session_id and isinstance(feedback_report, dict) and feedback_report:
+                payload[session_id] = feedback_report
+        if payload:
+            return payload
+
+    if last_error is not None:
+        logger.warning("Unable to load Call Simulation feedback reports from Supabase: %s", last_error)
+    return {}
 
 
 def _normalize_json_object(value: Any) -> dict[str, Any]:
@@ -3444,6 +3456,40 @@ def _count_scenario_groups(
     return max(1, len(steps))
 
 
+def _resolve_initial_csr_step_number(
+    steps: list[CallSimulationScenarioStepResponse],
+) -> int:
+    """Start fresh trainee sessions on the first CSR turn, not a member prompt row."""
+    for step in steps:
+        if str(step.actor or "").strip().lower() == "csr":
+            return int(step.step_number or 1)
+    return int(steps[0].step_number or 1) if steps else 1
+
+
+def _resolve_session_current_step_for_response(
+    session: SimSession,
+    steps: list[CallSimulationScenarioStepResponse],
+) -> int:
+    """Normalize the start step for fresh or legacy sessions before the trainee UI loads."""
+    current_step = int(session.current_step or 1)
+    if not steps:
+        return current_step
+
+    if current_step < 1:
+        return _resolve_initial_csr_step_number(steps)
+
+    step_lookup = {int(step.step_number or 0): step for step in steps}
+    current_step_entry = step_lookup.get(current_step)
+    if current_step_entry is None:
+        return _resolve_initial_csr_step_number(steps)
+
+    has_saved_turns = bool(_session_turn_logs(session))
+    if not has_saved_turns and str(current_step_entry.actor or "").strip().lower() != "csr":
+        return _resolve_initial_csr_step_number(steps)
+
+    return current_step
+
+
 def _build_session_start_response(
     db: Session,
     *,
@@ -3464,6 +3510,7 @@ def _build_session_start_response(
         scenario,
         float(effective_kpi.passing_score or DEFAULT_PASSING_SCORE),
     )
+    steps = _build_scenario_steps(scenario)
 
     return SimSessionStartResponse(
         session_id=session.id,
@@ -3474,7 +3521,7 @@ def _build_session_start_response(
         scenario_title=scenario.title,
         scenario_description=scenario.description,
         opening_prompt=scenario.opening_prompt,
-        current_step=int(session.current_step or 1),
+        current_step=_resolve_session_current_step_for_response(session, steps),
         variation=ScenarioVariationResponse.model_validate(variation) if variation else None,
         kpi_config=BatchKPIConfigResponse.model_validate(effective_kpi),
         passing_score=passing_score,
@@ -3483,7 +3530,7 @@ def _build_session_start_response(
         call_simulation_config=effective_call_simulation_config,
         ringer_audio_url=scenario.ringer_audio_url,
         hold_audio_url=scenario.hold_audio_url,
-        steps=_build_scenario_steps(scenario),
+        steps=steps,
     )
 
 
@@ -4177,6 +4224,7 @@ def _aggregate_turn_based_evaluation(
     *,
     session: SimSession,
     kpi_config: BatchKPIConfig,
+    scenario_steps: Optional[list[CallSimulationScenarioStepResponse]] = None,
 ) -> tuple[str, int, dict[str, Any], str]:
     csr_turns = _selected_csr_turns_for_scoring(session)
     combined_transcript = " ".join(
@@ -4241,11 +4289,31 @@ def _aggregate_turn_based_evaluation(
             ),
         },
     )
+    estimated_member_duration = 0.0
+    if scenario_steps:
+        max_recorded_csr_step = max(
+            (int(item.get("step_number") or 0) for item in csr_turns),
+            default=0,
+        )
+        estimated_member_duration = sum(
+            _estimate_script_duration_seconds(step.script)
+            for step in scenario_steps
+            if str(step.actor or "").strip().lower() != "csr"
+            and int(step.step_number or 0) <= max_recorded_csr_step
+        )
     session_level_duration = int(
         round(
-            float(session.audio_duration_seconds or 0.0)
-            or sum(float(item.get("duration_seconds") or 0.0) for item in _session_turn_logs(session))
-            or spoken_turn_duration
+            (
+                spoken_turn_duration
+                + float(dead_air_seconds or 0.0)
+                + estimated_member_duration
+            )
+            if scenario_steps
+            else (
+                float(session.audio_duration_seconds or 0.0)
+                or sum(float(item.get("duration_seconds") or 0.0) for item in _session_turn_logs(session))
+                or spoken_turn_duration
+            )
         )
     )
     evaluation["aht_actual"] = session_level_duration
@@ -7317,6 +7385,8 @@ async def start_simulation(
         .order_by(func.random())
         .first()
     )
+    scenario_steps = _build_scenario_steps(scenario)
+    initial_csr_step_number = _resolve_initial_csr_step_number(scenario_steps)
 
     new_session = SimSession(
         id=str(uuid.uuid4()),
@@ -7327,7 +7397,7 @@ async def start_simulation(
         scenario_variation_id=variation.id if variation else None,
         batch_id=batch_id,
         status="in_progress",
-        current_step=1,
+        current_step=initial_csr_step_number,
         started_at=datetime.utcnow(),
         aht_target=(kpi_config.target_aht_seconds if kpi_config else 120),
         attempt_number=next_attempt_number,
@@ -7670,6 +7740,7 @@ async def upload_session_recording(
         session_id=session.id,
         filename=storage_leaf,
         content_type=resolved_content_type,
+        save_local_backup=True,
     )
     if not audio_url:
         raise HTTPException(
@@ -7706,13 +7777,14 @@ async def finalize_session(
         raise HTTPException(status_code=404, detail="Scenario not found")
 
     kpi_config = _get_effective_kpi_config(db, session.batch_id)
-    transcript, total_duration, evaluation, ai_feedback = _aggregate_turn_based_evaluation(
+    scenario_steps = _build_scenario_steps(scenario)
+    csr_transcript, total_duration, evaluation, ai_feedback = _aggregate_turn_based_evaluation(
         session=session,
         kpi_config=kpi_config,
+        scenario_steps=scenario_steps,
     )
-    scenario_steps = _build_scenario_steps(scenario)
-    keyword_compliance = _build_keyword_compliance_summary(transcript, scenario_steps)
-    sentiment_score = _analyze_sentiment_score(transcript)
+    keyword_compliance = _build_keyword_compliance_summary(csr_transcript, scenario_steps)
+    sentiment_score = _analyze_sentiment_score(csr_transcript)
     evaluation["keyword_compliance"] = keyword_compliance
     evaluation["sentiment_score"] = sentiment_score
     _apply_call_scenario_passing_score(
@@ -7777,10 +7849,15 @@ async def finalize_session(
             )
         timeline_cursor += duration_seconds
     session.transcript_log = full_transcript_log
+    full_conversation_transcript = "\n".join(
+        f"{str(item.get('speaker_label') or item.get('actor') or 'Speaker').strip()}: {str(item.get('transcript') or item.get('text') or '').strip()}"
+        for item in full_transcript_log
+        if str(item.get("transcript") or item.get("text") or "").strip()
+    ).strip()
 
     _apply_evaluation_to_session(
         session=session,
-        transcript=transcript,
+        transcript=full_conversation_transcript or csr_transcript,
         audio_url=session.audio_url or next((item.get("audio_url") for item in _session_turn_logs(session) if item.get("audio_url")), None),
         audio_duration_seconds=total_duration,
         evaluation=evaluation,
@@ -8063,6 +8140,8 @@ async def retake_session(
         .order_by(func.random())
         .first()
     )
+    scenario_steps = _build_scenario_steps(scenario) if scenario else []
+    initial_csr_step_number = _resolve_initial_csr_step_number(scenario_steps)
 
     new_session = SimSession(
         id=str(uuid.uuid4()),
@@ -8073,7 +8152,7 @@ async def retake_session(
         scenario_variation_id=variation.id if variation else None,
         batch_id=session.batch_id,
         status="in_progress",
-        current_step=1,
+        current_step=initial_csr_step_number,
         started_at=datetime.utcnow(),
         aht_target=session.aht_target,
         attempt_number=session.attempt_number + 1,
@@ -8191,7 +8270,7 @@ async def get_interaction_history(
         query = query.filter(SimSession.trainee_id == trainee_id)
 
     sessions = (
-        query.order_by(SimSession.created_at.desc())
+        query.order_by(SimSession.completed_at.desc(), SimSession.created_at.desc())
         .offset(skip)
         .limit(limit)
         .all()

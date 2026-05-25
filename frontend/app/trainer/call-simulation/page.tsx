@@ -1145,7 +1145,7 @@ export default function TrainerSimFloorPage() {
   }, [authedFetch]);
 
   const fetchInteractions = useCallback(async (batchId: string) => {
-    const response = await authedFetch(`/api/call-simulation/coaching/interactions?batch_id=${batchId}&limit=20`);
+    const response = await authedFetch(`/api/call-simulation/coaching/interactions?batch_id=${batchId}&limit=100`);
     if (!response.ok) throw new Error('Unable to load interactions');
     const data = await response.json();
     setInteractions(data.sessions || []);
@@ -2462,6 +2462,7 @@ export default function TrainerSimFloorPage() {
 
   const openCoachingDialog = (interaction: InteractionSession) => {
     setSelectedInteraction(interaction);
+    setSelectedInteractionPlaybackUrl(null);
     setCoachingNotes(interaction.trainer_verdict_notes || interaction.coaching_notes || '');
     setVerdictStatus(normalizeVerdictStatus(interaction.trainer_verdict_status));
     setPlaybackTime(0);
@@ -3217,7 +3218,9 @@ export default function TrainerSimFloorPage() {
         <Card>
           <CardHeader>
             <CardTitle>Submitted Mock Calls</CardTitle>
-            <CardDescription>Review finished trainee scenarios, replay the Supabase recording, and send coaching or retake guidance.</CardDescription>
+            <CardDescription>
+              Review completed trainee mock calls, replay the saved Supabase recording, inspect transcript, KPI, and Gemini AI evidence, and send coaching or retake guidance.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {interactions.length === 0 ? (
@@ -3229,13 +3232,15 @@ export default function TrainerSimFloorPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Trainee</TableHead>
-                    <TableHead>Scenario</TableHead>
+                    <TableHead>Batch</TableHead>
+                    <TableHead>Scenario / Module</TableHead>
                     <TableHead>Score</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>Pass / Fail</TableHead>
                     <TableHead>Attempt</TableHead>
                     <TableHead>Duration</TableHead>
-                    <TableHead>AI KPI</TableHead>
-                    <TableHead>Submitted</TableHead>
+                    <TableHead>KPI Snapshot</TableHead>
+                    <TableHead>Date Completed</TableHead>
+                    <TableHead>Coaching Assets</TableHead>
                     <TableHead>Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -3244,32 +3249,16 @@ export default function TrainerSimFloorPage() {
                     <TableRow key={session.id}>
                       <TableCell className="font-medium">
                         <div>{session.trainee_name}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {formatBatchWaveLabel(session.batch_name, session.batch_wave_number)}
-                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="text-sm">{formatBatchWaveLabel(session.batch_name, session.batch_wave_number)}</div>
                       </TableCell>
                       <TableCell>{session.scenario_title}</TableCell>
                       <TableCell>{session.score.toFixed(1)}%</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            session.pass_fail ? 'default' : 'destructive'
-                          }
-                        >
+                        <Badge variant={session.pass_fail ? 'default' : 'destructive'}>
                           {getOutcomeLabel(session)}
                         </Badge>
-                        <Badge variant="outline">
-                          {getVerdictLabel(session.trainer_verdict_status)}
-                        </Badge>
-                        {session.coaching_status ? (
-                          <Badge variant={session.coaching_status === 'acknowledged' ? 'default' : session.coaching_status === 'sent' ? 'outline' : 'secondary'}>
-                            {session.coaching_status === 'acknowledged'
-                              ? 'Acked'
-                              : session.coaching_status === 'sent'
-                                ? 'Awaiting Ack'
-                                : 'Draft Coaching'}
-                          </Badge>
-                        ) : null}
                       </TableCell>
                       <TableCell>{session.attempt_number}</TableCell>
                       <TableCell>{formatClockTime(session.audio_duration_seconds)}</TableCell>
@@ -3280,9 +3269,51 @@ export default function TrainerSimFloorPage() {
                       </TableCell>
                       <TableCell>{formatDateTime(session.completed_at || session.created_at)}</TableCell>
                       <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant={session.audio_url ? 'default' : 'secondary'}>
+                            {session.audio_url ? 'Recording' : 'No Recording'}
+                          </Badge>
+                          <Badge variant={session.transcript_log?.length || session.transcript ? 'outline' : 'secondary'}>
+                            {session.transcript_log?.length || session.transcript ? 'Transcript' : 'No Transcript'}
+                          </Badge>
+                          <Badge
+                            variant={
+                              session.speech_to_text_accuracy != null
+                              || session.grammar_score != null
+                              || session.pronunciation_score != null
+                              || session.pacing_score != null
+                                ? 'outline'
+                                : 'secondary'
+                            }
+                          >
+                            KPI
+                          </Badge>
+                          <Badge variant={session.feedback_report || session.ai_feedback ? 'outline' : 'secondary'}>
+                            Gemini AI
+                          </Badge>
+                          <Badge variant={session.coaching_notes || session.trainer_verdict_notes ? 'outline' : 'secondary'}>
+                            Coaching
+                          </Badge>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          <Badge variant="outline">
+                            {getVerdictLabel(session.trainer_verdict_status)}
+                          </Badge>
+                          {session.coaching_status ? (
+                            <Badge variant={session.coaching_status === 'acknowledged' ? 'default' : session.coaching_status === 'sent' ? 'outline' : 'secondary'}>
+                              {session.coaching_status === 'acknowledged'
+                                ? 'Acked'
+                                : session.coaching_status === 'sent'
+                                  ? 'Awaiting Ack'
+                                  : 'Draft Coaching'}
+                            </Badge>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                      <TableCell>
                         <Button variant="ghost" size="sm" onClick={() => openCoachingDialog(session)}>
                           <Mic className="mr-1 h-3 w-3" />
-                          Review
+                          Open Review
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -4155,9 +4186,9 @@ export default function TrainerSimFloorPage() {
       >
         <DialogContent className="!max-h-[88vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Coaching Review</DialogTitle>
+            <DialogTitle>Trainer Coaching Review</DialogTitle>
             <DialogDescription>
-              Replay the recorded mock call, inspect each turn, review the KPI and Gemini evaluation, and decide whether the trainee is competent or needs a retake.
+              Replay the full recorded mock call between the Trainee/CSR and Member/AI, inspect the transcript and KPI evidence, review the Gemini evaluation, and record coaching guidance.
             </DialogDescription>
           </DialogHeader>
           {selectedInteraction ? (
@@ -4176,8 +4207,11 @@ export default function TrainerSimFloorPage() {
                   <p className="font-semibold">{selectedInteraction.scenario_title}</p>
                 </div>
                 <div className="rounded-lg border p-4">
-                  <p className="text-sm text-muted-foreground">Trainer Verdict</p>
+                  <p className="text-sm text-muted-foreground">Result / Verdict</p>
                   <div className="mt-2 flex items-center gap-2">
+                    <Badge variant={selectedInteraction.pass_fail ? 'default' : 'destructive'}>
+                      {getOutcomeLabel(selectedInteraction)}
+                    </Badge>
                     <Badge
                       variant={
                         verdictStatus === 'competent'
@@ -4198,60 +4232,68 @@ export default function TrainerSimFloorPage() {
                   </div>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-4">
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Submitted</p>
-                  <p className="font-semibold">{formatDateTime(selectedInteraction.completed_at || selectedInteraction.created_at)}</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Call Duration</p>
-                  <p className="font-semibold">{formatClockTime(selectedInteraction.audio_duration_seconds)}</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Overall</p>
-                  <p className="font-semibold">{selectedInteraction.score?.toFixed(1) ?? '0.0'}%</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Speech Accuracy</p>
-                  <p className="font-semibold">{selectedInteraction.speech_to_text_accuracy?.toFixed(1) ?? '0.0'}%</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Rate of Speech</p>
-                  <p className="font-semibold">{selectedInteraction.rate_of_speech?.toFixed(0) ?? '0'} WPM</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Dead Air</p>
-                  <p className="font-semibold">{selectedInteraction.dead_air_seconds?.toFixed(1) ?? '0.0'}s</p>
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Grammar</p>
-                  <p className="font-semibold">{selectedInteraction.grammar_score?.toFixed(1) ?? '0.0'}%</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Pronunciation</p>
-                  <p className="font-semibold">{selectedInteraction.pronunciation_score?.toFixed(1) ?? '0.0'}%</p>
-                </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Pacing</p>
-                  <p className="font-semibold">{selectedInteraction.pacing_score?.toFixed(1) ?? '0.0'}%</p>
-                </div>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Sentiment</p>
-                  <p className="font-semibold">
-                    {typeof selectedInteraction.sentiment_score === 'number'
-                      ? `${selectedInteraction.sentiment_score.toFixed(2)}`
-                      : 'Pending'}
+              <div className="space-y-3 rounded-lg border p-4">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">KPI Analysis</p>
+                  <p className="text-xs text-muted-foreground">
+                    Review the completed call score, speech metrics, script compliance, and quality indicators captured for coaching.
                   </p>
                 </div>
-                <div className="rounded-lg border p-3 text-sm">
-                  <p className="text-muted-foreground">Keyword Compliance</p>
-                  <p className="font-semibold">
-                    {Number(selectedInteraction.keyword_compliance?.score || 0).toFixed(0)}%
-                  </p>
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Date Completed</p>
+                    <p className="font-semibold">{formatDateTime(selectedInteraction.completed_at || selectedInteraction.created_at)}</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Call Duration</p>
+                    <p className="font-semibold">{formatClockTime(selectedInteraction.audio_duration_seconds)}</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Final Score</p>
+                    <p className="font-semibold">{selectedInteraction.score?.toFixed(1) ?? '0.0'}%</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Transcript Accuracy</p>
+                    <p className="font-semibold">{selectedInteraction.speech_to_text_accuracy?.toFixed(1) ?? '0.0'}%</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Rate of Speech</p>
+                    <p className="font-semibold">{selectedInteraction.rate_of_speech?.toFixed(0) ?? '0'} WPM</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Dead Air</p>
+                    <p className="font-semibold">{selectedInteraction.dead_air_seconds?.toFixed(1) ?? '0.0'}s</p>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Grammar</p>
+                    <p className="font-semibold">{selectedInteraction.grammar_score?.toFixed(1) ?? '0.0'}%</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Pronunciation</p>
+                    <p className="font-semibold">{selectedInteraction.pronunciation_score?.toFixed(1) ?? '0.0'}%</p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Pacing</p>
+                    <p className="font-semibold">{selectedInteraction.pacing_score?.toFixed(1) ?? '0.0'}%</p>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Sentiment</p>
+                    <p className="font-semibold">
+                      {typeof selectedInteraction.sentiment_score === 'number'
+                        ? `${selectedInteraction.sentiment_score.toFixed(2)}`
+                        : 'Pending'}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border p-3 text-sm">
+                    <p className="text-muted-foreground">Keyword Compliance</p>
+                    <p className="font-semibold">
+                      {Number(selectedInteraction.keyword_compliance?.score || 0).toFixed(0)}%
+                    </p>
+                  </div>
                 </div>
               </div>
               {(selectedInteraction.keyword_compliance?.items || []).length ? (
@@ -4285,9 +4327,9 @@ export default function TrainerSimFloorPage() {
               ) : null}
               {selectedInteractionPlaybackUrl || selectedInteraction.audio_url ? (
                 <div className="rounded-lg border p-4">
-                  <p className="text-sm font-medium text-muted-foreground">Full Call Recording</p>
+                  <p className="text-sm font-medium text-muted-foreground">Recording Playback</p>
                   <div className="mt-2 flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>Synchronized with the saved conversation transcript</span>
+                    <span>Full conversation between Trainee/CSR and Member/AI</span>
                     <span>{formatClockTime(playbackTime)}</span>
                   </div>
                   <audio
@@ -4312,7 +4354,7 @@ export default function TrainerSimFloorPage() {
                 <div className="space-y-3 rounded-lg border p-4">
                   <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
                     <Headphones className="h-4 w-4" />
-                    Saved CSR Turn Clips
+                    Scenario Turn Evidence
                   </div>
                   {selectedInteraction.turn_logs.map((turn, index) => (
                     <div key={`${turn.turn_attempt_id || turn.step_number || index}-${index}`} className="rounded-lg bg-slate-50 p-3">
@@ -4347,14 +4389,14 @@ export default function TrainerSimFloorPage() {
               )}
               {selectedInteraction.ai_feedback ? (
                 <div className="rounded-lg border p-4">
-                  <p className="text-sm font-medium text-muted-foreground">Gemini AI Summary</p>
+                  <p className="text-sm font-medium text-muted-foreground">Summary Analysis</p>
                   <p className="mt-2">{selectedInteraction.ai_feedback}</p>
                 </div>
               ) : null}
               {selectedInteraction.feedback_report ? (
                 <div className="space-y-4 rounded-lg border p-4">
                   <div>
-                    <p className="text-sm font-medium text-muted-foreground">Structured Evaluation Report</p>
+                    <p className="text-sm font-medium text-muted-foreground">Gemini AI Evaluation</p>
                     <p className="mt-2 text-sm leading-7 text-slate-700">
                       {selectedInteraction.feedback_report.summary || selectedInteraction.feedback_report.overallSummary}
                     </p>
@@ -4420,7 +4462,7 @@ export default function TrainerSimFloorPage() {
                 </div>
               ) : null}
               <div className="rounded-lg border p-4">
-                <p className="text-sm font-medium text-muted-foreground">Full Transcript Timeline</p>
+                <p className="text-sm font-medium text-muted-foreground">Transcript / Captions</p>
                 {selectedTranscriptEntries.length ? (
                   <div className="mt-3 space-y-3">
                     {selectedTranscriptEntries.map((entry, index) => (
@@ -4507,7 +4549,7 @@ export default function TrainerSimFloorPage() {
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
-                  <Label>Coaching Notes</Label>
+                  <Label>Coaching Notes / Opportunities</Label>
                   <Button type="button" variant="outline" size="sm" onClick={() => appendTimestampedNote()}>
                     <Plus className="mr-2 h-4 w-4" />
                     Add Coaching Note

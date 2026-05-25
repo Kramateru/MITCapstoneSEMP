@@ -604,6 +604,7 @@ begin
         id,
         title,
         description,
+        coalesce(nullif(call_simulation_config ->> 'topic', ''), title) as topic,
         opening_prompt,
         expected_keywords,
         estimated_duration,
@@ -612,6 +613,8 @@ begin
         member_profile,
         cxone_metadata,
         call_simulation_config,
+        call_simulation_config -> 'script_flow' as script_flow,
+        call_simulation_config -> 'target_kpis' as target_kpis,
         ringer_audio_url,
         hold_audio_url,
         created_by as trainer_id,
@@ -635,9 +638,12 @@ begin
         script,
         expected_keywords,
         audio_url,
-        response_time_limit,
-        is_closing,
-        metadata,
+        step_metadata,
+        coalesce(
+          nullif(step_metadata ->> 'member_audio_url', ''),
+          nullif(step_metadata ->> 'audio_url', ''),
+          audio_url
+        ) as member_audio_url,
         created_at,
         updated_at
       from public.scenario_steps;
@@ -667,6 +673,25 @@ begin
         target_aht_seconds,
         target_ros_words_per_min,
         target_dead_air_seconds,
+        jsonb_build_object(
+          'speech_to_text_weight', speech_to_text_weight,
+          'aht_weight', aht_weight,
+          'rate_of_speech_weight', rate_of_speech_weight,
+          'dead_air_weight', dead_air_weight,
+          'empathy_statements_weight', empathy_statements_weight,
+          'probing_questions_weight', probing_questions_weight,
+          'grammar_weight', grammar_weight,
+          'pronunciation_weight', pronunciation_weight,
+          'pacing_weight', pacing_weight,
+          'forbidden_words_penalty', forbidden_words_penalty,
+          'passing_score', passing_score,
+          'forbidden_words', forbidden_words,
+          'empathy_keywords', empathy_keywords,
+          'probing_keywords', probing_keywords,
+          'target_aht_seconds', target_aht_seconds,
+          'target_ros_words_per_min', target_ros_words_per_min,
+          'target_dead_air_seconds', target_dead_air_seconds
+        ) as criteria_payload,
         created_at,
         updated_at
       from public.batch_kpi_config;
@@ -674,155 +699,344 @@ begin
   end if;
 
   if to_regclass('public.call_simulation_assignment') is not null then
-    execute $view$
-      create or replace view public.call_simulation_assignments as
-      select
-        id,
-        scenario_id,
-        trainee_id,
-        assigned_by as trainer_id,
-        batch_id,
-        max_attempts,
-        trainer_notes,
-        is_active,
-        assigned_at,
-        updated_at
-      from public.call_simulation_assignment;
-    $view$;
+    if to_regclass('public.sim_session') is not null then
+      execute $view$
+        create or replace view public.call_simulation_assignments as
+        select
+          assignment.id,
+          assignment.scenario_id,
+          assignment.trainee_id,
+          assignment.assigned_by as trainer_id,
+          assignment.batch_id,
+          assignment.max_attempts,
+          assignment.trainer_notes,
+          assignment.is_active,
+          assignment.assigned_at,
+          assignment.updated_at,
+          coalesce(session_stats.latest_attempt_number, 0) as latest_attempt_number,
+          greatest(coalesce(session_stats.latest_attempt_number, 0) - 1, 0) as retake_count,
+          latest_session.id as latest_session_id,
+          latest_session.status as latest_session_status,
+          latest_session.pass_fail as latest_pass_fail,
+          latest_session.weighted_score as latest_score,
+          latest_session.completed_at as latest_completed_at,
+          latest_session.audio_url as latest_recording_url
+        from public.call_simulation_assignment as assignment
+        left join lateral (
+          select
+            session.id,
+            session.status,
+            session.pass_fail,
+            session.weighted_score,
+            session.completed_at,
+            session.audio_url
+          from public.sim_session as session
+          where session.assignment_id::text = assignment.id::text
+          order by coalesce(session.completed_at, session.created_at) desc, session.attempt_number desc
+          limit 1
+        ) as latest_session on true
+        left join lateral (
+          select coalesce(max(session.attempt_number), 0) as latest_attempt_number
+          from public.sim_session as session
+          where session.assignment_id::text = assignment.id::text
+        ) as session_stats on true;
+      $view$;
+    else
+      execute $view$
+        create or replace view public.call_simulation_assignments as
+        select
+          id,
+          scenario_id,
+          trainee_id,
+          assigned_by as trainer_id,
+          batch_id,
+          max_attempts,
+          trainer_notes,
+          is_active,
+          assigned_at,
+          updated_at,
+          0::integer as latest_attempt_number,
+          0::integer as retake_count,
+          null::text as latest_session_id,
+          null::text as latest_session_status,
+          null::boolean as latest_pass_fail,
+          null::numeric as latest_score,
+          null::timestamp as latest_completed_at,
+          null::text as latest_recording_url
+        from public.call_simulation_assignment;
+      $view$;
+    end if;
   end if;
 
   if to_regclass('public.sim_session') is not null then
-    execute $view$
-      create or replace view public.call_simulation_attempts as
-      select
-        id,
-        trainee_id,
-        scenario_id,
-        assignment_id,
-        assigned_by_id as trainer_id,
-        batch_id,
-        status,
-        attempt_number,
-        max_attempts,
-        transcript,
-        transcript_log,
-        turn_logs,
-        audio_url,
-        audio_duration_seconds as call_duration_seconds,
-        speech_to_text_accuracy,
-        grammar_score,
-        pronunciation_score,
-        pacing_score,
-        rate_of_speech,
-        dead_air_seconds,
-        sentiment_score,
-        keyword_compliance,
-        weighted_score as final_score,
-        pass_fail,
-        ai_feedback,
-        coaching_notes,
-        trainer_verdict_status,
-        trainer_verdict_notes,
-        trainer_evaluated_by,
-        trainer_evaluated_at,
-        certificate_id,
-        started_at,
-        completed_at,
-        created_at,
-        updated_at
-      from public.sim_session;
-    $view$;
+    if to_regclass('public.call_simulation_scores') is not null then
+      execute $view$
+        create or replace view public.call_simulation_attempts as
+        select
+          session.id,
+          session.trainee_id,
+          session.scenario_id,
+          session.assignment_id,
+          session.assigned_by_id as trainer_id,
+          session.batch_id,
+          session.status,
+          session.attempt_number,
+          greatest(coalesce(session.attempt_number, 1) - 1, 0) as retake_count,
+          session.max_attempts,
+          session.transcript,
+          session.transcript_log,
+          session.turn_logs,
+          session.audio_url,
+          session.audio_url as recording_url,
+          session.audio_duration_seconds as call_duration_seconds,
+          session.speech_to_text_accuracy,
+          session.grammar_score,
+          session.pronunciation_score,
+          session.pacing_score,
+          session.rate_of_speech,
+          session.dead_air_seconds,
+          session.sentiment_score,
+          session.keyword_compliance,
+          session.weighted_score as final_score,
+          session.pass_fail,
+          session.ai_feedback,
+          score.id as supabase_score_record_id,
+          score.passing_score,
+          coalesce(score.full_transcript, session.transcript) as full_transcript,
+          score.feedback_report as evaluation_payload,
+          session.coaching_notes,
+          session.trainer_verdict_status,
+          session.trainer_verdict_notes,
+          session.trainer_evaluated_by,
+          session.trainer_evaluated_at,
+          session.certificate_id,
+          session.started_at,
+          session.completed_at,
+          session.created_at,
+          session.updated_at
+        from public.sim_session as session
+        left join public.call_simulation_scores as score
+          on score.session_id::text = session.id::text;
+      $view$;
+    else
+      execute $view$
+        create or replace view public.call_simulation_attempts as
+        select
+          session.id,
+          session.trainee_id,
+          session.scenario_id,
+          session.assignment_id,
+          session.assigned_by_id as trainer_id,
+          session.batch_id,
+          session.status,
+          session.attempt_number,
+          greatest(coalesce(session.attempt_number, 1) - 1, 0) as retake_count,
+          session.max_attempts,
+          session.transcript,
+          session.transcript_log,
+          session.turn_logs,
+          session.audio_url,
+          session.audio_url as recording_url,
+          session.audio_duration_seconds as call_duration_seconds,
+          session.speech_to_text_accuracy,
+          session.grammar_score,
+          session.pronunciation_score,
+          session.pacing_score,
+          session.rate_of_speech,
+          session.dead_air_seconds,
+          session.sentiment_score,
+          session.keyword_compliance,
+          session.weighted_score as final_score,
+          session.pass_fail,
+          session.ai_feedback,
+          null::text as supabase_score_record_id,
+          null::numeric as passing_score,
+          session.transcript as full_transcript,
+          null::jsonb as evaluation_payload,
+          session.coaching_notes,
+          session.trainer_verdict_status,
+          session.trainer_verdict_notes,
+          session.trainer_evaluated_by,
+          session.trainer_evaluated_at,
+          session.certificate_id,
+          session.started_at,
+          session.completed_at,
+          session.created_at,
+          session.updated_at
+        from public.sim_session as session;
+      $view$;
+    end if;
 
     execute $view$
       create or replace view public.call_simulation_recordings as
       select
-        id,
-        trainee_id,
-        scenario_id,
-        assignment_id,
-        batch_id,
-        audio_url as recording_url,
-        audio_duration_seconds as call_duration_seconds,
-        started_at,
-        completed_at,
-        created_at,
-        updated_at
-      from public.sim_session
-      where audio_url is not null;
+        session.id,
+        session.trainee_id,
+        session.scenario_id,
+        session.assignment_id,
+        session.batch_id,
+        session.audio_url as recording_url,
+        session.audio_url as recording_path,
+        session.audio_duration_seconds as call_duration_seconds,
+        session.transcript,
+        session.transcript_log,
+        session.turn_logs,
+        session.weighted_score as final_score,
+        session.pass_fail,
+        session.attempt_number,
+        greatest(coalesce(session.attempt_number, 1) - 1, 0) as retake_count,
+        session.started_at,
+        session.completed_at,
+        session.created_at,
+        session.updated_at
+      from public.sim_session as session
+      where session.audio_url is not null;
     $view$;
   end if;
 
   if to_regclass('public.call_simulation_scores') is not null then
-    execute $view$
-      create or replace view public.call_simulation_ai_evaluations as
-      select
-        id,
-        session_id,
-        scenario_id,
-        call_scenario_id,
-        trainee_id,
-        trainee_name,
-        scenario_topic,
-        total_score,
-        passing_score,
-        is_passed,
-        full_transcript,
-        feedback_report as evaluation_payload,
-        certificate_id,
-        supabase_certificate_id,
-        created_at,
-        updated_at
-      from public.call_simulation_scores;
-    $view$;
+    if to_regclass('public.sim_session') is not null then
+      execute $view$
+        create or replace view public.call_simulation_ai_evaluations as
+        select
+          score.id,
+          score.session_id,
+          score.scenario_id,
+          score.call_scenario_id,
+          score.trainee_id,
+          score.trainee_name,
+          score.scenario_topic,
+          score.total_score,
+          score.passing_score,
+          score.is_passed,
+          coalesce(score.full_transcript, session.transcript) as full_transcript,
+          session.transcript_log,
+          session.turn_logs,
+          session.audio_url as recording_url,
+          session.audio_duration_seconds as call_duration_seconds,
+          session.attempt_number,
+          greatest(coalesce(session.attempt_number, 1) - 1, 0) as retake_count,
+          session.max_attempts,
+          session.batch_id,
+          session.assignment_id,
+          session.coaching_notes,
+          session.trainer_verdict_status,
+          session.trainer_verdict_notes,
+          session.completed_at,
+          score.feedback_report as evaluation_payload,
+          score.certificate_id,
+          score.supabase_certificate_id,
+          score.created_at,
+          score.updated_at
+        from public.call_simulation_scores as score
+        left join public.sim_session as session
+          on session.id::text = score.session_id::text;
+      $view$;
+    else
+      execute $view$
+        create or replace view public.call_simulation_ai_evaluations as
+        select
+          id,
+          session_id,
+          scenario_id,
+          call_scenario_id,
+          trainee_id,
+          trainee_name,
+          scenario_topic,
+          total_score,
+          passing_score,
+          is_passed,
+          full_transcript,
+          null::jsonb as transcript_log,
+          null::jsonb as turn_logs,
+          null::text as recording_url,
+          null::integer as call_duration_seconds,
+          null::integer as attempt_number,
+          0::integer as retake_count,
+          null::integer as max_attempts,
+          null::text as batch_id,
+          null::text as assignment_id,
+          null::text as coaching_notes,
+          null::text as trainer_verdict_status,
+          null::text as trainer_verdict_notes,
+          null::timestamp as completed_at,
+          feedback_report as evaluation_payload,
+          certificate_id,
+          supabase_certificate_id,
+          created_at,
+          updated_at
+        from public.call_simulation_scores;
+      $view$;
+    end if;
   end if;
 
   if to_regclass('public.coaching_log') is not null then
     execute $view$
       create or replace view public.call_simulation_coaching_notes as
       select
-        id,
-        coaching_id,
-        sim_session_id as session_id,
-        trainer_id,
-        trainee_id,
-        batch_name,
-        lob,
-        coaching_minutes,
-        strengths,
-        opportunities,
-        action_plan,
-        target_date,
-        status,
-        competency_status,
-        trainer_remarks,
-        acknowledged_at,
-        created_at,
-        updated_at
-      from public.coaching_log;
+        coaching.id,
+        coaching.coaching_id,
+        coaching.sim_session_id as session_id,
+        coaching.trainer_id,
+        coaching.trainee_id,
+        coaching.batch_name,
+        coaching.lob,
+        coaching.coaching_minutes,
+        coaching.strengths,
+        coaching.opportunities,
+        coaching.action_plan,
+        coaching.target_date,
+        coaching.status,
+        coaching.competency_status,
+        coaching.trainer_remarks,
+        coaching.acknowledged_at,
+        session.scenario_id,
+        session.batch_id,
+        session.audio_url as recording_url,
+        session.transcript,
+        session.attempt_number,
+        session.pass_fail,
+        session.trainer_verdict_status,
+        session.completed_at,
+        coaching.created_at,
+        coaching.updated_at
+      from public.coaching_log as coaching
+      left join public.sim_session as session
+        on session.id::text = coaching.sim_session_id::text;
     $view$;
   elsif to_regclass('public.coaching_logs') is not null then
     execute $view$
       create or replace view public.call_simulation_coaching_notes as
       select
-        id,
-        coaching_id,
-        session_id,
-        trainer_id,
-        trainee_id,
+        coaching.id,
+        coaching.coaching_id,
+        coaching.session_id,
+        coaching.trainer_id,
+        coaching.trainee_id,
         null::text as batch_name,
         null::text as lob,
         null::integer as coaching_minutes,
-        strengths,
-        opportunities,
-        action_plan,
-        target_date::timestamp as target_date,
-        status,
+        coaching.strengths,
+        coaching.opportunities,
+        coaching.action_plan,
+        coaching.target_date::timestamp as target_date,
+        coaching.status,
         null::text as competency_status,
         null::text as trainer_remarks,
-        acknowledged_at,
-        created_at,
-        updated_at
-      from public.coaching_logs;
+        coaching.acknowledged_at,
+        session.scenario_id,
+        session.batch_id,
+        session.audio_url as recording_url,
+        session.transcript,
+        session.attempt_number,
+        session.pass_fail,
+        session.trainer_verdict_status,
+        session.completed_at,
+        coaching.created_at,
+        coaching.updated_at
+      from public.coaching_logs as coaching
+      left join public.sim_session as session
+        on session.id::text = coaching.session_id::text;
     $view$;
   end if;
 end $$;
