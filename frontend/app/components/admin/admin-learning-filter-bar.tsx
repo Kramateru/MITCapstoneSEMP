@@ -160,12 +160,12 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
   }
 
   return (
-    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5 2xl:grid-cols-10">
+    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5 lg:p-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 2xl:grid-cols-10">
         <div className="space-y-2">
           <Label>Trainer</Label>
           <Select value={value.trainerId || NONE_VALUE} onValueChange={(nextValue) => setField('trainerId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All trainers" />
             </SelectTrigger>
             <SelectContent>
@@ -182,7 +182,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Batch</Label>
           <Select value={value.batchId || NONE_VALUE} onValueChange={(nextValue) => setField('batchId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All batches" />
             </SelectTrigger>
             <SelectContent>
@@ -199,7 +199,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Trainee</Label>
           <Select value={value.traineeId || NONE_VALUE} onValueChange={(nextValue) => setField('traineeId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All trainees" />
             </SelectTrigger>
             <SelectContent>
@@ -216,7 +216,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Module</Label>
           <Select value={value.moduleId || NONE_VALUE} onValueChange={(nextValue) => setField('moduleId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All modules" />
             </SelectTrigger>
             <SelectContent>
@@ -233,7 +233,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Assessment</Label>
           <Select value={value.assessmentId || NONE_VALUE} onValueChange={(nextValue) => setField('assessmentId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All assessments" />
             </SelectTrigger>
             <SelectContent>
@@ -250,7 +250,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Exercise</Label>
           <Select value={value.exerciseId || NONE_VALUE} onValueChange={(nextValue) => setField('exerciseId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All exercises" />
             </SelectTrigger>
             <SelectContent>
@@ -267,7 +267,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Completion Status</Label>
           <Select value={value.completionStatus || NONE_VALUE} onValueChange={(nextValue) => setField('completionStatus', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All statuses" />
             </SelectTrigger>
             <SelectContent>
@@ -284,7 +284,7 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Performance Level</Label>
           <Select value={value.performanceLevel || NONE_VALUE} onValueChange={(nextValue) => setField('performanceLevel', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All levels" />
             </SelectTrigger>
             <SelectContent>
@@ -300,16 +300,16 @@ export function AdminLearningFilterBar({ value, options, onChange }: Props) {
 
         <div className="space-y-2">
           <Label>Start Date</Label>
-          <Input type="date" value={value.startDate} onChange={(event) => setField('startDate', event.target.value)} />
+          <Input className="w-full" type="date" value={value.startDate} onChange={(event) => setField('startDate', event.target.value)} />
         </div>
 
         <div className="space-y-2">
           <Label>End Date</Label>
-          <Input type="date" value={value.endDate} onChange={(event) => setField('endDate', event.target.value)} />
+          <Input className="w-full" type="date" value={value.endDate} onChange={(event) => setField('endDate', event.target.value)} />
         </div>
 
-        <div className="flex items-end">
-          <Button type="button" variant="outline" className="w-full" onClick={() => onChange(EMPTY_ADMIN_LEARNING_FILTERS)}>
+        <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-5 2xl:col-span-10">
+          <Button type="button" variant="outline" className="min-h-11 w-full 2xl:max-w-[15rem]" onClick={() => onChange(EMPTY_ADMIN_LEARNING_FILTERS)}>
             <FilterX className="mr-2 size-4" />
             Clear Filters
           </Button>

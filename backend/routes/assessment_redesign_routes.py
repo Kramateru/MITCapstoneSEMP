@@ -39,6 +39,7 @@ from backend.services.assessment_workspace import (
     update_category_record,
     update_question_record,
 )
+from backend.services.live_updates import live_update_manager
 from backend.supabase_client import SupabaseClient
 
 router = APIRouter(prefix="/api/assessment-module", tags=["assessment-redesign"])
@@ -760,6 +761,30 @@ async def submit_assessment_attempt(
         raise HTTPException(status_code=403, detail="Trainee access required")
     payload = await request.json()
     result = submit_trainee_workspace_attempt(db, current_user, payload)
+    attempt = result.get("attempt") or {}
+    assessment_event = {
+        "type": "assessment_submitted",
+        "details": {
+            "attempt_id": attempt.get("id"),
+            "assignment_id": attempt.get("assignmentId"),
+            "assessment_id": attempt.get("assessmentId"),
+            "assessment_title": attempt.get("assignmentTitle") or attempt.get("assessmentTitle"),
+            "category_title": attempt.get("categoryTitle"),
+            "trainee_id": current_user.id,
+            "trainee_name": current_user.full_name,
+            "batch_id": attempt.get("batchId"),
+            "batch_label": attempt.get("batchName"),
+            "score": float(attempt.get("score") or 0.0),
+            "passed": attempt.get("status") == "pass",
+            "attempt_no": int(attempt.get("attemptNo") or 1),
+            "completed_at": attempt.get("completedAt") or attempt.get("submittedAt"),
+        },
+    }
+    await live_update_manager.broadcast_training_update(assessment_event)
+    await live_update_manager.broadcast(
+        f"trainee:{current_user.id}",
+        assessment_event,
+    )
     logger.info("Assessment attempt saved by %s for assignment %s", current_user.email, payload.get("assignmentId") or payload.get("assignment_id"))
     return result
 

@@ -85,6 +85,7 @@ from ..services.certificate_awards import (
 )
 from ..services.coaching import generate_coaching_id, normalize_competency_status
 from ..services.gemini_tts import gemini_tts_engine
+from ..services.live_updates import live_update_manager
 from ..services.notifications import notify_call_simulation_completion
 from ..services.speech_assessment import assess_audio_submission, normalize_text, tokenize_text
 from ..services.supabase_auth_service import filter_to_supabase_active_users
@@ -137,6 +138,34 @@ def _require_trainer(current_user: User) -> None:
 def _require_trainee(current_user: User) -> None:
     if current_user.role != UserRole.TRAINEE:
         raise HTTPException(status_code=403, detail="Trainee access required")
+
+
+async def _broadcast_call_simulation_completion(
+    *,
+    trainee: User,
+    session: SimSession,
+    scenario: Optional[Scenario],
+) -> None:
+    payload = {
+        "type": "call_simulation_completed",
+        "details": {
+            "session_id": session.id,
+            "scenario_id": session.scenario_id,
+            "scenario_title": getattr(scenario, "title", None) or "Call Simulation",
+            "trainee_id": trainee.id,
+            "trainee_name": trainee.full_name,
+            "batch_id": session.batch_id,
+            "score": float(getattr(session, "overall_score", 0.0) or 0.0),
+            "passed": bool(getattr(session, "pass_fail", False)),
+            "attempt_no": int(getattr(session, "attempt_number", 1) or 1),
+            "completed_at": session.updated_at.isoformat() if session.updated_at else None,
+        },
+    }
+    await live_update_manager.broadcast_training_update(payload)
+    await live_update_manager.broadcast(
+        f"trainee:{trainee.id}",
+        payload,
+    )
 
 
 def _require_supabase_storage(detail: str) -> Any:
@@ -2111,6 +2140,108 @@ def _is_local_media_public_url(public_url: Optional[str]) -> bool:
     if normalized_url.startswith("/media/"):
         return True
     return (urlparse(normalized_url).path or "").startswith("/media/")
+
+
+def _is_supabase_storage_public_url(public_url: Optional[str]) -> bool:
+    bucket_name, relative_path = _resolve_call_simulation_storage_location(public_url)
+    return bool(bucket_name and relative_path)
+
+
+def _validate_call_simulation_member_audio_assets(
+    row_assets: dict[str, Any],
+) -> None:
+    missing_groups: list[str] = []
+    invalid_groups: list[str] = []
+
+    for group in list(row_assets.get("scenario_groups") or []):
+        scenario_key = str(group.get("scenario_key") or "").strip() or "Unknown"
+        member_rows = list(group.get("member_rows") or [])
+        if not member_rows:
+            continue
+
+        member_audio_url = next(
+            (
+                _normalize_optional_url(row.get("audio_url"))
+                for row in member_rows
+                if _normalize_optional_url(row.get("audio_url"))
+            ),
+            None,
+        )
+        if not member_audio_url:
+            missing_groups.append(scenario_key)
+            continue
+        if not _is_supabase_storage_public_url(member_audio_url):
+            invalid_groups.append(scenario_key)
+
+    if missing_groups:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Each Member AI row must have a Supabase-backed audio asset before saving this Call Simulation. "
+                f"Missing audio in Scenario Group{'s' if len(missing_groups) != 1 else ''}: {', '.join(missing_groups)}."
+            ),
+        )
+    if invalid_groups:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Member AI audio must come from Supabase storage before saving this Call Simulation. "
+                f"Replace the audio in Scenario Group{'s' if len(invalid_groups) != 1 else ''}: {', '.join(invalid_groups)}."
+            ),
+        )
+
+
+def _validate_call_simulation_launch_assets(
+    scenario: Scenario,
+    scenario_steps: list[CallSimulationScenarioStepResponse],
+) -> None:
+    if not _is_supabase_storage_public_url(scenario.ringer_audio_url):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This Call Simulation is not ready for live playback because the trainer ringer audio "
+                "is missing from Supabase. Ask the trainer to upload or regenerate it first."
+            ),
+        )
+
+    missing_member_references: list[str] = []
+    for step in scenario_steps:
+        if str(getattr(step, "actor", "") or "").lower() != "member":
+            continue
+        if not str(getattr(step, "script", "") or "").strip():
+            continue
+        audio_url = _normalize_optional_url(
+            getattr(step, "audio_url", None)
+            or _normalize_json_object(getattr(step, "metadata", None)).get("member_audio_url")
+        )
+        if _is_supabase_storage_public_url(audio_url):
+            continue
+        missing_member_references.append(f"step {int(step.step_number or 0)}")
+
+    scenario_config = _normalize_json_object(getattr(scenario, "call_simulation_config", None))
+    configured_script_flow = scenario_config.get("script_flow")
+    if isinstance(configured_script_flow, list):
+        for index, row in enumerate(configured_script_flow, start=1):
+            normalized_row = _normalize_json_object(row)
+            member_response_text = str(normalized_row.get("member_response_text") or "").strip()
+            if not member_response_text:
+                continue
+            member_audio_url = _normalize_optional_url(normalized_row.get("member_audio_url"))
+            if _is_supabase_storage_public_url(member_audio_url):
+                continue
+            scenario_label = str(normalized_row.get("scenario") or "").strip() or str(index)
+            reference = f"scenario {scenario_label}"
+            if reference not in missing_member_references:
+                missing_member_references.append(reference)
+
+    if missing_member_references:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This Call Simulation is missing Supabase-backed Member AI audio for "
+                f"{', '.join(missing_member_references)}. Ask the trainer to regenerate or upload the Member speech before launching it."
+            ),
+        )
 
 
 def _infer_call_simulation_audio_filename_from_url(
@@ -4475,6 +4606,7 @@ async def create_call_simulation_scenario(
     call_simulation_config = _normalize_json_object(scenario_data.call_simulation_config)
 
     if row_assets:
+        _validate_call_simulation_member_audio_assets(row_assets)
         first_member_row = row_assets.get("first_member_row")
         first_csr_row = row_assets.get("first_csr_row")
         default_problem_statement = (
@@ -4537,6 +4669,11 @@ async def create_call_simulation_scenario(
         incoming_ringer_audio_url=scenario_data.ringer_audio_url,
         incoming_hold_audio_url=scenario_data.hold_audio_url,
     )
+    if not _is_supabase_storage_public_url(resolved_ringer_audio_url):
+        raise HTTPException(
+            status_code=400,
+            detail="Attach a Supabase-backed trainer ringer audio before creating this Call Simulation scenario.",
+        )
 
     new_scenario = Scenario(
         id=str(uuid.uuid4()),
@@ -4914,6 +5051,7 @@ async def update_call_simulation_scenario(
         scenario.is_draft = not scenario_update.is_published
 
     if row_assets:
+        _validate_call_simulation_member_audio_assets(row_assets)
         first_member_row = row_assets.get("first_member_row")
         first_csr_row = row_assets.get("first_csr_row")
         default_problem_statement = (
@@ -4976,6 +5114,11 @@ async def update_call_simulation_scenario(
         incoming_ringer_audio_url=scenario_update.ringer_audio_url if "ringer_audio_url" in update_fields else _UNSET,
         incoming_hold_audio_url=scenario_update.hold_audio_url if "hold_audio_url" in update_fields else _UNSET,
     )
+    if not _is_supabase_storage_public_url(scenario.ringer_audio_url):
+        raise HTTPException(
+            status_code=400,
+            detail="Attach a Supabase-backed trainer ringer audio before saving this Call Simulation scenario.",
+        )
 
     active_mapping = (
         db.query(BatchScenarioMapping)
@@ -7313,6 +7456,8 @@ async def start_simulation(
             ),
         )
 
+    scenario_steps = _build_scenario_steps(scenario)
+    _validate_call_simulation_launch_assets(scenario, scenario_steps)
     kpi_config = db.query(BatchKPIConfig).filter(BatchKPIConfig.batch_id == batch_id).first() if batch_id else None
     next_attempt_number = 1
     max_attempts = _resolve_call_assignment_max_attempts(
@@ -7385,7 +7530,6 @@ async def start_simulation(
         .order_by(func.random())
         .first()
     )
-    scenario_steps = _build_scenario_steps(scenario)
     initial_csr_step_number = _resolve_initial_csr_step_number(scenario_steps)
 
     new_session = SimSession(
@@ -7876,6 +8020,11 @@ async def finalize_session(
     )
     db.commit()
     db.refresh(session)
+    await _broadcast_call_simulation_completion(
+        trainee=current_user,
+        session=session,
+        scenario=scenario,
+    )
     return SimSessionResponse.model_validate(session)
 
 
@@ -8023,6 +8172,11 @@ async def submit_session_audio(
 
     db.commit()
     db.refresh(session)
+    await _broadcast_call_simulation_completion(
+        trainee=current_user,
+        session=session,
+        scenario=scenario,
+    )
     return SimSessionResponse.model_validate(session)
 
 
@@ -8095,6 +8249,11 @@ async def complete_session(
     session.turn_logs = payload.turn_logs or session.turn_logs
     db.commit()
     db.refresh(session)
+    await _broadcast_call_simulation_completion(
+        trainee=current_user,
+        session=session,
+        scenario=scenario,
+    )
     return SimSessionResponse.model_validate(session)
 
 

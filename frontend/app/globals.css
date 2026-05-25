@@ -417,6 +417,7 @@
 
   .workspace-topbar {
     background:
+      radial-gradient(circle at top right, rgba(29, 86, 216, 0.08), transparent 22%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 253, 0.92));
     backdrop-filter: blur(16px);
     box-shadow: 0 20px 44px -40px rgba(15, 23, 42, 0.24);
@@ -425,6 +426,7 @@
   [data-slot="card"],
   [data-slot="card-content"],
   [data-slot="dialog-content"],
+  [data-slot="alert-dialog-content"],
   [data-slot="sheet-content"],
   [data-slot="table-container"],
   [data-slot="tabs"],
@@ -593,11 +595,82 @@
   .chart-scroll-shell {
     overflow-x: auto;
     overflow-y: hidden;
-    padding-bottom: 0.35rem;
+    margin-inline: -0.15rem;
+    padding: 0 0.15rem 0.45rem;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-gutter: stable both-edges;
   }
 
   .chart-scroll-inner {
-    min-width: 620px;
+    min-width: 580px;
+  }
+
+  .analytics-page-shell {
+    display: grid;
+    gap: clamp(1rem, 0.82rem + 0.72vw, 1.5rem);
+  }
+
+  .analytics-page-header {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
+  }
+
+  .analytics-page-header > * {
+    min-width: 0;
+  }
+
+  .analytics-page-actions {
+    display: flex;
+    width: 100%;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .analytics-page-actions > * {
+    flex: 1 1 12rem;
+    min-width: 0;
+  }
+
+  .analytics-summary-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .analytics-auto-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
+  .analytics-inline-stats {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+
+  .analytics-note-card {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .analytics-badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .table-scroll-area {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: auto;
+  }
+
+  .table-scroll-area > div {
+    min-width: 100%;
   }
 }
 
@@ -635,6 +708,10 @@
   .workspace-shell {
     min-height: calc(100dvh - 7rem);
   }
+
+  .analytics-page-actions > * {
+    flex-basis: min(100%, 14rem);
+  }
 }
 
 @media (max-width: 640px) {
@@ -662,13 +739,39 @@
     width: 7.5rem;
   }
 
+  .chart-scroll-shell {
+    margin-inline: -0.3rem;
+    padding-inline: 0.3rem;
+  }
+
   .chart-scroll-inner {
-    min-width: 680px;
+    min-width: 540px;
+  }
+
+  .analytics-page-actions > * {
+    flex-basis: 100%;
   }
 }
 
 @media (min-width: 768px) {
   .chart-scroll-inner {
     min-width: 0;
+  }
+}
+
+@media (min-width: 1024px) {
+  .analytics-page-header {
+    align-items: end;
+    flex-direction: row;
+    justify-content: space-between;
+  }
+
+  .analytics-page-actions {
+    width: auto;
+    justify-content: flex-end;
+  }
+
+  .analytics-page-actions > * {
+    flex: 0 0 auto;
   }
 }

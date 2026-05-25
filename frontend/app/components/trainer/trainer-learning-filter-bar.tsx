@@ -98,12 +98,12 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
   }
 
   return (
-    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5">
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-8">
+    <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5 lg:p-6">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-8">
         <div className="space-y-2">
           <Label>Batch</Label>
           <Select value={value.batchId || NONE_VALUE} onValueChange={(nextValue) => setField('batchId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All batches" />
             </SelectTrigger>
             <SelectContent>
@@ -120,7 +120,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Trainee</Label>
           <Select value={value.traineeId || NONE_VALUE} onValueChange={(nextValue) => setField('traineeId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All trainees" />
             </SelectTrigger>
             <SelectContent>
@@ -137,7 +137,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Module</Label>
           <Select value={value.moduleId || NONE_VALUE} onValueChange={(nextValue) => setField('moduleId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All modules" />
             </SelectTrigger>
             <SelectContent>
@@ -154,7 +154,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Assessment</Label>
           <Select value={value.assessmentId || NONE_VALUE} onValueChange={(nextValue) => setField('assessmentId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All assessments" />
             </SelectTrigger>
             <SelectContent>
@@ -171,7 +171,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
         <div className="space-y-2">
           <Label>Exercise</Label>
           <Select value={value.exerciseId || NONE_VALUE} onValueChange={(nextValue) => setField('exerciseId', nextValue === NONE_VALUE ? '' : nextValue)}>
-            <SelectTrigger>
+            <SelectTrigger className="w-full">
               <SelectValue placeholder="All exercises" />
             </SelectTrigger>
             <SelectContent>
@@ -189,6 +189,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
           <Label>Start Date</Label>
           <Input
             type="date"
+            className="w-full"
             value={value.startDate}
             onChange={(event) => setField('startDate', event.target.value)}
           />
@@ -198,16 +199,17 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
           <Label>End Date</Label>
           <Input
             type="date"
+            className="w-full"
             value={value.endDate}
             onChange={(event) => setField('endDate', event.target.value)}
           />
         </div>
 
-        <div className="flex items-end">
+        <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-1 2xl:col-span-1">
           <Button
             type="button"
             variant="outline"
-            className="w-full"
+            className="w-full min-h-11"
             onClick={() => onChange(EMPTY_TRAINER_LEARNING_FILTERS)}
           >
             <FilterX className="mr-2 size-4" />

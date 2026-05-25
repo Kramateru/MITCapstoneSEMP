@@ -94,6 +94,8 @@ export type AdminLearningInsightsResponse = {
     completed_call_simulations?: number
     pending_call_simulations?: number
     in_progress_call_simulations?: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     average_assessment_score: number
     average_exercise_score: number
@@ -102,6 +104,7 @@ export type AdminLearningInsightsResponse = {
     pass_rate: number
     call_simulation_pass_rate?: number
     total_attempts: number
+    repeated_attempts?: number
     passed_modules: number
     passed_assessments: number
     passed_call_simulations?: number
@@ -129,6 +132,8 @@ export type AdminLearningInsightsResponse = {
     trainer_created_modules: number
     assigned_items: number
     completed_items: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     pass_rate: number
     average_exercise_score: number
@@ -138,6 +143,7 @@ export type AdminLearningInsightsResponse = {
     performance_level?: string | null
     certificates_issued: number
     total_attempts: number
+    repeated_attempts?: number
     pending_coaching?: number
     acknowledged_coaching?: number
     coaching_completion_rate?: number
@@ -150,6 +156,8 @@ export type AdminLearningInsightsResponse = {
     trainer_created_modules: number
     assigned_items: number
     completed_items: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     pass_rate: number
     average_exercise_score: number
@@ -158,6 +166,7 @@ export type AdminLearningInsightsResponse = {
     performance_level?: string | null
     certificates_issued: number
     total_attempts: number
+    repeated_attempts?: number
   }>
   at_risk_trainers: Array<{
     trainer_id: string
@@ -167,6 +176,8 @@ export type AdminLearningInsightsResponse = {
     trainer_created_modules: number
     assigned_items: number
     completed_items: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     pass_rate: number
     average_exercise_score: number
@@ -195,6 +206,7 @@ export type AdminLearningInsightsResponse = {
     average_call_simulation_score?: number
     overall_score: number
     performance_level?: string | null
+    repeated_attempts?: number
     total_attempts: number
   }>
   top_batches: Array<{
@@ -246,14 +258,20 @@ export type AdminLearningInsightsResponse = {
     pass_rate: number
     module_assigned: number
     module_completed: number
+    module_passed?: number
     assessment_assigned: number
     assessment_completed: number
+    assessment_passed?: number
     call_simulation_assigned?: number
     call_simulation_completed?: number
     call_simulation_passed?: number
     pending_coaching?: number
     acknowledged_coaching?: number
     retake_coaching?: number
+    pending_items?: number
+    failed_items?: number
+    repeated_attempts?: number
+    intervention_needed?: boolean
     total_attempts: number
     latest_activity_at?: string | null
   }>
@@ -517,10 +535,17 @@ export type AdminLearningInsightsResponse = {
   }>
   ai_analysis: {
     overview: string
+    strengths: string[]
     trainer_effectiveness: string[]
     batch_performance: string[]
     module_and_assessment: string[]
     exercise_performance: string[]
+    weak_modules_categories: string[]
+    assessment_improvement_notes: string[]
+    exercise_improvement_notes: string[]
+    call_simulation_kpi_coaching_notes: string[]
+    recommended_next_action: string[]
+    betterment_notes: string[]
     weak_areas: string[]
     opportunities: string[]
     recommended_actions: string[]

@@ -379,39 +379,39 @@ def _trainer_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any
             "empty_message": "No standout strengths were available for the selected report scope.",
         },
         {
-            "title": "Weak Areas",
-            "items": ai_analysis.get("weak_areas") or [],
-            "empty_message": "No weak-area notes were available for the selected report scope.",
+            "title": "Opportunities For Improvement",
+            "items": ai_analysis.get("opportunities") or [],
+            "empty_message": "No improvement opportunity was available for the selected report scope.",
         },
         {
-            "title": "Low-Performing Assessment Categories",
-            "items": low_categories,
-            "empty_message": "No low-performing assessment category was detected in this scope.",
+            "title": "Weak Modules and Categories",
+            "items": ai_analysis.get("weak_modules_categories") or ai_analysis.get("weak_areas") or weak_modules or low_categories,
+            "empty_message": "No weak module or category was detected in this scope.",
         },
         {
-            "title": "Modules Needing Improvement",
-            "items": weak_modules,
-            "empty_message": "No weak module pattern was detected in this scope.",
+            "title": "Assessment Improvement Notes",
+            "items": ai_analysis.get("assessment_improvement_notes") or low_categories or retake_recommendations[:4],
+            "empty_message": "No assessment improvement note was generated for this scope.",
         },
         {
-            "title": "Call Simulation Coaching Notes",
-            "items": call_simulation_notes[:5],
-            "empty_message": "No Call Simulation coaching priority was detected in this scope.",
+            "title": "Exercise Improvement Notes",
+            "items": ai_analysis.get("exercise_improvement_notes") or weak_modules,
+            "empty_message": "No exercise improvement note was generated for this scope.",
         },
         {
-            "title": "Retake Recommendations",
-            "items": retake_recommendations[:6],
-            "empty_message": "No immediate retake recommendation is required for the current scope.",
+            "title": "Call Simulation KPI Coaching Notes",
+            "items": ai_analysis.get("call_simulation_kpi_coaching_notes") or call_simulation_notes[:5],
+            "empty_message": "No Call Simulation KPI coaching note was generated for this scope.",
         },
         {
-            "title": "Coaching Recommendations",
-            "items": ai_analysis.get("recommended_actions") or [],
-            "empty_message": "No coaching recommendation was available for the current scope.",
+            "title": "Recommended Next Action",
+            "items": ai_analysis.get("recommended_next_action") or ai_analysis.get("recommended_actions") or action_plan,
+            "empty_message": "No recommended next action was available for the current scope.",
         },
         {
-            "title": "Suggested Action Plan",
-            "items": action_plan,
-            "empty_message": "No action plan items were generated for the current scope.",
+            "title": "Betterment Notes",
+            "items": ai_analysis.get("betterment_notes") or action_plan,
+            "empty_message": "No betterment note was generated for the current scope.",
         },
     ]
 
@@ -471,49 +471,44 @@ def _admin_evaluation_sections(insights: dict[str, Any]) -> List[dict[str, Any]]
             "empty_message": "No executive overview was available for the selected admin scope.",
         },
         {
-            "title": "Trainer Effectiveness",
-            "items": ai_analysis.get("trainer_effectiveness") or [],
-            "empty_message": "No trainer-effectiveness notes were available for this scope.",
-        },
-        {
-            "title": "Batch Performance",
-            "items": ai_analysis.get("batch_performance") or [],
-            "empty_message": "No batch-performance notes were available for this scope.",
-        },
-        {
-            "title": "Module and Assessment Summary",
-            "items": ai_analysis.get("module_and_assessment") or [],
-            "empty_message": "No module or assessment summary was available for this scope.",
-        },
-        {
-            "title": "Exercise and Call Simulation",
-            "items": ai_analysis.get("exercise_performance") or [],
-            "empty_message": "No exercise or Call Simulation note was available for this scope.",
-        },
-        {
-            "title": "Weak Areas",
-            "items": ai_analysis.get("weak_areas") or [],
-            "empty_message": "No weak-area notes were available for this scope.",
+            "title": "Strengths",
+            "items": ai_analysis.get("strengths") or ai_analysis.get("trainer_effectiveness") or ai_analysis.get("batch_performance") or [],
+            "empty_message": "No strengths note was generated for this scope.",
         },
         {
             "title": "Opportunities For Improvement",
-            "items": ai_analysis.get("opportunities") or [],
-            "empty_message": "No improvement opportunities were generated for this scope.",
+            "items": ai_analysis.get("opportunities") or intervention_suggestions,
+            "empty_message": "No improvement opportunity was generated for this scope.",
         },
         {
-            "title": "Trainer Intervention Suggestions",
-            "items": intervention_suggestions,
-            "empty_message": "No trainer intervention suggestion was generated for this scope.",
+            "title": "Weak Modules and Categories",
+            "items": ai_analysis.get("weak_modules_categories") or ai_analysis.get("module_and_assessment") or intervention_suggestions,
+            "empty_message": "No weak module or category note was generated for this scope.",
         },
         {
-            "title": "Coaching Follow-Up",
-            "items": coaching_follow_up[:4],
-            "empty_message": "No coaching follow-up note was generated for this scope.",
+            "title": "Assessment Improvement Notes",
+            "items": ai_analysis.get("assessment_improvement_notes") or ai_analysis.get("module_and_assessment") or [],
+            "empty_message": "No assessment improvement note was generated for this scope.",
         },
         {
-            "title": "Recommended Action Plan",
-            "items": ai_analysis.get("recommended_actions") or [],
-            "empty_message": "No recommended action plan was generated for this scope.",
+            "title": "Exercise Improvement Notes",
+            "items": ai_analysis.get("exercise_improvement_notes") or ai_analysis.get("exercise_performance") or [],
+            "empty_message": "No exercise improvement note was generated for this scope.",
+        },
+        {
+            "title": "Call Simulation KPI Coaching Notes",
+            "items": ai_analysis.get("call_simulation_kpi_coaching_notes") or coaching_follow_up[:4],
+            "empty_message": "No Call Simulation KPI coaching note was generated for this scope.",
+        },
+        {
+            "title": "Recommended Next Action",
+            "items": ai_analysis.get("recommended_next_action") or ai_analysis.get("recommended_actions") or intervention_suggestions,
+            "empty_message": "No recommended next action was generated for this scope.",
+        },
+        {
+            "title": "Betterment Notes",
+            "items": ai_analysis.get("betterment_notes") or coaching_follow_up[:4],
+            "empty_message": "No betterment note was generated for this scope.",
         },
     ]
 
@@ -885,35 +880,27 @@ async def get_trainer_dashboard(
             detail="Trainer access required"
         )
     
-    # Get trainer's batches
-    batches = db.query(Batch).filter(Batch.created_by == current_user.id).all()
-    
-    dashboard_data = {
+    insights = build_trainer_learning_insights(db, trainer=current_user)
+    return {
         "trainer_id": current_user.id,
         "trainer_name": current_user.full_name,
-        "batches": []
+        "summary": insights.get("summary") or {},
+        "batches": [
+            {
+                "batch_id": row.get("batch_id"),
+                "batch_name": row.get("batch_label"),
+                "trainee_count": row.get("trainee_count"),
+                "assigned_items": row.get("assigned_items"),
+                "completed_items": row.get("completed_items"),
+                "pending_items": row.get("pending_items"),
+                "failed_items": row.get("failed_items"),
+                "completion_rate": row.get("completion_rate"),
+                "pass_rate": row.get("pass_rate"),
+                "average_score": row.get("overall_score"),
+            }
+            for row in insights.get("batch_comparison", [])
+        ],
     }
-    
-    for batch in batches:
-        # Get batch analytics
-        trainee_ids = [u.id for u in batch.users if u.role == UserRole.TRAINEE]
-        sessions = db.query(PracticeSession).filter(
-            PracticeSession.user_id.in_(trainee_ids)
-        ).all()
-        
-        avg_batch_score = 0.0
-        if sessions and any(s.overall_score for s in sessions):
-            avg_batch_score = sum(s.overall_score for s in sessions if s.overall_score) / len([s for s in sessions if s.overall_score])
-        
-        dashboard_data["batches"].append({
-            "batch_id": batch.id,
-            "batch_name": batch.name,
-            "trainee_count": len([u for u in batch.users if u.role == UserRole.TRAINEE]),
-            "sessions_completed": len(sessions),
-            "average_score": avg_batch_score
-        })
-    
-    return dashboard_data
 
 
 @router.get("/dashboard/admin", response_model=dict)
@@ -930,27 +917,23 @@ async def get_admin_dashboard(
             detail="Admin access required"
         )
     
-    # Get system statistics
-    total_users = db.query(User).count()
-    total_trainees = db.query(User).filter(User.role == UserRole.TRAINEE).count()
-    total_trainers = db.query(User).filter(User.role == UserRole.TRAINER).count()
-    
-    total_sessions = db.query(PracticeSession).count()
-    sessions_passed = db.query(PracticeSession).filter(
-        PracticeSession.overall_score >= 70
-    ).count()
-    
-    overall_passing_rate = (sessions_passed / total_sessions * 100) if total_sessions > 0 else 0.0
-    
+    insights = build_admin_learning_insights(db)
     return {
+        "scope": insights.get("scope") or {},
+        "summary": insights.get("summary") or {},
         "system_stats": {
-            "total_users": total_users,
-            "total_trainees": total_trainees,
-            "total_trainers": total_trainers,
-            "total_sessions": total_sessions,
-            "sessions_passed": sessions_passed,
-            "overall_passing_rate": overall_passing_rate
-        }
+            "total_users": db.query(User).count(),
+            "total_trainees": (insights.get("summary") or {}).get("total_trainees", 0),
+            "total_trainers": (insights.get("summary") or {}).get("total_trainers", 0),
+            "total_completed_activities": (
+                int((insights.get("summary") or {}).get("completed_modules") or 0)
+                + int((insights.get("summary") or {}).get("completed_assessments") or 0)
+                + int((insights.get("summary") or {}).get("completed_call_simulations") or 0)
+            ),
+            "overall_passing_rate": (insights.get("summary") or {}).get("pass_rate", 0.0),
+            "completion_rate": (insights.get("summary") or {}).get("completion_rate", 0.0),
+            "intervention_needed_count": (insights.get("summary") or {}).get("intervention_needed_count", 0),
+        },
     }
 
 
@@ -2027,7 +2010,7 @@ async def download_trainer_learning_insights_pdf(
 
     summary_rows = [
         ["Total Trainees", _format_count(summary.get("total_trainees"))],
-        ["Trainer-Created Modules", _format_count(summary.get("trainer_created_modules"))],
+        ["Modules in Scope", _format_count(summary.get("trainer_created_modules"))],
         ["Assigned Modules", _format_count(summary.get("assigned_module_records"))],
         ["Assigned Assessments", _format_count(summary.get("assigned_assessment_records"))],
         ["Assigned Call Simulations", _format_count(summary.get("assigned_call_simulation_records"))],

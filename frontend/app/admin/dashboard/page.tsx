@@ -26,6 +26,7 @@ import {
 } from '@/app/components/ui/dashboard-kit';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
+import { getBackendWebSocketUrl } from '@/app/utils/ws';
 
 type DashboardStats = {
   total_users: number;
@@ -33,9 +34,15 @@ type DashboardStats = {
   total_trainers: number;
   total_scenarios: number;
   total_sessions: number;
+  total_completed_activities?: number;
+  total_assigned_activities?: number;
+  total_pending_activities?: number;
+  total_failed_activities?: number;
   average_score: number;
   active_batches: number;
   average_completion: number;
+  passing_rate?: number;
+  intervention_needed_count?: number;
   system_status?: {
     asr_engine?: { status: string; detail: string };
     nlp_processing?: { status: string; detail: string };
@@ -193,6 +200,7 @@ export default function AdminDashboardPage() {
   const [loadMessage, setLoadMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [liveStatus, setLiveStatus] = useState('');
 
   const authHeaders = () => {
     const token = localStorage.getItem('token');
@@ -231,6 +239,59 @@ export default function AdminDashboardPage() {
     void loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      return undefined;
+    }
+
+    const socket = new WebSocket(
+      getBackendWebSocketUrl(`/api/trainer/live-updates?token=${encodeURIComponent(token)}`),
+    );
+
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data) as {
+          type?: string;
+          session?: { user_name?: string; scenario_title?: string };
+          details?: { trainee_name?: string; scenario_title?: string; module_title?: string; assessment_title?: string };
+        };
+
+        if (
+          message.type === 'practice_session_completed'
+          || message.type === 'call_simulation_completed'
+          || message.type === 'module_completed'
+          || message.type === 'assessment_submitted'
+        ) {
+          const activityLabel =
+            message.details?.module_title
+            || message.details?.assessment_title
+            || message.session?.scenario_title
+            || message.details?.scenario_title
+            || 'an activity';
+          setLiveStatus(
+            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} updated ${activityLabel}.`,
+          );
+          void loadData('refresh');
+        }
+      } catch (error) {
+        console.error('Admin live update parse error:', error);
+      }
+    };
+
+    socket.onopen = () => {
+      setLiveStatus('Live admin updates connected.');
+    };
+
+    socket.onclose = () => {
+      setLiveStatus('Live admin updates disconnected.');
+    };
+
+    return () => {
+      socket.close();
+    };
+  }, [loadData]);
+
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
       <div className="space-y-6">
@@ -262,6 +323,7 @@ export default function AdminDashboardPage() {
         ) : null}
 
         {loadMessage ? <NoticeBanner tone="amber">{loadMessage}</NoticeBanner> : null}
+        {liveStatus ? <NoticeBanner tone="blue">{liveStatus}</NoticeBanner> : null}
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <MetricCard
@@ -272,9 +334,9 @@ export default function AdminDashboardPage() {
             tone="blue"
           />
           <MetricCard
-            label="Training Scenarios"
-            value={loading && !stats ? '...' : stats?.total_scenarios ?? 0}
-            hint={`${stats?.total_sessions ?? 0} saved sessions`}
+            label="Completed Activities"
+            value={loading && !stats ? '...' : stats?.total_completed_activities ?? stats?.total_sessions ?? 0}
+            hint={`${stats?.total_assigned_activities ?? 0} assigned activities in the current analytics scope`}
             icon={<FileText className="size-5" />}
             tone="amber"
           />
@@ -286,7 +348,7 @@ export default function AdminDashboardPage() {
             tone="green"
           />
           <MetricCard
-            label="Average Completion"
+            label="Completion Rate"
             value={
               loading && !stats
                 ? '...'
@@ -294,7 +356,7 @@ export default function AdminDashboardPage() {
                   ? `${stats.average_completion.toFixed(1)}%`
                   : '0.0%'
             }
-            hint="Across saved course assignments"
+            hint={`${stats?.total_pending_activities ?? 0} activities still pending completion`}
             icon={<Activity className="size-5" />}
             tone="violet"
           />
@@ -307,7 +369,7 @@ export default function AdminDashboardPage() {
                   ? stats.average_score.toFixed(1)
                   : '0.0'
             }
-            hint="Current practice-session average"
+            hint={`${stats?.total_failed_activities ?? 0} failed activities | ${(stats?.passing_rate ?? 0).toFixed(1)}% passing rate`}
             icon={<Activity className="size-5" />}
             tone="rose"
           />
@@ -353,8 +415,8 @@ export default function AdminDashboardPage() {
                 tone="green"
               />
               <SoftStat
-                label="Average Score"
-                value={typeof stats?.average_score === 'number' ? stats.average_score.toFixed(1) : '0.0'}
+                label="Intervention Needed"
+                value={stats?.intervention_needed_count ?? 0}
                 tone="violet"
               />
             </div>

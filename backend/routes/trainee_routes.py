@@ -395,7 +395,7 @@ def _build_trainee_microlearning_report(
             "certified_count": certified_count,
             "average_score": _average(score_values),
             "pass_rate": round(
-                (certified_count / len(rows) * 100) if rows else 0.0,
+                (certified_count / completed_count * 100) if completed_count else 0.0,
                 2,
             ),
             "total_duration_minutes": total_duration_minutes,
@@ -787,6 +787,19 @@ async def assess_practice_audio(
                 "provider": assessment.get("provider"),
             },
         }
+    )
+    await live_update_manager.broadcast(
+        f"trainee:{current_user.id}",
+        {
+            "type": "practice_session_completed",
+            "session": {
+                "id": practice_session.id,
+                "scenario_id": scenario.id,
+                "scenario_title": scenario.title,
+                "overall_score": practice_session.overall_score or 0,
+                "created_at": practice_session.created_at.isoformat(),
+            },
+        },
     )
 
     return assessment
@@ -1587,6 +1600,7 @@ async def submit_microlearning_exercise(
         refresh_assignment_progress(assignment)
     result_summary = ensure_assignment_result_summary(assignment)
     final_assignment_summary = serialize_assignment_summary(assignment)
+    module_event = None
     if not was_completed and assignment.status in {"completed", "certified"}:
         notify_microlearning_completion(
             db,
@@ -1595,8 +1609,29 @@ async def submit_microlearning_exercise(
             score=float(final_assignment_summary.get("average_score") or 0),
             is_passed=bool(final_assignment_summary.get("is_passed")),
         )
+        module_event = {
+            "type": "module_completed",
+            "details": {
+                "assignment_id": assignment.id,
+                "module_id": final_assignment_summary.get("module_id"),
+                "module_title": final_assignment_summary.get("module_title") or final_assignment_summary.get("title"),
+                "trainee_id": current_user.id,
+                "trainee_name": current_user.full_name,
+                "batch_id": final_assignment_summary.get("batch_id"),
+                "batch_label": final_assignment_summary.get("batch_label"),
+                "score": float(final_assignment_summary.get("average_score") or 0.0),
+                "passed": bool(final_assignment_summary.get("is_passed")),
+                "completed_at": final_assignment_summary.get("completed_at"),
+            },
+        }
     db.commit()
     db.refresh(assignment)
+    if module_event:
+        await live_update_manager.broadcast_training_update(module_event)
+        await live_update_manager.broadcast(
+            f"trainee:{current_user.id}",
+            module_event,
+        )
 
     return {
         "status": "saved",

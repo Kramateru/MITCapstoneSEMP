@@ -420,6 +420,24 @@ const CALL_SIMULATION_AUDIO_ALLOWED_EXTENSIONS = new Set(['.mp3', '.wav', '.ogg'
 
 const isEmbeddedAudioDataUrl = (value: string) => value.trim().startsWith('data:audio/');
 
+const isLocalMediaAudioUrl = (value: string) => {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized.startsWith('/media/')) {
+    return true;
+  }
+  try {
+    const parsed = new URL(normalized, 'http://localhost');
+    return parsed.pathname.startsWith('/media/');
+  } catch {
+    return false;
+  }
+};
+
+const isSupabaseStorageAudioUrl = (value: string) => value.trim().includes('/storage/v1/object/public/');
+
 const getManagedAudioReplacementUrl = (value?: string | null) => {
   const normalized = String(value || '').trim();
   if (!normalized || isEmbeddedAudioDataUrl(normalized)) {
@@ -992,6 +1010,17 @@ export default function TrainerSimFloorPage() {
     )) || null;
   }, [scenarioAudioAssets]);
 
+  const isSupabaseManagedScenarioAudioUrl = useCallback((audioUrl?: string | null) => {
+    const normalizedUrl = String(audioUrl || '').trim();
+    if (!normalizedUrl || isEmbeddedAudioDataUrl(normalizedUrl) || isLocalMediaAudioUrl(normalizedUrl)) {
+      return false;
+    }
+    if (isSupabaseStorageAudioUrl(normalizedUrl)) {
+      return true;
+    }
+    return scenarioAudioAssets.some((asset) => asset.public_url === normalizedUrl && asset.is_active);
+  }, [scenarioAudioAssets]);
+
   const deleteDraftScenarioAudioAsset = useCallback(async (
     asset: CallSimulationAudioAssetRecord,
     options?: { stepNumber?: number | null },
@@ -1492,6 +1521,29 @@ export default function TrainerSimFloorPage() {
       toast.error(
         `Each Scenario Group can contain only one Member row. Fix group${groupsWithMultipleMemberRows.length === 1 ? '' : 's'} ${groupsWithMultipleMemberRows.join(', ')} before saving.`,
       );
+      return;
+    }
+
+    const groupsMissingSupabaseMemberAudio = groupedRows
+      .filter((group) => group.member_rows.some((row) => row.script.trim()) && !group.member_rows.some((row) => isSupabaseManagedScenarioAudioUrl(row.audio_url)))
+      .map((group) => group.scenario_key);
+    if (groupsMissingSupabaseMemberAudio.length > 0) {
+      toast.error(
+        `Generate or upload Supabase-backed Member audio for Scenario Group${groupsMissingSupabaseMemberAudio.length === 1 ? '' : 's'} ${groupsMissingSupabaseMemberAudio.join(', ')} before saving.`,
+      );
+      return;
+    }
+
+    const resolvedRingerAudioUrl = (
+      scenarioForm.use_shared_ringer_audio
+        ? callToneSettings.ringer_audio_url
+        : scenarioForm.ringer_audio_url
+    ).trim();
+    const hasSupabaseRinger = scenarioForm.use_shared_ringer_audio
+      ? Boolean(sharedAudioAssets.ringer?.public_url || isSupabaseStorageAudioUrl(resolvedRingerAudioUrl))
+      : isSupabaseManagedScenarioAudioUrl(resolvedRingerAudioUrl);
+    if (!hasSupabaseRinger) {
+      toast.error('Attach a Supabase-backed trainer ringer audio before saving this Call Simulation scenario.');
       return;
     }
 
@@ -2314,16 +2366,10 @@ export default function TrainerSimFloorPage() {
       if (result.audioAsset) {
         upsertScenarioAudioAsset(result.audioAsset);
       }
-      if (result.fallbackMode === 'browser' || !result.audioUrl) {
-        toast.info(result.warning || 'AI voice is using browser fallback mode.');
-      } else if (result.storageMode === 'local') {
-        toast.success('Member speech generated and saved to the local media folder.');
-      } else if (result.storageMode === 'embedded') {
-        toast.success('Member speech generated and embedded directly in the scenario.');
-        if (result.warning) {
-          toast.info(result.warning);
-        }
-      } else if (result.warning) {
+      if (!result.audioUrl) {
+        throw new Error('The generated Member speech did not return a Supabase audio URL.');
+      }
+      if (result.warning) {
         toast.success('Member speech generated and saved for trainee playback.');
         toast.info(result.warning);
       } else {
@@ -2352,9 +2398,6 @@ export default function TrainerSimFloorPage() {
 
     let successCount = 0;
     let failedCount = 0;
-    let browserFallbackCount = 0;
-    let localStorageCount = 0;
-    let embeddedStorageCount = 0;
     let firstFailureMessage: string | null = null;
 
     try {
@@ -2379,12 +2422,8 @@ export default function TrainerSimFloorPage() {
           if (result.audioAsset) {
             upsertScenarioAudioAsset(result.audioAsset);
           }
-          if (result.fallbackMode === 'browser' || !result.audioUrl) {
-            browserFallbackCount += 1;
-          } else if (result.storageMode === 'local') {
-            localStorageCount += 1;
-          } else if (result.storageMode === 'embedded') {
-            embeddedStorageCount += 1;
+          if (!result.audioUrl) {
+            throw new Error(`The generated speech for Member row ${entry.index + 1} did not return a Supabase audio URL.`);
           }
           successCount += 1;
         } catch (error) {
@@ -2400,31 +2439,7 @@ export default function TrainerSimFloorPage() {
       }
 
       if (failedCount === 0) {
-        if (browserFallbackCount > 0) {
-          toast.info(
-            browserFallbackCount === successCount
-              ? 'AI voice is using browser fallback mode.'
-              : `${browserFallbackCount} Member row${browserFallbackCount === 1 ? '' : 's'} will use browser fallback mode during live playback.`,
-          );
-        } else if (embeddedStorageCount === successCount) {
-          toast.success(
-            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and embedded it directly in the scenario.`,
-          );
-        } else if (localStorageCount === successCount) {
-          toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved it to the local media folder.`);
-        } else if (embeddedStorageCount > 0 && localStorageCount > 0) {
-          toast.success(
-            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} with ${embeddedStorageCount} embedded and ${localStorageCount} saved locally.`,
-          );
-        } else if (embeddedStorageCount > 0) {
-          toast.success(
-            `Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} with ${embeddedStorageCount} embedded directly in the scenario.`,
-          );
-        } else if (localStorageCount > 0) {
-          toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'} and saved ${localStorageCount} locally.`);
-        } else {
-          toast.success(`Generated server-side speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
-        }
+        toast.success(`Generated Supabase-backed speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
         return;
       }
 
@@ -2636,8 +2651,8 @@ export default function TrainerSimFloorPage() {
     [memberRows],
   );
   const memberAudioReadyCount = useMemo(
-    () => memberRows.filter((row) => row.audio_url.trim()).length,
-    [memberRows],
+    () => memberRows.filter((row) => row.script.trim() && isSupabaseManagedScenarioAudioUrl(row.audio_url)).length,
+    [isSupabaseManagedScenarioAudioUrl, memberRows],
   );
   const activeScenarioRingerAsset = useMemo(
     () => (
@@ -3794,7 +3809,7 @@ export default function TrainerSimFloorPage() {
                           <div>
                             <div className="text-sm font-medium text-cyan-950">Member AI Speech</div>
                             <p className="mt-1 text-xs text-cyan-900/80">
-                              Upload trainer audio or generate server-side speech for this Member row. Saved assets stay reusable in the trainee call flow, and browser fallback is still available when no stored audio is attached.
+                              Upload trainer audio or generate server-side speech for this Member row. Each Member response must have a Supabase-backed audio asset before trainees can launch the live call flow.
                             </p>
                           </div>
                           <div className="flex flex-col gap-2 sm:flex-row">
@@ -3835,16 +3850,20 @@ export default function TrainerSimFloorPage() {
                           <Input
                             value={formatGeneratedAudioValue(row.audio_url)}
                             onChange={(event) => updateScenarioRow(index, 'audio_url', event.target.value)}
-                            placeholder="Stored or embedded audio for trainee playback"
+                            placeholder="Supabase audio URL for trainee playback"
                             readOnly={isEmbeddedAudioDataUrl(row.audio_url)}
                           />
                           {isEmbeddedAudioDataUrl(row.audio_url) ? (
                             <p className="text-xs text-cyan-900/80">
-                              Supabase storage is unavailable right now, so this row is carrying embedded audio inside the saved scenario data.
+                              Embedded audio is no longer accepted for live trainee playback. Regenerate or upload this Member row so it stores in Supabase.
+                            </p>
+                          ) : isLocalMediaAudioUrl(row.audio_url) ? (
+                            <p className="text-xs text-cyan-900/80">
+                              Local-only audio is not accepted for live trainee playback. Replace it with a Supabase-backed upload or generated speech asset.
                             </p>
                           ) : !row.audio_url ? (
                             <p className="text-xs text-cyan-900/80">
-                              No stored audio asset is attached yet. The trainee call can still continue using browser fallback voice playback.
+                              No Supabase audio asset is attached yet. Generate or upload the Member speech before saving the scenario.
                             </p>
                           ) : memberAudioAsset ? (
                             <div className="rounded-2xl border border-cyan-200/60 bg-white/80 p-3 text-xs text-cyan-950">
@@ -3891,7 +3910,7 @@ export default function TrainerSimFloorPage() {
           <div className="shrink-0 border-t bg-white px-6 py-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <p className="text-xs text-slate-500">
-                Keep at least 5 complete rows, make sure Member rows have playable audio, and use Save when the module is ready for trainees.
+                Keep at least 5 complete rows, make sure every Member row has a Supabase-backed audio asset, and use Save when the module is ready for trainees.
               </p>
               <div className="flex flex-col-reverse gap-2 sm:flex-row">
                 <Button variant="outline" onClick={() => setShowScenarioDialog(false)}>Cancel</Button>

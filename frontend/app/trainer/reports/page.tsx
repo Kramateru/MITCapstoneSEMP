@@ -22,7 +22,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -32,13 +31,16 @@ import {
 } from 'recharts'
 
 import { DashboardLayout } from '@/app/components/DashboardLayout'
+import { AiInsightBoard, type AiInsightSection } from '@/app/components/ui/ai-insight-board'
 import { Badge } from '@/app/components/ui/badge'
 import { Button } from '@/app/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/app/components/ui/card'
-import { ChartCountLabelList, ChartPercentLabelList } from '@/app/components/ui/chart-data-labels'
+import { ChartPercentLabelList } from '@/app/components/ui/chart-data-labels'
 import { Progress } from '@/app/components/ui/progress'
+import { ReportNavigation, type ReportNavigationItem } from '@/app/components/ui/report-navigation'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/app/components/ui/tabs'
 import { TrainerLearningFilterBar } from '@/app/components/trainer/trainer-learning-filter-bar'
+import { useLiveRefresh } from '@/app/hooks/useLiveRefresh'
 import {
   buildTrainerLearningInsightsPdfUrl,
   buildTrainerLearningInsightsUrl,
@@ -48,10 +50,9 @@ import {
 } from '@/app/lib/trainer-learning-insights'
 import { trainerSidebarItems } from '@/app/trainer/nav'
 import { apiFetch, downloadApiFile } from '@/app/utils/api'
+import { getBackendWebSocketUrl } from '@/app/utils/ws'
 
-const AUTO_REFRESH_MS = 60_000
-const SCORE_DISTRIBUTION_COLORS = ['#e2e8f0', '#cbd5e1', '#93c5fd', '#60a5fa', '#2563eb']
-
+const AUTO_REFRESH_MS = 20_000
 function formatPercent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return '0.0%'
@@ -116,13 +117,13 @@ function SummaryCard({
 }) {
   return (
     <Card className="border-slate-200 shadow-sm">
-      <CardContent className="flex items-center justify-between gap-4 p-5">
-        <div>
-          <div className="text-sm text-slate-500">{title}</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-950">{value}</div>
-          <div className="mt-2 text-xs text-slate-500">{helper}</div>
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-500">{title}</div>
+          <div className="mt-2 break-words text-2xl font-semibold text-slate-950 sm:text-3xl">{value}</div>
+          <div className="mt-2 text-xs leading-5 text-slate-500">{helper}</div>
         </div>
-        <div className="rounded-2xl bg-slate-100 p-3 text-slate-700">
+        <div className="self-start rounded-2xl bg-slate-100 p-3 text-slate-700">
           <Icon className="size-5" />
         </div>
       </CardContent>
@@ -142,6 +143,7 @@ function getAssessmentBadge(row: TrainerLearningInsightsResponse['assessment_res
 
 export default function ReportsPage() {
   const [filters, setFilters] = useState<TrainerLearningFilterState>(EMPTY_TRAINER_LEARNING_FILTERS)
+  const [activeTab, setActiveTab] = useState('overview')
   const [data, setData] = useState<TrainerLearningInsightsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -149,6 +151,7 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null)
   const [downloadNotice, setDownloadNotice] = useState<{ tone: 'warning' | 'error'; message: string } | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
+  const [liveStatus, setLiveStatus] = useState('Connecting to live trainer reports...')
 
   const requestUrl = useMemo(() => buildTrainerLearningInsightsUrl(filters), [filters])
   const pdfUrl = useMemo(() => buildTrainerLearningInsightsPdfUrl(filters), [filters])
@@ -181,12 +184,62 @@ export default function ReportsPage() {
     void loadReports('initial')
   }, [loadReports])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadReports('auto')
-    }, AUTO_REFRESH_MS)
+  useLiveRefresh({
+    intervalMs: AUTO_REFRESH_MS,
+    onRefresh: () => loadReports('auto'),
+  })
 
-    return () => window.clearInterval(timer)
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) {
+      return undefined
+    }
+
+    const socket = new WebSocket(
+      getBackendWebSocketUrl(`/api/trainer/live-updates?token=${encodeURIComponent(token)}`),
+    )
+
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data) as {
+          type?: string
+          session?: { user_name?: string; scenario_title?: string }
+          details?: { trainee_name?: string; scenario_title?: string; module_title?: string; assessment_title?: string }
+        }
+
+        if (
+          message.type === 'practice_session_completed'
+          || message.type === 'call_simulation_completed'
+          || message.type === 'module_completed'
+          || message.type === 'assessment_submitted'
+        ) {
+          const activityLabel =
+            message.details?.module_title
+            || message.details?.assessment_title
+            || message.session?.scenario_title
+            || message.details?.scenario_title
+            || 'an activity'
+          setLiveStatus(
+            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} updated ${activityLabel}. Refreshing trainer reports...`,
+          )
+          void loadReports('refresh')
+        }
+      } catch (parseError) {
+        console.error('Trainer reports live update parse error:', parseError)
+      }
+    }
+
+    socket.onopen = () => {
+      setLiveStatus('Live trainer report websocket connected.')
+    }
+
+    socket.onclose = () => {
+      setLiveStatus('Live trainer report websocket disconnected. Auto-refresh remains active.')
+    }
+
+    return () => {
+      socket.close()
+    }
   }, [loadReports])
 
   const summary = data?.summary
@@ -219,6 +272,135 @@ export default function ReportsPage() {
     () => data?.weakest_assessment_areas || [],
     [data?.weakest_assessment_areas],
   )
+  const trainerAiSections = useMemo<AiInsightSection[]>(
+    () => [
+      {
+        title: 'Strengths',
+        items: data?.ai_analysis.strengths || [],
+        tone: 'emerald',
+        emptyMessage: 'No trainer-scope strengths were generated yet.',
+      },
+      {
+        title: 'Opportunities For Improvement',
+        items: data?.ai_analysis.opportunities || [],
+        tone: 'sky',
+        emptyMessage: 'No improvement opportunity was generated yet.',
+      },
+      {
+        title: 'Weak Modules / Categories',
+        items: data?.ai_analysis.weak_modules_categories || data?.ai_analysis.weak_areas || [],
+        tone: 'amber',
+        emptyMessage: 'No weak module or category pattern is standing out yet.',
+      },
+      {
+        title: 'Assessment Improvement Notes',
+        items: data?.ai_analysis.assessment_improvement_notes || [],
+        tone: 'violet',
+        emptyMessage: 'No assessment improvement note was generated yet.',
+      },
+      {
+        title: 'Exercise Improvement Notes',
+        items: data?.ai_analysis.exercise_improvement_notes || [],
+        tone: 'teal',
+        emptyMessage: 'No exercise improvement note was generated yet.',
+      },
+      {
+        title: 'Call Simulation KPI Coaching Notes',
+        items: data?.ai_analysis.call_simulation_kpi_coaching_notes || [],
+        tone: 'rose',
+        emptyMessage: 'No Call Simulation KPI coaching note was generated yet.',
+      },
+      {
+        title: 'Recommended Next Action',
+        items: data?.ai_analysis.recommended_next_action || data?.ai_analysis.recommended_actions || [],
+        tone: 'sky',
+        emptyMessage: 'No recommended next action was generated yet.',
+      },
+      {
+        title: 'Betterment Notes',
+        items: data?.ai_analysis.betterment_notes || [],
+        tone: 'slate',
+        emptyMessage: 'No betterment note was generated yet.',
+      },
+    ],
+    [data?.ai_analysis],
+  )
+  const reportNavigationItems = useMemo<ReportNavigationItem[]>(
+    () => [
+      {
+        value: 'overview',
+        title: 'Overview',
+        description: 'Progress summary, strengths, weak areas, coaching posture, and mock-call KPI context for the selected scope.',
+        icon: Activity,
+        metrics: [
+          { label: 'Completion', value: formatPercent(summary?.completion_rate) },
+          { label: 'Pass Rate', value: formatPercent(summary?.pass_rate) },
+          { label: 'Open Coaching', value: formatCount(summary?.pending_coaching_logs) },
+        ],
+      },
+      {
+        value: 'batches',
+        title: 'Batch Report',
+        description: 'Batch-level completion, scores, attempts, and pass/fail signals built only from assigned trainer learning.',
+        icon: Users,
+        metrics: [
+          { label: 'Batches', value: formatCount(batchRows.length) },
+          { label: 'Top Completion', value: formatPercent(Math.max(0, ...batchRows.map((row) => row.completion_rate || 0))) },
+          { label: 'Avg Mock Call', value: formatPercent(summary?.average_call_simulation_score) },
+        ],
+      },
+      {
+        value: 'trainees',
+        title: 'Trainee Report',
+        description: 'Per-trainee scores, completion rates, pass/fail outcomes, attempts, and intervention flags for coaching review.',
+        icon: GraduationCap,
+        metrics: [
+          { label: 'Trainees', value: formatCount(traineeRows.length) },
+          { label: 'Need Support', value: formatCount(improvementRows.length) },
+          { label: 'Attempts', value: formatCount(summary?.total_attempts) },
+        ],
+      },
+      {
+        value: 'learning',
+        title: 'Modules & Categories',
+        description: 'Microlearning progress, module-level performance, exercise results, and low-scoring category patterns.',
+        icon: BookOpen,
+        metrics: [
+          { label: 'Modules', value: formatCount(summary?.assigned_module_records) },
+          { label: 'Avg Microlearning', value: formatPercent(summary?.average_exercise_score) },
+          { label: 'Weak Areas', value: formatCount(weakestModules.length + weakestAreas.length) },
+        ],
+      },
+      {
+        value: 'results',
+        title: 'Results & Coaching',
+        description: 'Assessment breakdowns, Call Simulation outcomes, coaching status, and detailed saved activity rows.',
+        icon: ClipboardList,
+        metrics: [
+          { label: 'Assessments', value: formatCount(assessmentRows.length) },
+          { label: 'Mock Calls', value: formatCount(callSimulationResultRows.length) },
+          { label: 'KPI Metrics', value: formatCount(callSimulationKpis.length) },
+        ],
+      },
+    ],
+    [
+      assessmentRows.length,
+      batchRows,
+      callSimulationKpis.length,
+      callSimulationResultRows.length,
+      improvementRows.length,
+      summary?.average_call_simulation_score,
+      summary?.average_exercise_score,
+      summary?.completion_rate,
+      summary?.pass_rate,
+      summary?.pending_coaching_logs,
+      summary?.total_attempts,
+      summary?.assigned_module_records,
+      traineeRows.length,
+      weakestAreas.length,
+      weakestModules.length,
+    ],
+  )
 
   const handleDownloadPdf = useCallback(async () => {
     setDownloadNotice(null)
@@ -249,23 +431,23 @@ export default function ReportsPage() {
 
   return (
     <DashboardLayout sidebarItems={trainerSidebarItems()} userRole="trainer">
-      <div className="space-y-6">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold">Reports</h1>
+      <div className="analytics-page-shell">
+        <div className="analytics-page-header">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold sm:text-3xl">Reports</h1>
             <p className="text-muted-foreground">
               Database-driven batch and trainee reporting based only on trainer-created modules,
               trainer-assigned learning, and saved trainee results.
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="analytics-page-actions">
             <Button
               type="button"
               variant="outline"
               onClick={() => void handleDownloadPdf()}
               disabled={downloadingPdf}
-              className="rounded-full"
+              className="min-h-11 rounded-full"
             >
               {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
               Download PDF Report
@@ -276,7 +458,7 @@ export default function ReportsPage() {
               variant="outline"
               onClick={() => void loadReports('refresh')}
               disabled={loading || refreshing || downloadingPdf}
-              className="rounded-full"
+              className="min-h-11 rounded-full"
             >
               {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
               Refresh Reports
@@ -289,6 +471,7 @@ export default function ReportsPage() {
             <div>
               <div className="font-semibold">Current Report Scope</div>
               <div className="mt-1 text-sky-800">{scopeLabel}</div>
+              <div className="mt-1 text-xs text-sky-700">{liveStatus}</div>
             </div>
             <div className="text-sky-800">
               Last synced: {formatDateTime(lastSyncedAt)}
@@ -343,7 +526,7 @@ export default function ReportsPage() {
           </Card>
         ) : (
           <>
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+            <div className="analytics-summary-grid 2xl:grid-cols-6">
               <SummaryCard
                 title="Total Trainees"
                 value={formatCount(summary?.total_trainees)}
@@ -359,7 +542,7 @@ export default function ReportsPage() {
               <SummaryCard
                 title="Completed Modules"
                 value={formatCount(summary?.completed_modules)}
-                helper={`${formatCount(summary?.pending_modules)} assignments still pending`}
+                helper={`${formatCount(summary?.pending_modules)} assignments still incomplete`}
                 icon={CheckCircle2}
               />
               <SummaryCard
@@ -395,7 +578,7 @@ export default function ReportsPage() {
               <SummaryCard
                 title="Assigned Call Sim"
                 value={formatCount(summary?.assigned_call_simulation_records)}
-                helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} pending`}
+                helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} incomplete`}
                 icon={Mic}
               />
               <SummaryCard
@@ -418,13 +601,21 @@ export default function ReportsPage() {
               />
             </div>
 
-            <Tabs defaultValue="overview" className="space-y-4">
+            <ReportNavigation
+              title="Report Navigation"
+              description="Jump to batch, trainee, module/category, and detailed result views using live analytics for the selected trainer scope."
+              items={reportNavigationItems}
+              activeValue={activeTab}
+              onChange={setActiveTab}
+            />
+
+            <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
               <TabsList className="flex h-auto flex-wrap gap-2 rounded-2xl bg-slate-100 p-2">
                 <TabsTrigger value="overview" className="rounded-xl">Overview</TabsTrigger>
-                <TabsTrigger value="batches" className="rounded-xl">Batch Summary</TabsTrigger>
-                <TabsTrigger value="trainees" className="rounded-xl">Trainee Summary</TabsTrigger>
-                <TabsTrigger value="learning" className="rounded-xl">Learning Performance</TabsTrigger>
-                <TabsTrigger value="results" className="rounded-xl">Detailed Results</TabsTrigger>
+                <TabsTrigger value="batches" className="rounded-xl">Batch Report</TabsTrigger>
+                <TabsTrigger value="trainees" className="rounded-xl">Trainee Report</TabsTrigger>
+                <TabsTrigger value="learning" className="rounded-xl">Modules & Categories</TabsTrigger>
+                <TabsTrigger value="results" className="rounded-xl">Results & Coaching</TabsTrigger>
               </TabsList>
 
               <TabsContent value="overview" className="space-y-6">
@@ -432,47 +623,19 @@ export default function ReportsPage() {
                   <CardHeader>
                     <CardTitle>AI Analysis</CardTitle>
                     <CardDescription>
-                      Professional notes generated from real module completion, exercise outcomes, assessment results,
-                      assigned Call Simulation work, and coaching follow-up.
+                      Professional AI-style explanation generated from real module completion, exercise outcomes,
+                      assessment results, assigned Call Simulation work, and coaching follow-up.
                     </CardDescription>
                   </CardHeader>
-                  <CardContent className="space-y-5">
-                    <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">
-                      {data?.ai_analysis.headline}
-                    </div>
-
-                    <div className="grid gap-4 xl:grid-cols-3">
-                      <div className="rounded-2xl border bg-white p-4">
-                        <div className="text-sm font-semibold text-slate-950">Strengths</div>
-                        <div className="mt-3 space-y-2 text-sm text-slate-600">
-                          {(data?.ai_analysis.strengths || []).map((item) => (
-                            <p key={item}>{item}</p>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl border bg-white p-4">
-                        <div className="text-sm font-semibold text-slate-950">Weak Areas</div>
-                        <div className="mt-3 space-y-2 text-sm text-slate-600">
-                          {(data?.ai_analysis.weak_areas || []).map((item) => (
-                            <p key={item}>{item}</p>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="rounded-2xl border bg-white p-4">
-                        <div className="text-sm font-semibold text-slate-950">Recommended Action Plan</div>
-                        <div className="mt-3 space-y-2 text-sm text-slate-600">
-                          {(data?.ai_analysis.recommended_actions || []).map((item) => (
-                            <p key={item}>{item}</p>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
+                  <CardContent>
+                    <AiInsightBoard
+                      headline={data?.ai_analysis.headline}
+                      sections={trainerAiSections}
+                    />
                   </CardContent>
                 </Card>
 
-                <div className="grid gap-6 xl:grid-cols-2">
+                <div className="grid gap-6">
                   <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
                     <CardTitle>Batch Performance Comparison</CardTitle>
@@ -505,39 +668,6 @@ export default function ReportsPage() {
                     )}
                   </CardContent>
                 </Card>
-
-                  <Card className="border-slate-200 shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Score Distribution</CardTitle>
-                    <CardDescription>
-                      Combined spread of saved exercise, assessment, and Call Simulation scores in the selected report scope.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {(data?.score_distribution || []).some((row) => row.count > 0) ? (
-                      <div className="chart-scroll-shell">
-                        <div className="chart-scroll-inner h-[320px]">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis dataKey="range_label" />
-                              <YAxis allowDecimals={false} />
-                              <Tooltip />
-                              <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Results">
-                                <ChartCountLabelList />
-                                {(data?.score_distribution || []).map((row, index) => (
-                                  <Cell key={row.range_label} fill={SCORE_DISTRIBUTION_COLORS[index % SCORE_DISTRIBUTION_COLORS.length]} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-                    ) : (
-                      <SectionEmpty message="Score distribution will populate once trainees complete exercises or assessments." />
-                    )}
-                  </CardContent>
-                  </Card>
                 </div>
 
                 <div className="grid gap-6 xl:grid-cols-[1.05fr_0.95fr]">
@@ -866,7 +996,7 @@ export default function ReportsPage() {
                 <div className="grid gap-6 xl:grid-cols-2">
                   <Card className="border-slate-200 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Module Progress Chart</CardTitle>
+                      <CardTitle>Microlearning Progress</CardTitle>
                       <CardDescription>
                         Completion rate and average score for the trainer-created modules in the selected scope.
                       </CardDescription>
@@ -899,7 +1029,7 @@ export default function ReportsPage() {
 
                   <Card className="border-slate-200 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Weakest Assessment Areas</CardTitle>
+                      <CardTitle>Assessment Category Breakdown</CardTitle>
                       <CardDescription>
                         Low-scoring assessment categories for the selected batch, trainee, or module scope.
                       </CardDescription>
@@ -934,7 +1064,7 @@ export default function ReportsPage() {
                 <div className="grid gap-6 xl:grid-cols-3">
                   <Card className="border-slate-200 shadow-sm xl:col-span-1">
                     <CardHeader>
-                      <CardTitle>Module Performance</CardTitle>
+                      <CardTitle>Microlearning Module Breakdown</CardTitle>
                       <CardDescription>
                         Completion and score summary per trainer-created module.
                       </CardDescription>
@@ -1005,7 +1135,7 @@ export default function ReportsPage() {
 
                   <Card className="border-slate-200 shadow-sm xl:col-span-1">
                     <CardHeader>
-                      <CardTitle>Exercise Performance Summary</CardTitle>
+                      <CardTitle>Microlearning Exercise Breakdown</CardTitle>
                       <CardDescription>
                         Exercise results based on actual trainee attempts inside trainer-authored modules.
                       </CardDescription>
@@ -1051,7 +1181,7 @@ export default function ReportsPage() {
                 <div className="grid gap-6 xl:grid-cols-2">
                   <Card className="border-slate-200 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Module Assignment Results</CardTitle>
+                      <CardTitle>Microlearning Assignment Results</CardTitle>
                       <CardDescription>
                         Live progress status for trainer-assigned modules in the selected report scope.
                       </CardDescription>
@@ -1093,7 +1223,7 @@ export default function ReportsPage() {
 
                   <Card className="border-slate-200 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Assessment Results</CardTitle>
+                      <CardTitle>Assessment Breakdown</CardTitle>
                       <CardDescription>
                         Pass/fail status, attempts, and scores for trainer-assigned assessments.
                       </CardDescription>
@@ -1133,7 +1263,7 @@ export default function ReportsPage() {
                 <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
                   <Card className="border-slate-200 shadow-sm">
                     <CardHeader>
-                      <CardTitle>Call Simulation Result Rows</CardTitle>
+                      <CardTitle>Call Simulation Breakdown</CardTitle>
                       <CardDescription>
                         Latest mock-call results, pass status, attempts, and coaching state for this report scope.
                       </CardDescription>

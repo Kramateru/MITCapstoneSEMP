@@ -590,16 +590,18 @@ def collect_call_simulation_rows(
 
     scenario_performance = []
     for bucket in scenario_totals.values():
+        assigned_count = int(bucket["assigned_count"] or 0)
         completed_count = int(bucket["completed_count"] or 0)
         passed_count = int(bucket["passed_count"] or 0)
+        pending_count = max(assigned_count - completed_count, 0)
         scenario_performance.append(
             {
                 "scenario_id": bucket["scenario_id"],
                 "scenario_title": bucket["scenario_title"],
-                "assigned_count": int(bucket["assigned_count"] or 0),
+                "assigned_count": assigned_count,
                 "completed_count": completed_count,
                 "in_progress_count": int(bucket["in_progress_count"] or 0),
-                "pending_count": int(bucket["pending_count"] or 0),
+                "pending_count": pending_count,
                 "pass_rate": round((passed_count / completed_count) * 100.0, 2)
                 if completed_count
                 else 0.0,
@@ -630,9 +632,10 @@ def collect_call_simulation_rows(
 
     completed_count = sum(1 for row in rows if row["completion_status"] == "completed")
     passed_count = sum(1 for row in rows if row["is_passed"])
+    assigned_count = len(rows)
     summary = {
-        "assigned_count": len(rows),
-        "pending_count": sum(1 for row in rows if row["completion_status"] == "pending"),
+        "assigned_count": assigned_count,
+        "pending_count": max(assigned_count - completed_count, 0),
         "in_progress_count": sum(1 for row in rows if row["completion_status"] == "in_progress"),
         "completed_count": completed_count,
         "passed_count": passed_count,

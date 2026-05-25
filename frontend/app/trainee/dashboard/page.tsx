@@ -13,6 +13,7 @@ import {
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Input } from '@/app/components/ui/input';
+import { useLiveRefresh } from '@/app/hooks/useLiveRefresh';
 import { useAuth } from '@/app/context/AuthContext';
 import { traineeSidebarItems } from '@/app/trainee/nav';
 import {
@@ -28,7 +29,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -93,6 +94,8 @@ interface SimFloorAssignedScenario {
   competent: boolean;
 }
 
+const AUTO_REFRESH_MS = 20_000;
+
 function verdictLabel(status?: string) {
   const normalized = (status || '').toLowerCase();
   if (normalized === 'competent') return 'Competent';
@@ -144,18 +147,21 @@ export default function TraineeDashboard() {
   const [isChanging, setIsChanging] = useState(false);
   const [strengthTouched, setStrengthTouched] = useState(false);
 
-  async function fetchTraineeData() {
+  const fetchTraineeData = useCallback(async () => {
     try {
       const token = localStorage.getItem('token');
       const [statsRes, sessionsRes, coachingRes] = await Promise.all([
         fetch('/api/trainee/stats', {
           headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
         }),
         fetch('/api/trainee/sessions', {
           headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
         }),
         fetch('/api/certification/coaching/logs', {
           headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
         }),
       ]);
 
@@ -176,9 +182,9 @@ export default function TraineeDashboard() {
     } catch (error) {
       console.error('Error fetching trainee data:', error);
     }
-  }
+  }, []);
 
-  async function loadSimFloorWorkspace() {
+  const loadSimFloorWorkspace = useCallback(async () => {
     try {
       if (!user?.user_id) return;
       const token = localStorage.getItem('token');
@@ -205,17 +211,21 @@ export default function TraineeDashboard() {
     } catch (error) {
       console.error('Error loading Call Simulation report:', error);
     }
-  }
-
-  useEffect(() => {
-    void fetchTraineeData();
-    void loadSimFloorWorkspace();
-  }, []);
-
-  useEffect(() => {
-    if (!user?.user_id) return;
-    void loadSimFloorWorkspace();
   }, [user?.user_id]);
+
+  const refreshDashboard = useCallback(async () => {
+    await Promise.all([fetchTraineeData(), loadSimFloorWorkspace()]);
+  }, [fetchTraineeData, loadSimFloorWorkspace]);
+
+  useEffect(() => {
+    void refreshDashboard();
+  }, [refreshDashboard]);
+
+  useLiveRefresh({
+    enabled: true,
+    intervalMs: AUTO_REFRESH_MS,
+    onRefresh: refreshDashboard,
+  });
 
   useEffect(() => {
     setMustChangePassword(!!user?.must_change_password);
@@ -589,7 +599,7 @@ export default function TraineeDashboard() {
                                 </Badge>
                               </div>
                               <p className="mt-1 text-sm text-muted-foreground">
-                                Attempt {session.attempt_number} · {formatDate(session.created_at)}
+                                Attempt {session.attempt_number} - {formatDate(session.created_at)}
                               </p>
                             </div>
                             <div className="flex items-center gap-2">
@@ -636,7 +646,7 @@ export default function TraineeDashboard() {
                           </div>
                           <h4 className="mt-3 text-sm font-semibold text-foreground">{log.coaching_id}</h4>
                           <p className="mt-1 text-sm text-muted-foreground">
-                            {log.scenario_title || 'General coaching'} · {formatDate(log.created_at)}
+                            {log.scenario_title || 'General coaching'} - {formatDate(log.created_at)}
                           </p>
                         </div>
                       ))}
@@ -662,7 +672,7 @@ export default function TraineeDashboard() {
                           <div>
                             <h4 className="text-sm font-semibold text-foreground">{session.scenario_title}</h4>
                             <p className="mt-1 text-sm text-muted-foreground">
-                              {formatDate(session.created_at)} · {formatDuration(session.duration)}
+                              {formatDate(session.created_at)} - {formatDuration(session.duration)}
                             </p>
                           </div>
                           <Badge variant={scoreVariant(session.overall_score)}>

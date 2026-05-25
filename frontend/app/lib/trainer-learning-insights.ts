@@ -67,13 +67,17 @@ export type TrainerLearningInsightsResponse = {
     completed_call_simulations?: number
     pending_call_simulations?: number
     in_progress_call_simulations?: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     average_assessment_score: number
     average_exercise_score: number
     average_call_simulation_score?: number
+    overall_score?: number
     pass_rate: number
     call_simulation_pass_rate?: number
     total_attempts: number
+    repeated_attempts?: number
     passed_modules: number
     passed_assessments: number
     passed_call_simulations?: number
@@ -90,12 +94,15 @@ export type TrainerLearningInsightsResponse = {
     trainee_count: number
     assigned_items: number
     completed_items: number
+    pending_items?: number
+    failed_items?: number
     completion_rate: number
     pass_rate: number
     average_exercise_score: number
     average_assessment_score: number
     average_call_simulation_score?: number
     overall_score: number
+    repeated_attempts?: number
     total_attempts: number
   }>
   trainee_ranking: Array<{
@@ -113,14 +120,20 @@ export type TrainerLearningInsightsResponse = {
     pass_rate: number
     module_assigned: number
     module_completed: number
+    module_passed?: number
     assessment_assigned: number
     assessment_completed: number
+    assessment_passed?: number
     call_simulation_assigned?: number
     call_simulation_completed?: number
     call_simulation_passed?: number
     pending_coaching?: number
     acknowledged_coaching?: number
     retake_coaching?: number
+    pending_items?: number
+    failed_items?: number
+    repeated_attempts?: number
+    intervention_needed?: boolean
     total_attempts: number
     latest_activity_at?: string | null
   }>
@@ -344,6 +357,13 @@ export type TrainerLearningInsightsResponse = {
   ai_analysis: {
     headline: string
     strengths: string[]
+    opportunities: string[]
+    weak_modules_categories: string[]
+    assessment_improvement_notes: string[]
+    exercise_improvement_notes: string[]
+    call_simulation_kpi_coaching_notes: string[]
+    recommended_next_action: string[]
+    betterment_notes: string[]
     weak_areas: string[]
     recommended_actions: string[]
   }

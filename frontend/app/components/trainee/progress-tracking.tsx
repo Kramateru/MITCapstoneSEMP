@@ -15,9 +15,11 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
+import { useLiveRefresh } from '@/app/hooks/useLiveRefresh'
 import type { AppUser } from '@/app/types/user'
 import { apiFetch } from '@/app/utils/api'
 import { dedupeMessages } from '@/app/utils/runtime-errors'
+import { getBackendWebSocketUrl } from '@/app/utils/ws'
 
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -161,6 +163,8 @@ type CoachingResponse = {
   logs: CoachingLog[]
 }
 
+const AUTO_REFRESH_MS = 15_000
+
 function formatDate(value?: string | null) {
   if (!value) {
     return 'No date yet'
@@ -250,10 +254,11 @@ export default function ProgressTracking({
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [messages, setMessages] = useState<string[]>([])
+  const [liveStatus, setLiveStatus] = useState('')
 
   const traineeId = user.id || user.user_id
 
-  const loadProgress = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
+  const loadProgress = useCallback(async (mode: 'initial' | 'refresh' | 'auto' = 'initial') => {
     if (!traineeId) {
       setMessages(['Missing trainee account ID. Please sign in again.'])
       setLoading(false)
@@ -321,6 +326,65 @@ export default function ProgressTracking({
     void loadProgress()
   }, [loadProgress])
 
+  useLiveRefresh({
+    enabled: Boolean(traineeId),
+    intervalMs: AUTO_REFRESH_MS,
+    onRefresh: () => loadProgress('auto'),
+  })
+
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token || !traineeId) {
+      return undefined
+    }
+
+    const socket = new WebSocket(
+      getBackendWebSocketUrl(`/api/trainee/live-updates?token=${encodeURIComponent(token)}`),
+    )
+
+    socket.onmessage = (event) => {
+      try {
+        const payload = JSON.parse(event.data) as {
+          type?: string
+          session?: { scenario_title?: string }
+          details?: { module_title?: string; assessment_title?: string; scenario_title?: string }
+        }
+
+        if (
+          payload.type === 'microlearning_assignments_changed'
+          || payload.type === 'microlearning_module_deleted'
+          || payload.type === 'module_completed'
+          || payload.type === 'assessment_submitted'
+          || payload.type === 'call_simulation_completed'
+          || payload.type === 'practice_session_completed'
+        ) {
+          const activityLabel =
+            payload.details?.module_title
+            || payload.details?.assessment_title
+            || payload.details?.scenario_title
+            || payload.session?.scenario_title
+            || 'your progress data'
+          setLiveStatus(`Live progress update received for ${activityLabel}. Refreshing now.`)
+          void loadProgress('refresh')
+        }
+      } catch (parseError) {
+        console.error('Trainee progress live update parse error:', parseError)
+      }
+    }
+
+    socket.onopen = () => {
+      setLiveStatus('Live progress updates connected.')
+    }
+
+    socket.onclose = () => {
+      setLiveStatus('Live progress updates disconnected. Background refresh is still active.')
+    }
+
+    return () => {
+      socket.close()
+    }
+  }, [loadProgress, traineeId])
+
   const assessmentSummary = useMemo(() => {
     const completed = assessments.filter((assessment) => assessment.is_completed).length
     const passed = assessments.filter((assessment) => getAssessmentStatus(assessment) === 'passed').length
@@ -359,11 +423,7 @@ export default function ProgressTracking({
     const lockedFinal = scenarioStatuses.filter(
       ({ scenario, status }) => status === 'failed' && !scenario.can_retake,
     ).length
-    const averageScore = average(
-      callSimulationAssignments
-        .filter((scenario) => scenario.attempt_count > 0)
-        .map((scenario) => Number(scenario.latest_score || 0)),
-    )
+    const averageScore = Number(simFloorReport?.summary.average_score || 0)
 
     return {
       assigned,
@@ -376,7 +436,7 @@ export default function ProgressTracking({
       lockedFinal,
       averageScore,
     }
-  }, [callSimulationAssignments])
+  }, [callSimulationAssignments, simFloorReport?.summary.average_score])
 
   const coachingSummary = useMemo(() => {
     return {
@@ -398,19 +458,15 @@ export default function ProgressTracking({
     const totalPassed = microlearningPassed + assessmentSummary.passed + callSimulationSummary.passed
     const totalFailed = microlearningFailed + assessmentSummary.failed + callSimulationSummary.failed
     const totalInProgress = (microlearningReport?.summary.in_progress_count || 0) + callSimulationSummary.inProgress
-    const totalPending = Math.max(totalAssigned - totalCompleted - totalInProgress, 0)
-
-    const allScores = [
-      ...(microlearningReport?.assignments || [])
-        .filter((assignment) => Number((assignment.completed_exercises || 0)) > 0)
-        .map((assignment) => Number(assignment.average_score || 0)),
-      ...assessments
-        .filter((assessment) => assessment.score_percentage !== null && assessment.score_percentage !== undefined)
-        .map((assessment) => Number(assessment.score_percentage || 0)),
-      ...callSimulationAssignments
-        .filter((scenario) => scenario.attempt_count > 0)
-        .map((scenario) => Number(scenario.latest_score || 0)),
-    ]
+    const totalPending = Math.max(totalAssigned - totalCompleted, 0)
+    const microlearningScoreTotal = Number(microlearningReport?.summary.average_score || 0) * microlearningCompleted
+    const assessmentScoreTotal = assessmentSummary.averageScore * assessmentSummary.completed
+    const callSimulationCompletedAttempts = Number(simFloorReport?.summary.total_sessions || 0)
+    const callSimulationScoreTotal = Number(simFloorReport?.summary.average_score || 0) * callSimulationCompletedAttempts
+    const scoredAttemptCount = microlearningCompleted + assessmentSummary.completed + callSimulationCompletedAttempts
+    const averageScore = scoredAttemptCount
+      ? (microlearningScoreTotal + assessmentScoreTotal + callSimulationScoreTotal) / scoredAttemptCount
+      : 0
 
     return {
       totalAssigned,
@@ -421,9 +477,9 @@ export default function ProgressTracking({
       inProgress: totalInProgress,
       completionRate: totalAssigned ? (totalCompleted / totalAssigned) * 100 : 0,
       passRate: totalCompleted ? (totalPassed / totalCompleted) * 100 : 0,
-      averageScore: average(allScores),
+      averageScore,
     }
-  }, [assessmentSummary, callSimulationAssignments, callSimulationSummary, microlearningReport])
+  }, [assessmentSummary, callSimulationSummary, microlearningReport, simFloorReport?.summary.average_score, simFloorReport?.summary.total_sessions])
 
   const latestFeedback = useMemo(() => {
     const latestCoaching = [...coachingLogs].sort((left, right) => {
@@ -566,6 +622,12 @@ export default function ProgressTracking({
         </div>
       ) : null}
 
+      {liveStatus ? (
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          {liveStatus}
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <SummaryMetric
           title="Overall Completion"
@@ -576,7 +638,7 @@ export default function ProgressTracking({
         <SummaryMetric
           title="Average Score"
           value={formatScore(overallSummary.averageScore)}
-          helper="Combined average across scored microlearning, assessments, and Call Simulation"
+          helper="Combined average across completed scored microlearning, assessments, and Call Simulation attempts"
           icon={TrendingUp}
         />
         <SummaryMetric
@@ -729,7 +791,7 @@ export default function ProgressTracking({
                   scenario.active_session_id
                     ? 'Call in progress'
                     : scenario.can_retake
-                      ? `Retake available${scenario.remaining_attempts !== null && scenario.remaining_attempts !== undefined ? ` • ${scenario.remaining_attempts} left` : ''}`
+                      ? `Retake available${scenario.remaining_attempts !== null && scenario.remaining_attempts !== undefined ? ` - ${scenario.remaining_attempts} left` : ''}`
                       : scenarioStatus === 'failed'
                         ? scenario.launch_block_reason || 'Attempt limit reached. Final score saved.'
                       : scenario.launch_block_reason || `Assigned ${formatDate(scenario.assigned_at)}`

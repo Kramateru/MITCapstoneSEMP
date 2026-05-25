@@ -58,6 +58,7 @@ from ..services.microlearning import (
     refresh_assignment_progress,
     serialize_assignment_summary,
 )
+from ..services.admin_learning_analytics import build_admin_learning_insights
 from ..services.lob_catalog import (
     list_active_lobs,
     rename_lob_references,
@@ -2116,11 +2117,21 @@ async def admin_dashboard(
     current_user: Any = Depends(verify_admin), db: Session = Depends(get_db)
 ):
     """Admin dashboard with system overview"""
+    insights = build_admin_learning_insights(db)
+    summary = insights.get("summary") or {}
+
     total_users = db.query(User).filter(User.is_active.is_(True)).count()
     total_scenarios = db.query(Scenario).filter(Scenario.is_published.is_(True)).count()
-
-    trainee_count = db.query(User).filter(User.role == UserRole.TRAINEE).count()
-    trainer_count = db.query(User).filter(User.role == UserRole.TRAINER).count()
+    trainee_count = (
+        db.query(User)
+        .filter(User.role == UserRole.TRAINEE, User.is_active.is_(True))
+        .count()
+    )
+    trainer_count = (
+        db.query(User)
+        .filter(User.role == UserRole.TRAINER, User.is_active.is_(True))
+        .count()
+    )
     # Count batches with at least one trainee directly in SQL to avoid loading every
     # batch and relationship collection into Python on each dashboard refresh.
     active_batches = (
@@ -2128,24 +2139,26 @@ async def admin_dashboard(
         .select_from(Batch)
         .join(batch_user_association, batch_user_association.c.batch_id == Batch.id)
         .join(User, User.id == batch_user_association.c.user_id)
-        .filter(User.role == UserRole.TRAINEE)
+        .filter(User.role == UserRole.TRAINEE, User.is_active.is_(True))
         .scalar()
         or 0
     )
-    average_completion = db.query(func.avg(CourseAssignment.completion_percentage)).scalar() or 0
+    average_completion = float(summary.get("completion_rate") or 0.0)
 
-    session_metrics = (
-        db.query(
-            func.count(PracticeSession.id).label("total_sessions"),
-            func.avg(PracticeSession.overall_score).label("average_score"),
-            func.count(PracticeSession.audio_file_url).label("sessions_with_audio"),
-        )
-        .one()
+    total_completed_activities = (
+        int(summary.get("completed_modules") or 0)
+        + int(summary.get("completed_assessments") or 0)
+        + int(summary.get("completed_call_simulations") or 0)
     )
-    total_sessions = int(session_metrics.total_sessions or 0)
-    avg_score = float(session_metrics.average_score or 0)
-    audio_sessions = int(session_metrics.sessions_with_audio or 0)
-    audio_coverage = round((audio_sessions / total_sessions * 100) if total_sessions else 0.0, 2)
+    avg_score = float(summary.get("overall_score") or 0.0)
+    audio_sessions = (
+        db.query(func.count(PracticeSession.audio_file_url))
+        .filter(PracticeSession.audio_file_url.isnot(None))
+        .scalar()
+        or 0
+    )
+    practice_sessions = db.query(func.count(PracticeSession.id)).scalar() or 0
+    audio_coverage = round((int(audio_sessions) / int(practice_sessions) * 100) if practice_sessions else 0.0, 2)
 
     database_status = {
         "status": "connected",
@@ -2174,10 +2187,20 @@ async def admin_dashboard(
         "total_trainees": trainee_count,
         "total_trainers": trainer_count,
         "total_scenarios": total_scenarios,
-        "total_sessions": total_sessions,
+        "total_sessions": total_completed_activities,
+        "total_completed_activities": total_completed_activities,
+        "total_assigned_activities": (
+            int(summary.get("assigned_module_records") or 0)
+            + int(summary.get("assigned_assessment_records") or 0)
+            + int(summary.get("assigned_call_simulation_records") or 0)
+        ),
+        "total_pending_activities": int(summary.get("pending_items") or 0),
+        "total_failed_activities": int(summary.get("failed_items") or 0),
         "average_score": round(avg_score, 2),
         "active_batches": active_batches,
         "average_completion": round(float(average_completion or 0), 2),
+        "passing_rate": round(float(summary.get("pass_rate") or 0.0), 2),
+        "intervention_needed_count": int(summary.get("intervention_needed_count") or 0),
         "system_status": {
             "asr_engine": {
                 "status": "configured" if openai_key_configured else "fallback_only",
@@ -2205,7 +2228,7 @@ async def admin_dashboard(
                     )
                 ),
                 "utilization": {
-                    "sessions_with_audio": audio_sessions,
+                    "sessions_with_audio": int(audio_sessions),
                     "coverage_percentage": audio_coverage,
                 },
             },

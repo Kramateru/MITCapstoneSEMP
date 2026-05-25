@@ -52,6 +52,7 @@ from ..models import (
     UserRole,
 )
 from ..services.certificate_awards import sync_trainee_completion_certificates
+from ..services.trainer_learning_analytics import build_trainer_learning_insights
 from ..services.live_updates import live_update_manager
 from ..services.microlearning import (
     assignment_is_current,
@@ -3284,53 +3285,60 @@ async def get_batch_performance(
 ):
     """Get performance analytics for a batch"""
     batch = _get_trainer_batch(db, trainer_id=current_user.id, batch_id=batch_id)
-
-    # Get all sessions for batch users
-    user_ids = [u.id for u in batch.users if u.role == UserRole.TRAINEE]
-    sessions = (
-        db.query(PracticeSession).filter(PracticeSession.user_id.in_(user_ids)).all()
+    insights = build_trainer_learning_insights(
+        db,
+        trainer=current_user,
+        batch_id=batch.id,
     )
-
-    # Calculate metrics by user
-    user_metrics = {}
-    for session in sessions:
-        if session.user_id not in user_metrics:
-            user_metrics[session.user_id] = {
-                "sessions": [],
-                "avg_score": 0,
-                "passed_count": 0,
-                "failed_count": 0,
-            }
-
-        user_metrics[session.user_id]["sessions"].append(session)
-        if session.overall_score and session.overall_score >= 70:
-            user_metrics[session.user_id]["passed_count"] += 1
-        else:
-            user_metrics[session.user_id]["failed_count"] += 1
-
-    # Calculate averages
-    for metrics in user_metrics.values():
-        if metrics["sessions"]:
-            total_score = sum(s.overall_score or 0 for s in metrics["sessions"])
-            metrics["avg_score"] = total_score / len(metrics["sessions"])
-
+    batch_snapshot = next(
+        (row for row in insights.get("batch_comparison", []) if row.get("batch_id") == batch.id),
+        None,
+    ) or {}
+    trainee_rows = [
+        row
+        for row in insights.get("trainee_ranking", [])
+        if row.get("batch_id") == batch.id
+    ]
+    total_users = len(
+        [
+            user
+            for user in batch.users
+            if user.role == UserRole.TRAINEE and bool(getattr(user, "is_active", True))
+        ]
+    )
     return {
         "batch_id": batch_id,
         "batch_name": batch.name,
-        "total_users": len(batch.users),
-        "total_sessions": len(sessions),
+        "wave_number": batch.wave_number,
+        "total_users": total_users,
+        "assigned_items": int(batch_snapshot.get("assigned_items") or 0),
+        "completed_items": int(batch_snapshot.get("completed_items") or 0),
+        "pending_items": int(batch_snapshot.get("pending_items") or 0),
+        "failed_items": int(batch_snapshot.get("failed_items") or 0),
+        "completion_rate": float(batch_snapshot.get("completion_rate") or 0.0),
+        "passing_rate": float(batch_snapshot.get("pass_rate") or 0.0),
+        "overall_score": float(batch_snapshot.get("overall_score") or 0.0),
+        "total_attempts": int(batch_snapshot.get("total_attempts") or 0),
+        "total_sessions": int(batch_snapshot.get("completed_items") or 0),
         "user_performance": [
             {
-                "user_id": user_id,
-                "user_name": next(
-                    (u.full_name for u in batch.users if u.id == user_id), None
-                ),
-                "avg_score": round(metrics["avg_score"], 2),
-                "passed_sessions": metrics["passed_count"],
-                "failed_sessions": metrics["failed_count"],
-                "session_count": len(metrics["sessions"]),
+                "user_id": row.get("trainee_id"),
+                "user_name": row.get("trainee_name"),
+                "avg_score": round(float(row.get("overall_score") or 0.0), 2),
+                "passed_sessions": int(row.get("module_passed") or 0)
+                + int(row.get("assessment_passed") or 0)
+                + int(row.get("call_simulation_passed") or 0),
+                "failed_sessions": int(row.get("failed_items") or 0),
+                "pending_items": int(row.get("pending_items") or 0),
+                "session_count": int(row.get("module_completed") or 0)
+                + int(row.get("assessment_completed") or 0)
+                + int(row.get("call_simulation_completed") or 0),
+                "completion_rate": float(row.get("completion_rate") or 0.0),
+                "pass_rate": float(row.get("pass_rate") or 0.0),
+                "total_attempts": int(row.get("total_attempts") or 0),
+                "intervention_needed": bool(row.get("intervention_needed")),
             }
-            for user_id, metrics in user_metrics.items()
+            for row in trainee_rows
         ],
     }
 
@@ -3482,13 +3490,39 @@ async def trainer_stats(
     current_user: Any = Depends(verify_trainer), db: Session = Depends()
 ):
     """Stats payload used by trainer dashboard UI."""
-    data = await trainer_dashboard(current_user=current_user, db=db)
+    insights = build_trainer_learning_insights(db, trainer=current_user)
+    summary = insights.get("summary") or {}
+    trainer_batches = db.query(Batch).filter(Batch.created_by == current_user.id, Batch.is_active == True).all()
+    total_trainees = len(
+        {
+            trainee.id
+            for batch in trainer_batches
+            for trainee in batch.users
+            if trainee.role == UserRole.TRAINEE and bool(getattr(trainee, "is_active", True))
+        }
+    )
+    total_completed_activities = (
+        int(summary.get("completed_modules") or 0)
+        + int(summary.get("completed_assessments") or 0)
+        + int(summary.get("completed_call_simulations") or 0)
+    )
     return {
-        "total_trainees": data.get("total_assigned_users", 0),
-        "total_batches": data.get("total_batches", 0),
-        "total_sessions": data.get("total_sessions", 0),
-        "average_score": data.get("average_session_score", 0),
-        "pending_reviews": data.get("pending_reviews", 0),
+        "total_trainees": total_trainees,
+        "total_batches": len(trainer_batches),
+        "total_sessions": total_completed_activities,
+        "total_completed_activities": total_completed_activities,
+        "total_assigned_activities": (
+            int(summary.get("assigned_module_records") or 0)
+            + int(summary.get("assigned_assessment_records") or 0)
+            + int(summary.get("assigned_call_simulation_records") or 0)
+        ),
+        "total_pending_activities": int(summary.get("pending_items") or 0),
+        "total_failed_activities": int(summary.get("failed_items") or 0),
+        "average_score": float(summary.get("overall_score") or 0.0),
+        "completion_rate": float(summary.get("completion_rate") or 0.0),
+        "pass_rate": float(summary.get("pass_rate") or 0.0),
+        "pending_reviews": int(summary.get("pending_coaching_logs") or 0),
+        "intervention_needed_count": int(summary.get("intervention_needed_count") or 0),
     }
 
 
@@ -3497,39 +3531,39 @@ async def trainer_dashboard(
     current_user: Any = Depends(verify_trainer), db: Session = Depends()
 ):
     """Trainer dashboard summary"""
-    # Get batches
-    batches = db.query(Batch).filter(Batch.created_by == current_user.id).all()
-    batch_ids = [b.id for b in batches]
-
-    # Get user IDs from batches
-    from sqlalchemy import and_
-
-    batch_user_ids = (
-        db.query(User).filter(User.batches.any(Batch.id.in_(batch_ids))).all()
+    insights = build_trainer_learning_insights(db, trainer=current_user)
+    summary = insights.get("summary") or {}
+    trainer_batches = db.query(Batch).filter(Batch.created_by == current_user.id, Batch.is_active == True).all()
+    total_trainees = len(
+        {
+            trainee.id
+            for batch in trainer_batches
+            for trainee in batch.users
+            if trainee.role == UserRole.TRAINEE and bool(getattr(trainee, "is_active", True))
+        }
     )
-    user_ids = [u.id for u in batch_user_ids]
-
-    # Get sessions
-    sessions = (
-        db.query(PracticeSession).filter(PracticeSession.user_id.in_(user_ids)).all()
-        if user_ids
-        else []
+    total_completed_activities = (
+        int(summary.get("completed_modules") or 0)
+        + int(summary.get("completed_assessments") or 0)
+        + int(summary.get("completed_call_simulations") or 0)
     )
-
-    # Calculate metrics
-    total_users = len(batch_user_ids)
-    total_sessions = len(sessions)
-
-    avg_score = (
-        sum(s.overall_score or 0 for s in sessions) / total_sessions if sessions else 0
-    )
-
     return {
         "trainer_name": current_user.full_name,
-        "total_batches": len(batches),
-        "total_assigned_users": total_users,
-        "total_sessions": total_sessions,
-        "average_session_score": round(avg_score, 2),
-        "pending_reviews": sum(not s.is_verified for s in sessions),
+        "total_batches": len(trainer_batches),
+        "total_assigned_users": total_trainees,
+        "total_sessions": total_completed_activities,
+        "total_completed_activities": total_completed_activities,
+        "total_assigned_activities": (
+            int(summary.get("assigned_module_records") or 0)
+            + int(summary.get("assigned_assessment_records") or 0)
+            + int(summary.get("assigned_call_simulation_records") or 0)
+        ),
+        "total_pending_activities": int(summary.get("pending_items") or 0),
+        "total_failed_activities": int(summary.get("failed_items") or 0),
+        "completion_rate": float(summary.get("completion_rate") or 0.0),
+        "pass_rate": float(summary.get("pass_rate") or 0.0),
+        "average_session_score": round(float(summary.get("overall_score") or 0.0), 2),
+        "pending_reviews": int(summary.get("pending_coaching_logs") or 0),
+        "intervention_needed_count": int(summary.get("intervention_needed_count") or 0),
         "timestamp": datetime.utcnow(),
     }
