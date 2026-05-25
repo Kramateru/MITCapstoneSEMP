@@ -950,6 +950,7 @@ def ensure_call_simulation_reporting_views() -> None:
             id,
             title,
             description,
+            COALESCE(NULLIF(call_simulation_config ->> 'topic', ''), title) AS topic,
             opening_prompt,
             expected_keywords,
             estimated_duration,
@@ -958,6 +959,8 @@ def ensure_call_simulation_reporting_views() -> None:
             member_profile,
             cxone_metadata,
             call_simulation_config,
+            call_simulation_config -> 'script_flow' AS script_flow,
+            call_simulation_config -> 'target_kpis' AS target_kpis,
             ringer_audio_url,
             hold_audio_url,
             created_by AS trainer_id,
@@ -981,9 +984,12 @@ def ensure_call_simulation_reporting_views() -> None:
             script,
             expected_keywords,
             audio_url,
-            response_time_limit,
-            is_closing,
-            metadata,
+            step_metadata,
+            COALESCE(
+              NULLIF(step_metadata ->> 'member_audio_url', ''),
+              NULLIF(step_metadata ->> 'audio_url', ''),
+              audio_url
+            ) AS member_audio_url,
             created_at,
             updated_at
           FROM public.scenario_steps;
@@ -1013,6 +1019,25 @@ def ensure_call_simulation_reporting_views() -> None:
             target_aht_seconds,
             target_ros_words_per_min,
             target_dead_air_seconds,
+            jsonb_build_object(
+              'speech_to_text_weight', speech_to_text_weight,
+              'aht_weight', aht_weight,
+              'rate_of_speech_weight', rate_of_speech_weight,
+              'dead_air_weight', dead_air_weight,
+              'empathy_statements_weight', empathy_statements_weight,
+              'probing_questions_weight', probing_questions_weight,
+              'grammar_weight', grammar_weight,
+              'pronunciation_weight', pronunciation_weight,
+              'pacing_weight', pacing_weight,
+              'forbidden_words_penalty', forbidden_words_penalty,
+              'passing_score', passing_score,
+              'forbidden_words', forbidden_words,
+              'empathy_keywords', empathy_keywords,
+              'probing_keywords', probing_keywords,
+              'target_aht_seconds', target_aht_seconds,
+              'target_ros_words_per_min', target_ros_words_per_min,
+              'target_dead_air_seconds', target_dead_air_seconds
+            ) AS criteria_payload,
             created_at,
             updated_at
           FROM public.batch_kpi_config;
@@ -1020,155 +1045,344 @@ def ensure_call_simulation_reporting_views() -> None:
       END IF;
 
       IF to_regclass('public.call_simulation_assignment') IS NOT NULL THEN
-        EXECUTE $view$
-          CREATE OR REPLACE VIEW public.call_simulation_assignments AS
-          SELECT
-            id,
-            scenario_id,
-            trainee_id,
-            assigned_by AS trainer_id,
-            batch_id,
-            max_attempts,
-            trainer_notes,
-            is_active,
-            assigned_at,
-            updated_at
-          FROM public.call_simulation_assignment;
-        $view$;
+        IF to_regclass('public.sim_session') IS NOT NULL THEN
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_assignments AS
+            SELECT
+              assignment.id,
+              assignment.scenario_id,
+              assignment.trainee_id,
+              assignment.assigned_by AS trainer_id,
+              assignment.batch_id,
+              assignment.max_attempts,
+              assignment.trainer_notes,
+              assignment.is_active,
+              assignment.assigned_at,
+              assignment.updated_at,
+              COALESCE(session_stats.latest_attempt_number, 0) AS latest_attempt_number,
+              GREATEST(COALESCE(session_stats.latest_attempt_number, 0) - 1, 0) AS retake_count,
+              latest_session.id AS latest_session_id,
+              latest_session.status AS latest_session_status,
+              latest_session.pass_fail AS latest_pass_fail,
+              latest_session.weighted_score AS latest_score,
+              latest_session.completed_at AS latest_completed_at,
+              latest_session.audio_url AS latest_recording_url
+            FROM public.call_simulation_assignment AS assignment
+            LEFT JOIN LATERAL (
+              SELECT
+                session.id,
+                session.status,
+                session.pass_fail,
+                session.weighted_score,
+                session.completed_at,
+                session.audio_url
+              FROM public.sim_session AS session
+              WHERE session.assignment_id::text = assignment.id::text
+              ORDER BY COALESCE(session.completed_at, session.created_at) DESC, session.attempt_number DESC
+              LIMIT 1
+            ) AS latest_session ON TRUE
+            LEFT JOIN LATERAL (
+              SELECT COALESCE(MAX(session.attempt_number), 0) AS latest_attempt_number
+              FROM public.sim_session AS session
+              WHERE session.assignment_id::text = assignment.id::text
+            ) AS session_stats ON TRUE;
+          $view$;
+        ELSE
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_assignments AS
+            SELECT
+              id,
+              scenario_id,
+              trainee_id,
+              assigned_by AS trainer_id,
+              batch_id,
+              max_attempts,
+              trainer_notes,
+              is_active,
+              assigned_at,
+              updated_at,
+              0::integer AS latest_attempt_number,
+              0::integer AS retake_count,
+              NULL::text AS latest_session_id,
+              NULL::text AS latest_session_status,
+              NULL::boolean AS latest_pass_fail,
+              NULL::numeric AS latest_score,
+              NULL::timestamp AS latest_completed_at,
+              NULL::text AS latest_recording_url
+            FROM public.call_simulation_assignment;
+          $view$;
+        END IF;
       END IF;
 
       IF to_regclass('public.sim_session') IS NOT NULL THEN
-        EXECUTE $view$
-          CREATE OR REPLACE VIEW public.call_simulation_attempts AS
-          SELECT
-            id,
-            trainee_id,
-            scenario_id,
-            assignment_id,
-            assigned_by_id AS trainer_id,
-            batch_id,
-            status,
-            attempt_number,
-            max_attempts,
-            transcript,
-            transcript_log,
-            turn_logs,
-            audio_url,
-            audio_duration_seconds AS call_duration_seconds,
-            speech_to_text_accuracy,
-            grammar_score,
-            pronunciation_score,
-            pacing_score,
-            rate_of_speech,
-            dead_air_seconds,
-            sentiment_score,
-            keyword_compliance,
-            weighted_score AS final_score,
-            pass_fail,
-            ai_feedback,
-            coaching_notes,
-            trainer_verdict_status,
-            trainer_verdict_notes,
-            trainer_evaluated_by,
-            trainer_evaluated_at,
-            certificate_id,
-            started_at,
-            completed_at,
-            created_at,
-            updated_at
-          FROM public.sim_session;
-        $view$;
+        IF to_regclass('public.call_simulation_scores') IS NOT NULL THEN
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_attempts AS
+            SELECT
+              session.id,
+              session.trainee_id,
+              session.scenario_id,
+              session.assignment_id,
+              session.assigned_by_id AS trainer_id,
+              session.batch_id,
+              session.status,
+              session.attempt_number,
+              GREATEST(COALESCE(session.attempt_number, 1) - 1, 0) AS retake_count,
+              session.max_attempts,
+              session.transcript,
+              session.transcript_log,
+              session.turn_logs,
+              session.audio_url,
+              session.audio_url AS recording_url,
+              session.audio_duration_seconds AS call_duration_seconds,
+              session.speech_to_text_accuracy,
+              session.grammar_score,
+              session.pronunciation_score,
+              session.pacing_score,
+              session.rate_of_speech,
+              session.dead_air_seconds,
+              session.sentiment_score,
+              session.keyword_compliance,
+              session.weighted_score AS final_score,
+              session.pass_fail,
+              session.ai_feedback,
+              score.id AS supabase_score_record_id,
+              score.passing_score,
+              COALESCE(score.full_transcript, session.transcript) AS full_transcript,
+              score.feedback_report AS evaluation_payload,
+              session.coaching_notes,
+              session.trainer_verdict_status,
+              session.trainer_verdict_notes,
+              session.trainer_evaluated_by,
+              session.trainer_evaluated_at,
+              session.certificate_id,
+              session.started_at,
+              session.completed_at,
+              session.created_at,
+              session.updated_at
+            FROM public.sim_session AS session
+            LEFT JOIN public.call_simulation_scores AS score
+              ON score.session_id::text = session.id::text;
+          $view$;
+        ELSE
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_attempts AS
+            SELECT
+              session.id,
+              session.trainee_id,
+              session.scenario_id,
+              session.assignment_id,
+              session.assigned_by_id AS trainer_id,
+              session.batch_id,
+              session.status,
+              session.attempt_number,
+              GREATEST(COALESCE(session.attempt_number, 1) - 1, 0) AS retake_count,
+              session.max_attempts,
+              session.transcript,
+              session.transcript_log,
+              session.turn_logs,
+              session.audio_url,
+              session.audio_url AS recording_url,
+              session.audio_duration_seconds AS call_duration_seconds,
+              session.speech_to_text_accuracy,
+              session.grammar_score,
+              session.pronunciation_score,
+              session.pacing_score,
+              session.rate_of_speech,
+              session.dead_air_seconds,
+              session.sentiment_score,
+              session.keyword_compliance,
+              session.weighted_score AS final_score,
+              session.pass_fail,
+              session.ai_feedback,
+              NULL::text AS supabase_score_record_id,
+              NULL::numeric AS passing_score,
+              session.transcript AS full_transcript,
+              NULL::jsonb AS evaluation_payload,
+              session.coaching_notes,
+              session.trainer_verdict_status,
+              session.trainer_verdict_notes,
+              session.trainer_evaluated_by,
+              session.trainer_evaluated_at,
+              session.certificate_id,
+              session.started_at,
+              session.completed_at,
+              session.created_at,
+              session.updated_at
+            FROM public.sim_session AS session;
+          $view$;
+        END IF;
 
         EXECUTE $view$
           CREATE OR REPLACE VIEW public.call_simulation_recordings AS
           SELECT
-            id,
-            trainee_id,
-            scenario_id,
-            assignment_id,
-            batch_id,
-            audio_url AS recording_url,
-            audio_duration_seconds AS call_duration_seconds,
-            started_at,
-            completed_at,
-            created_at,
-            updated_at
-          FROM public.sim_session
-          WHERE audio_url IS NOT NULL;
+            session.id,
+            session.trainee_id,
+            session.scenario_id,
+            session.assignment_id,
+            session.batch_id,
+            session.audio_url AS recording_url,
+            session.audio_url AS recording_path,
+            session.audio_duration_seconds AS call_duration_seconds,
+            session.transcript,
+            session.transcript_log,
+            session.turn_logs,
+            session.weighted_score AS final_score,
+            session.pass_fail,
+            session.attempt_number,
+            GREATEST(COALESCE(session.attempt_number, 1) - 1, 0) AS retake_count,
+            session.started_at,
+            session.completed_at,
+            session.created_at,
+            session.updated_at
+          FROM public.sim_session AS session
+          WHERE session.audio_url IS NOT NULL;
         $view$;
       END IF;
 
       IF to_regclass('public.call_simulation_scores') IS NOT NULL THEN
-        EXECUTE $view$
-          CREATE OR REPLACE VIEW public.call_simulation_ai_evaluations AS
-          SELECT
-            id,
-            session_id,
-            scenario_id,
-            call_scenario_id,
-            trainee_id,
-            trainee_name,
-            scenario_topic,
-            total_score,
-            passing_score,
-            is_passed,
-            full_transcript,
-            feedback_report AS evaluation_payload,
-            certificate_id,
-            supabase_certificate_id,
-            created_at,
-            updated_at
-          FROM public.call_simulation_scores;
-        $view$;
+        IF to_regclass('public.sim_session') IS NOT NULL THEN
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_ai_evaluations AS
+            SELECT
+              score.id,
+              score.session_id,
+              score.scenario_id,
+              score.call_scenario_id,
+              score.trainee_id,
+              score.trainee_name,
+              score.scenario_topic,
+              score.total_score,
+              score.passing_score,
+              score.is_passed,
+              COALESCE(score.full_transcript, session.transcript) AS full_transcript,
+              session.transcript_log,
+              session.turn_logs,
+              session.audio_url AS recording_url,
+              session.audio_duration_seconds AS call_duration_seconds,
+              session.attempt_number,
+              GREATEST(COALESCE(session.attempt_number, 1) - 1, 0) AS retake_count,
+              session.max_attempts,
+              session.batch_id,
+              session.assignment_id,
+              session.coaching_notes,
+              session.trainer_verdict_status,
+              session.trainer_verdict_notes,
+              session.completed_at,
+              score.feedback_report AS evaluation_payload,
+              score.certificate_id,
+              score.supabase_certificate_id,
+              score.created_at,
+              score.updated_at
+            FROM public.call_simulation_scores AS score
+            LEFT JOIN public.sim_session AS session
+              ON session.id::text = score.session_id::text;
+          $view$;
+        ELSE
+          EXECUTE $view$
+            CREATE OR REPLACE VIEW public.call_simulation_ai_evaluations AS
+            SELECT
+              id,
+              session_id,
+              scenario_id,
+              call_scenario_id,
+              trainee_id,
+              trainee_name,
+              scenario_topic,
+              total_score,
+              passing_score,
+              is_passed,
+              full_transcript,
+              NULL::jsonb AS transcript_log,
+              NULL::jsonb AS turn_logs,
+              NULL::text AS recording_url,
+              NULL::integer AS call_duration_seconds,
+              NULL::integer AS attempt_number,
+              0::integer AS retake_count,
+              NULL::integer AS max_attempts,
+              NULL::text AS batch_id,
+              NULL::text AS assignment_id,
+              NULL::text AS coaching_notes,
+              NULL::text AS trainer_verdict_status,
+              NULL::text AS trainer_verdict_notes,
+              NULL::timestamp AS completed_at,
+              feedback_report AS evaluation_payload,
+              certificate_id,
+              supabase_certificate_id,
+              created_at,
+              updated_at
+            FROM public.call_simulation_scores;
+          $view$;
+        END IF;
       END IF;
 
       IF to_regclass('public.coaching_log') IS NOT NULL THEN
         EXECUTE $view$
           CREATE OR REPLACE VIEW public.call_simulation_coaching_notes AS
           SELECT
-            id,
-            coaching_id,
-            sim_session_id AS session_id,
-            trainer_id,
-            trainee_id,
-            batch_name,
-            lob,
-            coaching_minutes,
-            strengths,
-            opportunities,
-            action_plan,
-            target_date,
-            status,
-            competency_status,
-            trainer_remarks,
-            acknowledged_at,
-            created_at,
-            updated_at
-          FROM public.coaching_log;
+            coaching.id,
+            coaching.coaching_id,
+            coaching.sim_session_id AS session_id,
+            coaching.trainer_id,
+            coaching.trainee_id,
+            coaching.batch_name,
+            coaching.lob,
+            coaching.coaching_minutes,
+            coaching.strengths,
+            coaching.opportunities,
+            coaching.action_plan,
+            coaching.target_date,
+            coaching.status,
+            coaching.competency_status,
+            coaching.trainer_remarks,
+            coaching.acknowledged_at,
+            session.scenario_id,
+            session.batch_id,
+            session.audio_url AS recording_url,
+            session.transcript,
+            session.attempt_number,
+            session.pass_fail,
+            session.trainer_verdict_status,
+            session.completed_at,
+            coaching.created_at,
+            coaching.updated_at
+          FROM public.coaching_log AS coaching
+          LEFT JOIN public.sim_session AS session
+            ON session.id::text = coaching.sim_session_id::text;
         $view$;
       ELSIF to_regclass('public.coaching_logs') IS NOT NULL THEN
         EXECUTE $view$
           CREATE OR REPLACE VIEW public.call_simulation_coaching_notes AS
           SELECT
-            id,
-            coaching_id,
-            session_id,
-            trainer_id,
-            trainee_id,
+            coaching.id,
+            coaching.coaching_id,
+            coaching.session_id,
+            coaching.trainer_id,
+            coaching.trainee_id,
             NULL::text AS batch_name,
             NULL::text AS lob,
             NULL::integer AS coaching_minutes,
-            strengths,
-            opportunities,
-            action_plan,
-            target_date::timestamp AS target_date,
-            status,
+            coaching.strengths,
+            coaching.opportunities,
+            coaching.action_plan,
+            coaching.target_date::timestamp AS target_date,
+            coaching.status,
             NULL::text AS competency_status,
             NULL::text AS trainer_remarks,
-            acknowledged_at,
-            created_at,
-            updated_at
-          FROM public.coaching_logs;
+            coaching.acknowledged_at,
+            session.scenario_id,
+            session.batch_id,
+            session.audio_url AS recording_url,
+            session.transcript,
+            session.attempt_number,
+            session.pass_fail,
+            session.trainer_verdict_status,
+            session.completed_at,
+            coaching.created_at,
+            coaching.updated_at
+          FROM public.coaching_logs AS coaching
+          LEFT JOIN public.sim_session AS session
+            ON session.id::text = coaching.session_id::text;
         $view$;
       END IF;
     END $$;

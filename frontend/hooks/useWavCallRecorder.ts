@@ -1,5 +1,6 @@
 'use client';
 
+import lamejs from 'lamejs';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface WavCallRecordingResult {
@@ -9,25 +10,16 @@ export interface WavCallRecordingResult {
   fileExtension: string;
 }
 
-type CaptureMode = 'media-recorder' | 'manual-wav' | null;
+type CaptureMode = 'media-recorder' | 'manual-mp3' | null;
 
 type CaptureFormat = {
   mimeType: string;
   fileExtension: string;
 };
 
-const COMPRESSED_CAPTURE_FORMATS: CaptureFormat[] = [
-  { mimeType: 'audio/mpeg', fileExtension: 'mp3' },
-  { mimeType: 'audio/mp4', fileExtension: 'm4a' },
-  { mimeType: 'audio/webm;codecs=opus', fileExtension: 'webm' },
-  { mimeType: 'audio/webm', fileExtension: 'webm' },
-  { mimeType: 'audio/ogg;codecs=opus', fileExtension: 'ogg' },
-  { mimeType: 'audio/ogg', fileExtension: 'ogg' },
-];
-
-const MANUAL_WAV_FORMAT: CaptureFormat = {
-  mimeType: 'audio/wav',
-  fileExtension: 'wav',
+const MP3_CAPTURE_FORMAT: CaptureFormat = {
+  mimeType: 'audio/mpeg',
+  fileExtension: 'mp3',
 };
 
 function normalizeMimeType(value?: string | null) {
@@ -65,10 +57,9 @@ function resolvePreferredCaptureFormat() {
     return null;
   }
 
-  return (
-    COMPRESSED_CAPTURE_FORMATS.find((candidate) => MediaRecorder.isTypeSupported(candidate.mimeType))
-    || null
-  );
+  return MediaRecorder.isTypeSupported(MP3_CAPTURE_FORMAT.mimeType)
+    ? MP3_CAPTURE_FORMAT
+    : null;
 }
 
 function mergeBuffers(chunks: Float32Array[]) {
@@ -80,12 +71,6 @@ function mergeBuffers(chunks: Float32Array[]) {
     offset += chunk.length;
   });
   return output;
-}
-
-function writeString(view: DataView, offset: number, value: string) {
-  for (let index = 0; index < value.length; index += 1) {
-    view.setUint8(offset + index, value.charCodeAt(index));
-  }
 }
 
 function getCaptureErrorMessage(error: unknown) {
@@ -107,32 +92,35 @@ function getCaptureErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Unable to start the call recorder.';
 }
 
-function encodeWav(samples: Float32Array, sampleRate: number) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * 2, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, samples.length * 2, true);
-
-  let offset = 44;
+function convertFloat32ToInt16(samples: Float32Array) {
+  const output = new Int16Array(samples.length);
   for (let index = 0; index < samples.length; index += 1) {
     const sample = Math.max(-1, Math.min(1, samples[index] || 0));
-    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-    offset += 2;
+    output[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+  }
+  return output;
+}
+
+function encodeMp3(samples: Float32Array, sampleRate: number) {
+  const pcmSamples = convertFloat32ToInt16(samples);
+  const encoder = new lamejs.Mp3Encoder(1, sampleRate, 128);
+  const blockSize = 1152;
+  const mp3Chunks: ArrayBuffer[] = [];
+
+  for (let offset = 0; offset < pcmSamples.length; offset += blockSize) {
+    const pcmChunk = pcmSamples.subarray(offset, offset + blockSize);
+    const encodedChunk = encoder.encodeBuffer(pcmChunk);
+    if (encodedChunk.length > 0) {
+      mp3Chunks.push(Uint8Array.from(encodedChunk).buffer as ArrayBuffer);
+    }
   }
 
-  return new Blob([view], { type: MANUAL_WAV_FORMAT.mimeType });
+  const flushedChunk = encoder.flush();
+  if (flushedChunk.length > 0) {
+    mp3Chunks.push(Uint8Array.from(flushedChunk).buffer as ArrayBuffer);
+  }
+
+  return new Blob(mp3Chunks, { type: MP3_CAPTURE_FORMAT.mimeType });
 }
 
 export function useWavCallRecorder() {
@@ -150,7 +138,7 @@ export function useWavCallRecorder() {
   const mediaChunksRef = useRef<Blob[]>([]);
   const recordedSamplesRef = useRef(0);
   const captureModeRef = useRef<CaptureMode>(null);
-  const captureFormatRef = useRef<CaptureFormat>(MANUAL_WAV_FORMAT);
+  const captureFormatRef = useRef<CaptureFormat>(MP3_CAPTURE_FORMAT);
   const captureStartedAtRef = useRef<number | null>(null);
   const pausedRef = useRef(false);
 
@@ -245,6 +233,9 @@ export function useWavCallRecorder() {
       }
 
       const audioContext = new AudioContextClass();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume().catch(() => undefined);
+      }
       const source = audioContext.createMediaStreamSource(stream);
       const mixGain = audioContext.createGain();
       const recordingDestination = audioContext.createMediaStreamDestination();
@@ -295,8 +286,8 @@ export function useWavCallRecorder() {
         processorRef.current = processor;
         gainRef.current = monitorGain;
         sampleRateRef.current = audioContext.sampleRate || 44100;
-        captureModeRef.current = 'manual-wav';
-        captureFormatRef.current = MANUAL_WAV_FORMAT;
+        captureModeRef.current = 'manual-mp3';
+        captureFormatRef.current = MP3_CAPTURE_FORMAT;
       }
 
       setIsCapturing(true);
@@ -397,22 +388,39 @@ export function useWavCallRecorder() {
 
     const durationSeconds = recordedSamplesRef.current / Math.max(sampleRateRef.current, 1);
     const mergedSamples = mergeBuffers(chunksRef.current);
-    const blob = encodeWav(mergedSamples, sampleRateRef.current);
 
-    await cleanup();
-    chunksRef.current = [];
-    mediaChunksRef.current = [];
-    recordedSamplesRef.current = 0;
-    pausedRef.current = false;
-    setIsCapturing(false);
-    setIsPaused(false);
+    try {
+      const blob = encodeMp3(mergedSamples, sampleRateRef.current);
 
-    return {
-      blob,
-      durationSeconds,
-      mimeType: MANUAL_WAV_FORMAT.mimeType,
-      fileExtension: MANUAL_WAV_FORMAT.fileExtension,
-    } satisfies WavCallRecordingResult;
+      await cleanup();
+      chunksRef.current = [];
+      mediaChunksRef.current = [];
+      recordedSamplesRef.current = 0;
+      pausedRef.current = false;
+      setIsCapturing(false);
+      setIsPaused(false);
+
+      return {
+        blob,
+        durationSeconds,
+        mimeType: MP3_CAPTURE_FORMAT.mimeType,
+        fileExtension: MP3_CAPTURE_FORMAT.fileExtension,
+      } satisfies WavCallRecordingResult;
+    } catch (encodeError) {
+      await cleanup();
+      chunksRef.current = [];
+      mediaChunksRef.current = [];
+      recordedSamplesRef.current = 0;
+      pausedRef.current = false;
+      setIsCapturing(false);
+      setIsPaused(false);
+
+      const message = encodeError instanceof Error
+        ? encodeError.message
+        : 'Unable to encode the final call recording as MP3.';
+      setError(message);
+      throw new Error(message);
+    }
   }, [cleanup, isCapturing]);
 
   const discardCapture = useCallback(async () => {

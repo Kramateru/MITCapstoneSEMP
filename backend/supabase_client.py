@@ -456,9 +456,10 @@ class SupabaseClient:
         session_id: str,
         filename: str,
         content_type: Optional[str] = None,
+        save_local_backup: bool = False,
     ) -> Optional[str]:
-        """Upload a Call Simulation recording using the recordings/{trainee}/{scenario}/... layout."""
-        relative_path = f"call-simulation-recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+        """Upload a Call Simulation recording using the call-simulations/recordings/{trainee}/{scenario}/... layout."""
+        relative_path = f"call-simulations/recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
 
         if not self.is_available:
             if self._allow_explicit_local_media_fallback():
@@ -470,14 +471,21 @@ class SupabaseClient:
             logger.warning("Supabase not available. Call Simulation audio upload was rejected.")
             return None
 
-        path = f"recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+        path = f"call-simulations/recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
         public_url = self._upload_bytes_to_bucket(
             bucket_name=self.call_simulation_bucket_name,
             path=path,
             file_data=file_data,
-            content_type=content_type or "audio/webm",
+            content_type=content_type or "audio/mpeg",
         )
         if public_url:
+            if save_local_backup:
+                local_backup_path = self._write_local_media_copy(
+                    relative_path=relative_path,
+                    file_data=file_data,
+                )
+                if local_backup_path:
+                    logger.info("Saved Call Simulation local backup copy: %s", local_backup_path)
             logger.info(f"Call Simulation audio uploaded: {path}")
             return public_url
 
@@ -503,6 +511,7 @@ class SupabaseClient:
         session_id: str,
         filename: str,
         content_type: Optional[str] = None,
+        save_local_backup: bool = False,
     ) -> Optional[str]:
         """Backward-compatible alias for retired Call Simulation upload call sites."""
         return self.upload_call_simulation_audio(
@@ -512,6 +521,7 @@ class SupabaseClient:
             session_id=session_id,
             filename=filename,
             content_type=content_type,
+            save_local_backup=save_local_backup,
         )
 
     def upload_call_simulation_asset(
