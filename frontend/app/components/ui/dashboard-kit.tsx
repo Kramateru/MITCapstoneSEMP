@@ -72,18 +72,24 @@ export function DashboardHero({
   className?: string;
 }) {
   return (
-    <section className={cn("dashboard-hero p-5 sm:p-7 lg:p-8", className)}>
-      <div className="relative z-10 flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+    <section className={cn("dashboard-hero p-4 sm:p-6 lg:p-8", className)}>
+      <div className="relative z-10 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3 reading-width">
           {eyebrow ? <span className="dashboard-kicker">{eyebrow}</span> : null}
           <div className="space-y-2">
-            <h2>{title}</h2>
+            <h2 className="text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl xl:text-[2.45rem]">
+              {title}
+            </h2>
             <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-[0.98rem]">
               {description}
             </p>
           </div>
         </div>
-        {actions ? <div className="flex w-full flex-wrap items-center gap-2 xl:w-auto xl:justify-end">{actions}</div> : null}
+        {actions ? (
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:w-auto xl:justify-end">
+            {actions}
+          </div>
+        ) : null}
       </div>
       {children ? <div className="relative z-10 mt-6">{children}</div> : null}
     </section>
@@ -109,16 +115,18 @@ export function MetricCard({
 
   return (
     <Card className={cn("metric-card border-border/75 bg-gradient-to-br p-0", toneStyle.surface, className)}>
-      <CardContent className="flex items-start justify-between gap-4 p-5 sm:p-6">
-        <div className="space-y-2">
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-6">
+        <div className="min-w-0 space-y-2">
           <p className="text-[0.72rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
             {label}
           </p>
-          <p className="text-[1.95rem] font-bold tracking-[-0.03em] text-foreground sm:text-[2.15rem]">{value}</p>
+          <p className="break-words text-[1.7rem] font-bold tracking-[-0.03em] text-foreground sm:text-[2.15rem]">
+            {value}
+          </p>
           {hint ? <p className="max-w-[30ch] text-sm leading-6 text-muted-foreground">{hint}</p> : null}
         </div>
         {icon ? (
-          <div className={cn("rounded-2xl p-3 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
+          <div className={cn("self-start rounded-2xl p-3 shadow-sm ring-1 sm:self-auto", toneStyle.icon, toneStyle.ring)}>
             {icon}
           </div>
         ) : null}
@@ -150,7 +158,7 @@ export function SectionPanel({
             <CardTitle>{title}</CardTitle>
             {description ? <CardDescription>{description}</CardDescription> : null}
           </div>
-          {action ? <div className="shrink-0">{action}</div> : null}
+          {action ? <div className="w-full shrink-0 lg:w-auto">{action}</div> : null}
         </div>
       </CardHeader>
       <CardContent className={cn("pt-5 sm:pt-6", contentClassName)}>{children}</CardContent>
@@ -181,24 +189,24 @@ export function ActionCard({
     <Link
       href={href}
       className={cn(
-        "group data-card block p-5 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)]",
+        "group data-card block p-4 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-5",
         className,
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
           {icon ? (
             <div className={cn("mt-0.5 rounded-2xl p-3 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
               {icon}
             </div>
           ) : null}
-          <div className="space-y-1.5">
+          <div className="min-w-0 space-y-1.5">
             <h3 className="text-base font-semibold leading-6 text-foreground">{title}</h3>
             <p className="text-sm leading-6 text-muted-foreground">{description}</p>
           </div>
         </div>
         {trailing ?? (
-          <ArrowRight className={cn("mt-1 size-4 shrink-0 text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5", toneStyle.accentText)} />
+          <ArrowRight className={cn("mt-1 size-4 shrink-0 self-end text-muted-foreground transition-transform duration-200 group-hover:translate-x-0.5 sm:self-auto", toneStyle.accentText)} />
         )}
       </div>
     </Link>
@@ -240,7 +248,9 @@ export function SoftStat({
   return (
     <div className={cn("soft-panel px-4 py-4", className)}>
       <p className="text-[0.72rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">{label}</p>
-      <p className={cn("mt-2 text-xl font-bold tracking-[-0.02em]", toneStyle.accentText)}>{value}</p>
+      <p className={cn("mt-2 break-words text-lg font-bold tracking-[-0.02em] sm:text-xl", toneStyle.accentText)}>
+        {value}
+      </p>
     </div>
   );
 }

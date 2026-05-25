@@ -306,7 +306,7 @@ export function DashboardLayout({
 
       {/* Sidebar */}
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-[19.5rem] max-w-[92vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-24' : 'lg:w-[19.5rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
+        className={`fixed inset-y-0 left-0 z-50 w-[20.5rem] max-w-[94vw] border-r border-sidebar-border bg-sidebar text-sidebar-foreground shadow-[0_24px_60px_-30px_rgba(15,23,42,0.35)] backdrop-blur transition-transform duration-300 transform ${isMinifiedSidebar ? 'lg:w-[6.25rem]' : 'lg:w-[20.5rem]'} lg:max-w-none ${desktopSidebarStateClass} ${
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{
@@ -316,28 +316,34 @@ export function DashboardLayout({
       >
         <div className="h-full flex flex-col">
           {/* Logo Section */}
-          <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6">
-            <div className={`flex items-start gap-4 ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="flex h-[4.75rem] w-[4.75rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.55rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-24 sm:w-24">
+          <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6 lg:px-6 lg:py-7">
+            <div className={`flex items-start gap-[1.125rem] ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
+              <div className="flex h-[5.15rem] w-[5.15rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.65rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-[5.9rem] sm:w-[5.9rem]">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
                   className="h-full w-full object-contain"
                 />
               </div>
-              <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                <p className="text-[1rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/88">
+              <div className={`min-w-0 space-y-1.5 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+                <p className="text-[0.74rem] font-semibold uppercase tracking-[0.22em] text-sidebar-foreground/55">
+                  {roleLabelMap[resolvedUserRole]}
+                </p>
+                <p className="text-[1.05rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/90">
                   St. Peter Velle
                 </p>
-                <p className="mt-1 text-[0.96rem] leading-6 text-sidebar-foreground/70">
+                <p className="text-[0.95rem] leading-6 text-sidebar-foreground/72">
                   Speech-Enabled BPO Platform
+                </p>
+                <p className="text-sm leading-6 text-sidebar-foreground/54">
+                  {roleWorkspaceHintMap[resolvedUserRole]}
                 </p>
               </div>
             </div>
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6">
+          <nav className="flex-1 space-y-6 overflow-y-auto px-3.5 py-6 sm:px-[1.125rem] sm:py-6">
             {groupedSidebarItems.map((group) => (
               <div key={group.section} className="space-y-2.5">
                 {!isMinifiedSidebar ? (
@@ -376,7 +382,7 @@ export function DashboardLayout({
           </nav>
 
           {/* Logout Button */}
-          <div className="border-t border-sidebar-border p-4">
+          <div className="border-t border-sidebar-border p-4 sm:p-[1.125rem]">
             <button
               onClick={handleLogout}
               className="flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3.5 text-[0.98rem] text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -394,11 +400,11 @@ export function DashboardLayout({
         <header className={`workspace-topbar flex flex-col gap-4 border-b border-border/80 px-3 py-3.5 shadow-sm sm:px-6 sm:py-4 lg:flex-row lg:items-center lg:justify-between lg:px-7 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
-          <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
             <button
               type="button"
               onClick={() => setSidebarOpen((prev) => !prev)}
-              className={`inline-flex items-center justify-center rounded-xl border border-border bg-background p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${
+              className={`inline-flex items-center justify-center rounded-2xl border border-border bg-background p-2.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${
                 desktopMenuEnabled ? 'lg:inline-flex' : 'lg:hidden'
               }`}
               aria-label={sidebarOpen ? 'Close navigation menu' : 'Open navigation menu'}
@@ -407,15 +413,15 @@ export function DashboardLayout({
               {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
 
-            <div className="flex min-w-0 items-start gap-3 sm:gap-4">
-              <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-[1.35rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-20 sm:w-20 lg:h-[5rem] lg:w-[5rem]">
+            <div className="flex min-w-0 items-start gap-3.5 sm:gap-[1.125rem]">
+              <div className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-[5.2rem] sm:w-[5.2rem] lg:h-[5.6rem] lg:w-[5.6rem]">
                 <img
                   src="/st-peter-seal.png"
                   alt="St. Peter Velle Technical Training Center"
                   className="h-full w-full object-contain"
                 />
               </div>
-              <div className="min-w-0 space-y-1">
+              <div className="min-w-0 space-y-1.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
                     {roleLabelMap[resolvedUserRole]}
@@ -424,13 +430,16 @@ export function DashboardLayout({
                     Live Workspace
                   </Badge>
                 </div>
-                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80 sm:block">
+                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80 sm:block">
+                  St. Peter Velle Technical Training Center
+                </p>
+                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/72 lg:block">
                   Speech-Enabled BPO Platform
                 </p>
-                <h1 className="line-clamp-2 text-[1.12rem] font-bold tracking-[-0.02em] text-foreground sm:text-[1.28rem] lg:line-clamp-1 lg:text-[1.45rem] xl:text-[1.68rem]">
+                <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-[-0.025em] text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
                   {currentPageLabel}
                 </h1>
-                <p className="hidden text-sm leading-6 text-muted-foreground sm:block">
+                <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
                   {roleDescriptionMap[resolvedUserRole]}
                 </p>
                 <p className="text-xs leading-5 text-muted-foreground/85 sm:hidden">
@@ -441,7 +450,7 @@ export function DashboardLayout({
           </div>
 
           {/* Right Section */}
-          <div className="flex w-full flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-white/80 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:flex-nowrap sm:justify-end sm:gap-4 sm:px-3.5 lg:gap-5">
+          <div className="flex w-full self-stretch flex-wrap items-center justify-between gap-3 rounded-[1.35rem] border border-border/70 bg-white/84 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:min-w-[18rem] sm:self-auto sm:flex-nowrap sm:justify-end sm:gap-4 sm:px-3.5 lg:min-w-[19rem] lg:gap-5">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>

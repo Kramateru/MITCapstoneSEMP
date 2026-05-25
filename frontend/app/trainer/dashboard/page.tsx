@@ -23,6 +23,7 @@ import {
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import { Progress } from '@/app/components/ui/progress';
+import type { TrainerLearningInsightsResponse } from '@/app/lib/trainer-learning-insights';
 import { trainerSidebarItems } from '@/app/trainer/nav';
 import { getBackendWebSocketUrl } from '@/app/utils/ws';
 
@@ -45,8 +46,15 @@ interface TrainerStats {
   total_trainees: number;
   total_batches: number;
   total_sessions: number;
+  total_completed_activities?: number;
+  total_assigned_activities?: number;
+  total_pending_activities?: number;
+  total_failed_activities?: number;
   average_score: number;
+  completion_rate?: number;
+  pass_rate?: number;
   pending_reviews: number;
+  intervention_needed_count?: number;
 }
 
 interface CoachingCompliance {
@@ -103,6 +111,9 @@ interface BatchSnapshot extends BatchItem {
   progress: number;
   total_sessions: number;
   average_score: number;
+  pending_items: number;
+  failed_items: number;
+  passing_rate: number;
 }
 
 function formatDateTime(value?: string | null) {
@@ -177,7 +188,7 @@ function batchHealth(batch: BatchSnapshot) {
     };
   }
 
-  if (batch.average_score < 70 || batch.progress < 50) {
+  if (batch.average_score < 70 || batch.progress < 50 || batch.failed_items > 0 || batch.passing_rate < 70) {
     return {
       label: 'Needs attention',
       variant: 'warning' as const,
@@ -201,6 +212,9 @@ function batchPriority(batch: BatchSnapshot) {
   }
   if (batch.progress < 50) {
     priority += 60;
+  }
+  if (batch.failed_items > 0) {
+    priority += 45;
   }
 
   return priority;
@@ -230,16 +244,26 @@ export default function TrainerDashboardPage() {
       }
 
       const authHeaders = { Authorization: `Bearer ${token}` };
-      const [statsRes, coachingHubRes, coachingRes, batchesRes] = await Promise.all([
+      const [statsRes, insightsRes, coachingHubRes, coachingRes, batchesRes] = await Promise.all([
         fetch('/api/trainer/stats', { headers: authHeaders, cache: 'no-store' }),
+        fetch('/api/analytics/trainer/learning-insights', { headers: authHeaders, cache: 'no-store' }),
         fetch('/api/certification/coaching/hub', { headers: authHeaders, cache: 'no-store' }),
         fetch('/api/certification/coaching/compliance', { headers: authHeaders, cache: 'no-store' }),
         fetch('/api/trainer/batches', { headers: authHeaders, cache: 'no-store' }),
       ]);
 
+      const batchMetricsById = new Map<string, TrainerLearningInsightsResponse['batch_comparison'][number]>();
+
       if (statsRes.ok) {
         const statsData = await statsRes.json();
         setStats(statsData);
+      }
+
+      if (insightsRes.ok) {
+        const insightsData: TrainerLearningInsightsResponse = await insightsRes.json();
+        for (const row of insightsData.batch_comparison || []) {
+          batchMetricsById.set(row.batch_id, row);
+        }
       }
 
       if (coachingHubRes.ok) {
@@ -274,51 +298,19 @@ export default function TrainerDashboardPage() {
           .sort((left, right) => (right.users_count || 0) - (left.users_count || 0))
           .slice(0, 6);
 
-        const hydratedBatches = await Promise.all(
-          priorityBatches.map(async (batch) => {
-            try {
-              const performanceRes = await fetch(`/api/trainer/batch-performance/${batch.id}`, {
-                headers: authHeaders,
-                cache: 'no-store',
-              });
+        const hydratedBatches = priorityBatches.map((batch) => {
+          const performanceData = batchMetricsById.get(batch.id);
 
-              if (!performanceRes.ok) {
-                return {
-                  ...batch,
-                  progress: 0,
-                  total_sessions: 0,
-                  average_score: 0,
-                } satisfies BatchSnapshot;
-              }
-
-              const performanceData = await performanceRes.json();
-              const userPerformance = performanceData.user_performance || [];
-              const activeUsers = userPerformance.filter(
-                (row: { session_count?: number }) => (row.session_count || 0) > 0,
-              ).length;
-              const averageScore = userPerformance.length
-                ? userPerformance.reduce(
-                    (total: number, row: { avg_score?: number }) => total + Number(row.avg_score || 0),
-                    0,
-                  ) / userPerformance.length
-                : 0;
-
-              return {
-                ...batch,
-                progress: batch.users_count ? Math.round((activeUsers / batch.users_count) * 100) : 0,
-                total_sessions: performanceData.total_sessions || 0,
-                average_score: Number(averageScore.toFixed(1)),
-              } satisfies BatchSnapshot;
-            } catch {
-              return {
-                ...batch,
-                progress: 0,
-                total_sessions: 0,
-                average_score: 0,
-              } satisfies BatchSnapshot;
-            }
-          }),
-        );
+          return {
+            ...batch,
+            progress: Number(performanceData?.completion_rate || 0),
+            total_sessions: Number(performanceData?.completed_items || 0),
+            average_score: Number(Number(performanceData?.overall_score || 0).toFixed(1)),
+            pending_items: Number(performanceData?.pending_items || 0),
+            failed_items: Number(performanceData?.failed_items || 0),
+            passing_rate: Number(performanceData?.pass_rate || 0),
+          } satisfies BatchSnapshot;
+        });
 
         setBatches(hydratedBatches);
       }
@@ -347,15 +339,23 @@ export default function TrainerDashboardPage() {
         const message = JSON.parse(event.data) as {
           type?: string;
           session?: { user_name?: string; scenario_title?: string };
-          details?: { trainee_name?: string; scenario_title?: string };
+          details?: { trainee_name?: string; scenario_title?: string; module_title?: string; assessment_title?: string };
         };
 
         if (
           message.type === 'practice_session_completed'
           || message.type === 'call_simulation_completed'
+          || message.type === 'module_completed'
+          || message.type === 'assessment_submitted'
         ) {
+          const activityLabel =
+            message.details?.module_title
+            || message.details?.assessment_title
+            || message.session?.scenario_title
+            || message.details?.scenario_title
+            || 'an activity';
           setLiveStatus(
-            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} completed ${message.session?.scenario_title || message.details?.scenario_title || 'a scenario'}.`,
+            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} updated ${activityLabel}.`,
           );
           void fetchTrainerData();
         }
@@ -453,9 +453,9 @@ export default function TrainerDashboardPage() {
             tone="violet"
           />
           <MetricCard
-            label="Session Volume"
-            value={stats?.total_sessions ?? 0}
-            hint="Recorded trainee activity sessions"
+            label="Completed Activities"
+            value={stats?.total_completed_activities ?? stats?.total_sessions ?? 0}
+            hint={`${stats?.total_assigned_activities ?? 0} assigned activities across modules, assessments, and mock calls`}
             icon={<TrendingUp className="size-5" />}
             tone="green"
           />
@@ -467,16 +467,16 @@ export default function TrainerDashboardPage() {
             tone="blue"
           />
           <MetricCard
-            label="Needs Coaching"
-            value={pendingReviewCount}
-            hint="Completed mock calls still waiting for trainer review"
+            label="Pending Activities"
+            value={stats?.total_pending_activities ?? 0}
+            hint={`${(stats?.completion_rate ?? 0).toFixed(1)}% completion rate across assigned work`}
             icon={<AlertCircle className="size-5" />}
             tone="amber"
           />
           <MetricCard
-            label="Retake Required"
-            value={coachingStats?.not_competent_logs ?? 0}
-            hint={`${coachingStats?.pending_logs ?? 0} coaching log(s) still awaiting acknowledgement`}
+            label="Intervention Needed"
+            value={stats?.intervention_needed_count ?? 0}
+            hint={`${stats?.total_failed_activities ?? 0} failed activities | ${(stats?.pass_rate ?? 0).toFixed(1)}% passing rate`}
             icon={<AlertCircle className="size-5" />}
             tone="rose"
           />
@@ -522,16 +522,21 @@ export default function TrainerDashboardPage() {
 
                       <div className="mt-5 grid gap-3 sm:grid-cols-3">
                         <SoftStat label="Trainees" value={batch.users_count} tone="blue" />
-                        <SoftStat label="Sessions" value={batch.total_sessions} tone="violet" />
+                        <SoftStat label="Completed" value={batch.total_sessions} tone="violet" />
                         <SoftStat label="Avg Score" value={`${batch.average_score.toFixed(1)}%`} tone="green" />
                       </div>
 
                       <div className="mt-5 space-y-3">
                         <div className="flex items-center justify-between text-sm text-muted-foreground">
-                          <span className="font-medium">Engagement</span>
-                          <span className="font-semibold text-foreground">{batch.progress}%</span>
+                          <span className="font-medium">Completion Rate</span>
+                          <span className="font-semibold text-foreground">{batch.progress.toFixed(1)}%</span>
                         </div>
                         <Progress value={batch.progress} />
+                        <div className="flex flex-wrap gap-3 text-xs text-muted-foreground">
+                          <span>{batch.pending_items} pending</span>
+                          <span>{batch.failed_items} failed</span>
+                          <span>{batch.passing_rate.toFixed(1)}% passing</span>
+                        </div>
                       </div>
                     </div>
                   );

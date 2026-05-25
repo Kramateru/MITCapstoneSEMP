@@ -39,12 +39,16 @@ import {
   type AdminLearningFilterState,
   type AdminLearningInsightsResponse,
 } from '@/app/lib/admin-learning-insights'
+import { useLiveRefresh } from '@/app/hooks/useLiveRefresh'
 import { apiFetch, downloadApiFile } from '@/app/utils/api'
+import { getBackendWebSocketUrl } from '@/app/utils/ws'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { AiInsightBoard, type AiInsightSection } from '../ui/ai-insight-board'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { ChartCountLabelList, ChartPercentLabelList } from '../ui/chart-data-labels'
 import { Progress } from '../ui/progress'
+import { ReportNavigation, type ReportNavigationItem } from '../ui/report-navigation'
 import { ScrollArea } from '../ui/scroll-area'
 import {
   Table,
@@ -56,7 +60,7 @@ import {
 } from '../ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
 
-const AUTO_REFRESH_MS = 75_000
+const AUTO_REFRESH_MS = 20_000
 
 function formatPercent(value?: number | null) {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -178,34 +182,17 @@ function SummaryCard({
 }) {
   return (
     <Card className="border-slate-200 shadow-sm">
-      <CardContent className="flex items-center justify-between gap-4 p-5">
-        <div>
-          <div className="text-sm text-slate-500">{title}</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-950">{value}</div>
-          <div className="mt-2 text-xs text-slate-500">{helper}</div>
+      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-slate-500">{title}</div>
+          <div className="mt-2 break-words text-2xl font-semibold text-slate-950 sm:text-3xl">{value}</div>
+          <div className="mt-2 text-xs leading-5 text-slate-500">{helper}</div>
         </div>
-        <div className="rounded-2xl bg-slate-100 p-3 text-slate-700">
+        <div className="self-start rounded-2xl bg-slate-100 p-3 text-slate-700">
           <Icon className="size-5" />
         </div>
       </CardContent>
     </Card>
-  )
-}
-
-function AnalysisColumn({
-  title,
-  rows,
-}: {
-  title: string
-  rows: string[]
-}) {
-  return (
-    <div className="rounded-2xl border bg-white p-4">
-      <div className="text-sm font-semibold text-slate-950">{title}</div>
-      <div className="mt-3 space-y-2 text-sm leading-6 text-slate-600">
-        {rows.length ? rows.map((row) => <p key={row}>{row}</p>) : <p>No insight available yet.</p>}
-      </div>
-    </div>
   )
 }
 
@@ -219,6 +206,7 @@ function ScopeBadge({ label }: { label: string }) {
 
 export function AdminLearningReportWorkspace() {
   const [filters, setFilters] = useState<AdminLearningFilterState>(EMPTY_ADMIN_LEARNING_FILTERS)
+  const [activeTab, setActiveTab] = useState('overview')
   const [data, setData] = useState<AdminLearningInsightsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -226,6 +214,7 @@ export function AdminLearningReportWorkspace() {
   const [error, setError] = useState<string | null>(null)
   const [downloadNotice, setDownloadNotice] = useState<{ tone: 'warning' | 'error'; message: string } | null>(null)
   const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null)
+  const [liveStatus, setLiveStatus] = useState('Connecting to live admin reports...')
 
   const requestUrl = useMemo(() => buildAdminLearningInsightsUrl(filters), [filters])
   const pdfUrl = useMemo(() => buildAdminLearningInsightsPdfUrl(filters), [filters])
@@ -258,12 +247,62 @@ export function AdminLearningReportWorkspace() {
     void loadReport('initial')
   }, [loadReport])
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadReport('auto')
-    }, AUTO_REFRESH_MS)
+  useLiveRefresh({
+    intervalMs: AUTO_REFRESH_MS,
+    onRefresh: () => loadReport('auto'),
+  })
 
-    return () => window.clearInterval(timer)
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    if (!token) {
+      return undefined
+    }
+
+    const socket = new WebSocket(
+      getBackendWebSocketUrl(`/api/trainer/live-updates?token=${encodeURIComponent(token)}`),
+    )
+
+    socket.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data) as {
+          type?: string
+          session?: { user_name?: string; scenario_title?: string }
+          details?: { trainee_name?: string; scenario_title?: string; module_title?: string; assessment_title?: string }
+        }
+
+        if (
+          message.type === 'practice_session_completed'
+          || message.type === 'call_simulation_completed'
+          || message.type === 'module_completed'
+          || message.type === 'assessment_submitted'
+        ) {
+          const activityLabel =
+            message.details?.module_title
+            || message.details?.assessment_title
+            || message.session?.scenario_title
+            || message.details?.scenario_title
+            || 'an activity'
+          setLiveStatus(
+            `${message.session?.user_name || message.details?.trainee_name || 'A trainee'} updated ${activityLabel}. Refreshing admin reports...`,
+          )
+          void loadReport('refresh')
+        }
+      } catch (parseError) {
+        console.error('Admin reports live update parse error:', parseError)
+      }
+    }
+
+    socket.onopen = () => {
+      setLiveStatus('Live admin report websocket connected.')
+    }
+
+    socket.onclose = () => {
+      setLiveStatus('Live admin report websocket disconnected. Auto-refresh remains active.')
+    }
+
+    return () => {
+      socket.close()
+    }
   }, [loadReport])
 
   const summary = data?.summary
@@ -321,6 +360,135 @@ export function AdminLearningReportWorkspace() {
   const callSimulationKpis = useMemo(() => data?.call_simulation_kpi_breakdown || [], [data?.call_simulation_kpi_breakdown])
   const coachingNotes = useMemo(() => data?.coaching_notes_summary || [], [data?.coaching_notes_summary])
   const coachingSummary = data?.coaching_summary || null
+  const adminAiSections = useMemo<AiInsightSection[]>(
+    () => [
+      {
+        title: 'Strengths',
+        items: data?.ai_analysis.strengths || data?.ai_analysis.trainer_effectiveness || [],
+        tone: 'emerald',
+        emptyMessage: 'No admin-scope strengths were generated yet.',
+      },
+      {
+        title: 'Opportunities For Improvement',
+        items: data?.ai_analysis.opportunities || [],
+        tone: 'sky',
+        emptyMessage: 'No improvement opportunity was generated yet.',
+      },
+      {
+        title: 'Weak Modules / Categories',
+        items: data?.ai_analysis.weak_modules_categories || data?.ai_analysis.module_and_assessment || [],
+        tone: 'amber',
+        emptyMessage: 'No weak module or category pattern is standing out yet.',
+      },
+      {
+        title: 'Assessment Improvement Notes',
+        items: data?.ai_analysis.assessment_improvement_notes || [],
+        tone: 'violet',
+        emptyMessage: 'No assessment improvement note was generated yet.',
+      },
+      {
+        title: 'Exercise Improvement Notes',
+        items: data?.ai_analysis.exercise_improvement_notes || data?.ai_analysis.exercise_performance || [],
+        tone: 'teal',
+        emptyMessage: 'No exercise improvement note was generated yet.',
+      },
+      {
+        title: 'Call Simulation KPI Coaching Notes',
+        items: data?.ai_analysis.call_simulation_kpi_coaching_notes || [],
+        tone: 'rose',
+        emptyMessage: 'No Call Simulation KPI coaching note was generated yet.',
+      },
+      {
+        title: 'Recommended Next Action',
+        items: data?.ai_analysis.recommended_next_action || data?.ai_analysis.recommended_actions || [],
+        tone: 'sky',
+        emptyMessage: 'No recommended next action was generated yet.',
+      },
+      {
+        title: 'Betterment Notes',
+        items: data?.ai_analysis.betterment_notes || [],
+        tone: 'slate',
+        emptyMessage: 'No betterment note was generated yet.',
+      },
+    ],
+    [data?.ai_analysis],
+  )
+  const reportNavigationItems = useMemo<ReportNavigationItem[]>(
+    () => [
+      {
+        value: 'overview',
+        title: 'Overview',
+        description: 'Executive summary, completion mix, strengths, weak areas, coaching posture, and mock-call KPI context.',
+        icon: Sparkles,
+        metrics: [
+          { label: 'Trainees', value: formatCount(summary?.total_trainees) },
+          { label: 'Completion', value: formatPercent(summary?.completion_rate) },
+          { label: 'Open Coaching', value: formatCount(summary?.pending_coaching_logs) },
+        ],
+      },
+      {
+        value: 'rankings',
+        title: 'People & Batches',
+        description: 'Trainer, batch, and trainee comparisons with live score, completion, pass/fail, and intervention signals.',
+        icon: Users,
+        metrics: [
+          { label: 'Trainers', value: formatCount(summary?.total_trainers) },
+          { label: 'Batches', value: formatCount(summary?.total_batches) },
+          { label: 'Support Needed', value: formatCount(improvementRows.length) },
+        ],
+      },
+      {
+        value: 'modules',
+        title: 'Modules & Categories',
+        description: 'Microlearning progress, module effectiveness, exercise activity, and category-linked weak patterns.',
+        icon: BookOpen,
+        metrics: [
+          { label: 'Modules', value: formatCount(summary?.assigned_module_records) },
+          { label: 'Avg Microlearning', value: formatPercent(summary?.average_exercise_score) },
+          { label: 'Weak Modules', value: formatCount(weakestModules.length) },
+        ],
+      },
+      {
+        value: 'assessments',
+        title: 'Assessment Breakdown',
+        description: 'Assessment performance, pass/fail spread, low-scoring categories, and detailed assessment reporting.',
+        icon: ClipboardList,
+        metrics: [
+          { label: 'Assessments', value: formatCount(summary?.assigned_assessment_records) },
+          { label: 'Avg Assessment', value: formatPercent(summary?.average_assessment_score) },
+          { label: 'Weak Categories', value: formatCount(weakestAreas.length) },
+        ],
+      },
+      {
+        value: 'results',
+        title: 'Results & Coaching',
+        description: 'Detailed microlearning, assessment, Call Simulation, and coaching rows with saved attempts and status.',
+        icon: Mic,
+        metrics: [
+          { label: 'Mock Calls', value: formatCount(callSimulationResultRows.length) },
+          { label: 'Coaching Notes', value: formatCount(coachingNotes.length) },
+          { label: 'Attempts', value: formatCount(summary?.total_attempts) },
+        ],
+      },
+    ],
+    [
+      callSimulationResultRows.length,
+      coachingNotes.length,
+      improvementRows.length,
+      summary?.assigned_assessment_records,
+      summary?.assigned_module_records,
+      summary?.average_assessment_score,
+      summary?.average_exercise_score,
+      summary?.completion_rate,
+      summary?.pending_coaching_logs,
+      summary?.total_attempts,
+      summary?.total_batches,
+      summary?.total_trainees,
+      summary?.total_trainers,
+      weakestAreas.length,
+      weakestModules.length,
+    ],
+  )
 
   const scopeBadges = useMemo(() => {
     if (!data?.scope) {
@@ -350,20 +518,20 @@ export function AdminLearningReportWorkspace() {
   }, [data?.scope])
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between print:hidden">
-        <div>
-          <h1 className="text-3xl font-bold text-foreground">Admin Reports</h1>
+    <div className="analytics-page-shell">
+      <div className="analytics-page-header print:hidden">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-foreground sm:text-3xl">Admin Reports</h1>
           <p className="text-sm text-muted-foreground">
             Report-ready analytics sourced only from saved trainer modules, trainee exercise outcomes,
             assessment submissions, batch memberships, and certificate records in the database.
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="analytics-page-actions">
           <Link
             href="/admin/analytics"
-            className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+            className="inline-flex min-h-11 items-center justify-center rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
             <FileBarChart className="mr-2 size-4" />
             Open Analytics
@@ -373,7 +541,7 @@ export function AdminLearningReportWorkspace() {
             variant="outline"
             onClick={() => void handleDownloadPdf()}
             disabled={downloadingPdf}
-            className="rounded-full"
+            className="min-h-11 rounded-full"
           >
             {downloadingPdf ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}
             Download PDF Report
@@ -383,7 +551,7 @@ export function AdminLearningReportWorkspace() {
             variant="outline"
             onClick={() => void loadReport('refresh')}
             disabled={loading || refreshing || downloadingPdf}
-            className="rounded-full"
+            className="min-h-11 rounded-full"
           >
             {refreshing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
             Refresh
@@ -396,7 +564,8 @@ export function AdminLearningReportWorkspace() {
           <div>
             <div className="text-sm font-semibold text-sky-950">Current Report Scope</div>
             <div className="mt-1 text-sm text-sky-900">{data?.scope.label || 'All Admin Learning Data'}</div>
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-1 text-xs text-sky-700">{liveStatus}</div>
+            <div className="analytics-badge-row mt-3">
               {scopeBadges.length ? (
                 scopeBadges.map((badge) => <ScopeBadge key={badge} label={badge} />)
               ) : (
@@ -457,7 +626,7 @@ export function AdminLearningReportWorkspace() {
         </Card>
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-6">
+          <div className="analytics-summary-grid 2xl:grid-cols-6">
             <SummaryCard
               title="Trainers in Scope"
               value={formatCount(summary?.total_trainers)}
@@ -497,19 +666,19 @@ export function AdminLearningReportWorkspace() {
             <SummaryCard
               title="Assigned Modules"
               value={formatCount(summary?.assigned_module_records)}
-              helper={`${formatCount(summary?.completed_modules)} completed | ${formatCount(summary?.pending_modules)} pending`}
+              helper={`${formatCount(summary?.completed_modules)} completed | ${formatCount(summary?.pending_modules)} incomplete`}
               icon={BookOpen}
             />
             <SummaryCard
               title="Assigned Assessments"
               value={formatCount(summary?.assigned_assessment_records)}
-              helper={`${formatCount(summary?.completed_assessments)} completed | ${formatCount(summary?.pending_assessments)} pending`}
+              helper={`${formatCount(summary?.completed_assessments)} completed | ${formatCount(summary?.pending_assessments)} incomplete`}
               icon={Sparkles}
             />
             <SummaryCard
               title="Assigned Call Sim"
               value={formatCount(summary?.assigned_call_simulation_records)}
-              helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} pending`}
+              helper={`${formatCount(summary?.completed_call_simulations)} completed | ${formatCount(summary?.pending_call_simulations)} incomplete`}
               icon={Mic}
             />
             <SummaryCard
@@ -532,13 +701,21 @@ export function AdminLearningReportWorkspace() {
             />
           </div>
 
-          <Tabs defaultValue="overview" className="space-y-6">
+          <ReportNavigation
+            title="Report Navigation"
+            description="Open the admin views for people, batches, modules, assessments, and detailed coaching-ready results using live system analytics."
+            items={reportNavigationItems}
+            activeValue={activeTab}
+            onChange={setActiveTab}
+          />
+
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
             <TabsList className="w-full justify-start overflow-x-auto rounded-2xl p-1">
               <TabsTrigger value="overview">Overview</TabsTrigger>
-              <TabsTrigger value="rankings">Rankings</TabsTrigger>
-              <TabsTrigger value="modules">Modules</TabsTrigger>
-              <TabsTrigger value="assessments">Assessments</TabsTrigger>
-              <TabsTrigger value="results">Detailed Results</TabsTrigger>
+              <TabsTrigger value="rankings">People & Batches</TabsTrigger>
+              <TabsTrigger value="modules">Modules & Categories</TabsTrigger>
+              <TabsTrigger value="assessments">Assessment Breakdown</TabsTrigger>
+              <TabsTrigger value="results">Results & Coaching</TabsTrigger>
             </TabsList>
 
             <TabsContent value="overview" className="space-y-6">
@@ -550,52 +727,15 @@ export function AdminLearningReportWorkspace() {
                     exercise, Call Simulation, coaching, and trainee results in this scope.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="rounded-2xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-sky-900">
-                    {data?.ai_analysis.overview}
-                  </div>
-
-                  <div className="grid gap-4 xl:grid-cols-4">
-                    <AnalysisColumn title="Trainer Effectiveness" rows={data?.ai_analysis.trainer_effectiveness || []} />
-                    <AnalysisColumn title="Batch Performance" rows={data?.ai_analysis.batch_performance || []} />
-                    <AnalysisColumn title="Weak Areas" rows={data?.ai_analysis.weak_areas || []} />
-                    <AnalysisColumn title="Recommended Actions" rows={data?.ai_analysis.recommended_actions || []} />
-                  </div>
+                <CardContent>
+                  <AiInsightBoard
+                    headline={data?.ai_analysis.overview}
+                    sections={adminAiSections}
+                  />
                 </CardContent>
               </Card>
 
-              <div className="grid gap-6 xl:grid-cols-2">
-                <Card className="border-slate-200 shadow-sm">
-                  <CardHeader>
-                    <CardTitle>Score Distribution</CardTitle>
-                    <CardDescription>
-                      Distribution of saved exercise, assessment, and Call Simulation scores under the current report scope.
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    {(data?.score_distribution || []).some((row) => row.count > 0) ? (
-                      <div className="chart-scroll-shell">
-                        <div className="chart-scroll-inner h-[320px]">
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={data?.score_distribution || []} margin={{ top: 24, right: 12, left: 0, bottom: 0 }}>
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis dataKey="range_label" />
-                              <YAxis allowDecimals={false} />
-                              <Tooltip />
-                              <Legend />
-                              <Bar dataKey="count" fill="#2563eb" radius={[8, 8, 0, 0]} name="Results">
-                                <ChartCountLabelList />
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-                    ) : (
-                      <SectionEmpty message="Score distribution will appear once scored results are available in this scope." />
-                    )}
-                  </CardContent>
-                </Card>
-
+              <div className="grid gap-6">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
                     <CardTitle>Completion and Performance Mix</CardTitle>
@@ -658,9 +798,9 @@ export function AdminLearningReportWorkspace() {
                     Core metrics that can be referenced directly inside management summaries and reviews.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <CardContent className="analytics-summary-grid">
                   <div className="rounded-2xl border bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Trainer-created Modules</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Modules in Scope</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{formatCount(summary?.trainer_created_modules)}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
@@ -684,7 +824,7 @@ export function AdminLearningReportWorkspace() {
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{formatPercent(summary?.coaching_completion_rate)}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
-                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Support Needed</div>
+                    <div className="text-xs uppercase tracking-[0.16em] text-slate-500">Intervention Flags</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-950">{formatCount(summary?.intervention_needed_count)}</div>
                   </div>
                   <div className="rounded-2xl border bg-slate-50 p-4">
@@ -804,7 +944,7 @@ export function AdminLearningReportWorkspace() {
                     <CardDescription>Completion, pass, and score results by trainer in the current scope.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[420px]">
+                    <ScrollArea className="table-scroll-area h-[420px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -852,7 +992,7 @@ export function AdminLearningReportWorkspace() {
                     <CardDescription>Batch-level learning performance inside the current scope.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[420px]">
+                    <ScrollArea className="table-scroll-area h-[420px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -901,7 +1041,7 @@ export function AdminLearningReportWorkspace() {
                     <CardDescription>Ranked trainee performance across modules and assessments.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[440px]">
+                    <ScrollArea className="table-scroll-area h-[440px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -991,7 +1131,7 @@ export function AdminLearningReportWorkspace() {
               <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Module Progress Report</CardTitle>
+                    <CardTitle>Microlearning Progress Report</CardTitle>
                     <CardDescription>
                       Completion rate and average score by module across the current report scope.
                     </CardDescription>
@@ -1062,11 +1202,11 @@ export function AdminLearningReportWorkspace() {
               <div className="grid gap-6 xl:grid-cols-2">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Module Performance Table</CardTitle>
+                    <CardTitle>Microlearning Module Breakdown</CardTitle>
                     <CardDescription>Completion, pass rate, and average score per module.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[420px]">
+                    <ScrollArea className="table-scroll-area h-[420px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -1112,11 +1252,11 @@ export function AdminLearningReportWorkspace() {
 
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Exercise Performance Table</CardTitle>
+                    <CardTitle>Microlearning Exercise Progress</CardTitle>
                     <CardDescription>Exercise-level detail from module attempt records.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[420px]">
+                    <ScrollArea className="table-scroll-area h-[420px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -1164,7 +1304,7 @@ export function AdminLearningReportWorkspace() {
               <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Assessment Performance Report</CardTitle>
+                    <CardTitle>Assessment Breakdown</CardTitle>
                     <CardDescription>
                       Average score and pass rate per assessment in the current scope.
                     </CardDescription>
@@ -1194,7 +1334,7 @@ export function AdminLearningReportWorkspace() {
 
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Weakest Assessment Areas</CardTitle>
+                    <CardTitle>Category Performance Signals</CardTitle>
                     <CardDescription>Assessment categories that need reinforcement or content review.</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -1224,11 +1364,11 @@ export function AdminLearningReportWorkspace() {
 
               <Card className="border-slate-200 shadow-sm">
                 <CardHeader>
-                  <CardTitle>Assessment Performance Table</CardTitle>
+                  <CardTitle>Assessment Breakdown Table</CardTitle>
                   <CardDescription>Assessment-level reporting for trainer, batch, and trainee review.</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ScrollArea className="h-[440px]">
+                  <ScrollArea className="table-scroll-area h-[440px]">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -1274,11 +1414,11 @@ export function AdminLearningReportWorkspace() {
               <div className="grid gap-6 xl:grid-cols-2">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Module Assignment Results</CardTitle>
+                    <CardTitle>Microlearning Assignment Results</CardTitle>
                     <CardDescription>Newest module assignment rows from the current report scope.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[440px]">
+                    <ScrollArea className="table-scroll-area h-[440px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -1326,11 +1466,11 @@ export function AdminLearningReportWorkspace() {
 
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Assessment Result Rows</CardTitle>
+                    <CardTitle>Assessment Result Breakdown</CardTitle>
                     <CardDescription>Newest assessment result rows from the current report scope.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[440px]">
+                    <ScrollArea className="table-scroll-area h-[440px]">
                       <Table>
                         <TableHeader>
                           <TableRow>
@@ -1380,11 +1520,11 @@ export function AdminLearningReportWorkspace() {
               <div className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
                 <Card className="border-slate-200 shadow-sm">
                   <CardHeader>
-                    <CardTitle>Call Simulation Result Rows</CardTitle>
+                    <CardTitle>Call Simulation Breakdown</CardTitle>
                     <CardDescription>Newest mock-call result rows from the current report scope.</CardDescription>
                   </CardHeader>
                   <CardContent>
-                    <ScrollArea className="h-[440px]">
+                    <ScrollArea className="table-scroll-area h-[440px]">
                       <Table>
                         <TableHeader>
                           <TableRow>

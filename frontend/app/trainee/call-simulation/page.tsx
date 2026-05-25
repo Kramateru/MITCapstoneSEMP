@@ -621,7 +621,6 @@ function TraineeSimFloorPageContent() {
   const invalidRequestedScenarioRef = useRef<string | null>(null);
   const consumedRequestedScenarioRef = useRef<string | null>(null);
   const browserTtsFallbackNoticeRef = useRef(false);
-  const recordingFallbackNoticeRef = useRef(false);
   const holdAudioErrorNoticeRef = useRef(false);
   const cueAudioErrorNoticeRef = useRef(false);
   const ringerAudioErrorNoticeRef = useRef(false);
@@ -916,16 +915,6 @@ function TraineeSimFloorPageContent() {
     }
     browserTtsFallbackNoticeRef.current = true;
     toast.info('AI voice is using browser fallback mode.');
-  }, []);
-
-  const showRecordingFallbackNotice = useCallback(() => {
-    if (recordingFallbackNoticeRef.current) {
-      return;
-    }
-    recordingFallbackNoticeRef.current = true;
-    const warningMessage = 'Member AI audio could not be saved to Supabase for this turn. Browser fallback will play, but the final recording may miss the member side.';
-    setMemberAudioWarning(warningMessage);
-    toast.warning(warningMessage);
   }, []);
 
   const speakWithBrowserFallback = useCallback(
@@ -1329,7 +1318,6 @@ function TraineeSimFloorPageContent() {
       setCallTimer(0);
       setLiveTranscript('');
       browserTtsFallbackNoticeRef.current = false;
-      recordingFallbackNoticeRef.current = false;
       cueAudioErrorNoticeRef.current = false;
       holdAudioErrorNoticeRef.current = false;
       setIsOnHold(false);
@@ -1385,94 +1373,50 @@ function TraineeSimFloorPageContent() {
       try {
         const token = localStorage.getItem('token');
         setIsGeneratingMemberAudio(true);
-        let payload: TtsResponsePayload | null = null;
-
         const canPersistForRecording = Boolean(
           options?.scenarioId
           && typeof options?.stepNumber === 'number'
           && options.stepNumber > 0,
         );
 
-        if (canPersistForRecording) {
-          const persistentParams = new URLSearchParams({
-            text: normalizedScript,
-            persist: 'true',
-            require_supabase: 'true',
-            scenario_id: String(options?.scenarioId),
-            step_number: String(options?.stepNumber),
-            asset_kind: 'member-step',
-          });
-
-          const persistentResponse = await fetch(`/api/call-simulation/tts?${persistentParams.toString()}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          const persistentPayload = (await persistentResponse.json().catch(() => null)) as TtsResponsePayload | null;
-          if (persistentResponse.ok && persistentPayload && !persistentPayload.detail) {
-            payload = persistentPayload;
-          } else {
-            console.warn(
-              'Call Simulation member audio could not be persisted for this step. Falling back to non-persistent playback.',
-              persistentPayload?.detail || persistentResponse.statusText,
-            );
-          }
+        if (!canPersistForRecording) {
+          throw new Error('Member AI playback could not be prepared because this scenario step is missing its Supabase recording context.');
         }
 
-        if (!payload) {
-          const response = await fetch(`/api/call-simulation/tts?text=${encodeURIComponent(normalizedScript)}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          payload = (await response.json().catch(() => null)) as TtsResponsePayload | null;
-          if (!response.ok || !payload || payload.detail) {
-            console.warn('Call Simulation backend TTS was unavailable. Browser fallback will be used.');
-            showBrowserFallbackNotice();
-            if (canPersistForRecording) {
-              showRecordingFallbackNotice();
-            }
-            return null;
-          }
+        const persistentParams = new URLSearchParams({
+          text: normalizedScript,
+          persist: 'true',
+          require_supabase: 'true',
+          scenario_id: String(options?.scenarioId),
+          step_number: String(options?.stepNumber),
+          asset_kind: 'member-step',
+        });
+
+        const persistentResponse = await fetch(`/api/call-simulation/tts?${persistentParams.toString()}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
+        const payload = (await persistentResponse.json().catch(() => null)) as TtsResponsePayload | null;
+        if (!persistentResponse.ok || !payload || payload.detail) {
+          throw new Error(payload?.detail || 'Member AI audio could not be generated and saved to Supabase for this step.');
         }
 
-        if (payload.warning || payload.fallback_mode === 'browser') {
-          console.warn(payload.warning || 'Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
-          showBrowserFallbackNotice();
-          if (canPersistForRecording) {
-            showRecordingFallbackNotice();
-          }
+        if (payload.warning || payload.fallback_mode === 'browser' || !payload.audio_url) {
+          throw new Error(payload.warning || 'Member AI audio did not return a Supabase playback URL for this step.');
         }
 
-        if (payload.audio_url) {
-          synthesizedPlaybackCacheRef.current.set(cacheKey, payload.audio_url);
-          return payload.audio_url;
-        }
-
-        if (payload.audio_base64) {
-          const binaryString = window.atob(payload.audio_base64);
-          const bytes = Uint8Array.from(binaryString, (character) => character.charCodeAt(0));
-          const blob = new Blob([bytes], { type: 'audio/wav' });
-          const objectUrl = window.URL.createObjectURL(blob);
-          synthesizedPlaybackCacheRef.current.set(cacheKey, objectUrl);
-          return objectUrl;
-        }
-
-        console.warn('Call Simulation backend TTS returned no playable audio. Browser fallback will be used.');
-        showBrowserFallbackNotice();
-        if (canPersistForRecording) {
-          showRecordingFallbackNotice();
-        }
+        synthesizedPlaybackCacheRef.current.set(cacheKey, payload.audio_url);
+        return payload.audio_url;
       } catch (error) {
-        console.warn('Call Simulation backend TTS request failed. Browser fallback will be used:', error);
-        showBrowserFallbackNotice();
-        if (options?.scenarioId && typeof options?.stepNumber === 'number' && options.stepNumber > 0) {
-          showRecordingFallbackNotice();
-        }
-        return null;
+        const warningMessage = error instanceof Error
+          ? error.message
+          : 'Member AI audio could not be generated and saved to Supabase for this step.';
+        setMemberAudioWarning(warningMessage);
+        throw new Error(warningMessage);
       } finally {
         setIsGeneratingMemberAudio(false);
       }
-
-      return null;
     },
-    [showBrowserFallbackNotice, showRecordingFallbackNotice],
+    [],
   );
 
   const playPlaybackPrompt = useCallback(
@@ -1504,11 +1448,10 @@ function TraineeSimFloorPageContent() {
         });
       }
 
-      if (resolvedAudioUrl) {
-        const playedAudio = await new Promise<boolean>((resolve) => {
+      const playAudioUrl = async (candidateUrl: string) => new Promise<boolean>((resolve) => {
           const audio = new Audio();
           audio.crossOrigin = 'anonymous';
-          audio.src = resolvedAudioUrl;
+          audio.src = candidateUrl;
           registerPlaybackElement(audio);
           audioRef.current = audio;
           audio.onended = () => {
@@ -1530,13 +1473,33 @@ function TraineeSimFloorPageContent() {
             resolve(false);
           });
         });
+
+      if (resolvedAudioUrl) {
+        const playedAudio = await playAudioUrl(resolvedAudioUrl);
         if (playedAudio) {
           return;
+        }
+        if (speaker === 'member' && resolvedScript) {
+          const regeneratedAudioUrl = await synthesizePlaybackAudio(resolvedScript, {
+            scenarioId: selectedScenarioId || null,
+            stepNumber,
+          });
+          if (regeneratedAudioUrl && regeneratedAudioUrl !== resolvedAudioUrl) {
+            const replayedAudio = await playAudioUrl(regeneratedAudioUrl);
+            if (replayedAudio) {
+              return;
+            }
+          }
+          throw new Error('Member AI audio could not be played from Supabase for this step. Ask your trainer to refresh the scenario audio and restart the call.');
         }
       }
 
       if (!resolvedScript) {
         return;
+      }
+
+      if (speaker === 'member') {
+        throw new Error('Member AI audio is missing for this step. Ask your trainer to regenerate the scenario audio and restart the call.');
       }
 
       if (!browserTtsService.isSupported()) {
@@ -1829,7 +1792,6 @@ function TraineeSimFloorPageContent() {
 
     setSelectedScenarioId(targetScenarioId);
     browserTtsFallbackNoticeRef.current = false;
-    recordingFallbackNoticeRef.current = false;
     cueAudioErrorNoticeRef.current = false;
     ringerAudioErrorNoticeRef.current = false;
     pendingFinalRecordingRef.current = null;
@@ -1980,21 +1942,33 @@ function TraineeSimFloorPageContent() {
     setShowIncomingAudio(true);
     setCallState('member-speaking');
 
-    for (const step of effectivePlaybackSteps) {
-      if (typeof step.stepIndex === 'number') {
-        setCurrentStepIndex(step.stepIndex);
+    try {
+      for (const step of effectivePlaybackSteps) {
+        if (typeof step.stepIndex === 'number') {
+          setCurrentStepIndex(step.stepIndex);
+        }
+        await playPlaybackPrompt({
+          script: step.script,
+          audioUrl: step.audioUrl,
+          speaker: step.speaker,
+          stepNumber: step.stepNumber,
+        });
       }
-      await playPlaybackPrompt({
-        script: step.script,
-        audioUrl: step.audioUrl,
-        speaker: step.speaker,
-        stepNumber: step.stepNumber,
-      });
-    }
 
-    await playResumeCue();
-    setMemberTurnState('awaiting-resume');
-    setCallState('connected');
+      await playResumeCue();
+      setMemberTurnState('awaiting-resume');
+      setCallState('connected');
+    } catch (error) {
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setIsOnHold(false);
+      setShowIncomingAudio(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      setCallState('connected');
+      throw error;
+    }
   }, [playPlaybackPrompt, playResumeCue]);
 
   const armNextScenarioResume = useCallback(async (nextIndex: number) => {

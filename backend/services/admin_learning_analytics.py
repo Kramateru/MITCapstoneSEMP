@@ -30,16 +30,21 @@ from .trainer_learning_analytics import (
     _assessment_activity_at,
     _average,
     _bounds_from_dates,
+    _build_call_simulation_kpi_coaching_notes,
+    _count_intervention_needed_activities,
     _build_score_distribution,
+    _dedupe_notes,
     _exercise_filter_key,
     _format_batch_label,
     _in_range,
     _module_activity_at,
     _normalize_text,
+    _pluralize,
     _resolve_primary_batch,
     _to_iso,
     _trainee_matches_batch,
 )
+from .supabase_auth_service import filter_to_supabase_active_users
 
 
 def _module_completion_status(status: str) -> str:
@@ -92,6 +97,10 @@ def _build_admin_ai_analysis(
     weakest_modules: list[dict[str, Any]],
     weakest_areas: list[dict[str, Any]],
     exercise_rows: list[dict[str, Any]],
+    assessment_rows: list[dict[str, Any]],
+    call_simulation_rows: list[dict[str, Any]],
+    call_simulation_kpis: list[dict[str, Any]],
+    coaching_notes: list[dict[str, Any]],
     improvement_rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
     overall_score = float(summary.get("overall_score") or 0.0)
@@ -143,6 +152,19 @@ def _build_admin_ai_analysis(
     weakest_area = weakest_areas[0] if weakest_areas else None
     weakest_exercise = exercise_rows[0] if exercise_rows else None
     improvement_focus = improvement_rows[0] if improvement_rows else None
+    weakest_assessment = next(
+        iter(
+            sorted(
+                assessment_rows,
+                key=lambda row: (
+                    float(row.get("average_score") or 0.0),
+                    float(row.get("pass_rate") or 0.0),
+                    _normalize_text(row.get("assessment_title")).lower(),
+                ),
+            )
+        ),
+        None,
+    )
 
     if average_assessment_score >= average_exercise_score and average_assessment_score >= 80:
         strongest_signal = "assessment retention"
@@ -159,6 +181,37 @@ def _build_admin_ai_analysis(
         f"AI Analysis: {scope_label} is currently strongest in {strongest_signal}, with an overall learning score of "
         f"{overall_score:.1f}%, completion at {completion_rate:.1f}%, and pass performance at {pass_rate:.1f}%."
     )
+
+    strengths: list[str] = []
+    if best_trainer:
+        strengths.append(
+            f'{best_trainer["trainer_name"]} is leading the trainer cohort with an overall score of '
+            f'{float(best_trainer.get("overall_score") or 0.0):.1f}% across '
+            f'{int(best_trainer.get("assigned_items") or 0)} tracked learning items.'
+        )
+    if best_batch:
+        strengths.append(
+            f'{best_batch["batch_label"]} is the strongest batch signal with completion at '
+            f'{float(best_batch.get("completion_rate") or 0.0):.1f}% and overall score at '
+            f'{float(best_batch.get("overall_score") or 0.0):.1f}%.'
+        )
+    if average_call_simulation_score >= 80:
+        strengths.append(
+            f"Call Simulation delivery is healthy at {average_call_simulation_score:.1f}%, which shows stronger transfer from knowledge into applied practice."
+        )
+    elif average_assessment_score >= 80:
+        strengths.append(
+            f"Assessment performance is healthy at {average_assessment_score:.1f}%, which suggests knowledge checks are being retained across the selected scope."
+        )
+    elif average_exercise_score >= 80:
+        strengths.append(
+            f"Exercise performance is healthy at {average_exercise_score:.1f}%, which suggests trainees can apply the trainer-authored practice tasks."
+        )
+    if not strengths:
+        strengths.append(
+            "Strength signals are still emerging, but overall participation is building enough to identify the next coaching priorities."
+        )
+    strengths = _dedupe_notes(strengths, 4)
 
     trainer_effectiveness: list[str] = []
     if best_trainer:
@@ -195,6 +248,7 @@ def _build_admin_ai_analysis(
         batch_performance.append(
             "Batch comparison insights will expand as more scoped learning records accumulate."
         )
+    batch_performance = _dedupe_notes(batch_performance, 3)
 
     module_and_assessment: list[str] = []
     if weakest_module:
@@ -213,26 +267,28 @@ def _build_admin_ai_analysis(
         module_and_assessment.append(
             "Module and assessment performance are currently balanced with no major outlier domain."
         )
+    module_and_assessment = _dedupe_notes(module_and_assessment, 4)
 
-    exercise_performance: list[str] = []
+    exercise_performance_notes: list[str] = []
     if weakest_exercise:
-        exercise_performance.append(
+        exercise_performance_notes.append(
             f'"{weakest_exercise["exercise_title"]}" in "{weakest_exercise["module_title"]}" is the weakest exercise signal, '
             f'with average score at {float(weakest_exercise.get("average_score") or 0.0):.1f}% and completion at '
             f'{float(weakest_exercise.get("completion_rate") or 0.0):.1f}%.'
         )
     if average_call_simulation_score >= 80:
-        exercise_performance.append(
+        exercise_performance_notes.append(
             f"Call Simulation delivery is healthy at {average_call_simulation_score:.1f}%, which shows stronger transfer from knowledge work into applied practice."
         )
     if average_exercise_score >= 80:
-        exercise_performance.append(
+        exercise_performance_notes.append(
             f'Exercise performance is otherwise healthy at {average_exercise_score:.1f}%, which suggests trainees can apply the trainer-authored practice tasks.'
         )
     elif not weakest_exercise:
-        exercise_performance.append(
+        exercise_performance_notes.append(
             "Exercise-level insights will appear after trainees generate more practical attempt data."
         )
+    exercise_performance_notes = _dedupe_notes(exercise_performance_notes, 4)
 
     weak_areas: list[str] = []
     if improvement_focus:
@@ -257,6 +313,7 @@ def _build_admin_ai_analysis(
         weak_areas.append(
             "There are no major risk clusters yet, but maintaining assignment follow-through will protect the current score profile."
         )
+    weak_areas = _dedupe_notes(weak_areas, 4)
 
     opportunities: list[str] = []
     if weakest_batch:
@@ -275,6 +332,74 @@ def _build_admin_ai_analysis(
         opportunities.append(
             "Opportunity: keep expanding the current strongest learning pattern into the next assignment wave while results remain stable."
         )
+    opportunities = _dedupe_notes(opportunities, 4)
+
+    weak_modules_categories: list[str] = []
+    if weakest_module:
+        weak_modules_categories.append(
+            f'Weak module: "{weakest_module["module_title"]}" is the softest delivery signal at '
+            f'{float(weakest_module.get("completion_rate") or 0.0):.1f}% completion and '
+            f'{float(weakest_module.get("average_score") or 0.0):.1f}% average score.'
+        )
+    if weakest_area:
+        weak_modules_categories.append(
+            f'Weak category: "{weakest_area["category_name"]}" is the lowest assessment category at '
+            f'{float(weakest_area.get("average_score") or 0.0):.1f}% average score and '
+            f'{float(weakest_area.get("pass_rate") or 0.0):.1f}% pass rate.'
+        )
+    if weakest_batch:
+        weak_modules_categories.append(
+            f'Weak cohort: {weakest_batch["batch_label"]} needs added reinforcement because overall score is '
+            f'{float(weakest_batch.get("overall_score") or 0.0):.1f}% and completion is '
+            f'{float(weakest_batch.get("completion_rate") or 0.0):.1f}%.'
+        )
+    if not weak_modules_categories:
+        weak_modules_categories.append(
+            "No weak module or category trend is standing out yet in the selected admin scope."
+        )
+    weak_modules_categories = _dedupe_notes(weak_modules_categories, 4)
+
+    assessment_improvement_notes: list[str] = []
+    if weakest_area:
+        assessment_improvement_notes.append(
+            f'Assessment improvement note: review "{weakest_area["category_name"]}" because the category is only averaging '
+            f'{float(weakest_area.get("average_score") or 0.0):.1f}% across '
+            f'{int(weakest_area.get("completed_count") or 0)} completed result{"" if int(weakest_area.get("completed_count") or 0) == 1 else "s"}.'
+        )
+    if weakest_assessment:
+        assessment_improvement_notes.append(
+            f'Assessment improvement note: "{weakest_assessment.get("assessment_title")}" needs item-quality review because average score is '
+            f'{float(weakest_assessment.get("average_score") or 0.0):.1f}% and pass rate is '
+            f'{float(weakest_assessment.get("pass_rate") or 0.0):.1f}%.'
+        )
+    if not assessment_improvement_notes:
+        assessment_improvement_notes.append(
+            "Assessment improvement note: current assessment performance is balanced, so maintain the same review cadence and keep monitoring the lowest categories."
+        )
+    assessment_improvement_notes = _dedupe_notes(assessment_improvement_notes, 4)
+
+    exercise_improvement_notes: list[str] = []
+    if weakest_exercise:
+        exercise_improvement_notes.append(
+            f'Exercise improvement note: "{weakest_exercise["exercise_title"]}" should be simplified or better scaffolded because average score is '
+            f'{float(weakest_exercise.get("average_score") or 0.0):.1f}% and completion is '
+            f'{float(weakest_exercise.get("completion_rate") or 0.0):.1f}%.'
+        )
+    if weakest_module:
+        exercise_improvement_notes.append(
+            f'Exercise improvement note: adjust the reinforcement steps inside "{weakest_module["module_title"]}" before launching the next assignment cycle.'
+        )
+    if not exercise_improvement_notes:
+        exercise_improvement_notes.append(
+            "Exercise improvement note: practice-task performance is steady enough to keep the current exercise mix in place."
+        )
+    exercise_improvement_notes = _dedupe_notes(exercise_improvement_notes, 4)
+
+    call_simulation_kpi_coaching_notes = _build_call_simulation_kpi_coaching_notes(
+        call_simulation_rows=call_simulation_rows,
+        call_simulation_kpis=call_simulation_kpis,
+        coaching_notes=coaching_notes,
+    )
 
     recommended_actions: list[str] = []
     if weakest_area:
@@ -301,16 +426,51 @@ def _build_admin_ai_analysis(
         recommended_actions.append(
             "Recommended action: maintain the current pacing, then raise difficulty gradually for the highest-performing batches and trainees."
         )
+    if weakest_trainer and best_trainer and weakest_trainer.get("trainer_id") != best_trainer.get("trainer_id"):
+        recommended_actions.append(
+            f'Recommended action: coach {weakest_trainer["trainer_name"]} on assignment pacing and follow-up so weaker cohort performance does not widen further.'
+        )
+    recommended_next_action = _dedupe_notes(recommended_actions, 4)
+
+    betterment_notes: list[str] = []
+    if weakest_trainer and best_trainer and weakest_trainer.get("trainer_id") != best_trainer.get("trainer_id"):
+        betterment_notes.append(
+            f'Betterment note: mirror part of {best_trainer["trainer_name"]}\'s pacing and follow-up approach when coaching {weakest_trainer["trainer_name"]}.'
+        )
+    if weakest_batch:
+        betterment_notes.append(
+            f'Betterment note: give {weakest_batch["batch_label"]} a shorter remediation loop focused on completion discipline before expanding content load.'
+        )
+    if pending_coaching_logs > 0:
+        betterment_notes.append(
+            f"Betterment note: close {pending_coaching_logs} open coaching {_pluralize(pending_coaching_logs, 'acknowledgement')} so trainees can act on the latest guidance."
+        )
+    if improvement_focus:
+        betterment_notes.append(
+            f'Betterment note: use {improvement_focus["trainee_name"]} as the immediate case study for targeted intervention and post-coaching progress tracking.'
+        )
+    if not betterment_notes:
+        betterment_notes.append(
+            "Betterment note: keep the current delivery rhythm and gradually raise challenge level for the strongest cohorts while the risk profile remains stable."
+        )
+    betterment_notes = _dedupe_notes(betterment_notes, 4)
 
     return {
         "overview": overview,
+        "strengths": strengths,
         "trainer_effectiveness": trainer_effectiveness[:3],
-        "batch_performance": batch_performance[:3],
-        "module_and_assessment": module_and_assessment[:3],
-        "exercise_performance": exercise_performance[:3],
-        "weak_areas": weak_areas[:3],
-        "opportunities": opportunities[:4],
-        "recommended_actions": recommended_actions[:4],
+        "batch_performance": batch_performance,
+        "module_and_assessment": module_and_assessment,
+        "exercise_performance": exercise_performance_notes,
+        "weak_modules_categories": weak_modules_categories,
+        "assessment_improvement_notes": assessment_improvement_notes,
+        "exercise_improvement_notes": exercise_improvement_notes,
+        "call_simulation_kpi_coaching_notes": call_simulation_kpi_coaching_notes,
+        "recommended_next_action": recommended_next_action,
+        "betterment_notes": betterment_notes,
+        "weak_areas": weak_areas,
+        "opportunities": opportunities,
+        "recommended_actions": recommended_next_action,
     }
 
 
@@ -334,6 +494,7 @@ def build_admin_learning_insights(
         .order_by(User.full_name.asc())
         .all()
     )
+    trainers = filter_to_supabase_active_users(db, trainers)
     trainer_lookup = {trainer.id: trainer for trainer in trainers}
     if trainer_id and trainer_id not in trainer_lookup:
         raise ValueError("Trainer not found")
@@ -354,6 +515,7 @@ def build_admin_learning_insights(
         .order_by(User.full_name.asc())
         .all()
     )
+    trainees = filter_to_supabase_active_users(db, trainees)
     trainee_lookup = {trainee.id: trainee for trainee in trainees}
     if trainee_id and trainee_id not in trainee_lookup:
         raise ValueError("Trainee not found")
@@ -857,14 +1019,14 @@ def build_admin_learning_insights(
             "id": trainer.id,
             "name": trainer.full_name,
             "email": trainer.email,
-            "batch_count": sum(1 for batch in batches if batch.created_by == trainer.id),
+            "batch_count": sum(1 for batch in visible_batches if batch.created_by == trainer.id),
             "trainee_count": sum(
                 1
-                for current_trainee in trainees
+                for current_trainee in visible_trainees
                 if trainer.id in trainer_ids_by_trainee.get(current_trainee.id, set())
             ),
         }
-        for trainer in trainers
+        for trainer in visible_trainers
     ]
     batch_options = [
         {
@@ -874,14 +1036,14 @@ def build_admin_learning_insights(
             "trainer_name": getattr(trainer_lookup.get(batch.created_by), "full_name", None),
             "trainee_count": sum(
                 1
-                for current_trainee in batch.users
-                if current_trainee.role == UserRole.TRAINEE and bool(getattr(current_trainee, "is_active", True))
+                for current_trainee in visible_trainees
+                if _trainee_matches_batch(current_trainee.id, batch.id, trainee_batch_memberships)
             ),
         }
-        for batch in batches
+        for batch in visible_batches
     ]
     trainee_options = []
-    for current_trainee in trainees:
+    for current_trainee in visible_trainees:
         memberships = trainee_batch_memberships.get(current_trainee.id, [])
         trainer_ids_for_trainee = trainer_ids_by_trainee.get(current_trainee.id, set())
         trainee_options.append(
@@ -912,6 +1074,7 @@ def build_admin_learning_insights(
             "created_by_name": getattr(trainer_lookup.get(module.created_by), "full_name", None),
         }
         for module in modules
+        if module.id in module_ids_in_scope or module.id == module_id
     ]
     assessment_options = [
         {
@@ -924,6 +1087,14 @@ def build_admin_learning_insights(
             "assigned_user_id": assessment.assigned_user_id,
         }
         for assessment in assessments
+        if assessment.id in assessment_ids_in_scope or assessment.id == assessment_id
+    ]
+    filtered_exercise_options = [
+        option
+        for option in exercise_options
+        if option["id"] == exercise_id
+        or option["module_id"] == module_id
+        or option["module_id"] in module_ids_in_scope
     ]
 
     all_scores = [
@@ -1127,6 +1298,16 @@ def build_admin_learning_insights(
         overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])
         completion_rate = round((total_completed / total_assigned) * 100.0, 2) if total_assigned else 0.0
         pass_rate = round((total_passed / total_completed) * 100.0, 2) if total_completed else 0.0
+        pending_items = max(total_assigned - total_completed, 0)
+        failed_items = max(total_completed - total_passed, 0)
+        repeated_attempts = max(int(metrics["total_attempts"] or 0) - total_completed, 0)
+        intervention_needed = (
+            failed_items > 0
+            or repeated_attempts > 0
+            or overall_score < 75.0
+            or int(metrics["pending_coaching"] or 0) > 0
+            or int(metrics["retake_coaching"] or 0) > 0
+        )
         trainee_ranking.append(
             {
                 "trainee_id": metrics["trainee_id"],
@@ -1155,14 +1336,20 @@ def build_admin_learning_insights(
                 "pass_rate": pass_rate,
                 "module_assigned": metrics["module_assigned"],
                 "module_completed": metrics["module_completed"],
+                "module_passed": metrics["module_passed"],
                 "assessment_assigned": metrics["assessment_assigned"],
                 "assessment_completed": metrics["assessment_completed"],
+                "assessment_passed": metrics["assessment_passed"],
                 "call_simulation_assigned": metrics["call_assigned"],
                 "call_simulation_completed": metrics["call_completed"],
                 "call_simulation_passed": metrics["call_passed"],
                 "pending_coaching": metrics["pending_coaching"],
                 "acknowledged_coaching": metrics["acknowledged_coaching"],
                 "retake_coaching": metrics["retake_coaching"],
+                "pending_items": pending_items,
+                "failed_items": failed_items,
+                "repeated_attempts": repeated_attempts,
+                "intervention_needed": intervention_needed,
                 "total_attempts": metrics["total_attempts"],
                 "latest_activity_at": metrics["latest_activity_at"],
             }
@@ -1262,6 +1449,9 @@ def build_admin_learning_insights(
         total_assigned = metrics["module_assigned"] + metrics["assessment_assigned"] + metrics["call_assigned"]
         total_completed = metrics["module_completed"] + metrics["assessment_completed"] + metrics["call_completed"]
         total_passed = metrics["module_passed"] + metrics["assessment_passed"] + metrics["call_passed"]
+        pending_items = max(total_assigned - total_completed, 0)
+        failed_items = max(total_completed - total_passed, 0)
+        repeated_attempts = max(int(metrics["total_attempts"] or 0) - total_completed, 0)
         batch_comparison.append(
             {
                 "batch_id": metrics["batch_id"],
@@ -1271,6 +1461,8 @@ def build_admin_learning_insights(
                 "trainee_count": len(metrics["trainee_ids"]),
                 "assigned_items": total_assigned,
                 "completed_items": total_completed,
+                "pending_items": pending_items,
+                "failed_items": failed_items,
                 "completion_rate": round((total_completed / total_assigned) * 100.0, 2)
                 if total_assigned
                 else 0.0,
@@ -1282,6 +1474,7 @@ def build_admin_learning_insights(
                 "average_call_simulation_score": _average(metrics["call_scores"]),
                 "overall_score": _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"]),
                 "performance_level": _performance_level(_average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])),
+                "repeated_attempts": repeated_attempts,
                 "total_attempts": metrics["total_attempts"],
             }
         )
@@ -1470,6 +1663,9 @@ def build_admin_learning_insights(
         total_completed = metrics["module_completed"] + metrics["assessment_completed"] + metrics["call_completed"]
         total_passed = metrics["module_passed"] + metrics["assessment_passed"] + metrics["call_passed"]
         overall_score = _average(metrics["module_scores"] + metrics["assessment_scores"] + metrics["call_scores"])
+        pending_items = max(total_assigned - total_completed, 0)
+        failed_items = max(total_completed - total_passed, 0)
+        repeated_attempts = max(int(metrics["total_attempts"] or 0) - total_completed, 0)
         trainer_comparison.append(
             {
                 "trainer_id": metrics["trainer_id"],
@@ -1479,6 +1675,8 @@ def build_admin_learning_insights(
                 "trainer_created_modules": len(metrics["created_module_ids"]),
                 "assigned_items": total_assigned,
                 "completed_items": total_completed,
+                "pending_items": pending_items,
+                "failed_items": failed_items,
                 "completion_rate": round((total_completed / total_assigned) * 100.0, 2)
                 if total_assigned
                 else 0.0,
@@ -1491,6 +1689,7 @@ def build_admin_learning_insights(
                 "overall_score": overall_score,
                 "performance_level": _performance_level(overall_score),
                 "certificates_issued": len(metrics["certificate_ids"]),
+                "repeated_attempts": repeated_attempts,
                 "total_attempts": metrics["total_attempts"],
                 "pending_coaching": metrics["pending_coaching"],
                 "acknowledged_coaching": metrics["acknowledged_coaching"],
@@ -1553,6 +1752,7 @@ def build_admin_learning_insights(
         assigned_count = int(module_bucket["assigned_count"] or 0)
         completed_count = int(module_bucket["completed_count"] or 0)
         passed_count = int(module_bucket["passed_count"] or 0)
+        pending_count = max(assigned_count - completed_count, 0)
         average_score = _average(module_bucket["scores"])
         module_progress.append(
             {
@@ -1564,7 +1764,7 @@ def build_admin_learning_insights(
                 "created_by_name": module_bucket["created_by_name"],
                 "assigned_count": assigned_count,
                 "completed_count": completed_count,
-                "pending_count": int(module_bucket["pending_count"] or 0),
+                "pending_count": pending_count,
                 "in_progress_count": int(module_bucket["in_progress_count"] or 0),
                 "completion_rate": round((completed_count / assigned_count) * 100.0, 2)
                 if assigned_count
@@ -1651,12 +1851,15 @@ def build_admin_learning_insights(
                 else 0.0,
             }
         )
+    weakest_exercise_rows = []
+
     assessment_performance.sort(
         key=lambda row: (
             float(row["average_score"] or 0.0),
             float(row["pass_rate"] or 0.0),
             row["assessment_title"].lower(),
-        )
+        ),
+        reverse=True,
     )
 
     weakest_assessment_areas = []
@@ -1760,19 +1963,25 @@ def build_admin_learning_insights(
             row["exercise_title"].lower(),
         )
     )
+    weakest_exercise_rows = exercise_performance[:5]
+    exercise_performance.sort(
+        key=lambda row: (
+            float(row["average_score"] or 0.0),
+            float(row["completion_rate"] or 0.0),
+            row["module_title"].lower(),
+            row["exercise_title"].lower(),
+        ),
+        reverse=True,
+    )
 
     trainees_needing_improvement = [
         row
         for row in trainee_ranking
-        if float(row["overall_score"] or 0.0) < 75.0
-        or float(row["completion_rate"] or 0.0) < 65.0
-        or float(row["pass_rate"] or 0.0) < 70.0
+        if int(row.get("failed_items") or 0) > 0
+        or int(row.get("repeated_attempts") or 0) > 0
+        or float(row["overall_score"] or 0.0) < 75.0
         or int(row["pending_coaching"] or 0) > 0
         or int(row["retake_coaching"] or 0) > 0
-        or (
-            int(row["call_simulation_completed"] or 0) > 0
-            and int(row["call_simulation_passed"] or 0) < int(row["call_simulation_completed"] or 0)
-        )
     ]
     trainees_needing_improvement.sort(
         key=lambda row: (
@@ -1815,13 +2024,13 @@ def build_admin_learning_insights(
 
     module_completed_count = sum(1 for row in module_assignment_rows if row["completion_status"] == "completed")
     module_in_progress_count = sum(1 for row in module_assignment_rows if row["completion_status"] == "in_progress")
-    module_pending_count = sum(1 for row in module_assignment_rows if row["completion_status"] == "pending")
+    module_pending_count = len(module_assignment_rows) - module_completed_count
     module_passed_count = sum(1 for row in module_assignment_rows if row["is_passed"])
     assessment_completed_count = sum(1 for row in assessment_rows if row["score_percentage"] is not None)
     assessment_pending_count = len(assessment_rows) - assessment_completed_count
     assessment_passed_count = sum(1 for row in assessment_rows if row["is_passed"])
     call_simulation_completed_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "completed")
-    call_simulation_pending_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "pending")
+    call_simulation_pending_count = len(call_simulation_rows) - call_simulation_completed_count
     call_simulation_in_progress_count = sum(1 for row in call_simulation_rows if row["completion_status"] == "in_progress")
     call_simulation_passed_count = sum(1 for row in call_simulation_rows if row["is_passed"])
 
@@ -1829,9 +2038,17 @@ def build_admin_learning_insights(
     total_completed_items = module_completed_count + assessment_completed_count + call_simulation_completed_count
     total_passed_items = module_passed_count + assessment_passed_count + call_simulation_passed_count
     overall_score = _average(all_scores)
+    failed_items = max(total_completed_items - total_passed_items, 0)
+    pending_items = max(total_assigned_items - total_completed_items, 0)
+    total_attempts = (
+        sum(max(int(row["attempt_number"] or 0), 0) for row in module_assignment_rows)
+        + sum(max(int(row["attempt_count"] or 0), 0) for row in assessment_rows)
+        + sum(max(int(row["attempt_count"] or 0), 0) for row in call_simulation_rows)
+    )
+    repeated_attempts = max(total_attempts - total_completed_items, 0)
 
     completion_breakdown = [
-        {"label": "Pending", "count": module_pending_count + assessment_pending_count + call_simulation_pending_count},
+        {"label": "Pending", "count": pending_items},
         {"label": "In Progress", "count": module_in_progress_count + call_simulation_in_progress_count},
         {"label": "Completed", "count": module_completed_count + assessment_completed_count + call_simulation_completed_count},
     ]
@@ -1861,6 +2078,8 @@ def build_admin_learning_insights(
         "completed_call_simulations": call_simulation_completed_count,
         "pending_call_simulations": call_simulation_pending_count,
         "in_progress_call_simulations": call_simulation_in_progress_count,
+        "pending_items": pending_items,
+        "failed_items": failed_items,
         "completion_rate": round((total_completed_items / total_assigned_items) * 100.0, 2)
         if total_assigned_items
         else 0.0,
@@ -1883,8 +2102,8 @@ def build_admin_learning_insights(
         )
         if call_simulation_completed_count
         else 0.0,
-        "total_attempts": sum(max(int(row["attempt_number"] or 0), 0) for row in module_assignment_rows)
-        + sum(max(int(row["attempt_count"] or 0), 0) for row in assessment_rows),
+        "total_attempts": total_attempts,
+        "repeated_attempts": repeated_attempts,
         "passed_modules": module_passed_count,
         "passed_assessments": assessment_passed_count,
         "passed_call_simulations": call_simulation_passed_count,
@@ -1897,7 +2116,12 @@ def build_admin_learning_insights(
         "pending_coaching_logs": int(coaching_summary.get("pending_logs") or 0),
         "acknowledged_coaching_logs": int(coaching_summary.get("acknowledged_logs") or 0),
         "coaching_completion_rate": float(coaching_summary.get("completion_rate") or 0.0),
-        "intervention_needed_count": len(trainees_needing_improvement),
+        "intervention_needed_count": _count_intervention_needed_activities(
+            module_assignment_rows=module_assignment_rows,
+            assessment_rows=assessment_rows,
+            call_simulation_rows=call_simulation_rows,
+            coaching_notes=coaching_notes_summary,
+        ),
         "certificates_issued": len(
             {
                 certificate_id
@@ -1910,7 +2134,6 @@ def build_admin_learning_insights(
             }
         ),
     }
-    summary["total_attempts"] += sum(max(int(row["attempt_count"] or 0), 0) for row in call_simulation_rows)
 
     recent_activity.sort(
         key=lambda row: _normalize_text(row.get("activity_at")),
@@ -1958,7 +2181,7 @@ def build_admin_learning_insights(
             "trainees": trainee_options,
             "modules": module_options,
             "assessments": assessment_options,
-            "exercises": exercise_options,
+            "exercises": filtered_exercise_options,
         },
         "summary": summary,
         "completion_breakdown": completion_breakdown,
@@ -2012,7 +2235,11 @@ def build_admin_learning_insights(
             batch_rows=batch_comparison,
             weakest_modules=weakest_modules,
             weakest_areas=weakest_assessment_areas,
-            exercise_rows=exercise_performance,
+            exercise_rows=weakest_exercise_rows,
+            assessment_rows=assessment_performance,
+            call_simulation_rows=call_simulation_bundle["scenario_performance"],
+            call_simulation_kpis=call_simulation_bundle["kpi_breakdown"],
+            coaching_notes=coaching_notes_summary,
             improvement_rows=trainees_needing_improvement,
         ),
     }
