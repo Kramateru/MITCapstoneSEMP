@@ -1734,6 +1734,130 @@ function TraineeSimFloorPageContent() {
     uploadFinalCallRecording,
   ]);
 
+  const buildQueuedMemberPlaybackFromIndex = useCallback((startIndex: number) => {
+    if (startIndex < 0 || startIndex >= steps.length) {
+      return null;
+    }
+
+    const queuedPlaybackSteps: NonNullable<QueuedMemberPlayback['playbackSteps']> = [];
+    let playbackIndex = startIndex;
+
+    while (playbackIndex >= 0 && playbackIndex < steps.length) {
+      const playbackStep = steps[playbackIndex];
+      if (!playbackStep || playbackStep.actor === 'csr') {
+        break;
+      }
+
+      queuedPlaybackSteps.push({
+        stepIndex: playbackIndex,
+        stepNumber: playbackStep.step_number,
+        script: playbackStep.script,
+        audioUrl: playbackStep.audio_url || null,
+        speaker: playbackStep.actor === 'system' ? 'system' : 'member',
+        speakerLabel: playbackStep.speaker_label || (playbackStep.actor === 'system' ? 'System' : memberName),
+      });
+      playbackIndex += 1;
+    }
+
+    if (!queuedPlaybackSteps.length) {
+      return null;
+    }
+
+    const firstPlaybackStep = queuedPlaybackSteps[0];
+    const resumeIndex = playbackIndex < steps.length ? playbackIndex : null;
+
+    return {
+      sourceStepIndex: firstPlaybackStep?.stepIndex ?? null,
+      resumeStepIndex: typeof resumeIndex === 'number' ? resumeIndex : null,
+      stepNumber: firstPlaybackStep?.stepNumber ?? null,
+      script: firstPlaybackStep?.script || '',
+      audioUrl: firstPlaybackStep?.audioUrl || null,
+      speakerLabel: firstPlaybackStep?.speakerLabel || memberName,
+      playbackSteps: queuedPlaybackSteps,
+    } satisfies QueuedMemberPlayback;
+  }, [memberName, steps]);
+
+  const playQueuedMemberResponse = useCallback(async (playback: QueuedMemberPlayback) => {
+    const playbackSteps = (playback.playbackSteps || []).filter(
+      (step) => step.script.trim() || step.audioUrl,
+    );
+    const effectivePlaybackSteps = playbackSteps.length
+      ? playbackSteps
+      : [{
+          stepIndex: playback.sourceStepIndex,
+          stepNumber: playback.stepNumber,
+          script: playback.script,
+          audioUrl: playback.audioUrl,
+          speaker: 'member' as const,
+          speakerLabel: playback.speakerLabel,
+        }];
+
+    if (!effectivePlaybackSteps.length) {
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setIsOnHold(false);
+      setShowIncomingAudio(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      return;
+    }
+
+    setIsOnHold(true);
+    setMemberTurnState('playing');
+    if (typeof effectivePlaybackSteps[0]?.stepIndex === 'number') {
+      setCurrentStepIndex(effectivePlaybackSteps[0].stepIndex);
+    }
+    setShowIncomingAudio(true);
+    setCallState('member-speaking');
+
+    try {
+      for (const step of effectivePlaybackSteps) {
+        if (typeof step.stepIndex === 'number') {
+          setCurrentStepIndex(step.stepIndex);
+        }
+        await playPlaybackPrompt({
+          script: step.script,
+          audioUrl: step.audioUrl,
+          speaker: step.speaker,
+          stepNumber: step.stepNumber,
+        });
+      }
+
+      await playResumeCue();
+      setMemberTurnState('awaiting-resume');
+      setCallState('connected');
+    } catch (error) {
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
+      setIsOnHold(false);
+      setShowIncomingAudio(false);
+      setActivePlaybackScript('');
+      setActivePlaybackSpeaker(null);
+      setCallState('connected');
+      throw error;
+    }
+  }, [playPlaybackPrompt, playResumeCue]);
+
+  const armNextScenarioResume = useCallback(async (nextIndex: number) => {
+    const nextStep = steps[nextIndex] || null;
+    setIsOnHold(true);
+    setQueuedMemberStepIndex(null);
+    setQueuedMemberPlayback({
+      sourceStepIndex: null,
+      resumeStepIndex: nextIndex,
+      stepNumber: nextStep?.step_number ?? null,
+      script: '',
+      audioUrl: null,
+      speakerLabel: nextStep?.speaker_label || 'CSR / Trainee',
+    });
+    setMemberTurnState('playing');
+    await playResumeCue();
+    setMemberTurnState('awaiting-resume');
+    setCallState('connected');
+  }, [playResumeCue, steps]);
+
   const moveToStep = useCallback(
     async (stepIndex: number) => {
       const step = steps[stepIndex];
@@ -1745,34 +1869,33 @@ function TraineeSimFloorPageContent() {
       setCurrentStepIndex(stepIndex);
       if (step.actor !== 'csr') {
         setShowSilenceAlert(false);
-        setShowIncomingAudio(true);
-        toast.info('Incoming audio from the Member Actor. Your mic is temporarily locked.');
-        setCallState('member-speaking');
-        await playPlaybackPrompt({
-          script: step.script,
-          audioUrl: step.audio_url,
-          speaker: 'member',
-          stepNumber: step.step_number,
-        });
-        await playResumeCue();
-
-        const nextIndex = stepIndex + 1;
-        if (!steps[nextIndex]) {
-          await finalizeSession();
+        const pendingPlayback = buildQueuedMemberPlaybackFromIndex(stepIndex);
+        if (pendingPlayback) {
+          setQueuedMemberStepIndex(pendingPlayback.sourceStepIndex ?? stepIndex);
+          setQueuedMemberPlayback(pendingPlayback);
+          await playQueuedMemberResponse(pendingPlayback);
           return;
         }
 
-        silenceStartRef.current = performance.now();
-        setCurrentStepIndex(nextIndex);
+        const nextIndex = steps.findIndex((candidate, index) => index > stepIndex && candidate.actor === 'csr');
+        if (nextIndex < 0) {
+          await finalizeSession();
+          return;
+        }
+        await armNextScenarioResume(nextIndex);
+        return;
       }
 
+      setQueuedMemberStepIndex(null);
+      setQueuedMemberPlayback(null);
+      setMemberTurnState('idle');
       if (step.actor === 'csr') {
         setActivePlaybackSpeaker(null);
         setActivePlaybackScript('');
       }
       setCallState('connected');
     },
-    [finalizeSession, playPlaybackPrompt, playResumeCue, steps],
+    [armNextScenarioResume, buildQueuedMemberPlaybackFromIndex, finalizeSession, playQueuedMemberResponse, steps],
   );
 
   const startSimulation = useCallback(async (scenarioOverride?: ScenarioCard | null) => {
@@ -1908,87 +2031,6 @@ function TraineeSimFloorPageContent() {
     return () => window.clearInterval(intervalId);
   }, [callState]);
 
-  const playQueuedMemberResponse = useCallback(async (playback: QueuedMemberPlayback) => {
-    const playbackSteps = (playback.playbackSteps || []).filter(
-      (step) => step.script.trim() || step.audioUrl,
-    );
-    const effectivePlaybackSteps = playbackSteps.length
-      ? playbackSteps
-      : [{
-          stepIndex: playback.sourceStepIndex,
-          stepNumber: playback.stepNumber,
-          script: playback.script,
-          audioUrl: playback.audioUrl,
-          speaker: 'member' as const,
-          speakerLabel: playback.speakerLabel,
-        }];
-
-    if (!effectivePlaybackSteps.length) {
-      setQueuedMemberStepIndex(null);
-      setQueuedMemberPlayback(null);
-      setMemberTurnState('idle');
-      setIsOnHold(false);
-      setShowIncomingAudio(false);
-      setActivePlaybackScript('');
-      setActivePlaybackSpeaker(null);
-      return;
-    }
-
-    setIsOnHold(true);
-    setMemberTurnState('playing');
-    if (typeof effectivePlaybackSteps[0]?.stepIndex === 'number') {
-      setCurrentStepIndex(effectivePlaybackSteps[0].stepIndex);
-    }
-    setShowIncomingAudio(true);
-    setCallState('member-speaking');
-
-    try {
-      for (const step of effectivePlaybackSteps) {
-        if (typeof step.stepIndex === 'number') {
-          setCurrentStepIndex(step.stepIndex);
-        }
-        await playPlaybackPrompt({
-          script: step.script,
-          audioUrl: step.audioUrl,
-          speaker: step.speaker,
-          stepNumber: step.stepNumber,
-        });
-      }
-
-      await playResumeCue();
-      setMemberTurnState('awaiting-resume');
-      setCallState('connected');
-    } catch (error) {
-      setQueuedMemberStepIndex(null);
-      setQueuedMemberPlayback(null);
-      setMemberTurnState('idle');
-      setIsOnHold(false);
-      setShowIncomingAudio(false);
-      setActivePlaybackScript('');
-      setActivePlaybackSpeaker(null);
-      setCallState('connected');
-      throw error;
-    }
-  }, [playPlaybackPrompt, playResumeCue]);
-
-  const armNextScenarioResume = useCallback(async (nextIndex: number) => {
-    const nextStep = steps[nextIndex] || null;
-    setIsOnHold(true);
-    setQueuedMemberStepIndex(null);
-    setQueuedMemberPlayback({
-      sourceStepIndex: null,
-      resumeStepIndex: nextIndex,
-      stepNumber: nextStep?.step_number ?? null,
-      script: '',
-      audioUrl: null,
-      speakerLabel: nextStep?.speaker_label || 'CSR / Trainee',
-    });
-    setMemberTurnState('playing');
-    await playResumeCue();
-    setMemberTurnState('awaiting-resume');
-    setCallState('connected');
-  }, [playResumeCue, steps]);
-
   const handleTurnSubmissionResult = useCallback(async (result: SimFloorTurnResult) => {
     setLiveTranscript(result.transcript || '');
     toast.success(
@@ -2028,55 +2070,31 @@ function TraineeSimFloorPageContent() {
 
     const nextIndex = steps.findIndex((step) => step.step_number === result.next_step);
     const resolvedNextIndex = nextIndex >= 0 ? nextIndex : currentStepIndex + 1;
-    const nextStep = steps[resolvedNextIndex];
     const fallbackMemberResponse = currentDialerTurn?.member_response_text?.trim() || '';
-    const queuedPlaybackSteps: NonNullable<QueuedMemberPlayback['playbackSteps']> = [];
-    let playbackIndex = resolvedNextIndex;
+    const nextStep = steps[resolvedNextIndex];
+    let nextPlayback = buildQueuedMemberPlaybackFromIndex(resolvedNextIndex);
 
-    while (playbackIndex >= 0 && playbackIndex < steps.length) {
-      const playbackStep = steps[playbackIndex];
-      if (!playbackStep || playbackStep.actor === 'csr') {
-        break;
-      }
-
-      queuedPlaybackSteps.push({
-        stepIndex: playbackIndex,
-        stepNumber: playbackStep.step_number,
-        script: playbackStep.script,
-        audioUrl: playbackStep.audio_url || null,
-        speaker: playbackStep.actor === 'system' ? 'system' : 'member',
-        speakerLabel: playbackStep.speaker_label || (playbackStep.actor === 'system' ? 'System' : memberName),
-      });
-      playbackIndex += 1;
-    }
-
-    if (!queuedPlaybackSteps.length && fallbackMemberResponse) {
-      queuedPlaybackSteps.push({
-        stepIndex: null,
+    if (!nextPlayback && fallbackMemberResponse) {
+      nextPlayback = {
+        sourceStepIndex: null,
+        resumeStepIndex: nextStep?.actor === 'csr' ? resolvedNextIndex : null,
         stepNumber: currentDialerTurn?.member_step_number ?? null,
         script: fallbackMemberResponse,
         audioUrl: currentDialerTurn?.member_audio_url || null,
-        speaker: 'member',
         speakerLabel: memberName,
-      });
+        playbackSteps: [{
+          stepIndex: null,
+          stepNumber: currentDialerTurn?.member_step_number ?? null,
+          script: fallbackMemberResponse,
+          audioUrl: currentDialerTurn?.member_audio_url || null,
+          speaker: 'member',
+          speakerLabel: memberName,
+        }],
+      };
     }
 
-    if (queuedPlaybackSteps.length) {
-      const firstPlaybackStep = queuedPlaybackSteps[0];
-      const resumeIndex = playbackIndex < steps.length
-        ? playbackIndex
-        : null;
-      const nextPlayback: QueuedMemberPlayback = {
-        sourceStepIndex: firstPlaybackStep?.stepIndex ?? null,
-        resumeStepIndex: typeof resumeIndex === 'number' ? resumeIndex : null,
-        stepNumber: firstPlaybackStep?.stepNumber ?? null,
-        script: firstPlaybackStep?.script || '',
-        audioUrl: firstPlaybackStep?.audioUrl || null,
-        speakerLabel: firstPlaybackStep?.speakerLabel || memberName,
-        playbackSteps: queuedPlaybackSteps,
-      };
-
-      setQueuedMemberStepIndex(firstPlaybackStep?.stepIndex ?? null);
+    if (nextPlayback) {
+      setQueuedMemberStepIndex(nextPlayback.sourceStepIndex ?? null);
       setQueuedMemberPlayback(nextPlayback);
       await playQueuedMemberResponse(nextPlayback);
       toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
@@ -2087,11 +2105,11 @@ function TraineeSimFloorPageContent() {
     toast.success('Turn saved. Click Unhold to continue to the next CSR step.');
   }, [
     armNextScenarioResume,
+    buildQueuedMemberPlaybackFromIndex,
     currentDialerTurn,
     currentStepIndex,
     finalizeSession,
     memberName,
-    moveToStep,
     playPlaybackPrompt,
     playQueuedMemberResponse,
     steps,
@@ -2162,6 +2180,7 @@ function TraineeSimFloorPageContent() {
     liveTranscript,
     memberTurnState,
     handleTurnSubmissionResult,
+    queuedMemberPlayback?.resumeStepIndex,
     stopBrowserTranscript,
     stopRecording,
   ]);

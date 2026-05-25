@@ -3621,6 +3621,42 @@ def _resolve_session_current_step_for_response(
     return current_step
 
 
+def _resolve_next_pending_csr_step_number(
+    session: SimSession,
+    steps: list[CallSimulationScenarioStepResponse],
+) -> Optional[int]:
+    """Return the next CSR step that is still waiting for an accepted submission."""
+    ordered_csr_steps = [
+        step
+        for step in sorted(steps, key=lambda item: int(item.step_number or 0))
+        if _is_csr_actor(step.actor)
+    ]
+    if not ordered_csr_steps:
+        return None
+
+    latest_turn_by_step: dict[int, dict[str, Any]] = {}
+    for item in _session_turn_logs(session):
+        if not _is_csr_actor(str(item.get("actor") or "")):
+            continue
+        step_number = int(item.get("step_number") or 0)
+        if step_number <= 0:
+            continue
+        existing_entry = latest_turn_by_step.get(step_number)
+        if existing_entry is None or int(item.get("turn_attempt_number") or 0) >= int(
+            existing_entry.get("turn_attempt_number") or 0
+        ):
+            latest_turn_by_step[step_number] = item
+
+    for step in ordered_csr_steps:
+        latest_turn = latest_turn_by_step.get(int(step.step_number or 0))
+        if latest_turn is None:
+            return int(step.step_number or 0)
+        if not bool(latest_turn.get("accepted_for_progress")):
+            return int(step.step_number or 0)
+
+    return None
+
+
 def _build_session_start_response(
     db: Session,
     *,
@@ -7602,6 +7638,18 @@ async def submit_session_turn(
         raise HTTPException(status_code=404, detail="Scenario step not found")
     if step.actor != "csr":
         raise HTTPException(status_code=400, detail="Only CSR turns can be recorded")
+
+    expected_step_number = _resolve_next_pending_csr_step_number(session, steps)
+    if expected_step_number is None:
+        raise HTTPException(
+            status_code=409,
+            detail="All CSR turns are already complete. End the call to generate the final evaluation.",
+        )
+    if step_number != expected_step_number:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Step {expected_step_number} is the next allowed CSR turn for this Call Simulation.",
+        )
 
     file_bytes = await file.read()
     if not file_bytes:
