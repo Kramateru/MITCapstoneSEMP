@@ -315,25 +315,11 @@ export function DashboardLayout({
         }}
       >
         <div className="h-full flex flex-col">
-          {/* Logo Section */}
           <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6 lg:px-6 lg:py-7">
-            <div className={`flex items-start gap-[1.125rem] ${isMinifiedSidebar ? 'lg:justify-center' : ''}`}>
-              <div className="flex h-[5.15rem] w-[5.15rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.65rem] bg-white/94 ring-1 ring-white/15 shadow-[0_18px_34px_-24px_rgba(15,23,42,0.45)] sm:h-[5.9rem] sm:w-[5.9rem]">
-                <img
-                  src="/st-peter-seal.png"
-                  alt="St. Peter Velle Technical Training Center"
-                  className="h-full w-full object-contain"
-                />
-              </div>
-              <div className={`min-w-0 space-y-1.5 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+            <div className={`min-w-0 space-y-1.5 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+              <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
                 <p className="text-[0.74rem] font-semibold uppercase tracking-[0.22em] text-sidebar-foreground/55">
                   {roleLabelMap[resolvedUserRole]}
-                </p>
-                <p className="text-[1.05rem] font-bold uppercase tracking-[0.18em] text-sidebar-foreground/90">
-                  St. Peter Velle
-                </p>
-                <p className="text-[0.95rem] leading-6 text-sidebar-foreground/72">
-                  Speech-Enabled BPO Platform
                 </p>
                 <p className="text-sm leading-6 text-sidebar-foreground/54">
                   {roleWorkspaceHintMap[resolvedUserRole]}
@@ -413,39 +399,24 @@ export function DashboardLayout({
               {sidebarOpen ? <X size={22} /> : <Menu size={22} />}
             </button>
 
-            <div className="flex min-w-0 items-start gap-3.5 sm:gap-[1.125rem]">
-              <div className="flex h-[4.5rem] w-[4.5rem] shrink-0 items-center justify-center overflow-hidden rounded-[1.5rem] border border-border/75 bg-white/92 shadow-[0_18px_36px_-28px_rgba(15,23,42,0.34)] sm:h-[5.2rem] sm:w-[5.2rem] lg:h-[5.6rem] lg:w-[5.6rem]">
-                <img
-                  src="/st-peter-seal.png"
-                  alt="St. Peter Velle Technical Training Center"
-                  className="h-full w-full object-contain"
-                />
+            <div className="min-w-0 space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
+                  {roleLabelMap[resolvedUserRole]}
+                </span>
+                <Badge variant="info" className="text-[0.7rem]">
+                  Live Workspace
+                </Badge>
               </div>
-              <div className="min-w-0 space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
-                    {roleLabelMap[resolvedUserRole]}
-                  </span>
-                  <Badge variant="info" className="text-[0.7rem]">
-                    Live Workspace
-                  </Badge>
-                </div>
-                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground/80 sm:block">
-                  St. Peter Velle Technical Training Center
-                </p>
-                <p className="hidden text-[0.76rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground/72 lg:block">
-                  Speech-Enabled BPO Platform
-                </p>
-                <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-[-0.025em] text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
-                  {currentPageLabel}
-                </h1>
-                <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
-                  {roleDescriptionMap[resolvedUserRole]}
-                </p>
-                <p className="text-xs leading-5 text-muted-foreground/85 sm:hidden">
-                  {roleWorkspaceHintMap[resolvedUserRole]}
-                </p>
-              </div>
+              <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-[-0.025em] text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
+                {currentPageLabel}
+              </h1>
+              <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
+                {roleDescriptionMap[resolvedUserRole]}
+              </p>
+              <p className="text-xs leading-5 text-muted-foreground/85 sm:hidden">
+                {roleWorkspaceHintMap[resolvedUserRole]}
+              </p>
             </div>
           </div>
 

@@ -100,7 +100,7 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-4 pb-[max(0.15rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-white/90 [&>*]:w-full sm:flex-row sm:justify-end sm:pt-6 sm:[&>*]:w-auto",
+        "dialog-safe-area-footer-padding sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 [&>*]:w-full sm:flex-row sm:justify-end sm:pt-6 sm:[&>*]:w-auto",
         className,
       )}
       {...props}

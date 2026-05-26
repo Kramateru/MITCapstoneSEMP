@@ -23,14 +23,6 @@ export default function Home() {
       <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.04),transparent_36%)]" />
 
       <div className="relative w-full max-w-3xl rounded-[2rem] border border-white/12 bg-white/10 p-8 text-center shadow-[0_40px_120px_-52px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:p-10">
-        <div className="mx-auto mb-6 flex h-24 w-24 items-center justify-center rounded-[1.7rem] bg-white/96 p-3 shadow-[0_22px_50px_-28px_rgba(15,23,42,0.42)] sm:h-28 sm:w-28">
-          <img
-            src="/st-peter-seal.png"
-            alt="St. Peter Velle Technical Training Center"
-            className="h-full w-full object-contain"
-          />
-        </div>
-
         <div className="space-y-3">
           <span className="inline-flex rounded-full border border-white/14 bg-white/8 px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-sky-100">
             Speech-Enabled BPO Training Platform
@@ -41,7 +33,6 @@ export default function Home() {
           <p className="mx-auto max-w-2xl text-sm leading-7 text-slate-200 sm:text-base">
             Loading your workspace with microlearning, assessments, mock calls, and coaching progress.
           </p>
-          <p className="text-sm text-slate-300">St. Peter Velle Technical Training Center, Inc.</p>
         </div>
 
         <div className="mt-8 flex flex-col items-center gap-4">

@@ -439,6 +439,14 @@
     gap: var(--dashboard-gap);
   }
 
+  .dialog-safe-area-padding {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+
+  .dialog-safe-area-footer-padding {
+    padding-bottom: max(0.15rem, env(safe-area-inset-bottom));
+  }
+
   .dashboard-card {
     background: var(--card);
     box-shadow: var(--dashboard-shadow);
@@ -750,6 +758,12 @@
 
   .analytics-page-actions > * {
     flex-basis: 100%;
+  }
+}
+
+@media (min-width: 640px) {
+  .dialog-safe-area-padding {
+    padding-bottom: max(1.35rem, env(safe-area-inset-bottom));
   }
 }
 

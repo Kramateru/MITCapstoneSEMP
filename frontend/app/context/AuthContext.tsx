@@ -56,6 +56,14 @@ type AuthApiPayload = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const SUPABASE_ACCESS_TOKEN_KEY = 'supabase_access_token'
 const SUPABASE_REFRESH_TOKEN_KEY = 'supabase_refresh_token'
+const expectedLoginErrorPatterns = [
+  /^invalid email or password$/i,
+  /^email is required\.?$/i,
+  /^password is required\.?$/i,
+  /^user account is inactive$/i,
+  /^your supabase account does not have a platform profile\.?$/i,
+  /^this supabase account is currently disabled\.?$/i,
+]
 
 function normalizeUserRole(value: unknown): User['user_role'] | null {
   if (typeof value !== 'string') {
@@ -238,6 +246,15 @@ function getRefreshTokenFromPayload(payload: AuthApiPayload, fallbackValue?: str
   return typeof payload.refresh_token === 'string' ? payload.refresh_token : fallbackValue || null
 }
 
+function isExpectedLoginError(error: Error) {
+  const message = error.message.trim()
+  if (!message) {
+    return false
+  }
+
+  return expectedLoginErrorPatterns.some((pattern) => pattern.test(message))
+}
+
 async function parseAuthSuccessResponse(response: Response, fallbackMessage: string) {
   const parsed = await readHttpResponse<AuthApiPayload>(response)
   if (!parsed.data || typeof parsed.data !== 'object') {
@@ -410,8 +427,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       return nextUser
     } catch (error) {
-      console.error('Login error:', error)
-      throw normalizeConnectivityError(error)
+      const normalizedError = normalizeConnectivityError(error)
+      if (!isExpectedLoginError(normalizedError)) {
+        console.error('Login error:', normalizedError)
+      }
+      throw normalizedError
     }
   }
 

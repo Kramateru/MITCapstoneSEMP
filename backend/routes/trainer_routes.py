@@ -119,9 +119,14 @@ def _normalize_text_value(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _sync_trainee_to_supabase_or_raise(db: Session, trainee: User) -> None:
+def _sync_trainee_to_supabase_or_raise(
+    db: Session,
+    trainee: User,
+    *,
+    update_password: bool = False,
+) -> None:
     try:
-        sync_user_to_supabase_auth(db, trainee)
+        sync_user_to_supabase_auth(db, trainee, update_password=update_password)
     except SupabaseUserSyncError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -1135,7 +1140,7 @@ def _create_trainee_account(
 
     db.add(new_user)
     db.flush()
-    _sync_trainee_to_supabase_or_raise(db, new_user)
+    _sync_trainee_to_supabase_or_raise(db, new_user, update_password=True)
 
     if batch and new_user not in batch.users:
         batch.users.append(new_user)

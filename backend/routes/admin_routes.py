@@ -1088,7 +1088,7 @@ async def create_user(
     db.flush()
 
     try:
-        sync_user_to_supabase_auth(db, new_user)
+        sync_user_to_supabase_auth(db, new_user, update_password=True)
     except SupabaseUserSyncError as exc:
         db.rollback()
         raise HTTPException(
@@ -1164,7 +1164,7 @@ async def bulk_upload_users(
 
                     db.add(new_user)
                     db.flush()
-                    sync_user_to_supabase_auth(db, new_user)
+                    sync_user_to_supabase_auth(db, new_user, update_password=True)
 
                 created_count += 1
 
@@ -1465,7 +1465,7 @@ def _seed_sample_dataset(
         },
     ]:
         user, created = _ensure_user(db, **user_seed)
-        sync_user_to_supabase_auth(db, user)
+        sync_user_to_supabase_auth(db, user, update_password=True)
         users[user_seed["email"]] = user
         summary["users_created"] += int(created)
 
