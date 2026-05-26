@@ -50,7 +50,7 @@
   --dashboard-card-radius: 1.25rem;
   --dashboard-gap: clamp(1rem, 0.85rem + 0.6vw, 1.5rem);
   --dashboard-padding: clamp(1rem, 0.85rem + 0.8vw, 1.45rem);
-  --dashboard-reading-width: 72ch;
+  --dashboard-reading-width: 68ch;
 }
 
 .dark {
@@ -399,10 +399,20 @@
   .dashboard-page {
     width: 100%;
     max-width: 100%;
+    display: grid;
+    align-content: start;
+    gap: var(--dashboard-gap);
+  }
+
+  .dashboard-page > * {
+    min-width: 0;
   }
 
   .workspace-shell {
     width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: clamp(1rem, 0.86rem + 0.48vw, 1.4rem);
     min-width: 0;
     overflow: hidden;
     border-radius: 1.55rem;
@@ -413,6 +423,10 @@
     box-shadow: var(--dashboard-shell-shadow);
     min-height: calc(100dvh - 8.5rem);
     backdrop-filter: blur(8px);
+  }
+
+  .workspace-shell > * {
+    min-width: 0;
   }
 
   .workspace-topbar {
@@ -437,6 +451,11 @@
   .dashboard-grid {
     display: grid;
     gap: var(--dashboard-gap);
+    align-items: start;
+  }
+
+  .dashboard-grid > * {
+    min-width: 0;
   }
 
   .dialog-safe-area-padding {
@@ -452,6 +471,7 @@
     box-shadow: var(--dashboard-shadow);
     border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
     border-radius: var(--dashboard-card-radius);
+    min-width: 0;
   }
 
   .dashboard-section {
@@ -460,6 +480,7 @@
     padding: var(--dashboard-padding);
     box-shadow: var(--dashboard-shadow);
     border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
+    min-width: 0;
   }
 
   .dashboard-hero {
@@ -506,6 +527,7 @@
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 250, 252, 0.96));
     box-shadow: var(--dashboard-shadow);
+    min-width: 0;
   }
 
   .metric-card::before {
@@ -522,12 +544,14 @@
     border: 1px solid color-mix(in srgb, var(--border) 88%, white 12%);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(249, 251, 253, 0.94));
     box-shadow: var(--dashboard-shadow);
+    min-width: 0;
   }
 
   .soft-panel {
     border-radius: calc(var(--dashboard-card-radius) - 0.15rem);
     border: 1px solid color-mix(in srgb, var(--border) 84%, white 16%);
     background: rgba(255, 255, 255, 0.84);
+    min-width: 0;
   }
 
   .form-field-shell {
@@ -535,16 +559,19 @@
     border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 254, 0.96));
     box-shadow: 0 12px 26px -24px rgba(15, 23, 42, 0.3);
+    min-width: 0;
   }
 
   .empty-state-panel {
     border-radius: calc(var(--dashboard-card-radius) - 0.05rem);
     border: 1.5px dashed color-mix(in srgb, var(--border) 90%, white 10%);
     background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(255, 255, 255, 0.95));
+    min-width: 0;
   }
 
   .reading-width {
     max-width: var(--dashboard-reading-width);
+    width: 100%;
   }
 
   .speech-panel {
@@ -554,6 +581,7 @@
     box-shadow: var(--dashboard-shadow);
     color: var(--foreground);
     line-height: 1.65;
+    min-width: 0;
   }
 
   .cta-button {
@@ -617,6 +645,11 @@
   .analytics-page-shell {
     display: grid;
     gap: clamp(1rem, 0.82rem + 0.72vw, 1.5rem);
+    align-content: start;
+  }
+
+  .analytics-page-shell > * {
+    min-width: 0;
   }
 
   .analytics-page-header {
@@ -635,6 +668,7 @@
     width: 100%;
     flex-wrap: wrap;
     gap: 0.75rem;
+    align-items: stretch;
   }
 
   .analytics-page-actions > * {
@@ -645,19 +679,21 @@
   .analytics-summary-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    align-items: stretch;
   }
 
   .analytics-auto-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    align-items: stretch;
   }
 
   .analytics-inline-stats {
     display: grid;
     gap: 0.75rem;
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
   }
 
   .analytics-note-card {
@@ -675,6 +711,8 @@
     max-width: 100%;
     overflow-x: auto;
     overflow-y: auto;
+    scrollbar-gutter: stable both-edges;
+    padding-bottom: 0.3rem;
   }
 
   .table-scroll-area > div {

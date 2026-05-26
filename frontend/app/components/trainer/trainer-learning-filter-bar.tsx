@@ -99,7 +99,7 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
 
   return (
     <div className="rounded-[1.75rem] border border-border/80 bg-white/92 p-4 shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] backdrop-blur sm:p-5 lg:p-6">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-8">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         <div className="space-y-2">
           <Label>Batch</Label>
           <Select value={value.batchId || NONE_VALUE} onValueChange={(nextValue) => setField('batchId', nextValue === NONE_VALUE ? '' : nextValue)}>
@@ -205,11 +205,11 @@ export function TrainerLearningFilterBar({ value, options, onChange }: Props) {
           />
         </div>
 
-        <div className="flex items-end sm:col-span-2 lg:col-span-3 xl:col-span-1 2xl:col-span-1">
+        <div className="flex items-end sm:col-span-2 xl:col-span-3 2xl:col-span-4">
           <Button
             type="button"
             variant="outline"
-            className="w-full min-h-11"
+            className="w-full min-h-11 2xl:w-auto"
             onClick={() => onChange(EMPTY_TRAINER_LEARNING_FILTERS)}
           >
             <FilterX className="mr-2 size-4" />

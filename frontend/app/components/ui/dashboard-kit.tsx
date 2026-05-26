@@ -86,7 +86,7 @@ export function DashboardHero({
           </div>
         </div>
         {actions ? (
-          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:w-auto xl:justify-end">
+          <div className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center xl:w-auto xl:max-w-[34rem] xl:justify-end">
             {actions}
           </div>
         ) : null}
@@ -158,7 +158,7 @@ export function SectionPanel({
             <CardTitle>{title}</CardTitle>
             {description ? <CardDescription>{description}</CardDescription> : null}
           </div>
-          {action ? <div className="w-full shrink-0 lg:w-auto">{action}</div> : null}
+          {action ? <div className="w-full shrink-0 lg:w-auto lg:max-w-[20rem]">{action}</div> : null}
         </div>
       </CardHeader>
       <CardContent className={cn("pt-5 sm:pt-6", contentClassName)}>{children}</CardContent>
@@ -189,11 +189,11 @@ export function ActionCard({
     <Link
       href={href}
       className={cn(
-        "group data-card block p-4 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-5",
+        "group data-card block min-h-full p-4 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-5",
         className,
       )}
     >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex h-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           {icon ? (
             <div className={cn("mt-0.5 rounded-2xl p-3 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
@@ -223,8 +223,8 @@ export function EmptyStatePanel({
   className?: string;
 }) {
   return (
-    <div className={cn("empty-state-panel px-5 py-8 text-center sm:px-6", className)}>
-      <div className="space-y-2">
+    <div className={cn("empty-state-panel grid place-items-center px-5 py-8 text-center sm:px-6", className)}>
+      <div className="space-y-2 reading-width">
         <p className="text-sm font-semibold text-foreground">{title}</p>
         <p className="mx-auto max-w-2xl text-sm leading-6 text-muted-foreground">{description}</p>
       </div>
