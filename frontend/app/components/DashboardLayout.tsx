@@ -16,6 +16,7 @@ import {
     type UserDashboardSettings,
 } from '@/app/utils/user-settings';
 import { LogOut, Menu, X } from 'lucide-react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
@@ -52,6 +53,7 @@ export function DashboardLayout({
   const isMinifiedSidebar = dashboardSettings.minifyNavigation && !isTopNavigation;
   const isHiddenSidebar = dashboardSettings.hideNavigation && !isTopNavigation;
   const desktopMenuEnabled = isHiddenSidebar;
+  const systemNameLines = ['Speech-Enabled', 'BPO Training Platform'] as const;
   const roleLabelMap = {
     trainee: 'Trainee Workspace',
     trainer: 'Trainer Workspace',
@@ -67,11 +69,11 @@ export function DashboardLayout({
     trainer: 'Manage learning flow, reviews, and follow-up across your trainees.',
     admin: 'Track system readiness, learning delivery, and organization-wide signals.',
   } as const;
-  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1720px] 2xl:max-w-[1880px]' : 'max-w-none';
+  const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1560px] 2xl:max-w-[1680px]' : 'max-w-none';
   const contentOuterSpacingClass = dashboardSettings.boxedLayout
-    ? 'px-3 py-3 sm:px-6 sm:py-6 lg:px-8 lg:py-7 xl:px-10 xl:py-8'
-    : 'px-3 py-3 sm:px-5 sm:py-5 lg:px-6 lg:py-6 xl:px-7 xl:py-7';
-  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-4 sm:p-7 lg:p-9 xl:p-10' : 'p-4 sm:p-6 lg:p-8 xl:p-9';
+    ? 'px-3 py-3 sm:px-5 sm:py-5 lg:px-7 lg:py-6 xl:px-8 xl:py-7'
+    : 'px-3 py-3 sm:px-4 sm:py-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6';
+  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-4 sm:p-6 lg:p-7 xl:p-8' : 'p-4 sm:p-5 lg:p-6 xl:p-7';
 
   let desktopSidebarStateClass = 'lg:translate-x-0 lg:relative';
   if (isTopNavigation) {
@@ -250,13 +252,14 @@ export function DashboardLayout({
     () => (href: string) => pathname === href || pathname.startsWith(`${href}/`),
     [pathname],
   );
-  const currentPageLabel = useMemo(() => {
-    const bestMatch = [...resolvedSidebarItems]
+  const activeSidebarItem = useMemo(() => {
+    return [...resolvedSidebarItems]
       .sort((left, right) => right.href.length - left.href.length)
       .find((item) => isActivePath(item.href));
-
-    return bestMatch?.label || 'Workspace';
   }, [isActivePath, resolvedSidebarItems]);
+
+  const currentPageLabel = activeSidebarItem?.label || 'Workspace';
+  const currentPageSection = activeSidebarItem?.section || roleLabelMap[resolvedUserRole];
 
   const handleLogout = () => {
     logout();
@@ -315,26 +318,58 @@ export function DashboardLayout({
         }}
       >
         <div className="h-full flex flex-col">
-          <div className="border-b border-sidebar-border px-5 py-5 sm:px-6 sm:py-6 lg:px-6 lg:py-7">
-            <div className={`min-w-0 space-y-1.5 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-              <div className={isMinifiedSidebar ? 'lg:hidden' : ''}>
-                <p className="text-[0.74rem] font-semibold uppercase tracking-[0.22em] text-sidebar-foreground/55">
-                  {roleLabelMap[resolvedUserRole]}
-                </p>
-                <p className="text-sm leading-6 text-sidebar-foreground/54">
-                  {roleWorkspaceHintMap[resolvedUserRole]}
-                </p>
+          <div className="border-b border-sidebar-border px-4 py-4 sm:px-5 sm:py-5 lg:px-5 lg:py-6">
+            <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:flex lg:justify-center' : 'space-y-4'}`}>
+              <div className={`flex ${isMinifiedSidebar ? 'justify-center' : 'items-center'} gap-3.5`}>
+                <div className="relative h-[4.25rem] w-[4.25rem] shrink-0 overflow-hidden rounded-3xl border border-white/14 bg-white/10 shadow-[0_18px_32px_-24px_rgba(15,23,42,0.95)]">
+                  <Image
+                    src="/st-peter-seal.svg"
+                    alt="St. Peter Velle Technical Training Center seal"
+                    fill
+                    priority
+                    sizes="68px"
+                    className="object-contain p-1.5"
+                  />
+                </div>
+                <div className={`min-w-0 space-y-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+                  <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-sidebar-foreground/58">
+                    {systemNameLines[0]}
+                  </p>
+                  <h2 className="text-balance text-[1.08rem] font-semibold leading-5 tracking-[-0.03em] text-white">
+                    {systemNameLines[1]}
+                  </h2>
+                </div>
               </div>
+              {!isMinifiedSidebar ? (
+                <div className="rounded-[1.35rem] border border-white/8 bg-white/[0.05] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-sidebar-foreground/55">
+                        {roleLabelMap[resolvedUserRole]}
+                      </p>
+                      <p className="mt-1 text-sm leading-6 text-sidebar-foreground/68">
+                        {roleWorkspaceHintMap[resolvedUserRole]}
+                      </p>
+                    </div>
+                    <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold text-sidebar-foreground/70">
+                      {resolvedSidebarItems.length} Links
+                    </div>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 space-y-6 overflow-y-auto px-3.5 py-6 sm:px-[1.125rem] sm:py-6">
+          <nav className="flex-1 overflow-y-auto px-3 py-5 sm:px-4 sm:py-5" aria-label={`${resolvedUserRole} workspace navigation`}>
             {groupedSidebarItems.map((group) => (
-              <div key={group.section} className="space-y-2.5">
+              <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
                 {!isMinifiedSidebar ? (
-                  <div className="px-3 text-[0.7rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/54">
-                    {group.section}
+                  <div className="flex items-center gap-2 px-2.5">
+                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/54">
+                      {group.section}
+                    </div>
+                    <div className="h-px flex-1 bg-white/8" />
                   </div>
                 ) : null}
                 {group.items.map((item) => (
@@ -343,23 +378,36 @@ export function DashboardLayout({
                     href={item.href}
                     prefetch={true}
                     onClick={handleSidebarLinkClick}
-                    className={`group relative flex items-center gap-3.5 rounded-2xl px-4 py-3.5 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
+                    title={isMinifiedSidebar ? item.label : undefined}
+                    aria-label={isMinifiedSidebar ? item.label : undefined}
+                    className={`group relative flex items-center gap-3 rounded-2xl border px-3.5 py-3 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
                       isActivePath(item.href)
-                        ? 'border border-white/10 bg-white/11 text-white font-medium shadow-[0_18px_34px_-24px_rgba(0,0,0,0.55)] ring-1 ring-white/10'
-                        : 'border border-transparent text-sidebar-foreground/82 hover:border-white/6 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                        ? 'border-white/12 bg-white/11 text-white shadow-[0_18px_34px_-24px_rgba(0,0,0,0.55)] ring-1 ring-white/10'
+                        : 'border-transparent text-sidebar-foreground/82 hover:border-white/8 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                     }`}
                   >
                     {isActivePath(item.href) ? (
                       <span className="absolute left-1 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-white/80" />
                     ) : null}
-                    <span className={isActivePath(item.href) ? 'text-white' : 'text-sidebar-foreground/82'}>
+                    <span
+                      className={`inline-flex size-10 shrink-0 items-center justify-center rounded-xl border transition ${
+                        isActivePath(item.href)
+                          ? 'border-white/12 bg-white/10 text-white'
+                          : 'border-white/6 bg-white/[0.04] text-sidebar-foreground/80 group-hover:border-white/10 group-hover:bg-white/[0.08] group-hover:text-sidebar-accent-foreground'
+                      }`}
+                    >
                       {item.icon}
                     </span>
-                    <span className={`flex-1 text-[0.98rem] leading-6 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>{item.label}</span>
+                    <div className={`min-w-0 flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+                      <div className="truncate text-[0.95rem] font-medium leading-6">{item.label}</div>
+                    </div>
                     {item.badge && !isMinifiedSidebar ? (
                       <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
                         {item.badge}
                       </Badge>
+                    ) : null}
+                    {isActivePath(item.href) && !item.badge && !isMinifiedSidebar ? (
+                      <span className="size-2 shrink-0 rounded-full bg-white/80" />
                     ) : null}
                   </Link>
                 ))}
@@ -371,10 +419,12 @@ export function DashboardLayout({
           <div className="border-t border-sidebar-border p-4 sm:p-[1.125rem]">
             <button
               onClick={handleLogout}
-              className="flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3.5 text-[0.98rem] text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              className={`flex w-full items-center gap-3 rounded-2xl border border-white/6 bg-white/5 px-4 py-3.5 text-[0.95rem] font-medium text-sidebar-foreground/82 transition-[background-color,color,border-color] hover:border-white/10 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground ${
+                isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''
+              }`}
             >
               <LogOut size={20} />
-              <span>Logout</span>
+              <span className={isMinifiedSidebar ? 'lg:hidden' : ''}>Logout</span>
             </button>
           </div>
         </div>
@@ -383,10 +433,10 @@ export function DashboardLayout({
       {/* Main Content */}
       <div className="relative z-10 flex-1 flex flex-col min-w-0">
         {/* Top Navigation Bar */}
-        <header className={`workspace-topbar flex flex-col gap-4 border-b border-border/80 px-3 py-3.5 shadow-sm sm:px-6 sm:py-4 lg:flex-row lg:items-center lg:justify-between lg:px-7 ${
+        <header className={`workspace-topbar flex flex-col gap-4 border-b border-border/80 px-3 py-3.5 shadow-sm sm:px-5 sm:py-4 lg:flex-row lg:items-center lg:justify-between lg:px-6 xl:px-7 ${
           dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
         }`}>
-          <div className="flex min-w-0 flex-1 items-start gap-3 sm:gap-4">
+          <div className="flex min-w-0 flex-1 items-start gap-3 sm:items-center sm:gap-4">
             <button
               type="button"
               onClick={() => setSidebarOpen((prev) => !prev)}
@@ -403,6 +453,9 @@ export function DashboardLayout({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
                   {roleLabelMap[resolvedUserRole]}
+                </span>
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  {currentPageSection}
                 </span>
                 <Badge variant="info" className="text-[0.7rem]">
                   Live Workspace
@@ -421,7 +474,7 @@ export function DashboardLayout({
           </div>
 
           {/* Right Section */}
-          <div className="flex w-full self-stretch flex-wrap items-center justify-between gap-3 rounded-[1.35rem] border border-border/70 bg-white/84 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:min-w-[18rem] sm:self-auto sm:flex-nowrap sm:justify-end sm:gap-4 sm:px-3.5 lg:min-w-[19rem] lg:gap-5">
+          <div className="flex w-full self-stretch flex-wrap items-center justify-end gap-3 rounded-[1.35rem] border border-border/70 bg-white/84 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:min-w-[18rem] sm:self-auto sm:flex-nowrap sm:gap-4 sm:px-3.5 lg:min-w-[19rem] lg:gap-5">
             <NotificationBell />
             <ProfileManagementDialog />
           </div>
@@ -429,29 +482,51 @@ export function DashboardLayout({
 
         {isTopNavigation ? (
           <div className="hidden border-b border-border bg-background/88 backdrop-blur lg:block">
-            <div className={`mx-auto w-full px-4 sm:px-5 lg:px-6 ${contentWidthClass}`}>
-              <nav className="overflow-x-auto py-3.5">
-                <div className="flex min-w-max items-center gap-2.5">
-                  {resolvedSidebarItems.map((item) => (
-                    <Link
-                      key={`top-${item.href}`}
-                      href={item.href}
-                      className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-2.5 text-[0.96rem] font-medium transition-colors ${
-                        isActivePath(item.href)
-                          ? 'bg-primary text-primary-foreground shadow-sm'
-                          : 'text-muted-foreground hover:bg-secondary hover:text-foreground'
-                      }`}
-                    >
-                      {item.icon}
-                      <span>{item.label}</span>
-                      {item.badge ? (
-                        <span className="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-800">
-                          {item.badge}
-                        </span>
-                      ) : null}
-                    </Link>
-                  ))}
-                </div>
+            <div className={`mx-auto w-full px-4 py-3.5 sm:px-5 lg:px-6 ${contentWidthClass}`}>
+              <nav
+                aria-label={`${resolvedUserRole} workspace sections`}
+                className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3"
+              >
+                {groupedSidebarItems.map((group) => (
+                  <div
+                    key={`top-group-${group.section}`}
+                    className="rounded-[1.3rem] border border-border/70 bg-white/90 px-3.5 py-3 shadow-[0_16px_34px_-30px_rgba(15,23,42,0.26)]"
+                  >
+                    <div className="mb-2.5 flex items-center gap-2">
+                      <div className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                        {group.section}
+                      </div>
+                      <div className="h-px flex-1 bg-border/80" />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {group.items.map((item) => (
+                        <Link
+                          key={`top-${item.href}`}
+                          href={item.href}
+                          className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-3 py-2 text-[0.9rem] font-medium transition-[background-color,color,border-color,box-shadow] ${
+                            isActivePath(item.href)
+                              ? 'border-primary/16 bg-primary text-primary-foreground shadow-[0_14px_28px_-20px_rgba(29,86,216,0.45)]'
+                              : 'border-border/80 bg-background text-muted-foreground hover:border-primary/18 hover:bg-secondary hover:text-foreground'
+                          }`}
+                        >
+                          <span>{item.icon}</span>
+                          <span>{item.label}</span>
+                          {item.badge ? (
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                isActivePath(item.href)
+                                  ? 'bg-white/18 text-white'
+                                  : 'bg-red-100 text-red-800'
+                              }`}
+                            >
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </nav>
             </div>
           </div>

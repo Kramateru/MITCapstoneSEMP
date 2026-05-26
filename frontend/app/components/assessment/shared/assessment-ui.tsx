@@ -155,19 +155,21 @@ export function AssessmentSectionNav<TSection extends string>({
   }>
   onSelect: (section: TSection) => void
 }) {
+  const currentSection = sections.find((section) => section.id === activeSection) || sections[0]
+
   return (
     <Card className="border-slate-200 bg-white/95 shadow-sm">
-      <CardContent className="space-y-4 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Workspace Navigation</div>
-            <div className="mt-1 text-sm text-slate-600">Jump between the core workflow cards on this one-page assessment workspace.</div>
+      <CardContent className="space-y-3 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-1">
+            <div className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-slate-500">Workspace Navigation</div>
+            <div className="text-sm text-slate-600">Jump between the core workflow cards on this one-page assessment workspace.</div>
           </div>
-          <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
+          <div className="inline-flex items-center self-start rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
             {sections.length} Sections
           </div>
         </div>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="flex flex-wrap gap-2">
           {sections.map((section) => {
             const isActive = section.id === activeSection
             return (
@@ -175,31 +177,43 @@ export function AssessmentSectionNav<TSection extends string>({
                 key={section.id}
                 type="button"
                 onClick={() => onSelect(section.id)}
-                className={`group rounded-3xl border p-4 text-left transition ${
+                aria-current={isActive ? 'page' : undefined}
+                className={`group inline-flex min-h-11 max-w-full items-center gap-2 rounded-full border px-3 py-2 text-left transition ${
                   isActive
-                    ? 'border-slate-900 bg-slate-900 text-white shadow-lg shadow-slate-200'
-                    : 'border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,252,0.98))] hover:border-slate-300 hover:shadow-sm'
+                    ? 'border-sky-200 bg-sky-50 text-slate-950 shadow-sm shadow-sky-100'
+                    : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'
                 }`}
               >
                 <div className="flex items-center gap-3">
                   <span
-                    className={`inline-flex size-10 items-center justify-center rounded-2xl border transition ${
+                    className={`inline-flex size-8 shrink-0 items-center justify-center rounded-full border transition ${
                       isActive
-                        ? 'border-white/20 bg-white/10 text-white'
-                        : 'border-slate-200 bg-white text-slate-700 group-hover:border-slate-300'
+                        ? 'border-sky-200 bg-white text-sky-700'
+                        : 'border-slate-200 bg-slate-50 text-slate-600 group-hover:border-slate-300 group-hover:bg-white'
                     }`}
                   >
                     {section.icon}
                   </span>
-                  <div className={`font-semibold ${isActive ? 'text-white' : 'text-slate-950'}`}>{section.label}</div>
-                </div>
-                <div className={`mt-3 text-xs leading-5 ${isActive ? 'text-slate-200' : 'text-slate-500'}`}>
-                  {section.description}
+                  <span className={`min-w-0 text-sm font-semibold ${isActive ? 'text-slate-950' : 'text-slate-800'}`}>
+                    {section.label}
+                  </span>
                 </div>
               </button>
             )
           })}
         </div>
+        {currentSection ? (
+          <div className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.95),rgba(255,255,255,0.98))] px-3.5 py-3">
+            <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-sky-200 bg-white text-sky-700">
+              {currentSection.icon}
+            </span>
+            <div className="min-w-0">
+              <div className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500">Current Section</div>
+              <div className="mt-1 text-sm font-semibold text-slate-950">{currentSection.label}</div>
+              <div className="mt-1 text-xs leading-5 text-slate-600">{currentSection.description}</div>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )
