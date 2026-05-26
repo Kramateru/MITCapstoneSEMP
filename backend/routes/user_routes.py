@@ -5,7 +5,7 @@ Handles user CRUD operations, authentication, and profile management
 
 import uuid
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from sqlalchemy import func
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
@@ -22,7 +22,9 @@ from ..services.supabase_auth_service import (
     SupabaseAuthServiceError,
     SupabaseUserSyncError,
     authenticate_supabase_credentials,
-    issue_supabase_session,
+    find_platform_user_for_supabase_session,
+    get_supabase_session_user_identity,
+    realign_platform_user_with_supabase_session,
     sync_user_to_supabase_auth,
 )
 from ..supabase_client import get_supabase_client
@@ -139,9 +141,14 @@ def _delete_profile_image(profile_image_url: Optional[str]) -> None:
     get_supabase_client().delete_by_public_url(profile_image_url)
 
 
-def _sync_user_to_supabase_or_raise(db: Session, user: User) -> None:
+def _sync_user_to_supabase_or_raise(
+    db: Session,
+    user: User,
+    *,
+    update_password: bool = False,
+) -> None:
     try:
-        sync_user_to_supabase_auth(db, user)
+        sync_user_to_supabase_auth(db, user, update_password=update_password)
     except SupabaseUserSyncError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -189,7 +196,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db.add(new_user)
     db.flush()
     try:
-        _sync_user_to_supabase_or_raise(db, new_user)
+        _sync_user_to_supabase_or_raise(db, new_user, update_password=True)
     except HTTPException:
         db.rollback()
         raise
@@ -204,8 +211,9 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     """User login with Supabase-authenticated email and password"""
     normalized_email = credentials.email.strip().lower()
 
+    supabase_session: dict[str, Any] = {}
     try:
-        authenticate_supabase_credentials(db, normalized_email, credentials.password)
+        supabase_session = authenticate_supabase_credentials(db, normalized_email, credentials.password)
     except SupabaseAuthInputError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -227,24 +235,20 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail=str(exc),
         ) from exc
 
-    supabase_session: dict[str, Any] = {}
-    try:
-        supabase_session = issue_supabase_session(normalized_email, credentials.password)
-    except (
-        SupabaseAuthenticationError,
-        SupabaseAuthConfigurationError,
-        SupabaseAuthServiceError,
-    ) as exc:
-        logger.warning(
-            "Supabase session issuance failed for %s after credentials were verified. "
-            "Continuing with backend session only: %s",
-            normalized_email,
-            exc,
-        )
-
-    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    session_user_id, session_user_email = get_supabase_session_user_identity(supabase_session)
+    user = find_platform_user_for_supabase_session(
+        db,
+        supabase_session,
+        fallback_email=normalized_email,
+    )
 
     if not user:
+        logger.warning(
+            "Supabase account %s (session email=%s user_id=%s) is missing a platform profile",
+            normalized_email,
+            session_user_email,
+            session_user_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your Supabase account does not have a platform profile.",
@@ -260,9 +264,14 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
     refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
     
-    # Update last login
+    realign_platform_user_with_supabase_session(
+        user,
+        session_payload=supabase_session,
+        successful_password=credentials.password,
+    )
     user.last_login = __import__('datetime').datetime.utcnow()
     db.commit()
+    db.refresh(user)
 
     return LoginResponse(
         access_token=access_token,
@@ -406,12 +415,23 @@ async def change_password(
     old_password = _validate_password_or_raise(password_change.old_password, field_name="Old password")
     new_password = _validate_password_or_raise(password_change.new_password, field_name="New password")
 
-    # Verify old password
-    if not auth_utils.verify_password(old_password, current_user.password_hash):
+    try:
+        authenticate_supabase_credentials(db, current_user.email, old_password)
+    except SupabaseAuthenticationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Old password is incorrect"
-        )
+            detail="Old password is incorrect",
+        ) from exc
+    except SupabaseAuthConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except SupabaseAuthServiceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
 
     # Prevent reusing the same password
     if old_password == new_password:
@@ -424,7 +444,7 @@ async def change_password(
     current_user.password_hash = auth_utils.hash_password(new_password)
     db.flush()
     try:
-        _sync_user_to_supabase_or_raise(db, current_user)
+        _sync_user_to_supabase_or_raise(db, current_user, update_password=True)
     except HTTPException:
         db.rollback()
         raise

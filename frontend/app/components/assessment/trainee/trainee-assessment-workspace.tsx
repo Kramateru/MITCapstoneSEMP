@@ -160,6 +160,10 @@ function matchesFilter(assessment: TraineeAssessmentCard, filter: AssessmentFilt
   return assessment.latestAttempt?.status === 'fail' && !assessment.canRetake
 }
 
+function getAssessmentErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message.trim() ? error.message : fallback
+}
+
 export function TraineeAssessmentWorkspace() {
   const router = useRouter()
 
@@ -188,8 +192,7 @@ export function TraineeAssessmentWorkspace() {
       const payload = await fetchTraineeAssessmentDashboard()
       setDashboard(payload)
     } catch (loadError) {
-      console.error(loadError)
-      setError(loadError instanceof Error ? loadError.message : 'Unable to load your assigned assessments.')
+      setError(getAssessmentErrorMessage(loadError, 'Unable to load your assigned assessments.'))
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -270,8 +273,7 @@ export function TraineeAssessmentWorkspace() {
       setActiveSession(payload)
       setSelectedAssignmentId(assignmentId)
     } catch (loadError) {
-      console.error(loadError)
-      setSessionError(loadError instanceof Error ? loadError.message : 'Unable to open this assigned assessment.')
+      setSessionError(getAssessmentErrorMessage(loadError, 'Unable to open this assigned assessment.'))
     } finally {
       setSessionLoading(false)
     }

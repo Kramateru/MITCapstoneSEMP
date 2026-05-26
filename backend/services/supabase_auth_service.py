@@ -11,7 +11,7 @@ import os
 from typing import Any, Sequence
 
 import requests
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, func, text
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
@@ -112,7 +112,7 @@ def _request_supabase_auth_session(
         )
 
         if response.status_code in {400, 401, 422}:
-            raise SupabaseAuthenticationError(str(detail))
+            raise SupabaseAuthenticationError(_normalize_supabase_auth_error_message(detail))
 
         raise SupabaseAuthServiceError(str(detail))
 
@@ -128,6 +128,21 @@ def _validate_auth_password(password: str, *, field_name: str = "Password") -> s
         return auth_utils.validate_password_length(password, field_name=field_name)
     except auth_utils.PasswordValidationError as exc:
         raise SupabaseAuthInputError(str(exc)) from exc
+
+
+def _normalize_supabase_auth_error_message(detail: Any) -> str:
+    normalized_detail = str(detail or "").strip()
+    if not normalized_detail:
+        return "Invalid email or password"
+
+    if normalized_detail.lower() in {
+        "invalid login credentials",
+        "email not confirmed",
+        "invalid grant",
+    }:
+        return "Invalid email or password"
+
+    return normalized_detail
 
 
 def _uses_supabase_auth_schema(db: Session) -> bool:
@@ -323,18 +338,27 @@ def get_auth_provider_status(db: Session) -> dict[str, Any]:
             "provider": "supabase",
             "uses_supabase": True,
             "available": False,
-            "credential_source": "auth.users",
+            "credential_source": "supabase.auth",
             "message": "Backend is not connected to Supabase Postgres.",
         }
 
     try:
         db.execute(text("select 1 from auth.users limit 1"))
+        _get_supabase_auth_rest_config()
+    except SupabaseAuthConfigurationError as exc:
+        return {
+            "provider": "supabase",
+            "uses_supabase": True,
+            "available": False,
+            "credential_source": "supabase.auth",
+            "message": str(exc),
+        }
     except Exception:
         return {
             "provider": "supabase",
             "uses_supabase": True,
             "available": False,
-            "credential_source": "auth.users",
+            "credential_source": "supabase.auth",
             "message": "Unable to reach Supabase Auth right now.",
         }
 
@@ -342,17 +366,17 @@ def get_auth_provider_status(db: Session) -> dict[str, Any]:
         "provider": "supabase",
         "uses_supabase": True,
         "available": True,
-        "credential_source": "auth.users",
-        "message": "Supabase Auth is connected for credential checks.",
+        "credential_source": "supabase.auth",
+        "message": "Supabase Auth is connected for credential checks and session issuance.",
     }
 
 
 def authenticate_supabase_credentials(db: Session, email: str, password: str) -> dict[str, Any]:
-    """Validate an email/password pair against Supabase's auth.users table."""
+    """Validate an email/password pair by issuing a real Supabase Auth session."""
     normalized_email = _normalized_email(email)
     if not normalized_email:
         raise SupabaseAuthInputError("Email is required.")
-    normalized_password = _validate_auth_password(password)
+    _validate_auth_password(password)
 
     if not _uses_supabase_auth_schema(db):
         raise SupabaseAuthConfigurationError(
@@ -360,42 +384,13 @@ def authenticate_supabase_credentials(db: Session, email: str, password: str) ->
         )
 
     try:
-        record = (
-            db.execute(
-                text(
-                    """
-                    select
-                        id::text as id,
-                        email,
-                        encrypted_password,
-                        banned_until,
-                        deleted_at
-                    from auth.users
-                    where lower(email) = :email
-                    limit 1
-                    """
-                ),
-                {"email": normalized_email},
-            )
-            .mappings()
-            .first()
-        )
+        db.execute(text("select 1 from auth.users limit 1"))
     except Exception as exc:
         raise SupabaseAuthConfigurationError(
             "Unable to reach the Supabase credentials store. Please try again."
         ) from exc
 
-    if not record or record["deleted_at"] is not None or not record["encrypted_password"]:
-        raise SupabaseAuthenticationError("Invalid email or password")
-
-    if not auth_utils.verify_password(normalized_password, record["encrypted_password"]):
-        raise SupabaseAuthenticationError("Invalid email or password")
-
-    banned_until = record["banned_until"]
-    if banned_until is not None and banned_until > datetime.utcnow():
-        raise SupabaseAuthenticationError("This Supabase account is currently disabled.")
-
-    return dict(record)
+    return issue_supabase_session(normalized_email, password)
 
 
 def issue_supabase_session(email: str, password: str) -> dict[str, Any]:
@@ -426,12 +421,78 @@ def refresh_supabase_session(refresh_token: str) -> dict[str, Any]:
     )
 
 
-def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
+def get_supabase_session_user_identity(
+    session_payload: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    session_user = session_payload.get("user")
+    if not isinstance(session_user, dict):
+        return None, None
+
+    raw_user_id = session_user.get("id")
+    user_id = str(raw_user_id).strip() if raw_user_id else ""
+    raw_email = session_user.get("email")
+    email = _normalized_email(raw_email) if isinstance(raw_email, str) else ""
+
+    return (user_id or None, email or None)
+
+
+def find_platform_user_for_supabase_session(
+    db: Session,
+    session_payload: dict[str, Any],
+    *,
+    fallback_email: str | None = None,
+) -> User | None:
+    supabase_user_id, supabase_email = get_supabase_session_user_identity(session_payload)
+
+    if supabase_user_id:
+        user = db.query(User).filter(User.id == supabase_user_id).first()
+        if user:
+            return user
+
+    resolved_email = supabase_email or _normalized_email(fallback_email or "")
+    if not resolved_email:
+        return None
+
+    return db.query(User).filter(func.lower(User.email) == resolved_email).first()
+
+
+def realign_platform_user_with_supabase_session(
+    user: User,
+    *,
+    session_payload: dict[str, Any],
+    successful_password: str,
+) -> bool:
+    updated = False
+    supabase_user_id, supabase_email = get_supabase_session_user_identity(session_payload)
+
+    if (
+        supabase_user_id
+        and supabase_email
+        and user.id == supabase_user_id
+        and _normalized_email(user.email) != supabase_email
+    ):
+        user.email = supabase_email
+        updated = True
+
+    if not auth_utils.verify_password(successful_password, user.password_hash):
+        user.password_hash = auth_utils.hash_password(successful_password)
+        updated = True
+
+    return updated
+
+
+def sync_user_to_supabase_auth(
+    db: Session,
+    local_user: User,
+    *,
+    update_password: bool = False,
+) -> dict[str, Any]:
     """
     Ensure a local platform user has a matching Supabase auth.users record.
 
-    The local bcrypt hash is copied into auth.users so the platform login only
-    accepts the credentials stored in the Supabase auth schema.
+    New platform users are provisioned into Supabase Auth with the local bcrypt
+    hash. Existing Supabase users keep their current password unless an explicit
+    local password change requests a password sync.
     """
     normalized_email = _normalized_email(local_user.email)
     if not normalized_email:
@@ -544,7 +605,10 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                     set
                         instance_id = coalesce(instance_id, cast(:instance_id as uuid)),
                         email = :email,
-                        encrypted_password = :encrypted_password,
+                        encrypted_password = case
+                            when cast(:update_password as boolean) then :encrypted_password
+                            else encrypted_password
+                        end,
                         email_confirmed_at = coalesce(email_confirmed_at, :confirmed_at),
                         confirmation_token = coalesce(confirmation_token, ''),
                         recovery_token = coalesce(recovery_token, ''),
@@ -568,6 +632,7 @@ def sync_user_to_supabase_auth(db: Session, local_user: User) -> dict[str, Any]:
                     "instance_id": SUPABASE_AUTH_INSTANCE_ID,
                     "email": normalized_email,
                     "encrypted_password": local_user.password_hash,
+                    "update_password": update_password,
                     "confirmed_at": now,
                     "app_metadata": app_metadata,
                     "user_metadata": user_metadata,

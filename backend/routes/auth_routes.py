@@ -10,7 +10,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from jose import JWTError, jwt
 import os
 
@@ -25,8 +24,10 @@ from ..services.supabase_auth_service import (
     SupabaseAuthInputError,
     SupabaseAuthServiceError,
     authenticate_supabase_credentials,
+    find_platform_user_for_supabase_session,
     get_auth_provider_status,
-    issue_supabase_session,
+    get_supabase_session_user_identity,
+    realign_platform_user_with_supabase_session,
     refresh_supabase_session,
 )
 from ..services.lob_catalog import list_active_lobs, serialize_lobs
@@ -95,8 +96,9 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     normalized_email = credentials.email.strip().lower()
     logger.info("Login endpoint reached for %s", normalized_email)
 
+    supabase_session: dict[str, Any] = {}
     try:
-        authenticate_supabase_credentials(db, normalized_email, credentials.password)
+        supabase_session = authenticate_supabase_credentials(db, normalized_email, credentials.password)
     except SupabaseAuthInputError as exc:
         logger.info("Login rejected for %s due to invalid input: %s", normalized_email, exc)
         return _auth_error_response(status.HTTP_400_BAD_REQUEST, str(exc))
@@ -110,32 +112,27 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
         logger.exception("Supabase auth service error during login for %s", normalized_email)
         return _auth_error_response(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
 
-    logger.info("Supabase credentials validated for %s", normalized_email)
+    session_user_id, session_user_email = get_supabase_session_user_identity(supabase_session)
+    logger.info(
+        "Supabase credentials validated for %s with session user_id=%s expires_at=%s",
+        normalized_email,
+        session_user_id,
+        supabase_session.get("expires_at"),
+    )
 
-    supabase_session: dict[str, Any] = {}
-    try:
-        supabase_session = issue_supabase_session(normalized_email, credentials.password)
-        logger.info(
-            "Supabase session issued for %s with expires_at=%s",
-            normalized_email,
-            supabase_session.get("expires_at"),
-        )
-    except (
-        SupabaseAuthenticationError,
-        SupabaseAuthConfigurationError,
-        SupabaseAuthServiceError,
-    ) as exc:
-        logger.warning(
-            "Supabase session issuance failed for %s after credentials were verified. "
-            "Continuing with backend session only: %s",
-            normalized_email,
-            exc,
-        )
-
-    user = db.query(User).filter(func.lower(User.email) == normalized_email).first()
+    user = find_platform_user_for_supabase_session(
+        db,
+        supabase_session,
+        fallback_email=normalized_email,
+    )
 
     if not user:
-        logger.warning("Supabase account %s is missing a platform profile", normalized_email)
+        logger.warning(
+            "Supabase account %s (session email=%s user_id=%s) is missing a platform profile",
+            normalized_email,
+            session_user_email,
+            session_user_id,
+        )
         return _auth_error_response(
             status.HTTP_403_FORBIDDEN,
             "Your Supabase account does not have a platform profile.",
@@ -152,9 +149,14 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
     access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
     refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
     
-    # Update last login
+    realign_platform_user_with_supabase_session(
+        user,
+        session_payload=supabase_session,
+        successful_password=credentials.password,
+    )
     user.last_login = datetime.utcnow()
     db.commit()
+    db.refresh(user)
 
     must_change_password = (
         user.role == UserRole.TRAINEE

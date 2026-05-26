@@ -1,6 +1,6 @@
 """
 One-time migration helper to ensure existing local users are provisioned in
-Supabase Auth with their current password hashes.
+Supabase Auth without overwriting passwords that Supabase already owns.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ def main() -> None:
         print(f"Syncing {len(users)} local users to Supabase Auth...")
 
         for user in users:
-            result = sync_user_to_supabase_auth(db, user)
+            result = sync_user_to_supabase_auth(db, user, update_password=False)
             status = result.get("status")
             if status == "created":
                 created += 1

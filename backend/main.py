@@ -1801,7 +1801,7 @@ def sync_runtime_users_to_supabase_auth(*, fail_fast: bool) -> None:
     try:
         users = db.query(User).order_by(User.created_at.asc(), User.email.asc()).all()
         for user in users:
-            result = sync_user_to_supabase_auth(db, user)
+            result = sync_user_to_supabase_auth(db, user, update_password=False)
             status = result.get("status")
             if status == "created":
                 created += 1

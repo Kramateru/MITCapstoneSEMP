@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@/app/components/ui/dialog';
 import { useAuth } from '@/app/context/AuthContext';
+import { getHttpErrorMessage, readHttpResponse } from '@/app/utils/http-response';
 import { Bell, CheckCircle2, ExternalLink, Info, Loader2, RefreshCw, TriangleAlert } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -37,6 +38,15 @@ type NotificationsPayload = {
   role: string;
   generated_at: string;
 };
+
+function createEmptyNotificationsPayload(): NotificationsPayload {
+  return {
+    count: 0,
+    notifications: [],
+    role: '',
+    generated_at: new Date().toISOString(),
+  };
+}
 
 function relativeTimeLabel(value: string | null) {
   if (!value) {
@@ -88,25 +98,32 @@ function borderClassForLevel(level: NotificationItem['level']) {
 }
 
 async function readErrorMessage(response: Response, fallback: string) {
-  try {
-    const payload = await response.json();
-    if (typeof payload?.detail === 'string' && payload.detail.trim()) {
-      return payload.detail;
-    }
-  } catch {
-    // Keep falling back when JSON is unavailable.
+  const parsed = await readHttpResponse<Record<string, unknown>>(response);
+  return getHttpErrorMessage(response, parsed, fallback);
+}
+
+async function readNotificationsPayload(response: Response) {
+  const parsed = await readHttpResponse<Partial<NotificationsPayload>>(response);
+  if (!parsed.data || typeof parsed.data !== 'object') {
+    return createEmptyNotificationsPayload();
   }
 
-  try {
-    const text = (await response.text()).trim();
-    if (text) {
-      return text;
-    }
-  } catch {
-    // Ignore parse failures and keep the fallback.
-  }
+  const notifications = Array.isArray(parsed.data.notifications)
+    ? parsed.data.notifications.filter(Boolean) as NotificationItem[]
+    : [];
+  const count = typeof parsed.data.count === 'number' && Number.isFinite(parsed.data.count)
+    ? parsed.data.count
+    : notifications.length;
 
-  return fallback;
+  return {
+    count,
+    notifications,
+    role: typeof parsed.data.role === 'string' ? parsed.data.role : '',
+    generated_at:
+      typeof parsed.data.generated_at === 'string' && parsed.data.generated_at.trim()
+        ? parsed.data.generated_at
+        : new Date().toISOString(),
+  } satisfies NotificationsPayload;
 }
 
 function openNotificationsRealtimeStream(token: string) {
@@ -128,12 +145,7 @@ export default function NotificationBell() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
-  const [payload, setPayload] = useState<NotificationsPayload>({
-    count: 0,
-    notifications: [],
-    role: '',
-    generated_at: new Date().toISOString(),
-  });
+  const [payload, setPayload] = useState<NotificationsPayload>(createEmptyNotificationsPayload);
 
   const fetchWithAuthRetry = useCallback(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -177,12 +189,7 @@ export default function NotificationBell() {
       }
 
       if (!isAuthenticated || !token) {
-        setPayload({
-          count: 0,
-          notifications: [],
-          role: '',
-          generated_at: new Date().toISOString(),
-        });
+        setPayload(createEmptyNotificationsPayload());
         setError('');
         setLoading(false);
         setRefreshing(false);
@@ -201,7 +208,7 @@ export default function NotificationBell() {
         if (!response.ok) {
           throw new Error(await readErrorMessage(response, 'Unable to load notifications right now.'));
         }
-        const nextPayload = (await response.json()) as NotificationsPayload;
+        const nextPayload = await readNotificationsPayload(response);
         setPayload(nextPayload);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : 'Unable to load notifications right now.');

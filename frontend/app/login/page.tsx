@@ -1,6 +1,5 @@
 'use client'
 
-import Image from 'next/image'
 import { useEffect, useState, type FormEvent } from 'react'
 import {
   AlertTriangle,
@@ -183,29 +182,13 @@ export default function LoginPage() {
             </div>
 
             <div className="relative flex h-full flex-col justify-between">
-              <div className="flex w-full justify-center">
-                <div className="relative h-28 w-28 overflow-hidden rounded-[28px] bg-white p-2.5 shadow-[0_18px_40px_-20px_rgba(0,0,0,0.55)] sm:h-32 sm:w-32 lg:h-36 lg:w-36">
-                  <Image
-                    src="/st-peter-seal.png"
-                    alt="St. Peter Velle Technical Training Center"
-                    fill
-                    sizes="(min-width: 1024px) 144px, (min-width: 640px) 128px, 112px"
-                    className="object-contain p-2.5"
-                    priority
-                  />
-                </div>
-              </div>
-
-              <div className="relative mx-auto mt-4 w-full max-w-[31rem] text-center lg:mt-4">
+              <div className="relative mx-auto w-full max-w-[31rem] text-center">
                 <h1 className="mx-auto max-w-[28rem] text-balance text-[clamp(2rem,3.18vw,3.15rem)] leading-[0.94] font-bold tracking-[-0.05em] text-white">
                   <span className="block">Speech-Enabled</span>
                   <span className="mt-1.5 block text-[0.64em] tracking-[0.07em]">Microlearning Platform</span>
                 </h1>
                 <div className="mt-4 flex flex-col items-center gap-2.5">
                   <span className="h-1 w-18 rounded-full bg-amber-400" />
-                  <p className="max-w-full whitespace-nowrap text-[clamp(0.84rem,0.94vw,1.02rem)] leading-[1.2] font-semibold text-slate-100">
-                    St. Peter Velle Technical Training Center, Inc
-                  </p>
                 </div>
               </div>
 

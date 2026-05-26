@@ -1,5 +1,10 @@
 'use client'
 
+import {
+  getHttpErrorMessage,
+  getUnexpectedJsonResponseMessage,
+  readHttpResponse,
+} from '@/app/utils/http-response'
 import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
 import type {
@@ -29,11 +34,6 @@ function getToken() {
 
 function getSupabaseAccessToken() {
   return window.localStorage.getItem('supabase_access_token')
-}
-
-function getJsonErrorMessage(payload: unknown) {
-  const candidate = payload as { error?: string; detail?: string; message?: string } | null
-  return candidate?.error || candidate?.detail || candidate?.message || 'Assessment request failed.'
 }
 
 async function sleep(ms: number) {
@@ -74,15 +74,25 @@ async function request<T>(input: string, init?: RequestInit, retryCount = 0): Pr
     throw normalizedError
   }
 
-  const payload = await response.json().catch(() => null)
+  const parsed = await readHttpResponse<T>(response)
   if (!response.ok) {
-    const errorMessage = getJsonErrorMessage(payload)
+    const errorMessage = getHttpErrorMessage(response, parsed, 'Assessment request failed.')
     const error = new Error(errorMessage)
     Object.defineProperty(error, 'status', { value: response.status })
     throw error
   }
 
-  return payload as T
+  if (!parsed.isJson || parsed.data === null || parsed.data === undefined) {
+    throw new Error(
+      getUnexpectedJsonResponseMessage(
+        response,
+        parsed,
+        'The assessment service returned an empty or invalid response.',
+      ),
+    )
+  }
+
+  return parsed.data
 }
 
 async function downloadBlob(input: string, fallbackFileName: string) {
@@ -102,8 +112,8 @@ async function downloadBlob(input: string, fallbackFileName: string) {
   })
 
   if (!response.ok) {
-    const payload = await response.json().catch(() => null)
-    throw new Error(getJsonErrorMessage(payload))
+    const parsed = await readHttpResponse<Record<string, unknown>>(response)
+    throw new Error(getHttpErrorMessage(response, parsed, 'Unable to download the assessment file.'))
   }
 
   const blob = await response.blob()
