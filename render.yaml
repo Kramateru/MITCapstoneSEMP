@@ -65,20 +65,43 @@ services:
     envVars:
       - key: NODE_VERSION
         value: 22.0.0
+      # Inherit Supabase settings from the backend service so both apps stay on
+      # the same project in Render and the assessment module cannot drift.
       - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: NEXT_PUBLIC_SUPABASE_URL
       - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
       - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: NEXT_PUBLIC_SUPABASE_ANON_KEY
       - key: SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: SUPABASE_URL
       - key: SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: SUPABASE_PUBLISHABLE_KEY
       - key: VITE_SUPABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: VITE_SUPABASE_URL
       - key: VITE_SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: VITE_SUPABASE_PUBLISHABLE_KEY
       - key: NEXT_PUBLIC_BACKEND_URL
         fromService:
           type: web
@@ -90,8 +113,14 @@ services:
           name: speech-bpo-backend
           envVarKey: BACKEND_URL
       - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: SUPABASE_SERVICE_ROLE_KEY
       - key: SUPABASE_SERVICE_KEY
-        sync: false
+        fromService:
+          type: web
+          name: speech-bpo-backend
+          envVarKey: SUPABASE_SERVICE_KEY
       - key: NEXT_TELEMETRY_DISABLED
         value: "1"

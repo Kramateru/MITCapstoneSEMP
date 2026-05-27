@@ -77,19 +77,21 @@ function hydrateEnvCache() {
 }
 
 export function getConfigValue(possibleKeys: string[], fallback?: string) {
+  for (const key of possibleKeys) {
+    const directValue = normalizeConfigCandidate(process.env[key])
+    if (directValue) {
+      return directValue
+    }
+  }
+
+  // Prefer real runtime environment variables first so Render and other
+  // deployed hosts can override any local development `.env` files.
   hydrateEnvCache()
 
   for (const key of possibleKeys) {
     const cachedValue = normalizeConfigCandidate(envCache.get(key))
     if (cachedValue) {
       return cachedValue
-    }
-  }
-
-  for (const key of possibleKeys) {
-    const directValue = normalizeConfigCandidate(process.env[key])
-    if (directValue) {
-      return directValue
     }
   }
 
