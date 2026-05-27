@@ -95,7 +95,7 @@ const FALLBACK_SYSTEM_SETTINGS: SystemSettingsPayload = {
   system_wide_font_scale: 1.0,
   default_high_contrast: false,
   enable_daltonism_mode: false,
-  company_name: 'Speech-Enabled BPO Platform',
+  company_name: 'Speech-Enabled Microlearning Platform',
 };
 
 function clampFontScale(value?: number | null) {

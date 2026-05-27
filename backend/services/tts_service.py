@@ -144,6 +144,18 @@ class TTSService:
         except Exception:
             return False
 
+    @staticmethod
+    def _result_has_audio_payload(result: Optional[dict[str, Any]]) -> bool:
+        if not result:
+            return False
+
+        audio_bytes = result.get("audio_bytes")
+        if isinstance(audio_bytes, (bytes, bytearray)) and len(audio_bytes) > 0:
+            return True
+
+        audio_base64 = result.get("audio_base64")
+        return isinstance(audio_base64, str) and bool(audio_base64.strip())
+
     async def synthesize(
         self,
         text: str,
@@ -273,6 +285,62 @@ class TTSService:
             fallback_result["error"] = f"{'. '.join(provider_errors)}. Fallback TTS failed: {fallback_error}"
         elif provider_errors:
             fallback_result["error"] = ". ".join(provider_errors)
+        return fallback_result
+
+    async def synthesize_for_persistence(
+        self,
+        text: str,
+        voice_name: Optional[str] = None,
+        speaking_style: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """
+        Generate audio that is intended to be saved server-side.
+
+        This retries the local/offline fallback one more time before giving up so
+        trainer flows can still persist generated speech when the network TTS
+        providers are temporarily unavailable.
+        """
+        try:
+            result = await self.synthesize(text, voice_name, speaking_style)
+        except Exception as exc:
+            logger.warning("Primary persistable TTS synthesis failed: %s", exc)
+            result = {
+                "audio_url": None,
+                "audio_base64": None,
+                "audio_bytes": None,
+                "audio_content_type": "audio/wav",
+                "audio_extension": "wav",
+                "duration": 0,
+                "provider": None,
+                "error": str(exc),
+                "fallback_mode": "browser",
+            }
+
+        if self._result_has_audio_payload(result):
+            return result
+
+        if not self._local_tts_available():
+            return result
+
+        try:
+            fallback_result = await self._fallback_tts(text)
+        except Exception as exc:
+            logger.warning("Persistable local TTS fallback failed: %s", exc)
+            return result
+
+        if not self._result_has_audio_payload(fallback_result):
+            primary_error = str(result.get("error") or "").strip()
+            fallback_error = str(fallback_result.get("error") or "").strip()
+            if primary_error and fallback_error:
+                fallback_result["error"] = f"{primary_error}. Fallback TTS failed: {fallback_error}"
+            elif primary_error:
+                fallback_result["error"] = primary_error
+            return fallback_result
+
+        primary_error = str(result.get("error") or "").strip()
+        fallback_error = str(fallback_result.get("error") or "").strip()
+        combined_error = " | ".join(part for part in [primary_error, fallback_error] if part) or None
+        fallback_result["error"] = combined_error
         return fallback_result
 
     def _synthesize_azure(
@@ -525,3 +593,16 @@ async def text_to_speech(
     """
     service = get_tts_service()
     return await service.synthesize(text, voice_name, speaking_style)
+
+
+async def text_to_speech_for_persistence(
+    text: str,
+    voice_name: Optional[str] = None,
+    speaking_style: Optional[str] = None,
+) -> dict[str, Any]:
+    """
+    Convert text to speech with an extra local/offline retry suitable for assets
+    that must be persisted to storage.
+    """
+    service = get_tts_service()
+    return await service.synthesize_for_persistence(text, voice_name, speaking_style)

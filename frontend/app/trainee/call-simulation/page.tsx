@@ -42,6 +42,8 @@ type CallState =
   | 'processing'
   | 'completed';
 
+const DEFAULT_CALL_RINGER_URL = '/audio/phone-ring.wav';
+
 interface ScenarioCard {
   id: string;
   assignment_id?: string;
@@ -340,7 +342,7 @@ function getScenarioLaunchNote(scenario: ScenarioCard | null) {
   const attemptWindow = typeof scenario.max_attempts === 'number'
     ? ` This assignment allows up to ${scenario.max_attempts} total attempt${scenario.max_attempts === 1 ? '' : 's'}.`
     : '';
-  return `Starting the call loads the trainer ringer from Supabase and keeps the full conversation recording flow ready through hang up. After you accept the line, the first CSR turn is prepared.${attemptWindow}`;
+  return `Starting the call loads the trainer ringer when one is attached and keeps the full conversation recording flow ready through hang up. If no custom ringer is saved, the default call ring will play instead. After you accept the line, the first CSR turn is prepared.${attemptWindow}`;
 }
 
 function getScenarioStatusText(scenario: ScenarioCard) {
@@ -1175,33 +1177,55 @@ function TraineeSimFloorPageContent() {
   const startRingtone = useCallback(
     (audioUrl?: string | null) => {
       const resolvedAudioUrl = String(audioUrl || '').trim();
-      if (!resolvedAudioUrl) {
+      const candidateUrls = [
+        resolvedAudioUrl,
+        resolvedAudioUrl === DEFAULT_CALL_RINGER_URL ? '' : DEFAULT_CALL_RINGER_URL,
+      ].filter(Boolean);
+
+      if (!candidateUrls.length) {
         setRingerStatus('missing');
         return false;
       }
 
-      const audio = new Audio(resolvedAudioUrl);
-      audio.loop = true;
-      registerPlaybackElement(audio);
-      audio.onerror = () => {
-        ringtoneAudioRef.current = null;
-        setRingerStatus('error');
-        if (!ringerAudioErrorNoticeRef.current) {
-          ringerAudioErrorNoticeRef.current = true;
-          toast.warning('The trainer ringer audio could not be played. Accept the line to continue, or ask your trainer to re-upload the Supabase asset.');
+      const tryPlayRingtone = (candidateIndex: number): boolean => {
+        const candidateUrl = candidateUrls[candidateIndex];
+        if (!candidateUrl) {
+          ringtoneAudioRef.current = null;
+          setRingerStatus(resolvedAudioUrl ? 'error' : 'missing');
+          if (!ringerAudioErrorNoticeRef.current) {
+            ringerAudioErrorNoticeRef.current = true;
+            toast.warning('The call ringer could not be played. Accept the line to continue.');
+          }
+          return false;
         }
+
+        const audio = new Audio(candidateUrl);
+        audio.loop = true;
+        registerPlaybackElement(audio);
+        let failureHandled = false;
+
+        const handleFailure = () => {
+          if (failureHandled) {
+            return;
+          }
+          failureHandled = true;
+          if (ringtoneAudioRef.current === audio) {
+            ringtoneAudioRef.current = null;
+          }
+          tryPlayRingtone(candidateIndex + 1);
+        };
+
+        audio.onerror = handleFailure;
+        ringtoneAudioRef.current = audio;
+        void audio.play().then(() => {
+          if (ringtoneAudioRef.current === audio) {
+            setRingerStatus('playing');
+          }
+        }).catch(handleFailure);
+        return true;
       };
-      ringtoneAudioRef.current = audio;
-      void audio.play().catch(() => {
-        ringtoneAudioRef.current = null;
-        setRingerStatus('error');
-        if (!ringerAudioErrorNoticeRef.current) {
-          ringerAudioErrorNoticeRef.current = true;
-          toast.warning('The trainer ringer audio could not be played. Accept the line to continue, or ask your trainer to re-upload the Supabase asset.');
-        }
-      });
-      setRingerStatus('playing');
-      return true;
+
+      return tryPlayRingtone(0);
     },
     [registerPlaybackElement],
   );
@@ -2667,12 +2691,12 @@ function TraineeSimFloorPageContent() {
     : statusLabel(callState, isOnHold);
   const currentStatusNote = callState === 'ringing'
     ? ringerStatus === 'playing'
-      ? 'The trainer ringer is active. Click Accept Call to begin the mock call.'
+      ? 'The call ringer is active. Click Accept Call to begin the mock call.'
       : ringerStatus === 'missing'
-        ? 'No trainer ringer audio is attached to this scenario in Supabase. Accept the line to continue, or ask your trainer to upload one.'
+        ? 'No custom trainer ringer is attached to this scenario, and the default ring could not be loaded. Accept the line to continue.'
         : ringerStatus === 'error'
-          ? 'The trainer ringer asset could not be played. Accept the line to continue, or ask your trainer to re-upload it.'
-          : 'Preparing the trainer ringer. Click Accept Call once the line is ready.'
+          ? 'The call ringer could not be played. Accept the line to continue.'
+          : 'Preparing the call ringer. Click Accept Call once the line is ready.'
     : callState === 'accepted'
       ? `The line is connected. Your first CSR turn will unlock in ${acceptedCountdown ?? 5} second${(acceptedCountdown ?? 5) === 1 ? '' : 's'}.`
       : memberTurnState === 'playing' && isOnHold && !queuedMemberHasPlayback

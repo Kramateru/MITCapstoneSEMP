@@ -1534,19 +1534,6 @@ export default function TrainerSimFloorPage() {
       return;
     }
 
-    const resolvedRingerAudioUrl = (
-      scenarioForm.use_shared_ringer_audio
-        ? callToneSettings.ringer_audio_url
-        : scenarioForm.ringer_audio_url
-    ).trim();
-    const hasSupabaseRinger = scenarioForm.use_shared_ringer_audio
-      ? Boolean(sharedAudioAssets.ringer?.public_url || isSupabaseStorageAudioUrl(resolvedRingerAudioUrl))
-      : isSupabaseManagedScenarioAudioUrl(resolvedRingerAudioUrl);
-    if (!hasSupabaseRinger) {
-      toast.error('Attach a Supabase-backed trainer ringer audio before saving this Call Simulation scenario.');
-      return;
-    }
-
     const aggregateKeywords = splitKeywords(scenarioForm.expected_keywords);
     const scriptFlow = groupedRows.map((group, index) => {
       const canonicalVariant = [...group.csr_variants].sort((left, right) => right.score - left.score)[0];
@@ -2837,7 +2824,7 @@ export default function TrainerSimFloorPage() {
                   </div>
                 ) : (
                   <div className="mt-4 rounded-2xl border border-dashed bg-slate-50 p-4 text-sm text-slate-500">
-                    No shared ringer audio has been saved yet.
+                    No shared ringer audio has been saved yet. Trainees will hear the default call ring until one is uploaded.
                   </div>
                 )}
               </div>
@@ -3598,8 +3585,8 @@ export default function TrainerSimFloorPage() {
                         </div>
                         <div className="text-xs text-slate-500">
                           {scenarioForm.use_shared_ringer_audio
-                            ? 'The shared trainer workspace ringer will play for this scenario.'
-                            : 'This custom ringer is stored on the scenario and overrides the shared workspace tone.'}
+                            ? 'The shared trainer workspace ringer will play for this scenario. If none is uploaded yet, the default call ring will be used.'
+                            : 'This custom ringer is stored on the scenario and overrides the shared workspace tone. If you leave it empty, trainees will hear the default call ring.'}
                         </div>
                         {activeScenarioRingerAudioUrl ? (
                           <div className="space-y-3">
@@ -3618,7 +3605,7 @@ export default function TrainerSimFloorPage() {
                             ) : null}
                           </div>
                         ) : (
-                          <div className="text-xs text-slate-500">No ringer audio is currently attached.</div>
+                          <div className="text-xs text-slate-500">No ringer audio is currently attached. The default call ring will be used.</div>
                         )}
                       </div>
                     </div>

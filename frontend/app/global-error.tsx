@@ -42,7 +42,7 @@ export default function GlobalError({
   return (
     <html lang="en">
       <head>
-        <title>Application Error - Speech-Enabled BPO Platform</title>
+        <title>Application Error - Speech-Enabled Microlearning Platform</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </head>
       <body className="bg-slate-950 text-white font-sans antialiased">
@@ -133,7 +133,7 @@ export default function GlobalError({
 
             {/* Status Information */}
             <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-4 text-xs text-slate-400">
-              <p><strong>Platform:</strong> Speech-Enabled BPO Training Platform</p>
+              <p><strong>Platform:</strong> Speech-Enabled Microlearning Platform</p>
               <p className="mt-1"><strong>Error ID:</strong> {error?.digest || 'No digest available'}</p>
             </div>
           </div>

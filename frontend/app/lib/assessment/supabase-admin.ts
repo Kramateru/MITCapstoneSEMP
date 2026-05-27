@@ -192,6 +192,32 @@ export function createSupabaseAdminClient() {
   }
 
   const urlProjectRef = extractSupabaseProjectRefFromUrl(supabaseUrl)
+  if (serviceRoleKey) {
+    const serviceKeyProjectRef = extractSupabaseProjectRefFromKey(serviceRoleKey)
+    if (urlProjectRef && serviceKeyProjectRef && urlProjectRef !== serviceKeyProjectRef) {
+      throw new Error(
+        `The configured Supabase service-role key belongs to project ${serviceKeyProjectRef}, `
+        + `but the assessment workspace URL points to project ${urlProjectRef}.`,
+      )
+    }
+
+    try {
+      return createClient(supabaseUrl, serviceRoleKey, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+        global: {
+          headers: {
+            'X-Client-Info': 'assessment-module',
+          },
+        },
+      })
+    } catch (error) {
+      console.error('Failed to create Supabase client:', error)
+      throw new Error('Failed to initialize Supabase client. Please check your configuration.')
+    }
+  }
 
   if (requestSupabaseAccessToken && publicApiKey) {
     const publicKeyProjectRef = extractSupabaseProjectRefFromKey(publicApiKey)
@@ -216,35 +242,8 @@ export function createSupabaseAdminClient() {
     })
   }
 
-  if (!serviceRoleKey) {
-    console.error('Supabase service role key not configured')
-    throw new Error(
-      'A valid Supabase service-role key is not configured for the assessment workspace. Please set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY.',
-    )
-  }
-
-  const serviceKeyProjectRef = extractSupabaseProjectRefFromKey(serviceRoleKey)
-  if (urlProjectRef && serviceKeyProjectRef && urlProjectRef !== serviceKeyProjectRef) {
-    throw new Error(
-      `The configured Supabase service-role key belongs to project ${serviceKeyProjectRef}, `
-      + `but the assessment workspace URL points to project ${urlProjectRef}.`,
-    )
-  }
-
-  try {
-    return createClient(supabaseUrl, serviceRoleKey, {
-      auth: {
-        autoRefreshToken: false,
-        persistSession: false,
-      },
-      global: {
-        headers: {
-          'X-Client-Info': 'assessment-module',
-        },
-      },
-    })
-  } catch (error) {
-    console.error('Failed to create Supabase client:', error)
-    throw new Error('Failed to initialize Supabase client. Please check your configuration.')
-  }
+  console.error('Supabase service role key not configured')
+  throw new Error(
+    'A valid Supabase service-role key is not configured for the assessment workspace. Please set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SERVICE_KEY.',
+  )
 }
