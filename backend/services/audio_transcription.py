@@ -22,6 +22,11 @@ _MP3_MIME_MARKERS = (
     "mpg",
 )
 
+
+def _looks_like_vosk_model_dir(model_path: str) -> bool:
+    required_directories = ("am", "conf", "graph")
+    return all(os.path.isdir(os.path.join(model_path, segment)) for segment in required_directories)
+
 # Try to import providers
 try:
     from google.cloud import speech_v1 as speech
@@ -92,13 +97,18 @@ class SpeechToTextService:
         self.vosk_recognizer = None
         if VOSK_AVAILABLE:
             model_path = os.getenv("VOSK_MODEL_PATH", "model")
-            if os.path.exists(model_path):
+            if os.path.exists(model_path) and _looks_like_vosk_model_dir(model_path):
                 try:
                     self.vosk_model = Model(model_path)
                     self.vosk_recognizer = KaldiRecognizer(self.vosk_model, 16000)
                     logger.info("✓ Vosk model loaded successfully")
                 except Exception as e:
                     logger.warning(f"Failed to load Vosk model: {e}")
+            elif os.path.exists(model_path):
+                logger.info(
+                    "Skipping Vosk model initialization because %s does not contain a complete Vosk model.",
+                    model_path,
+                )
 
     def is_available(self) -> bool:
         """Check if any transcription provider is available"""

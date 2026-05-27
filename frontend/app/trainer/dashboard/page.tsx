@@ -427,7 +427,7 @@ export default function TrainerDashboardPage() {
             </div>
           }
         >
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="dashboard-compact-grid">
             <SoftStat label="Pending Reviews" value={pendingReviewCount} tone="amber" />
             <SoftStat label="Coaching Acknowledged" value={coachingStats?.acknowledged_logs ?? 0} tone="green" />
             <SoftStat label="Retake Required" value={coachingStats?.not_competent_logs ?? 0} tone="rose" />
@@ -437,7 +437,7 @@ export default function TrainerDashboardPage() {
         {liveStatus ? <NoticeBanner tone="blue">{liveStatus}</NoticeBanner> : null}
         {error ? <NoticeBanner tone="rose">{error}</NoticeBanner> : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        <div className="dashboard-metrics-grid">
           <MetricCard
             label="Active Trainees"
             value={stats?.total_trainees ?? 0}
@@ -482,7 +482,7 @@ export default function TrainerDashboardPage() {
           />
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+        <div className="dashboard-balanced-grid">
           <SectionPanel
             title="Priority batches"
             description="The cohorts below are ranked by activity risk, score trend, and coaching urgency."
@@ -498,7 +498,7 @@ export default function TrainerDashboardPage() {
                 description="Fetching real-time batch activity and performance details."
               />
             ) : highlightedBatches.length ? (
-              <div className="space-y-4">
+              <div className="dashboard-list-stack">
                 {highlightedBatches.map((batch) => {
                   const health = batchHealth(batch);
 
@@ -520,7 +520,7 @@ export default function TrainerDashboardPage() {
                         </Button>
                       </div>
 
-                      <div className="mt-5 grid gap-3 sm:grid-cols-3">
+                      <div className="dashboard-compact-grid mt-5">
                         <SoftStat label="Trainees" value={batch.users_count} tone="blue" />
                         <SoftStat label="Completed" value={batch.total_sessions} tone="violet" />
                         <SoftStat label="Avg Score" value={`${batch.average_score.toFixed(1)}%`} tone="green" />
@@ -565,7 +565,7 @@ export default function TrainerDashboardPage() {
                 description="Fetching the latest completed mock calls and coaching states."
               />
             ) : coachingQueue.length ? (
-              <div className="space-y-4">
+              <div className="dashboard-list-stack">
                 {coachingQueue.map((session) => (
                   <div key={session.id} className="data-card p-5 sm:p-6">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -588,7 +588,7 @@ export default function TrainerDashboardPage() {
                       </div>
                     </div>
 
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                    <div className="dashboard-detail-grid mt-5">
                       <SoftStat label="Accuracy" value={`${session.accuracy.toFixed(1)}%`} tone="blue" />
                       <SoftStat label="Attempt / Fluency" value={`#${session.attempt_number} | ${session.fluency.toFixed(1)}%`} tone="green" />
                     </div>

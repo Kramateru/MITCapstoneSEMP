@@ -458,6 +458,86 @@
     min-width: 0;
   }
 
+  .dashboard-metrics-grid {
+    display: grid;
+    gap: var(--dashboard-gap);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    align-items: stretch;
+  }
+
+  .dashboard-actions-grid {
+    display: grid;
+    gap: var(--dashboard-gap);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+    align-items: stretch;
+  }
+
+  .dashboard-balanced-grid {
+    display: grid;
+    gap: var(--dashboard-gap);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+    align-items: start;
+  }
+
+  .dashboard-compact-grid {
+    display: grid;
+    gap: 0.85rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+    align-items: stretch;
+  }
+
+  .dashboard-detail-grid {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr));
+    align-items: stretch;
+  }
+
+  .dashboard-toolbar {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    align-items: end;
+  }
+
+  .dashboard-list-stack {
+    display: grid;
+    gap: 0.85rem;
+    align-content: start;
+  }
+
+  .dashboard-pagination-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .dashboard-pagination-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+  }
+
+  .workspace-breadcrumbs {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--muted-foreground);
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
+  .workspace-breadcrumbs a:hover {
+    color: var(--foreground);
+  }
+
+  .workspace-breadcrumb-separator {
+    opacity: 0.58;
+  }
+
   .dialog-safe-area-padding {
     padding-bottom: max(1rem, env(safe-area-inset-bottom));
   }
@@ -679,14 +759,14 @@
   .analytics-summary-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
     align-items: stretch;
   }
 
   .analytics-auto-grid {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
     align-items: stretch;
   }
 

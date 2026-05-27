@@ -53,6 +53,9 @@ import { AssessmentPlayer } from './assessment-player'
 type AssessmentFilter = 'all' | 'assigned' | 'retake' | 'passed' | 'failed'
 type PlayerDisplayMode = 'overview' | 'review'
 
+const ASSESSMENTS_PER_PAGE = 5
+const ATTEMPTS_PER_PAGE = 4
+
 function getAssessmentState(
   assessment: TraineeAssessmentCard,
   options?: {
@@ -173,6 +176,8 @@ export function TraineeAssessmentWorkspace() {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<AssessmentFilter>('all')
+  const [assessmentPage, setAssessmentPage] = useState(1)
+  const [attemptPage, setAttemptPage] = useState(1)
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('')
   const [sessionLoading, setSessionLoading] = useState(false)
   const [sessionError, setSessionError] = useState('')
@@ -247,6 +252,30 @@ export function TraineeAssessmentWorkspace() {
   }, [filter, prioritizedAssessments, search])
 
   useEffect(() => {
+    setAssessmentPage(1)
+  }, [filter, search])
+
+  const totalAssessmentPages = Math.max(1, Math.ceil(filteredAssessments.length / ASSESSMENTS_PER_PAGE))
+  const paginatedAssessments = useMemo(() => {
+    const startIndex = (assessmentPage - 1) * ASSESSMENTS_PER_PAGE
+    return filteredAssessments.slice(startIndex, startIndex + ASSESSMENTS_PER_PAGE)
+  }, [assessmentPage, filteredAssessments])
+
+  useEffect(() => {
+    setAssessmentPage((currentPage) => Math.min(currentPage, totalAssessmentPages))
+  }, [totalAssessmentPages])
+
+  useEffect(() => {
+    if (playerMode === 'in_progress' || !paginatedAssessments.length) {
+      return
+    }
+
+    if (!paginatedAssessments.some((assessment) => assessment.assignmentId === selectedAssignmentId)) {
+      setSelectedAssignmentId(paginatedAssessments[0].assignmentId)
+    }
+  }, [paginatedAssessments, playerMode, selectedAssignmentId])
+
+  useEffect(() => {
     if (playerMode === 'in_progress') {
       return
     }
@@ -308,11 +337,36 @@ export function TraineeAssessmentWorkspace() {
 
   const selectedAssessment = useMemo(
     () =>
-      prioritizedAssessments.find((assessment) => assessment.assignmentId === selectedAssignmentId)
-      || filteredAssessments[0]
+      paginatedAssessments.find((assessment) => assessment.assignmentId === selectedAssignmentId)
+      || paginatedAssessments[0]
       || null,
-    [filteredAssessments, prioritizedAssessments, selectedAssignmentId],
+    [paginatedAssessments, selectedAssignmentId],
   )
+
+  const visibleAssessmentRange = filteredAssessments.length
+    ? {
+        start: (assessmentPage - 1) * ASSESSMENTS_PER_PAGE + 1,
+        end: Math.min(assessmentPage * ASSESSMENTS_PER_PAGE, filteredAssessments.length),
+      }
+    : null
+
+  const savedAttempts = dashboard?.attempts ?? []
+  const totalAttemptPages = Math.max(1, Math.ceil(savedAttempts.length / ATTEMPTS_PER_PAGE))
+  const paginatedAttempts = useMemo(() => {
+    const startIndex = (attemptPage - 1) * ATTEMPTS_PER_PAGE
+    return savedAttempts.slice(startIndex, startIndex + ATTEMPTS_PER_PAGE)
+  }, [attemptPage, savedAttempts])
+
+  useEffect(() => {
+    setAttemptPage((currentPage) => Math.min(currentPage, totalAttemptPages))
+  }, [totalAttemptPages])
+
+  const visibleAttemptRange = savedAttempts.length
+    ? {
+        start: (attemptPage - 1) * ATTEMPTS_PER_PAGE + 1,
+        end: Math.min(attemptPage * ATTEMPTS_PER_PAGE, savedAttempts.length),
+      }
+    : null
 
   if (loading) {
     return (
@@ -363,7 +417,7 @@ export function TraineeAssessmentWorkspace() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="dashboard-metrics-grid">
         <MetricCard
           label="Assigned"
           value={String(dashboard.stats.assignedCount)}
@@ -404,7 +458,7 @@ export function TraineeAssessmentWorkspace() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="dashboard-toolbar">
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
               <Input
@@ -412,9 +466,10 @@ export function TraineeAssessmentWorkspace() {
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search assessment, category, or target"
                 className="pl-9"
+                disabled={playerMode === 'in_progress'}
               />
             </div>
-            <Select value={filter} onValueChange={(value: AssessmentFilter) => setFilter(value)}>
+            <Select value={filter} onValueChange={(value: AssessmentFilter) => setFilter(value)} disabled={playerMode === 'in_progress'}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -428,58 +483,89 @@ export function TraineeAssessmentWorkspace() {
             </Select>
           </div>
 
+          {filteredAssessments.length ? (
+            <div className="dashboard-pagination-bar rounded-2xl border border-slate-200 bg-slate-50/85 px-4 py-3 text-sm text-slate-600">
+              <div>
+                Showing {visibleAssessmentRange?.start}-{visibleAssessmentRange?.end} of {filteredAssessments.length} assigned assessment{filteredAssessments.length === 1 ? '' : 's'}
+              </div>
+              <div className="dashboard-pagination-actions">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAssessmentPage((currentPage) => Math.max(1, currentPage - 1))}
+                  disabled={assessmentPage === 1 || playerMode === 'in_progress'}
+                >
+                  Previous
+                </Button>
+                <Badge variant="outline">Page {assessmentPage} of {totalAssessmentPages}</Badge>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAssessmentPage((currentPage) => Math.min(totalAssessmentPages, currentPage + 1))}
+                  disabled={assessmentPage === totalAssessmentPages || playerMode === 'in_progress'}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          ) : null}
+
           {!filteredAssessments.length ? (
             <EmptyState
               title="No assigned assessments found"
               description="Only saved trainer assignments appear here. Adjust the filters or wait for a trainer to assign a new assessment."
             />
           ) : (
-            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-              <div className="space-y-3">
-                {filteredAssessments.map((assessment) => {
-                  const state = getAssessmentState(assessment, {
-                    isInProgress: assessment.assignmentId === activeSession?.assignmentId && playerMode === 'in_progress',
-                  })
-                  const isSelected = assessment.assignmentId === selectedAssessment?.assignmentId
+            <div className="grid gap-5 2xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+              <div className="rounded-[1.7rem] border border-slate-200 bg-slate-50/70 p-3 sm:p-4">
+                <div className="dashboard-list-stack">
+                  {paginatedAssessments.map((assessment) => {
+                    const state = getAssessmentState(assessment, {
+                      isInProgress: assessment.assignmentId === activeSession?.assignmentId && playerMode === 'in_progress',
+                    })
+                    const isSelected = assessment.assignmentId === selectedAssessment?.assignmentId
 
-                  return (
-                    <button
-                      key={assessment.assignmentId}
-                      type="button"
-                      onClick={() => setSelectedAssignmentId(assessment.assignmentId)}
-                      className={`w-full rounded-3xl border p-4 text-left transition ${
-                        isSelected
-                          ? 'border-sky-400 bg-sky-50 shadow-sm'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline">{assessment.categoryTitle}</Badge>
-                            <Badge className={state.tone}>{assessment.statusLabel || state.label}</Badge>
+                    return (
+                      <button
+                        key={assessment.assignmentId}
+                        type="button"
+                        onClick={() => setSelectedAssignmentId(assessment.assignmentId)}
+                        className={`w-full rounded-3xl border p-4 text-left transition ${
+                          isSelected
+                            ? 'border-sky-400 bg-sky-50 shadow-sm'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-sm'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge variant="outline">{assessment.categoryTitle}</Badge>
+                              <Badge className={state.tone}>{assessment.statusLabel || state.label}</Badge>
+                            </div>
+                            <div className="mt-3 font-semibold text-slate-950">
+                              {assessment.assignmentTitle || assessment.assessmentTitle}
+                            </div>
+                            <div className="mt-2 text-sm text-slate-600">
+                              {assessment.latestAttempt
+                                ? `Latest score ${assessment.latestAttempt.score.toFixed(2)}%`
+                                : 'Ready for first attempt'}
+                            </div>
                           </div>
-                          <div className="mt-3 font-semibold text-slate-950">
-                            {assessment.assignmentTitle || assessment.assessmentTitle}
-                          </div>
-                          <div className="mt-2 text-sm text-slate-600">
-                            {assessment.latestAttempt
-                              ? `Latest score ${assessment.latestAttempt.score.toFixed(2)}%`
-                              : 'Ready for first attempt'}
-                          </div>
+                          <ArrowRight className={`mt-1 size-4 shrink-0 ${isSelected ? 'text-sky-700' : 'text-slate-400'}`} />
                         </div>
-                        <ArrowRight className={`mt-1 size-4 shrink-0 ${isSelected ? 'text-sky-700' : 'text-slate-400'}`} />
-                      </div>
-                      <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                        <DetailChip label="Questions" value={String(assessment.questionCount)} />
-                        <DetailChip
-                          label="Attempts Left"
-                          value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
-                        />
-                      </div>
-                    </button>
-                  )
-                })}
+                        <div className="dashboard-detail-grid mt-4">
+                          <DetailChip label="Questions" value={String(assessment.questionCount)} />
+                          <DetailChip
+                            label="Attempts Left"
+                            value={assessment.attemptsRemaining === null ? 'Unlimited' : String(assessment.attemptsRemaining)}
+                          />
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
 
               {selectedAssessment ? (
@@ -526,7 +612,7 @@ export function TraineeAssessmentWorkspace() {
         </div>
       )}
 
-      {dashboard.attempts.length ? (
+      {savedAttempts.length ? (
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle>Recent Saved Results</CardTitle>
@@ -535,7 +621,33 @@ export function TraineeAssessmentWorkspace() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {dashboard.attempts.slice(0, 6).map((attempt) => (
+            <div className="dashboard-pagination-bar rounded-2xl border border-slate-200 bg-slate-50/85 px-4 py-3 text-sm text-slate-600">
+              <div>
+                Showing {visibleAttemptRange?.start}-{visibleAttemptRange?.end} of {savedAttempts.length} saved result{savedAttempts.length === 1 ? '' : 's'}
+              </div>
+              <div className="dashboard-pagination-actions">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAttemptPage((currentPage) => Math.max(1, currentPage - 1))}
+                  disabled={attemptPage === 1}
+                >
+                  Previous
+                </Button>
+                <Badge variant="outline">Page {attemptPage} of {totalAttemptPages}</Badge>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAttemptPage((currentPage) => Math.min(totalAttemptPages, currentPage + 1))}
+                  disabled={attemptPage === totalAttemptPages}
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+            {paginatedAttempts.map((attempt) => (
               <div key={attempt.id} className="rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
@@ -552,7 +664,7 @@ export function TraineeAssessmentWorkspace() {
                       {attempt.feedback || 'Assessment result saved.'}
                     </div>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="dashboard-detail-grid">
                     <DetailChip label="Score" value={`${attempt.score.toFixed(2)}%`} />
                     <DetailChip label="Passing Rate" value={`${(attempt.passingScore || 0).toFixed(2)}%`} />
                     <DetailChip
@@ -624,7 +736,7 @@ function FocusedAssessmentCard({
   }
 
   return (
-    <div className="rounded-[28px] border border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(224,242,254,0.7),transparent_32%),linear-gradient(160deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))] p-6 shadow-sm">
+    <div className="rounded-[28px] border border-slate-200 bg-[radial-gradient(circle_at_top_right,rgba(224,242,254,0.7),transparent_32%),linear-gradient(160deg,rgba(255,255,255,0.99),rgba(248,250,252,0.98))] p-5 shadow-sm sm:p-6">
       <div className="flex flex-col gap-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-3">
@@ -643,7 +755,7 @@ function FocusedAssessmentCard({
               </div>
             </div>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="dashboard-detail-grid">
             <FocusSnapshot
               label="Due Date"
               value={formatDateLabel(assessment.targetDueAt)}
@@ -657,7 +769,7 @@ function FocusedAssessmentCard({
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="dashboard-detail-grid">
           <DetailChip label="Questions" value={String(assessment.questionCount)} />
           <DetailChip label="Attempts Taken" value={assessment.maximumAttempts ? `${assessment.attemptCount || 0}/${assessment.maximumAttempts}` : `${assessment.attemptCount || 0}/Unlimited`} />
           <DetailChip

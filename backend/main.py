@@ -291,8 +291,13 @@ from backend.supabase_client import get_supabase_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    ensure_admin_user()
-    sync_runtime_users_to_supabase_auth(fail_fast=False)
+    if STARTUP_DATABASE_REACHABLE:
+        ensure_admin_user()
+        sync_runtime_users_to_supabase_auth(fail_fast=False)
+    else:
+        logger.warning(
+            "Skipping startup admin/bootstrap synchronization because the primary database is unreachable."
+        )
     yield
     engine.dispose()
     logger.info("Database connection pool cleaned up")
@@ -320,6 +325,32 @@ async def handle_database_operational_error(request: Request, exc: OperationalEr
     )
 
 
+def _summarize_startup_exception(exc: Exception) -> str:
+    for line in str(exc).splitlines():
+        normalized = line.strip()
+        if normalized:
+            return normalized
+    return exc.__class__.__name__
+
+
+def probe_startup_database_connectivity() -> bool:
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        logger.info("Primary database connection verified for startup maintenance.")
+        return True
+    except Exception as exc:
+        logger.warning(
+            "Primary database is unreachable during startup. "
+            "Skipping database maintenance and bootstrap tasks until a later restart. Detail: %s",
+            _summarize_startup_exception(exc),
+        )
+        return False
+
+
+STARTUP_DATABASE_REACHABLE = probe_startup_database_connectivity()
+
+
 def initialize_database_metadata() -> None:
     try:
         Base.metadata.create_all(bind=engine)
@@ -334,7 +365,8 @@ def initialize_database_metadata() -> None:
         )
 
 
-initialize_database_metadata()
+if STARTUP_DATABASE_REACHABLE:
+    initialize_database_metadata()
 
 
 def ensure_user_settings_columns() -> None:
@@ -392,7 +424,8 @@ def ensure_user_settings_columns() -> None:
         logger.exception("Failed to backfill user settings columns")
 
 
-ensure_user_settings_columns()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_user_settings_columns()
 
 
 def ensure_supabase_realtime_publication() -> None:
@@ -448,7 +481,8 @@ def ensure_supabase_realtime_publication() -> None:
         logger.exception("Unable to synchronize Supabase realtime publication")
 
 
-ensure_supabase_realtime_publication()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_supabase_realtime_publication()
 
 
 def ensure_microlearning_assessment_schema() -> None:
@@ -645,9 +679,10 @@ def ensure_microlearning_topic_category_schema() -> None:
         logger.exception("Failed to backfill microlearning topic category schema")
 
 
-ensure_microlearning_assessment_schema()
-ensure_microlearning_assignment_schema()
-ensure_microlearning_topic_category_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_microlearning_assessment_schema()
+    ensure_microlearning_assignment_schema()
+    ensure_microlearning_topic_category_schema()
 
 
 def ensure_user_dismissed_notifications_column() -> None:
@@ -682,7 +717,8 @@ def ensure_user_dismissed_notifications_column() -> None:
         logger.exception("Failed to backfill dismissed_notifications column")
 
 
-ensure_user_dismissed_notifications_column()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_user_dismissed_notifications_column()
 
 
 def ensure_batch_schema() -> None:
@@ -723,7 +759,8 @@ def ensure_batch_schema() -> None:
         logger.exception("Failed to backfill batch schema")
 
 
-ensure_batch_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_batch_schema()
 
 
 def ensure_call_simulation_session_schema() -> None:
@@ -819,7 +856,8 @@ def ensure_call_simulation_session_schema() -> None:
         logger.exception("Failed to backfill Call Simulation session schema")
 
 
-ensure_call_simulation_session_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_call_simulation_session_schema()
 
 
 def ensure_call_simulation_assignment_schema() -> None:
@@ -860,7 +898,8 @@ def ensure_call_simulation_assignment_schema() -> None:
         logger.exception("Failed to backfill Call Simulation assignment schema")
 
 
-ensure_call_simulation_assignment_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_call_simulation_assignment_schema()
 
 
 def ensure_call_simulation_scenario_schema() -> None:
@@ -932,7 +971,8 @@ def ensure_call_simulation_scenario_schema() -> None:
         logger.exception("Failed to backfill Call Simulation scenario schema")
 
 
-ensure_call_simulation_scenario_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_call_simulation_scenario_schema()
 
 
 def ensure_call_simulation_reporting_views() -> None:
@@ -1418,7 +1458,8 @@ def ensure_call_simulation_reporting_views() -> None:
         logger.exception("Failed to create Call Simulation reporting views")
 
 
-ensure_call_simulation_reporting_views()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_call_simulation_reporting_views()
 
 
 def ensure_certification_schema() -> None:
@@ -1560,7 +1601,8 @@ def ensure_certification_schema() -> None:
         logger.exception("Failed to backfill certification schema")
 
 
-ensure_certification_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_certification_schema()
 
 
 def ensure_mcq_assessment_schema() -> None:
@@ -1700,7 +1742,8 @@ def ensure_mcq_assessment_schema() -> None:
         logger.exception("Failed to backfill MCQ assessment navigation schema")
 
 
-ensure_mcq_assessment_schema()
+if STARTUP_DATABASE_REACHABLE:
+    ensure_mcq_assessment_schema()
 
 
 def cleanup_legacy_seed_data() -> None:
@@ -1775,7 +1818,8 @@ app.add_middleware(
 )
 app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
 
-cleanup_legacy_seed_data()
+if STARTUP_DATABASE_REACHABLE:
+    cleanup_legacy_seed_data()
 
 # Ensure admin user exists
 def ensure_admin_user():

@@ -1,14 +1,14 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 set "APP_ROOT=%~dp0"
 set "BACKEND_DIR=%APP_ROOT%backend"
 if not defined ENV_FILE_OVERRIDE set "ENV_FILE_OVERRIDE=1"
 if not defined BACKEND_PRESTART_COMPILE set "BACKEND_PRESTART_COMPILE=1"
 
-call :load_env_file "%APP_ROOT%.env"
-call :load_env_file "%APP_ROOT%.env.local"
 call :load_env_file "%BACKEND_DIR%\.env"
 call :load_env_file "%BACKEND_DIR%\.env.local"
+call :load_env_file "%APP_ROOT%.env"
+call :load_env_file "%APP_ROOT%.env.local"
 
 if defined HOST if not defined BACKEND_HOST set "BACKEND_HOST=%HOST%"
 if defined PORT if not defined BACKEND_PORT set "BACKEND_PORT=%PORT%"
