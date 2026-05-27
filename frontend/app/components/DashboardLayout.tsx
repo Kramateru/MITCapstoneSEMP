@@ -3,6 +3,7 @@
 import NotificationBell from '@/app/components/shared/notification-bell';
 import ProfileManagementDialog from '@/app/components/shared/profile-management-dialog';
 import { Badge } from '@/app/components/ui/badge';
+import { Input } from '@/app/components/ui/input';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
@@ -15,7 +16,7 @@ import {
     USER_SETTINGS_EVENT,
     type UserDashboardSettings,
 } from '@/app/utils/user-settings';
-import { LogOut, Menu, X } from 'lucide-react';
+import { ChevronRight, LogOut, Menu, Search, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -39,6 +40,7 @@ export function DashboardLayout({
   userRole?: string;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [navSearch, setNavSearch] = useState('');
   const [dashboardSettings, setDashboardSettings] = useState<UserDashboardSettings>(
     () => readCachedUserSettings() ?? buildDefaultUserSettings(),
   );
@@ -53,6 +55,7 @@ export function DashboardLayout({
   const isMinifiedSidebar = dashboardSettings.minifyNavigation && !isTopNavigation;
   const isHiddenSidebar = dashboardSettings.hideNavigation && !isTopNavigation;
   const desktopMenuEnabled = isHiddenSidebar;
+  const roleHomePath = getRoleHomePath(resolvedUserRole);
   const systemNameLines = ['Speech-Enabled', 'Microlearning Platform'] as const;
   const roleLabelMap = {
     trainee: 'Trainee Workspace',
@@ -233,10 +236,20 @@ export function DashboardLayout({
     ...item,
     badge: sidebarBadgeMap[item.href] ?? item.badge,
   }));
+  const filteredSidebarItems = useMemo(() => {
+    const normalizedSearch = navSearch.trim().toLowerCase();
+    if (!normalizedSearch) {
+      return resolvedSidebarItems;
+    }
+
+    return resolvedSidebarItems.filter((item) =>
+      `${item.label} ${item.section || ''}`.toLowerCase().includes(normalizedSearch),
+    );
+  }, [navSearch, resolvedSidebarItems]);
   const groupedSidebarItems = useMemo(() => {
     const groups = new Map<string, typeof resolvedSidebarItems>();
 
-    resolvedSidebarItems.forEach((item) => {
+    filteredSidebarItems.forEach((item) => {
       const section = item.section || 'Workspace';
       const items = groups.get(section);
       if (items) {
@@ -247,7 +260,7 @@ export function DashboardLayout({
     });
 
     return Array.from(groups.entries()).map(([section, items]) => ({ section, items }));
-  }, [resolvedSidebarItems]);
+  }, [filteredSidebarItems]);
   const isActivePath = useMemo(
     () => (href: string) => pathname === href || pathname.startsWith(`${href}/`),
     [pathname],
@@ -260,6 +273,21 @@ export function DashboardLayout({
 
   const currentPageLabel = activeSidebarItem?.label || 'Workspace';
   const currentPageSection = activeSidebarItem?.section || roleLabelMap[resolvedUserRole];
+  const headerBreadcrumbs = useMemo(() => {
+    const items: Array<{ label: string; href?: string }> = [
+      { label: roleLabelMap[resolvedUserRole], href: roleHomePath },
+    ];
+
+    if (currentPageSection && currentPageSection !== roleLabelMap[resolvedUserRole]) {
+      items.push({ label: currentPageSection });
+    }
+
+    if (currentPageLabel && currentPageLabel !== currentPageSection) {
+      items.push({ label: currentPageLabel });
+    }
+
+    return items;
+  }, [currentPageLabel, currentPageSection, resolvedUserRole, roleHomePath]);
 
   const handleLogout = () => {
     logout();
@@ -352,7 +380,9 @@ export function DashboardLayout({
                       </p>
                     </div>
                     <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold text-sidebar-foreground/70">
-                      {resolvedSidebarItems.length} Links
+                      {filteredSidebarItems.length === resolvedSidebarItems.length
+                        ? `${resolvedSidebarItems.length} Links`
+                        : `${filteredSidebarItems.length}/${resolvedSidebarItems.length} Links`}
                     </div>
                   </div>
                 </div>
@@ -362,6 +392,17 @@ export function DashboardLayout({
 
           {/* Navigation Items */}
           <nav className="flex-1 overflow-y-auto px-3 py-5 sm:px-4 sm:py-5" aria-label={`${resolvedUserRole} workspace navigation`}>
+            {!isMinifiedSidebar ? (
+              <div className="relative mb-4">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-sidebar-foreground/45" />
+                <Input
+                  value={navSearch}
+                  onChange={(event) => setNavSearch(event.target.value)}
+                  placeholder="Find a page"
+                  className="h-11 rounded-2xl border-white/10 bg-white/[0.07] pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/44"
+                />
+              </div>
+            ) : null}
             {groupedSidebarItems.map((group) => (
               <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
                 {!isMinifiedSidebar ? (
@@ -413,6 +454,11 @@ export function DashboardLayout({
                 ))}
               </div>
             ))}
+            {!groupedSidebarItems.length ? (
+              <div className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-sidebar-foreground/70">
+                No pages match your search.
+              </div>
+            ) : null}
           </nav>
 
           {/* Logout Button */}
@@ -461,6 +507,20 @@ export function DashboardLayout({
                   Live Workspace
                 </Badge>
               </div>
+              <div className="workspace-breadcrumbs">
+                {headerBreadcrumbs.map((item, index) => (
+                  <div key={`${item.label}-${index}`} className="contents">
+                    {index > 0 ? <span className="workspace-breadcrumb-separator"><ChevronRight size={14} /></span> : null}
+                    {item.href ? (
+                      <Link href={item.href} className="transition-colors hover:text-foreground">
+                        {item.label}
+                      </Link>
+                    ) : (
+                      <span>{item.label}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
               <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-[-0.025em] text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
                 {currentPageLabel}
               </h1>
@@ -475,6 +535,14 @@ export function DashboardLayout({
 
           {/* Right Section */}
           <div className="flex w-full self-stretch flex-wrap items-center justify-end gap-3 rounded-[1.35rem] border border-border/70 bg-white/84 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:min-w-[18rem] sm:self-auto sm:flex-nowrap sm:gap-4 sm:px-3.5 lg:min-w-[19rem] lg:gap-5">
+            <div className="hidden min-w-0 flex-1 text-right sm:block">
+              <p className="truncate text-sm font-semibold text-foreground">
+                {user.user_name || 'Signed in'}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {currentPageSection}
+              </p>
+            </div>
             <NotificationBell />
             <ProfileManagementDialog />
           </div>
@@ -485,7 +553,7 @@ export function DashboardLayout({
             <div className={`mx-auto w-full px-4 py-3.5 sm:px-5 lg:px-6 ${contentWidthClass}`}>
               <nav
                 aria-label={`${resolvedUserRole} workspace sections`}
-                className="grid gap-3 lg:grid-cols-2 xl:grid-cols-3"
+                className="dashboard-balanced-grid"
               >
                 {groupedSidebarItems.map((group) => (
                   <div

@@ -54,12 +54,12 @@ def _apply_env_aliases() -> None:
 
 
 def load_backend_environment() -> None:
-    """Load backend-local env first, then fall back to the repo root env."""
+    """Load the shared repo env first, then use backend-local values only as fallback."""
     backend_dir = Path(__file__).resolve().parent
     backend_env = backend_dir / ".env"
     root_env = backend_dir.parent / ".env"
 
-    for env_path in (backend_env, root_env):
+    for env_path in (root_env, backend_env):
         if env_path.exists():
             load_dotenv(dotenv_path=env_path, override=False)
 

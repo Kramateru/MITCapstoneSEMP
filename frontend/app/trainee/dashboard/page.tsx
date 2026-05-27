@@ -29,7 +29,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 interface PracticeSession {
   id: string;
@@ -146,6 +146,8 @@ export default function TraineeDashboard() {
   const [changeSuccess, setChangeSuccess] = useState('');
   const [isChanging, setIsChanging] = useState(false);
   const [strengthTouched, setStrengthTouched] = useState(false);
+  const [loadingWorkspace, setLoadingWorkspace] = useState(true);
+  const hasLoadedWorkspace = useRef(false);
 
   const fetchTraineeData = useCallback(async () => {
     try {
@@ -214,7 +216,16 @@ export default function TraineeDashboard() {
   }, [user?.user_id]);
 
   const refreshDashboard = useCallback(async () => {
-    await Promise.all([fetchTraineeData(), loadSimFloorWorkspace()]);
+    if (!hasLoadedWorkspace.current) {
+      setLoadingWorkspace(true);
+    }
+
+    try {
+      await Promise.all([fetchTraineeData(), loadSimFloorWorkspace()]);
+    } finally {
+      setLoadingWorkspace(false);
+      hasLoadedWorkspace.current = true;
+    }
   }, [fetchTraineeData, loadSimFloorWorkspace]);
 
   useEffect(() => {
@@ -287,13 +298,17 @@ export default function TraineeDashboard() {
           description="Review your assigned learning, continue mock calls, and keep up with the latest coaching and progress updates."
         >
           {stats ? (
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="dashboard-compact-grid">
               <SoftStat label="Completed Today" value={stats.completed_today} tone="blue" />
               <SoftStat label="Coaching Pending" value={coachingSummary.pending} tone="amber" />
               <SoftStat label="Certificates" value={stats.certifications} tone="green" />
             </div>
           ) : null}
         </DashboardHero>
+
+        {loadingWorkspace ? (
+          <NoticeBanner tone="blue">Loading your trainee dashboard...</NoticeBanner>
+        ) : null}
 
         {mustChangePassword ? (
           <SectionPanel
@@ -306,7 +321,7 @@ export default function TraineeDashboard() {
               </NoticeBanner>
 
               <form
-                className="grid gap-4 md:grid-cols-3"
+                className="dashboard-actions-grid"
                 onSubmit={async (e) => {
                   e.preventDefault();
                   setChangeError('');
@@ -436,7 +451,7 @@ export default function TraineeDashboard() {
 
         <div className={mustChangePassword ? 'pointer-events-none opacity-60' : 'space-y-6'}>
           {stats ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <div className="dashboard-metrics-grid">
               <MetricCard
                 label="Activity Sessions"
                 value={stats.total_sessions}
@@ -475,13 +490,13 @@ export default function TraineeDashboard() {
             </div>
           ) : null}
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.12fr)_minmax(0,0.88fr)]">
+          <div className="dashboard-balanced-grid">
             <div className="space-y-6">
               <SectionPanel
                 title="Assigned learning"
                 description="Continue only the items your trainer has assigned and keep your progress moving."
               >
-                <div className="grid gap-4 md:grid-cols-2">
+                <div className="dashboard-actions-grid">
                   <ActionCard
                     href="/trainee/microlearning"
                     title="Microlearning Hub"
@@ -520,7 +535,7 @@ export default function TraineeDashboard() {
                     description="Check completed work, current performance, and what to focus on next."
                     icon={<TrendingUp className="size-5" />}
                     tone="violet"
-                    className="md:col-span-2"
+                    className="xl:col-span-2"
                   />
                 </div>
               </SectionPanel>
@@ -535,7 +550,7 @@ export default function TraineeDashboard() {
                 }
               >
                 <div className="space-y-4">
-                  <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="dashboard-compact-grid">
                     <SoftStat
                       label="Call Sessions"
                       value={simFloorReport?.summary.total_sessions ?? 0}
@@ -587,7 +602,7 @@ export default function TraineeDashboard() {
                   )}
 
                   {simFloorReport?.recent_sessions?.length ? (
-                    <div className="space-y-3">
+                    <div className="dashboard-list-stack">
                       {simFloorReport.recent_sessions.slice(0, 3).map((session) => (
                         <div key={session.session_id} className="data-card p-4">
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -626,14 +641,14 @@ export default function TraineeDashboard() {
                 }
               >
                 <div className="space-y-4">
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="dashboard-compact-grid">
                     <SoftStat label="Pending" value={coachingSummary.pending} tone="amber" />
                     <SoftStat label="Acknowledged" value={coachingSummary.acknowledged} tone="green" />
                     <SoftStat label="Retake" value={coachingSummary.retake} tone="rose" />
                   </div>
 
                   {coachingLogs.length ? (
-                    <div className="space-y-3">
+                    <div className="dashboard-list-stack">
                       {coachingLogs.slice(0, 3).map((log) => (
                         <div key={log.id} className="data-card p-4">
                           <div className="flex flex-wrap items-center gap-2">
@@ -665,7 +680,7 @@ export default function TraineeDashboard() {
                 description="Your most recent saved practice sessions and scores."
               >
                 {sessions.length ? (
-                  <div className="space-y-3">
+                  <div className="dashboard-list-stack">
                     {sessions.slice(0, 5).map((session) => (
                       <div key={session.id} className="data-card p-4">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
@@ -679,7 +694,7 @@ export default function TraineeDashboard() {
                             {session.overall_score.toFixed(0)}%
                           </Badge>
                         </div>
-                        <div className="mt-4 grid grid-cols-2 gap-3">
+                        <div className="dashboard-detail-grid mt-4">
                           <SoftStat label="Accuracy" value={`${session.accuracy.toFixed(0)}%`} tone="blue" />
                           <SoftStat label="Fluency" value={`${session.fluency.toFixed(0)}%`} tone="green" />
                         </div>

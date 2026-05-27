@@ -13,9 +13,9 @@ function firstConfiguredValue(...values: Array<string | undefined>) {
 }
 
 const supabasePublicUrl = firstConfiguredValue(
+  process.env.SUPABASE_URL,
   process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_URL,
 );
 
 const supabasePublishableKey = firstConfiguredValue(

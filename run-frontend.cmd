@@ -1,13 +1,13 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 set "APP_ROOT=%~dp0"
 set "FRONTEND_DIR=%APP_ROOT%frontend"
 set "BACKEND_DIR=%APP_ROOT%backend"
 if not defined ENV_FILE_OVERRIDE set "ENV_FILE_OVERRIDE=1"
 
-call :load_env_file "%APP_ROOT%.env"
 call :load_env_file "%BACKEND_DIR%\.env"
 call :load_env_file "%BACKEND_DIR%\.env.local"
+call :load_env_file "%APP_ROOT%.env"
 call :load_env_file "%APP_ROOT%.env.local"
 call :load_env_file "%FRONTEND_DIR%\.env"
 call :load_env_file "%FRONTEND_DIR%\.env.local"
@@ -166,8 +166,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "while ((Get-Date) -lt $deadline) {" ^
   "  try {" ^
   "    $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 5;" ^
-  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500) { exit 0 }" ^
-  "  } catch {}" ^
+  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 600) { exit 0 }" ^
+  "  } catch { if ($_.Exception.Response) { exit 0 } }" ^
   "  Start-Sleep -Milliseconds 750;" ^
   "}" ^
   "Write-Host 'Backend health check timed out.';" ^

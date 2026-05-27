@@ -306,7 +306,7 @@ export default function AdminDashboardPage() {
             </Button>
           }
         >
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="dashboard-compact-grid">
             <SoftStat label="Total Trainers" value={stats?.total_trainers ?? 0} tone="blue" />
             <SoftStat label="Total Trainees" value={stats?.total_trainees ?? 0} tone="green" />
             <SoftStat label="Audio Coverage" value={`${stats?.system_status?.audio_storage?.utilization?.coverage_percentage ?? 0}%`} tone="amber" />
@@ -325,7 +325,7 @@ export default function AdminDashboardPage() {
         {loadMessage ? <NoticeBanner tone="amber">{loadMessage}</NoticeBanner> : null}
         {liveStatus ? <NoticeBanner tone="blue">{liveStatus}</NoticeBanner> : null}
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <div className="dashboard-metrics-grid">
           <MetricCard
             label="Total Users"
             value={loading && !stats ? '...' : stats?.total_users ?? 0}
@@ -375,12 +375,12 @@ export default function AdminDashboardPage() {
           />
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1.12fr,0.88fr]">
+        <div className="dashboard-balanced-grid">
           <SectionPanel
             title="Admin control center"
             description="Jump into the core admin workflows for user management, analytics, coaching oversight, and certification setup."
           >
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="dashboard-actions-grid">
               {ADMIN_QUICK_LINKS.map((item) => (
                 <ActionCard
                   key={item.href}
@@ -398,7 +398,7 @@ export default function AdminDashboardPage() {
             title="Platform focus"
             description="Fast admin checks that usually need a decision before deeper review."
           >
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+            <div className="dashboard-compact-grid">
               <SoftStat
                 label="Database"
                 value={toDisplayLabel(stats?.system_status?.database?.status || 'unknown')}
@@ -423,12 +423,12 @@ export default function AdminDashboardPage() {
           </SectionPanel>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[1fr,1fr]">
+        <div className="dashboard-balanced-grid">
           <SectionPanel
             title="System status"
             description="These checks reflect the currently configured database, ASR, NLP, and Supabase storage paths."
           >
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="dashboard-actions-grid">
               {[
                 {
                   label: 'ASR Engine',
@@ -470,7 +470,7 @@ export default function AdminDashboardPage() {
             description="Admin actions below are loaded from the audit log and reflect database-backed updates only."
           >
             {stats?.recent_activity?.length ? (
-              <div className="space-y-3">
+              <div className="dashboard-list-stack">
                 {stats.recent_activity.map((activity) => (
                   <div key={activity.id} className="data-card p-5">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

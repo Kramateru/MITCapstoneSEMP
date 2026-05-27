@@ -174,9 +174,9 @@ function resolveSupabasePublicApiKey() {
 
 export function createSupabaseAdminClient() {
   const supabaseUrl = normalizeEnvValue(getConfigValue([
-    'VITE_SUPABASE_URL',
-    'NEXT_PUBLIC_SUPABASE_URL',
     'SUPABASE_URL',
+    'NEXT_PUBLIC_SUPABASE_URL',
+    'VITE_SUPABASE_URL',
     'REACT_APP_SUPABASE_URL',
   ], ''))
   const requestSupabaseAccessToken = normalizeEnvValue(getAssessmentRequestSupabaseAccessToken())
