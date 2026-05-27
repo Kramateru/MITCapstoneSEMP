@@ -89,7 +89,7 @@ from ..services.live_updates import live_update_manager
 from ..services.notifications import notify_call_simulation_completion
 from ..services.speech_assessment import assess_audio_submission, normalize_text, tokenize_text
 from ..services.supabase_auth_service import filter_to_supabase_active_users
-from ..services.tts_service import text_to_speech
+from ..services.tts_service import text_to_speech, text_to_speech_for_persistence
 from ..supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -2195,15 +2195,6 @@ def _validate_call_simulation_launch_assets(
     scenario: Scenario,
     scenario_steps: list[CallSimulationScenarioStepResponse],
 ) -> None:
-    if not _is_supabase_storage_public_url(scenario.ringer_audio_url):
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This Call Simulation is not ready for live playback because the trainer ringer audio "
-                "is missing from Supabase. Ask the trainer to upload or regenerate it first."
-            ),
-        )
-
     missing_member_references: list[str] = []
     for step in scenario_steps:
         if str(getattr(step, "actor", "") or "").lower() != "member":
@@ -4705,11 +4696,6 @@ async def create_call_simulation_scenario(
         incoming_ringer_audio_url=scenario_data.ringer_audio_url,
         incoming_hold_audio_url=scenario_data.hold_audio_url,
     )
-    if not _is_supabase_storage_public_url(resolved_ringer_audio_url):
-        raise HTTPException(
-            status_code=400,
-            detail="Attach a Supabase-backed trainer ringer audio before creating this Call Simulation scenario.",
-        )
 
     new_scenario = Scenario(
         id=str(uuid.uuid4()),
@@ -5150,11 +5136,6 @@ async def update_call_simulation_scenario(
         incoming_ringer_audio_url=scenario_update.ringer_audio_url if "ringer_audio_url" in update_fields else _UNSET,
         incoming_hold_audio_url=scenario_update.hold_audio_url if "hold_audio_url" in update_fields else _UNSET,
     )
-    if not _is_supabase_storage_public_url(scenario.ringer_audio_url):
-        raise HTTPException(
-            status_code=400,
-            detail="Attach a Supabase-backed trainer ringer audio before saving this Call Simulation scenario.",
-        )
 
     active_mapping = (
         db.query(BatchScenarioMapping)
@@ -7055,7 +7036,8 @@ async def synthesize_member_speech(
     )
 
     try:
-        audio_result = await text_to_speech(
+        synthesis_fn = text_to_speech_for_persistence if persist else text_to_speech
+        audio_result = await synthesis_fn(
             normalized_text,
             voice_name="Puck",
             speaking_style="professional",

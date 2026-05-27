@@ -5,7 +5,7 @@ import { AuthProvider } from "@/app/context/AuthContext";
 import { RuntimeResilience } from "@/app/components/runtime-resilience";
 
 export const metadata: Metadata = {
-  title: "Speech-Enabled BPO Training Platform",
+  title: "Speech-Enabled Microlearning Platform",
   description: "Speech-enabled language assessment, microlearning, coaching, and certification workflow.",
 };
 

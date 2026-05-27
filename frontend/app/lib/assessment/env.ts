@@ -4,6 +4,27 @@ import path from 'node:path'
 const envCache = new Map<string, string>()
 let cacheHydrated = false
 
+function normalizeConfigCandidate(value?: string | null) {
+  const trimmed = (value || '').trim()
+  if (
+    !trimmed
+    || trimmed === 'undefined'
+    || trimmed === 'null'
+    || /^your[_-]/i.test(trimmed)
+  ) {
+    return ''
+  }
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+
+  return trimmed
+}
+
 function buildEnvFiles() {
   const candidateRoots = [
     process.cwd(),
@@ -56,19 +77,19 @@ function hydrateEnvCache() {
 }
 
 export function getConfigValue(possibleKeys: string[], fallback?: string) {
-  for (const key of possibleKeys) {
-    const directValue = process.env[key]
-    if (directValue) {
-      return directValue
-    }
-  }
-
   hydrateEnvCache()
 
   for (const key of possibleKeys) {
-    const cachedValue = envCache.get(key)
+    const cachedValue = normalizeConfigCandidate(envCache.get(key))
     if (cachedValue) {
       return cachedValue
+    }
+  }
+
+  for (const key of possibleKeys) {
+    const directValue = normalizeConfigCandidate(process.env[key])
+    if (directValue) {
+      return directValue
     }
   }
 

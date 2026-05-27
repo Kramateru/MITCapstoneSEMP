@@ -53,7 +53,7 @@ export function DashboardLayout({
   const isMinifiedSidebar = dashboardSettings.minifyNavigation && !isTopNavigation;
   const isHiddenSidebar = dashboardSettings.hideNavigation && !isTopNavigation;
   const desktopMenuEnabled = isHiddenSidebar;
-  const systemNameLines = ['Speech-Enabled', 'BPO Training Platform'] as const;
+  const systemNameLines = ['Speech-Enabled', 'Microlearning Platform'] as const;
   const roleLabelMap = {
     trainee: 'Trainee Workspace',
     trainer: 'Trainer Workspace',
@@ -321,14 +321,14 @@ export function DashboardLayout({
           <div className="border-b border-sidebar-border px-4 py-4 sm:px-5 sm:py-5 lg:px-5 lg:py-6">
             <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:flex lg:justify-center' : 'space-y-4'}`}>
               <div className={`flex ${isMinifiedSidebar ? 'justify-center' : 'items-center'} gap-3.5`}>
-                <div className="relative h-[4.25rem] w-[4.25rem] shrink-0 overflow-hidden rounded-3xl border border-white/14 bg-white/10 shadow-[0_18px_32px_-24px_rgba(15,23,42,0.95)]">
+                <div className="relative h-[4.25rem] w-[4.25rem] shrink-0 overflow-hidden rounded-full border border-white/14 bg-white/10 shadow-[0_18px_32px_-24px_rgba(15,23,42,0.95)]">
                   <Image
-                    src="/st-peter-seal.svg"
-                    alt="St. Peter Velle Technical Training Center seal"
+                    src="/spvlogo.png"
+                    alt="St. Peter Velle Technical Training Center logo"
                     fill
                     priority
                     sizes="68px"
-                    className="object-contain p-1.5"
+                    className="scale-[1.04] rounded-full object-cover"
                   />
                 </div>
                 <div className={`min-w-0 space-y-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
