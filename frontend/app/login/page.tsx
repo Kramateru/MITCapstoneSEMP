@@ -186,14 +186,14 @@ export default function LoginPage() {
               <div className="relative mx-auto flex w-full max-w-[31rem] flex-col items-center text-center">
                 <div className="relative mb-5 h-36 w-36 sm:h-44 sm:w-44 lg:h-52 lg:w-52">
                   <div className="absolute inset-0 rounded-full bg-white/14 blur-2xl" />
-                  <div className="relative flex h-full w-full items-center justify-center rounded-full border border-white/16 bg-white/8 p-3 shadow-[0_30px_70px_-36px_rgba(15,23,42,0.95)] backdrop-blur-md">
+                  <div className="relative flex h-full w-full items-center justify-center overflow-hidden rounded-full border border-white/16 bg-white/8 p-3 shadow-[0_30px_70px_-36px_rgba(15,23,42,0.95)] backdrop-blur-md">
                     <Image
                       src="/spvlogo.png"
                       alt="St. Peter Velle Technical Training Center logo"
                       width={220}
                       height={220}
                       priority
-                      className="h-full w-full object-contain"
+                      className="h-full w-full scale-[1.03] rounded-full object-cover"
                     />
                   </div>
                 </div>
