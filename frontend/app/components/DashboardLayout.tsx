@@ -40,7 +40,7 @@ export function DashboardLayout({
   userRole?: string;
 }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [navSearch, setNavSearch] = useState('');
+  // Removed navSearch and setNavSearch for navigation search removal
   const [dashboardSettings, setDashboardSettings] = useState<UserDashboardSettings>(
     () => readCachedUserSettings() ?? buildDefaultUserSettings(),
   );
@@ -236,20 +236,10 @@ export function DashboardLayout({
     ...item,
     badge: sidebarBadgeMap[item.href] ?? item.badge,
   }));
-  const filteredSidebarItems = useMemo(() => {
-    const normalizedSearch = navSearch.trim().toLowerCase();
-    if (!normalizedSearch) {
-      return resolvedSidebarItems;
-    }
-
-    return resolvedSidebarItems.filter((item) =>
-      `${item.label} ${item.section || ''}`.toLowerCase().includes(normalizedSearch),
-    );
-  }, [navSearch, resolvedSidebarItems]);
+  // No search: all items shown
   const groupedSidebarItems = useMemo(() => {
     const groups = new Map<string, typeof resolvedSidebarItems>();
-
-    filteredSidebarItems.forEach((item) => {
+    resolvedSidebarItems.forEach((item) => {
       const section = item.section || 'Workspace';
       const items = groups.get(section);
       if (items) {
@@ -258,9 +248,8 @@ export function DashboardLayout({
         groups.set(section, [item]);
       }
     });
-
     return Array.from(groups.entries()).map(([section, items]) => ({ section, items }));
-  }, [filteredSidebarItems]);
+  }, [resolvedSidebarItems]);
   const isActivePath = useMemo(
     () => (href: string) => pathname === href || pathname.startsWith(`${href}/`),
     [pathname],
@@ -380,9 +369,7 @@ export function DashboardLayout({
                       </p>
                     </div>
                     <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold text-sidebar-foreground/70">
-                      {filteredSidebarItems.length === resolvedSidebarItems.length
-                        ? `${resolvedSidebarItems.length} Links`
-                        : `${filteredSidebarItems.length}/${resolvedSidebarItems.length} Links`}
+                      {resolvedSidebarItems.length} Links
                     </div>
                   </div>
                 </div>
@@ -392,17 +379,7 @@ export function DashboardLayout({
 
           {/* Navigation Items */}
           <nav className="flex-1 overflow-y-auto px-3 py-5 sm:px-4 sm:py-5" aria-label={`${resolvedUserRole} workspace navigation`}>
-            {!isMinifiedSidebar ? (
-              <div className="relative mb-4">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-sidebar-foreground/45" />
-                <Input
-                  value={navSearch}
-                  onChange={(event) => setNavSearch(event.target.value)}
-                  placeholder="Find a page"
-                  className="h-11 rounded-2xl border-white/10 bg-white/[0.07] pl-9 text-sidebar-foreground placeholder:text-sidebar-foreground/44"
-                />
-              </div>
-            ) : null}
+            {/* Navigation search removed */}
             {groupedSidebarItems.map((group) => (
               <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
                 {!isMinifiedSidebar ? (
@@ -454,11 +431,7 @@ export function DashboardLayout({
                 ))}
               </div>
             ))}
-            {!groupedSidebarItems.length ? (
-              <div className="rounded-2xl border border-white/8 bg-white/[0.04] px-4 py-4 text-sm text-sidebar-foreground/70">
-                No pages match your search.
-              </div>
-            ) : null}
+            {/* No empty state needed since search is removed; all items always shown */}
           </nav>
 
           {/* Logout Button */}
