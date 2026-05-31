@@ -73,6 +73,16 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 DEFAULT_ADMIN_PASSWORD = ADMIN_PASSWORD
 DEFAULT_TRAINER_PASSWORD = TRAINER_PASSWORD
 ALL_LOB_ACCESS_LABEL = "All LOBs"
+MIN_FULL_NAME_LENGTH = 2
+MAX_FULL_NAME_LENGTH = 100
+ADMIN_USER_SORT_COLUMNS = {
+    "name": User.full_name,
+    "email": User.email,
+    "role": User.role,
+    "created_at": User.created_at,
+    "last_login": User.last_login,
+    "status": User.is_active,
+}
 
 
 # ==================== Pydantic Models ====================
@@ -121,6 +131,14 @@ class UserCreate(BaseModel):
     lob: Optional[str] = None
     department: Optional[str] = None
     language_dialect: str = "en-US"
+
+
+class AdminUserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    role: Optional[UserRole] = None
+    is_active: Optional[bool] = None
+    department: Optional[str] = None
+    language_dialect: Optional[str] = None
 
 
 class LineOfBusinessCreate(BaseModel):
@@ -175,6 +193,32 @@ def _validate_password_or_raise(password: Optional[str], *, field_name: str = "P
         return auth_utils.validate_password_length(password, field_name=field_name)
     except auth_utils.PasswordValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _validate_full_name_or_raise(value: Optional[str]) -> str:
+    full_name = (value or "").strip()
+    if len(full_name) < MIN_FULL_NAME_LENGTH:
+        raise HTTPException(status_code=400, detail="Full name must be at least 2 characters.")
+    if len(full_name) > MAX_FULL_NAME_LENGTH:
+        raise HTTPException(status_code=400, detail="Full name must be 100 characters or fewer.")
+    return full_name
+
+
+def _serialize_admin_user(user: User) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role.value if isinstance(user.role, UserRole) else str(user.role),
+        "lob": user.lob,
+        "department": user.department,
+        "language_dialect": user.language_dialect,
+        "profile_image_url": user.profile_image_url,
+        "is_active": bool(user.is_active),
+        "created_at": user.created_at,
+        "updated_at": user.updated_at,
+        "last_login": user.last_login,
+    }
 
 
 def _ensure_user(
@@ -1076,7 +1120,7 @@ async def create_user(
 
     new_user = User(
         email=normalized_email,
-        full_name=user_data.full_name.strip(),
+        full_name=_validate_full_name_or_raise(user_data.full_name),
         password_hash=auth_utils.hash_password(temporary_password),
         role=user_data.role,
         lob=ALL_LOB_ACCESS_LABEL,
@@ -1201,31 +1245,108 @@ async def list_users(
     current_user: Any = Depends(verify_admin),
     db: Session = Depends(get_db),
     role: Optional[UserRole] = None,
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
     skip: int = 0,
     limit: int = 50,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
 ):
-    """List all users with optional filtering by role"""
-    query = db.query(User).filter(User.is_active == True)
+    """List users with search, filters, sorting, and pagination."""
+    safe_limit = max(1, min(limit, 100))
+    safe_skip = max(0, skip)
+
+    query = db.query(User)
 
     if role:
         query = query.filter(User.role == role)
+    if is_active is not None:
+        query = query.filter(User.is_active == is_active)
+    if search:
+        term = f"%{search.strip().lower()}%"
+        query = query.filter(
+            or_(
+                func.lower(User.full_name).like(term),
+                func.lower(User.email).like(term),
+            )
+        )
 
-    users = query.offset(skip).limit(limit).all()
+    total = query.count()
+    sort_column = ADMIN_USER_SORT_COLUMNS.get(sort_by, User.created_at)
+    if sort_order.lower() == "asc":
+        query = query.order_by(sort_column.asc().nullslast(), User.full_name.asc())
+    else:
+        query = query.order_by(sort_column.desc().nullslast(), User.full_name.asc())
+
+    users = query.offset(safe_skip).limit(safe_limit).all()
 
     return {
         "count": len(users),
-        "users": [
-            {
-                "id": u.id,
-                "email": u.email,
-                "full_name": u.full_name,
-                "role": u.role,
-                "lob": u.lob,
-                "created_at": u.created_at,
-            }
-            for u in users
-        ],
+        "total": total,
+        "skip": safe_skip,
+        "limit": safe_limit,
+        "users": [_serialize_admin_user(user) for user in users],
     }
+
+
+@router.put("/users/{user_id}")
+async def update_admin_user(
+    user_id: str,
+    payload: AdminUserUpdate,
+    current_user: Any = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    """Update role, profile details, or account status for any user."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    changes: dict[str, Any] = {}
+
+    if payload.full_name is not None:
+        next_name = _validate_full_name_or_raise(payload.full_name)
+        if next_name != user.full_name:
+            changes["full_name"] = {"from": user.full_name, "to": next_name}
+            user.full_name = next_name
+
+    if payload.role is not None and payload.role != user.role:
+        changes["role"] = {
+            "from": user.role.value if isinstance(user.role, UserRole) else str(user.role),
+            "to": payload.role.value,
+        }
+        user.role = payload.role
+
+    if payload.is_active is not None and bool(payload.is_active) != bool(user.is_active):
+        if user.id == current_user.id and not payload.is_active:
+            raise HTTPException(status_code=400, detail="Admins cannot deactivate their own account.")
+        changes["is_active"] = {"from": bool(user.is_active), "to": bool(payload.is_active)}
+        user.is_active = bool(payload.is_active)
+
+    if payload.department is not None:
+        user.department = payload.department.strip() or None
+    if payload.language_dialect is not None:
+        user.language_dialect = payload.language_dialect.strip() or "en-US"
+
+    try:
+        sync_user_to_supabase_auth(db, user, update_password=False)
+    except SupabaseUserSyncError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    db.commit()
+    db.refresh(user)
+
+    if changes:
+        log_admin_action(
+            db,
+            current_user.id,
+            "updated_user",
+            "User",
+            user.id,
+            changes,
+        )
+
+    return {"status": "updated", "user": _serialize_admin_user(user)}
 
 
 # ==================== Line of Business Management ====================

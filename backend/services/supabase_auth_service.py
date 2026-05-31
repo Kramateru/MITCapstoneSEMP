@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+import logging
 import os
 from typing import Any, Sequence
 
@@ -25,6 +26,9 @@ from ..config_validation import (
     supabase_key_matches_url,
 )
 from ..models import User
+
+
+logger = logging.getLogger(__name__)
 
 
 class SupabaseAuthServiceError(RuntimeError):
@@ -235,6 +239,7 @@ def _build_user_metadata(local_user: User) -> str:
             "lob": local_user.lob,
             "department": local_user.department,
             "language_dialect": local_user.language_dialect,
+            "avatar_url": local_user.profile_image_url,
         }
     )
 
@@ -248,6 +253,48 @@ def _build_identity_metadata(user_id: str, email: str) -> str:
             "phone_verified": False,
         }
     )
+
+
+def _sync_public_profile_row(db: Session, local_user: User) -> None:
+    try:
+        with db.begin_nested():
+            db.execute(
+                text(
+                    """
+                    insert into public.profiles (
+                        id,
+                        full_name,
+                        avatar_url,
+                        role,
+                        created_at,
+                        updated_at
+                    ) values (
+                        cast(:user_id as uuid),
+                        :full_name,
+                        :avatar_url,
+                        :role,
+                        coalesce(:created_at, now()),
+                        coalesce(:updated_at, now())
+                    )
+                    on conflict (id) do update
+                    set
+                        full_name = excluded.full_name,
+                        avatar_url = excluded.avatar_url,
+                        role = excluded.role,
+                        updated_at = excluded.updated_at
+                    """
+                ),
+                {
+                    "user_id": local_user.id,
+                    "full_name": local_user.full_name,
+                    "avatar_url": local_user.profile_image_url,
+                    "role": local_user.role.value,
+                    "created_at": local_user.created_at,
+                    "updated_at": local_user.updated_at or datetime.utcnow(),
+                },
+            )
+    except Exception as exc:
+        logger.warning("Unable to sync public profile row for %s: %s", local_user.email, exc)
 
 
 def _sync_supabase_email_identity(
@@ -651,6 +698,7 @@ def sync_user_to_supabase_auth(
             updated_at=now,
             last_sign_in_at=last_sign_in_at,
         )
+        _sync_public_profile_row(db, local_user)
 
         return {
             "status": status,

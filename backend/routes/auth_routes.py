@@ -210,9 +210,23 @@ async def login(
     )
 
 
+
+# --- Enhanced Logout Endpoint ---
+from fastapi import Response, Cookie
+
 @router.post("/logout", response_model=SuccessResponse)
-async def logout(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    """Logout endpoint that marks the active server-side session inactive."""
+async def logout(
+    authorization: Optional[str] = Header(None),
+    session_id: Optional[str] = Cookie(None),
+    db: Session = Depends(get_db),
+    response: Response = None,
+):
+    """
+    Logout endpoint that marks the active server-side session inactive and clears cookies.
+    Supports both JWT and session-based authentication.
+    """
+    session_invalidated = False
+    # Invalidate session by JWT (Authorization header)
     if authorization:
         try:
             scheme, token = authorization.split()
@@ -223,9 +237,58 @@ async def logout(authorization: Optional[str] = Header(None), db: Session = Depe
                 )
                 deactivate_session(db, token_data.session_id)
                 db.commit()
+                session_invalidated = True
         except Exception:
             db.rollback()
-    return SuccessResponse(message="Logged out successfully")
+    # Invalidate session by session_id cookie
+    if session_id:
+        try:
+            deactivate_session(db, session_id)
+            db.commit()
+            session_invalidated = True
+        except Exception:
+            db.rollback()
+    # Clear cookies (JWT, session, refresh, etc.)
+    if response:
+        response.delete_cookie("session_id", path="/")
+        response.delete_cookie("authToken", path="/")
+        response.delete_cookie("refreshToken", path="/")
+    return SuccessResponse(message="Logged out successfully" if session_invalidated else "No active session found")
+
+
+# --- Session Validation Endpoint ---
+@router.get("/session")
+async def validate_session(
+    authorization: Optional[str] = Header(None),
+    session_id: Optional[str] = Cookie(None),
+    db: Session = Depends(get_db),
+):
+    """
+    Validate if the current session or token is still valid. Returns 200 if valid, 401 if not.
+    Used by frontend to check session status on app load.
+    """
+    try:
+        # Try JWT first
+        if authorization:
+            scheme, token = authorization.split()
+            if scheme.lower() == "bearer":
+                token_data = auth_utils.decode_token(token, allowed_types={"access"})
+                user = db.query(User).filter(User.id == token_data.user_id).first()
+                if not user or not user.is_active:
+                    raise Exception("User not found or inactive")
+                # Validate session
+                if not auth_utils.validate_current_session(db, user, token_data):
+                    raise Exception("Session invalid")
+                return {"valid": True}
+        # Try session_id cookie
+        if session_id:
+            user = db.query(User).filter(User.session_id == session_id, User.is_active == True).first()
+            if not user:
+                raise Exception("Session not found or inactive")
+            return {"valid": True}
+    except Exception:
+        pass
+    return JSONResponse({"valid": False}, status_code=401)
 
 
 @router.get("/provider-status")

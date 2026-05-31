@@ -5,6 +5,7 @@ Handles user CRUD operations, authentication, and profile management
 
 import uuid
 import logging
+import re
 from typing import Any, List, Optional
 
 from sqlalchemy import func
@@ -52,6 +53,11 @@ ALLOWED_PROFILE_IMAGE_TYPES = {
     "image/webp": "webp",
 }
 MAX_PROFILE_IMAGE_SIZE = 5 * 1024 * 1024
+MIN_FULL_NAME_LENGTH = 2
+MAX_FULL_NAME_LENGTH = 100
+PASSWORD_COMPLEXITY_PATTERN = re.compile(
+    r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
+)
 
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
@@ -71,6 +77,34 @@ def _validate_password_or_raise(password: Optional[str], *, field_name: str = "P
         ) from exc
 
 
+def _validate_full_name_or_raise(value: Optional[str]) -> str:
+    full_name = (value or "").strip()
+    if len(full_name) < MIN_FULL_NAME_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Full name must be at least 2 characters.",
+        )
+    if len(full_name) > MAX_FULL_NAME_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Full name must be 100 characters or fewer.",
+        )
+    return full_name
+
+
+def _validate_strong_password_or_raise(password: Optional[str], *, field_name: str = "Password") -> str:
+    normalized_password = _validate_password_or_raise(password, field_name=field_name)
+    if not PASSWORD_COMPLEXITY_PATTERN.match(normalized_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"{field_name} must be at least 8 characters and include uppercase, "
+                "lowercase, number, and special character."
+            ),
+        )
+    return normalized_password
+
+
 def _apply_self_profile_updates(current_user: User, user_update: UserUpdate, db: Session) -> None:
     if user_update.email is not None:
         normalized_email = user_update.email.strip().lower()
@@ -87,13 +121,7 @@ def _apply_self_profile_updates(current_user: User, user_update: UserUpdate, db:
         current_user.email = normalized_email
 
     if user_update.full_name is not None:
-        full_name = user_update.full_name.strip()
-        if not full_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Full name cannot be empty",
-            )
-        current_user.full_name = full_name
+        current_user.full_name = _validate_full_name_or_raise(user_update.full_name)
 
     if user_update.department is not None:
         current_user.department = _normalize_optional_text(user_update.department)
@@ -125,13 +153,7 @@ def _apply_admin_user_updates(user: User, user_update: UserUpdate, db: Session) 
         user.email = normalized_email
 
     if user_update.full_name is not None:
-        full_name = user_update.full_name.strip()
-        if not full_name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Full name cannot be empty",
-            )
-        user.full_name = full_name
+        user.full_name = _validate_full_name_or_raise(user_update.full_name)
 
     if user_update.department is not None:
         user.department = _normalize_optional_text(user_update.department)
@@ -187,7 +209,7 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     # Create new user
     new_user = User(
         email=normalized_email,
-        full_name=user_data.full_name.strip(),
+        full_name=_validate_full_name_or_raise(user_data.full_name),
         password_hash=auth_utils.hash_password(effective_password),
         role=user_data.role,
         department=user_data.department,
@@ -388,6 +410,11 @@ async def upload_current_user_profile_image(
 
     previous_profile_image_url = current_user.profile_image_url
     current_user.profile_image_url = new_profile_image_url
+    try:
+        _sync_user_to_supabase_or_raise(db, current_user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(current_user)
 
@@ -412,6 +439,11 @@ async def delete_current_user_profile_image(
     current_user = await auth_utils.get_current_user(authorization, db)
     previous_profile_image_url = current_user.profile_image_url
     current_user.profile_image_url = None
+    try:
+        _sync_user_to_supabase_or_raise(db, current_user)
+    except HTTPException:
+        db.rollback()
+        raise
     db.commit()
     db.refresh(current_user)
 
@@ -436,7 +468,7 @@ async def change_password(
     """Change user password"""
     current_user = await auth_utils.get_current_user(authorization, db)
     old_password = _validate_password_or_raise(password_change.old_password, field_name="Old password")
-    new_password = _validate_password_or_raise(password_change.new_password, field_name="New password")
+    new_password = _validate_strong_password_or_raise(password_change.new_password, field_name="New password")
 
     try:
         authenticate_supabase_credentials(db, current_user.email, old_password)
