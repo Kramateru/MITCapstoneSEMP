@@ -1,0 +1,107 @@
+INFO:main:Local server-side TTS fallback is disabled.
+INFO:main:Supabase admin storage configuration detected.
+INFO:main:Environment validation passed
+INFO:main:Gemini API key detected for Gemini-enabled features
+INFO:backend.services.audio_tts:Gemini TTS client initialized.
+INFO:backend.services.audio_tts:Local microlearning TTS fallback is disabled. Browser fallback should be used when server audio is unavailable.
+INFO:main:Primary database connection verified for startup maintenance.
+INFO:main:Database schema verified
+INFO:main:Ensured Supabase realtime publication includes: call_simulation_assignment, certificate_record, coaching_log, notification_event, sim_session
+INFO:main:Applied Call Simulation scenario schema backfill
+ERROR:main:Failed to create Call Simulation reporting views
+Traceback (most recent call last):
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 922, in do_execute
+    cursor.execute(statement, parameters)
+psycopg2.errors.InvalidTableDefinition: cannot change name of view column "created_at" to "criteria_payload"
+HINT:  Use ALTER VIEW ... RENAME COLUMN ... to change name of view column instead.
+
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\backend\main.py", line 1455, in ensure_call_simulation_reporting_views
+    connection.execute(text(statement))
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1416, in execute
+    return meth(
+           ^^^^^
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\sql\elements.py", line 516, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1639, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1848, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1988, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 2343, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\venv\Lib\site-packages\sqlalchemy\engine\default.py", line 922, in do_execute
+    cursor.execute(statement, parameters)
+sqlalchemy.exc.ProgrammingError: (psycopg2.errors.InvalidTableDefinition) cannot change name of view column "created_at" to "criteria_payload"
+HINT:  Use ALTER VIEW ... RENAME COLUMN ... to change name of view column instead.
+
+[SQL: 
+            CREATE OR REPLACE VIEW public.call_simulation_kpis AS
+            SELECT
+              id,
+              batch_id,
+              speech_to_text_weight,
+              aht_weight,
+              rate_of_speech_weight,
+              dead_air_weight,
+              empathy_statements_weight,
+              probing_questions_weight,
+              grammar_weight,
+              pronunciation_weight,
+              pacing_weight,
+              forbidden_words_penalty,
+              passing_score,
+              forbidden_words,
+              empathy_keywords,
+              probing_keywords,
+              target_aht_seconds,
+              target_ros_words_per_min,
+              target_dead_air_seconds,
+              jsonb_build_object(
+                'speech_to_text_weight', speech_to_text_weight,
+                'aht_weight', aht_weight,
+                'rate_of_speech_weight', rate_of_speech_weight,
+                'dead_air_weight', dead_air_weight,
+                'empathy_statements_weight', empathy_statements_weight,
+                'probing_questions_weight', probing_questions_weight,
+                'grammar_weight', grammar_weight,
+                'pronunciation_weight', pronunciation_weight,
+                'pacing_weight', pacing_weight,
+                'forbidden_words_penalty', forbidden_words_penalty,
+                'passing_score', passing_score,
+                'forbidden_words', forbidden_words,
+                'empathy_keywords', empathy_keywords,
+                'probing_keywords', probing_keywords,
+                'target_aht_seconds', target_aht_seconds,
+                'target_ros_words_per_min', target_ros_words_per_min,
+                'target_dead_air_seconds', target_dead_air_seconds
+              ) AS criteria_payload,
+              created_at,
+              updated_at
+            FROM public.batch_kpi_config
+            ]
+(Background on this error at: https://sqlalche.me/e/20/f405)
+INFO:main:Applied certification schema backfill for existing databases
+INFO:main:Applied MCQ assessment navigation schema backfill
+INFO:main:Azure Speech credentials are not configured. Pronunciation assessment is disabled.
+INFO:     Started server process [18484]
+INFO:     Waiting for application startup.
+INFO:main:Admin user already exists
+INFO:main:Synchronized 10 users to Supabase Auth (created=0, updated=10, skipped=0, mismatched_ids=0)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:backend.routes.auth_routes:Refresh token endpoint reached
+INFO:backend.routes.auth_routes:Login endpoint reached for mcureta@fatima.edu.ph
+INFO:backend.routes.auth_routes:Supabase credentials validated for mcureta@fatima.edu.ph with session user_id=b8be4cfb-4703-4ede-a069-bae27e0b3441 expires_at=1780193847
+INFO:backend.routes.auth_routes:Login success for mcureta@fatima.edu.ph. role=trainee redirect=/trainee/dashboard batch_id=ea7b62b4-ac4b-4e33-a7d8-4478534dd6c1 wave_number=1
