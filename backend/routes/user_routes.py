@@ -8,7 +8,7 @@ import logging
 from typing import Any, List, Optional
 
 from sqlalchemy import func
-from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from .. import auth_utils
@@ -26,6 +26,11 @@ from ..services.supabase_auth_service import (
     get_supabase_session_user_identity,
     realign_platform_user_with_supabase_session,
     sync_user_to_supabase_auth,
+)
+from ..services.session_service import (
+    get_session_timeout_seconds,
+    start_login_session,
+    strict_single_session_enabled,
 )
 from ..supabase_client import get_supabase_client
 from ..schemas import (
@@ -207,7 +212,11 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
+async def login(
+    credentials: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """User login with Supabase-authenticated email and password"""
     normalized_email = credentials.email.strip().lower()
 
@@ -260,26 +269,40 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             detail="User account is inactive"
         )
     
-    # Platform login succeeds once the shared credential hash is verified.
-    access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
-    refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
-    
     realign_platform_user_with_supabase_session(
         user,
         session_payload=supabase_session,
         successful_password=credentials.password,
     )
     user.last_login = __import__('datetime').datetime.utcnow()
+    login_session = start_login_session(db, user, request)
+
+    # Platform login succeeds once the shared credential hash is verified and no active session exists.
+    access_token = auth_utils.create_access_token(
+        user.id,
+        user.email,
+        user.role.value,
+        login_session.session_id,
+    )
+    refresh_token = auth_utils.create_refresh_token(
+        user.id,
+        user.email,
+        user.role.value,
+        login_session.session_id,
+    )
     db.commit()
     db.refresh(user)
 
     return LoginResponse(
         access_token=access_token,
         refresh_token=refresh_token,
+        session_id=login_session.session_id,
         supabase_access_token=supabase_session.get("access_token"),
         supabase_refresh_token=supabase_session.get("refresh_token"),
         supabase_expires_at=supabase_session.get("expires_at"),
         supabase_expires_in=supabase_session.get("expires_in"),
+        strict_single_session=strict_single_session_enabled(),
+        session_timeout_seconds=get_session_timeout_seconds(),
         user=UserResponse.from_orm(user),
         must_change_password=(
             user.role == UserRole.TRAINEE

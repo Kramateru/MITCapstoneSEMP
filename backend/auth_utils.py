@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from .database import get_db
 from .models import User, UserRole
+from .services.session_service import validate_user_session
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class TokenData(BaseModel):
     user_id: str
     email: str
     role: str
+    session_id: Optional[str] = None
+    token_type: str = "access"
 
 
 class TokenResponse(BaseModel):
@@ -128,6 +131,7 @@ def create_access_token(
     user_id: str, 
     email: str, 
     role: str, 
+    session_id: Optional[str] = None,
     expires_delta: Optional[timedelta] = None
 ) -> str:
     """Create a JWT access token"""
@@ -139,6 +143,7 @@ def create_access_token(
         "user_id": user_id,
         "email": email,
         "role": role,
+        "session_id": session_id,
         "exp": expire,
         "iat": datetime.utcnow(),
         "type": "access"
@@ -148,13 +153,14 @@ def create_access_token(
     return encoded_jwt
 
 
-def create_refresh_token(user_id: str, email: str, role: str) -> str:
+def create_refresh_token(user_id: str, email: str, role: str, session_id: Optional[str] = None) -> str:
     """Create a JWT refresh token"""
     expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode = {
         "user_id": user_id,
         "email": email,
         "role": role,
+        "session_id": session_id,
         "exp": expire,
         "iat": datetime.utcnow(),
         "type": "refresh"
@@ -164,22 +170,37 @@ def create_refresh_token(user_id: str, email: str, role: str) -> str:
     return encoded_jwt
 
 
-def decode_token(token: str) -> TokenData:
+def decode_token(token: str, allowed_types: Optional[set[str]] = None) -> TokenData:
     """Decode and validate a JWT token"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("user_id")
         email: str = payload.get("email")
         role: str = payload.get("role")
+        session_id: Optional[str] = payload.get("session_id")
+        token_type: str = payload.get("type") or "access"
         
-        if user_id is None or email is None:
+        if user_id is None or email is None or role is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+
+        if allowed_types and token_type not in allowed_types:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
-        return TokenData(user_id=user_id, email=email, role=role)
+        return TokenData(
+            user_id=user_id,
+            email=email,
+            role=role,
+            session_id=session_id,
+            token_type=token_type,
+        )
     
     except JWTError:
         raise HTTPException(
@@ -191,7 +212,12 @@ def decode_token(token: str) -> TokenData:
 
 def verify_token(token: str) -> TokenData:
     """Verify a token and return token data"""
-    return decode_token(token)
+    return decode_token(token, allowed_types={"access"})
+
+
+def validate_current_session(db: Session, user: User, token_data: TokenData):
+    """Validate that the token belongs to the active server-side login session."""
+    return validate_user_session(db, user, token_data.session_id)
 
 
 # ===================== Dependency: Get Current User =====================
@@ -226,7 +252,7 @@ async def get_current_user(
             detail="Invalid authorization header",
         )
     
-    token_data = decode_token(token)
+    token_data = decode_token(token, allowed_types={"access"})
     user = db.query(User).filter(User.id == token_data.user_id).first()
     
     if not user:
@@ -240,6 +266,8 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Inactive user",
         )
+
+    validate_current_session(db, user, token_data)
     
     return user
 

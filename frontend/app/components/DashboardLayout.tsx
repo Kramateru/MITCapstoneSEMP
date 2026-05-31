@@ -1,6 +1,5 @@
 'use client';
 
-import NotificationBell from '@/app/components/shared/notification-bell';
 import ProfileManagementDialog from '@/app/components/shared/profile-management-dialog';
 import { Badge } from '@/app/components/ui/badge';
 import { Toaster } from '@/app/components/ui/sonner';
@@ -515,7 +514,6 @@ export function DashboardLayout({
                 {currentPageSection}
               </p>
             </div>
-            <NotificationBell />
             <ProfileManagementDialog />
           </div>
         </header>

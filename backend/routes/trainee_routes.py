@@ -2010,12 +2010,14 @@ async def trainee_live_updates(websocket: WebSocket, token: str):
     db = SessionLocal()
     channel = ""
     try:
-        token_data = auth_utils.decode_token(token)
+        token_data = auth_utils.decode_token(token, allowed_types={"access"})
         user = db.query(User).filter(User.id == token_data.user_id).first()
 
         if not user or user.role != UserRole.TRAINEE:
             await websocket.close(code=4403)
             return
+
+        auth_utils.validate_current_session(db, user, token_data)
 
         channel = f"trainee:{user.id}"
         await live_update_manager.connect(channel, websocket)
