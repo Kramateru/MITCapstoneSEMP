@@ -844,7 +844,10 @@ def build_trainer_learning_insights(
             selectinload(MicrolearningAssignment.trainer),
             selectinload(MicrolearningAssignment.certificate),
         )
-        .filter(MicrolearningAssignment.assigned_by == trainer.id)
+        .filter(
+            MicrolearningAssignment.assigned_by == trainer.id,
+            MicrolearningAssignment.module_id.in_(list(module_lookup.keys()) or ["__none__"]),
+        )
         .all()
     )
     microlearning_assignments = filter_current_assignments(microlearning_assignments)
