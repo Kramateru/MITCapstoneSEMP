@@ -3,7 +3,6 @@
 import NotificationBell from '@/app/components/shared/notification-bell';
 import ProfileManagementDialog from '@/app/components/shared/profile-management-dialog';
 import { Badge } from '@/app/components/ui/badge';
-import { Input } from '@/app/components/ui/input';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
 import { openCallSimulationRealtimeStream } from '@/app/lib/assessment/call-simulation-client';
@@ -16,7 +15,7 @@ import {
     USER_SETTINGS_EVENT,
     type UserDashboardSettings,
 } from '@/app/utils/user-settings';
-import { ChevronRight, LogOut, Menu, Search, X } from 'lucide-react';
+import { ChevronRight, LogOut, Menu, X } from 'lucide-react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
