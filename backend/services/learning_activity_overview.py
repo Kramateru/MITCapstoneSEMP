@@ -296,7 +296,10 @@ def collect_call_simulation_rows(
         )
     )
     if trainer_id:
-        assignment_query = assignment_query.filter(CallSimulationAssignment.assigned_by == trainer_id)
+        assignment_query = assignment_query.filter(
+            CallSimulationAssignment.assigned_by == trainer_id,
+            CallSimulationAssignment.scenario.has(Scenario.created_by == trainer_id),
+        )
 
     assignments = assignment_query.order_by(
         CallSimulationAssignment.updated_at.desc(),
