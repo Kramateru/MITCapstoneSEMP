@@ -1,21 +1,16 @@
 'use client';
 
 import {
-    Activity,
-    BarChart3,
     BookOpen,
     ClipboardList,
     FileText,
-    Home,
     Mic,
     Settings,
     Users
 } from 'lucide-react';
 
 export const trainerSidebarItems = (pendingReviews?: number) => [
-  { label: 'Dashboard', icon: <Home size={20} />, href: '/trainer/dashboard', section: 'Overview' },
-  { label: 'Live Feed', icon: <Activity size={20} />, href: '/trainer/realtime', section: 'Overview' },
-  { label: 'Reports', icon: <BarChart3 size={20} />, href: '/trainer/reports', section: 'Overview' },
+  // Removed Overview section items
   { label: 'Trainees', icon: <Users size={20} />, href: '/trainer/users', section: 'Workspace' },
   { label: 'Batches', icon: <Users size={20} />, href: '/trainer/batches', section: 'Workspace' },
   { label: 'Learning', icon: <BookOpen size={20} />, href: '/trainer/microlearning', section: 'Workspace' },
