@@ -1,6 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
 import { clearAuthSessionCookies, isTokenExpired, writeAuthSessionCookies } from '@/app/utils/auth-session'
 import {
@@ -28,7 +28,7 @@ interface AuthContextType {
   isLoading: boolean
   isAuthenticated: boolean
   login: (email: string, password: string) => Promise<User>
-  logout: () => void
+  logout: (notice?: string, options?: { skipRemote?: boolean }) => void
   refreshToken: () => Promise<string | null>
   updateUser: (updates: Partial<User>) => void
 }
@@ -44,8 +44,11 @@ type AuthApiUserPayload = {
 type AuthApiPayload = {
   access_token?: unknown
   refresh_token?: unknown
+  session_id?: unknown
   supabase_access_token?: unknown
   supabase_refresh_token?: unknown
+  strict_single_session?: unknown
+  session_timeout_seconds?: unknown
   user?: AuthApiUserPayload
   must_change_password?: unknown
   batch_id?: unknown
@@ -56,6 +59,18 @@ type AuthApiPayload = {
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 const SUPABASE_ACCESS_TOKEN_KEY = 'supabase_access_token'
 const SUPABASE_REFRESH_TOKEN_KEY = 'supabase_refresh_token'
+const ACTIVE_SESSION_ID_KEY = 'active_session_id'
+const STRICT_SINGLE_SESSION_KEY = 'strict_single_session'
+const AUTH_NOTICE_KEY = 'auth_notice'
+const AUTH_STORAGE_KEYS = [
+  'token',
+  'refresh_token',
+  SUPABASE_ACCESS_TOKEN_KEY,
+  SUPABASE_REFRESH_TOKEN_KEY,
+  ACTIVE_SESSION_ID_KEY,
+  STRICT_SINGLE_SESSION_KEY,
+  'user',
+]
 const expectedLoginErrorPatterns = [
   /^invalid email or password$/i,
   /^email is required\.?$/i,
@@ -63,6 +78,8 @@ const expectedLoginErrorPatterns = [
   /^user account is inactive$/i,
   /^your supabase account does not have a platform profile\.?$/i,
   /^this supabase account is currently disabled\.?$/i,
+  /^your account is already logged in on another device or browser\.? please log out first\.?$/i,
+  /^this account is already active on another device or browser\.?$/i,
 ]
 
 function normalizeUserRole(value: unknown): User['user_role'] | null {
@@ -138,16 +155,86 @@ function clearStoredAuthState() {
   }
 
   try {
-    window.localStorage.removeItem('token')
-    window.localStorage.removeItem('refresh_token')
-    window.localStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
-    window.localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
-    window.localStorage.removeItem('user')
+    for (const key of AUTH_STORAGE_KEYS) {
+      window.localStorage.removeItem(key)
+      window.sessionStorage.removeItem(key)
+    }
   } catch (storageError) {
     console.warn('Unable to clear cached auth state:', storageError)
   }
 
   clearAuthSessionCookies()
+}
+
+function storeAuthNotice(message?: string) {
+  if (typeof window === 'undefined' || !message) {
+    return
+  }
+
+  try {
+    window.sessionStorage.setItem(AUTH_NOTICE_KEY, message)
+  } catch {
+    // Non-critical UI hint only.
+  }
+}
+
+export function readAndClearAuthNotice() {
+  if (typeof window === 'undefined') {
+    return ''
+  }
+
+  try {
+    const message = window.sessionStorage.getItem(AUTH_NOTICE_KEY) || ''
+    window.sessionStorage.removeItem(AUTH_NOTICE_KEY)
+    return message
+  } catch {
+    return ''
+  }
+}
+
+function clearStorage(storage: Storage) {
+  for (const key of AUTH_STORAGE_KEYS) {
+    storage.removeItem(key)
+  }
+}
+
+function readStrictSingleSessionFlag() {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  try {
+    return (
+      window.sessionStorage.getItem(STRICT_SINGLE_SESSION_KEY) === '1'
+      || window.localStorage.getItem(STRICT_SINGLE_SESSION_KEY) === '1'
+    )
+  } catch {
+    return false
+  }
+}
+
+function getStoredValue(key: string) {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    return window.sessionStorage.getItem(key) || window.localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+
+function getAuthStorageForWrite() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  if (readStrictSingleSessionFlag() || window.sessionStorage.getItem('token')) {
+    return window.sessionStorage
+  }
+
+  return window.localStorage
 }
 
 function readStoredAuthState() {
@@ -160,9 +247,14 @@ function readStoredAuthState() {
   }
 
   try {
-    const savedToken = window.localStorage.getItem('token')
-    const savedRefreshToken = window.localStorage.getItem('refresh_token')
-    const savedUser = window.localStorage.getItem('user')
+    const storageCandidates = [window.sessionStorage, window.localStorage]
+    const selectedStorage = storageCandidates.find((storage) => {
+      return Boolean(storage.getItem('token') && storage.getItem('user'))
+    })
+
+    const savedToken = selectedStorage?.getItem('token') || null
+    const savedRefreshToken = selectedStorage?.getItem('refresh_token') || null
+    const savedUser = selectedStorage?.getItem('user') || null
 
     if (!savedToken || !savedUser) {
       return {
@@ -235,7 +327,7 @@ function getStoredSupabaseRefreshToken() {
     return null
   }
 
-  return window.localStorage.getItem(SUPABASE_REFRESH_TOKEN_KEY)
+  return getStoredValue(SUPABASE_REFRESH_TOKEN_KEY)
 }
 
 function getAccessTokenFromPayload(payload: AuthApiPayload) {
@@ -271,24 +363,36 @@ function persistAuthState(payload: AuthApiPayload, nextUser: User, fallbackRefre
   }
 
   const refreshToken = getRefreshTokenFromPayload(payload, fallbackRefreshToken)
+  const strictSingleSession =
+    typeof payload.strict_single_session === 'boolean'
+      ? payload.strict_single_session
+      : readStrictSingleSessionFlag()
+  const targetStorage = strictSingleSession ? window.sessionStorage : window.localStorage
+  const secondaryStorage = strictSingleSession ? window.localStorage : window.sessionStorage
 
-  localStorage.setItem('token', accessToken)
+  clearStorage(secondaryStorage)
+
+  targetStorage.setItem('token', accessToken)
   if (refreshToken) {
-    localStorage.setItem('refresh_token', refreshToken)
+    targetStorage.setItem('refresh_token', refreshToken)
   } else {
-    localStorage.removeItem('refresh_token')
+    targetStorage.removeItem('refresh_token')
   }
   if (typeof payload.supabase_access_token === 'string' && payload.supabase_access_token.trim()) {
-    localStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, payload.supabase_access_token)
+    targetStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, payload.supabase_access_token)
   } else {
-    localStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
+    targetStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
   }
   if (typeof payload.supabase_refresh_token === 'string' && payload.supabase_refresh_token.trim()) {
-    localStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, payload.supabase_refresh_token)
+    targetStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, payload.supabase_refresh_token)
   } else {
-    localStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
+    targetStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
   }
-  localStorage.setItem('user', JSON.stringify(nextUser))
+  if (typeof payload.session_id === 'string' && payload.session_id.trim()) {
+    targetStorage.setItem(ACTIVE_SESSION_ID_KEY, payload.session_id)
+  }
+  targetStorage.setItem(STRICT_SINGLE_SESSION_KEY, strictSingleSession ? '1' : '0')
+  targetStorage.setItem('user', JSON.stringify(nextUser))
   writeAuthSessionCookies(accessToken, nextUser, refreshToken)
 }
 
@@ -297,6 +401,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null)
   const [refreshTokenValue, setRefreshTokenValue] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  const tokenRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    tokenRef.current = token
+  }, [token])
+
+  const clearCurrentSession = useCallback((notice?: string) => {
+    setUser(null)
+    setToken(null)
+    setRefreshTokenValue(null)
+    clearStoredAuthState()
+    storeAuthNotice(notice)
+  }, [])
+
+  const handleInvalidSession = useCallback((message: string) => {
+    clearCurrentSession(message)
+    if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+      window.location.replace('/login')
+    }
+  }, [clearCurrentSession])
+
+  const verifyBackendSession = useCallback(async (authToken: string) => {
+    const response = await fetch('/api/auth/verify-token', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${authToken}`,
+      },
+      cache: 'no-store',
+    })
+
+    if (!response.ok) {
+      throw new Error(await getApiErrorMessage(response, 'Your session has expired. Please log in again.'))
+    }
+
+    return true
+  }, [])
 
   useEffect(() => {
     let isMounted = true
@@ -317,6 +458,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       writeAuthSessionCookies(storedAuth.token, storedAuth.user, storedAuth.refreshToken)
 
       if (!storedAuth.refreshToken || !isTokenExpired(storedAuth.token)) {
+        try {
+          await verifyBackendSession(storedAuth.token)
+        } catch (verificationError) {
+          console.error('Session verification failed:', verificationError)
+          if (isMounted) {
+            clearCurrentSession(
+              verificationError instanceof Error
+                ? verificationError.message
+                : 'Your session has expired. Please log in again.',
+            )
+            setIsLoading(false)
+          }
+          return
+        }
+
         if (isMounted) {
           setIsLoading(false)
         }
@@ -365,11 +521,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch (initializationError) {
         console.error('Session bootstrap refresh failed:', initializationError)
         if (isMounted) {
-          setUser(null)
-          setToken(null)
-          setRefreshTokenValue(null)
+          clearCurrentSession(
+            initializationError instanceof Error
+              ? initializationError.message
+              : 'Your session has expired. Please log in again.',
+          )
         }
-        clearStoredAuthState()
       } finally {
         if (isMounted) {
           setIsLoading(false)
@@ -381,7 +538,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => {
       isMounted = false
     }
-  }, [])
+  }, [clearCurrentSession, verifyBackendSession])
 
   const login = async (email: string, password: string): Promise<User> => {
     try {
@@ -435,19 +592,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
-  const logout = () => {
-    setUser(null)
-    setToken(null)
-    setRefreshTokenValue(null)
-    clearStoredAuthState()
-  }
+  const logout = useCallback((notice?: string, options?: { skipRemote?: boolean }) => {
+    const tokenForLogout = getStoredValue('refresh_token') || tokenRef.current || getStoredValue('token')
+    if (tokenForLogout && !options?.skipRemote) {
+      void fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${tokenForLogout}`,
+        },
+        cache: 'no-store',
+      }).catch((error) => {
+        console.warn('Unable to mark server session inactive during logout:', error)
+      })
+    }
+
+    clearCurrentSession(notice)
+  }, [clearCurrentSession])
 
   const updateUser = (updates: Partial<User>) => {
     setUser((prev) => {
       if (!prev) return prev
       const next = { ...prev, ...updates }
       try {
-        localStorage.setItem('user', JSON.stringify(next))
+        getAuthStorageForWrite()?.setItem('user', JSON.stringify(next))
         if (token) {
           writeAuthSessionCookies(token, next, refreshTokenValue)
         }
@@ -480,7 +648,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (!response.ok) {
         const message = await getApiErrorMessage(response, 'Session expired. Please sign in again.')
-        logout()
+        logout(message, { skipRemote: true })
         throw new Error(message)
       }
 
@@ -512,10 +680,68 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return nextAccessToken
     } catch (error) {
       console.error('Token refresh error:', error)
-      logout()
+      logout('Your session has expired. Please log in again.', { skipRemote: true })
       return null
     }
   }
+
+  useEffect(() => {
+    if (!token || !user) {
+      return undefined
+    }
+
+    let isStopped = false
+    let lastHeartbeatAt = 0
+
+    const sendHeartbeat = async (force = false) => {
+      const now = Date.now()
+      if (!force && now - lastHeartbeatAt < 30000) {
+        return
+      }
+      lastHeartbeatAt = now
+
+      try {
+        const response = await fetch('/api/auth/session/activity', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          cache: 'no-store',
+        })
+
+        if (!response.ok) {
+          const message = await getApiErrorMessage(response, 'Your session has expired. Please log in again.')
+          if (!isStopped) {
+            handleInvalidSession(message)
+          }
+        }
+      } catch (error) {
+        console.warn('Session heartbeat failed:', error)
+      }
+    }
+
+    void sendHeartbeat(true)
+    const intervalId = window.setInterval(() => {
+      void sendHeartbeat()
+    }, 60000)
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void sendHeartbeat(true)
+      }
+    }
+
+    window.addEventListener('focus', handleVisibilityChange)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      isStopped = true
+      window.clearInterval(intervalId)
+      window.removeEventListener('focus', handleVisibilityChange)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+    }
+  }, [handleInvalidSession, token, user])
 
   return (
     <AuthContext.Provider

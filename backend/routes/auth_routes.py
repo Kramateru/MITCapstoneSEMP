@@ -10,8 +10,6 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from jose import JWTError, jwt
-import os
 
 from .. import auth_utils
 from ..database import get_db
@@ -31,13 +29,16 @@ from ..services.supabase_auth_service import (
     refresh_supabase_session,
 )
 from ..services.lob_catalog import list_active_lobs, serialize_lobs
+from ..services.session_service import (
+    deactivate_session,
+    get_session_timeout_seconds,
+    strict_single_session_enabled,
+    start_login_session,
+    touch_user_session,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
-
-# JWT configuration
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
 
 ROLE_HOME_PATHS = {
     UserRole.ADMIN: "/admin/dashboard",
@@ -91,7 +92,11 @@ def _auth_error_response(status_code: int, message: str) -> JSONResponse:
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
+async def login(
+    credentials: LoginRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """User login endpoint"""
     normalized_email = credentials.email.strip().lower()
     logger.info("Login endpoint reached for %s", normalized_email)
@@ -145,16 +150,27 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
             "User account is inactive",
         )
     
-    # Platform login succeeds once the shared credential hash is verified.
-    access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
-    refresh_token = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
-    
     realign_platform_user_with_supabase_session(
         user,
         session_payload=supabase_session,
         successful_password=credentials.password,
     )
     user.last_login = datetime.utcnow()
+    login_session = start_login_session(db, user, request)
+
+    # Platform login succeeds once the shared credential hash is verified and no active session exists.
+    access_token = auth_utils.create_access_token(
+        user.id,
+        user.email,
+        user.role.value,
+        login_session.session_id,
+    )
+    refresh_token = auth_utils.create_refresh_token(
+        user.id,
+        user.email,
+        user.role.value,
+        login_session.session_id,
+    )
     db.commit()
     db.refresh(user)
 
@@ -179,10 +195,13 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
         message="Login successful",
         access_token=access_token,
         refresh_token=refresh_token,
+        session_id=login_session.session_id,
         supabase_access_token=supabase_session.get("access_token"),
         supabase_refresh_token=supabase_session.get("refresh_token"),
         supabase_expires_at=supabase_session.get("expires_at"),
         supabase_expires_in=supabase_session.get("expires_in"),
+        strict_single_session=strict_single_session_enabled(),
+        session_timeout_seconds=get_session_timeout_seconds(),
         user=UserResponse.from_orm(user),
         must_change_password=must_change_password,
         batch_id=batch_context.get("batch_id"),
@@ -193,8 +212,19 @@ async def login(credentials: LoginRequest, db: Session = Depends(get_db)):
 
 @router.post("/logout", response_model=SuccessResponse)
 async def logout(authorization: Optional[str] = Header(None), db: Session = Depends(get_db)):
-    """Logout endpoint (client-side cleanup)"""
-    # Token validation is handled by the dependency
+    """Logout endpoint that marks the active server-side session inactive."""
+    if authorization:
+        try:
+            scheme, token = authorization.split()
+            if scheme.lower() == "bearer":
+                token_data = auth_utils.decode_token(
+                    token,
+                    allowed_types={"access", "refresh"},
+                )
+                deactivate_session(db, token_data.session_id)
+                db.commit()
+        except Exception:
+            db.rollback()
     return SuccessResponse(message="Logged out successfully")
 
 
@@ -244,35 +274,31 @@ async def refresh_token(
             detail="Invalid authorization header",
         )
     
-    # Try to decode token - accept both access and refresh tokens
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: str = payload.get("user_id")
-        email: str = payload.get("email")
-        role: str = payload.get("role")
-        
-        if not user_id or not email or not role:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token",
-            )
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-        )
+    token_data = auth_utils.decode_token(token, allowed_types={"access", "refresh"})
     
     # Get user from database
-    user = db.query(User).filter(User.id == user_id).first()
+    user = db.query(User).filter(User.id == token_data.user_id).first()
     if not user or not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or inactive",
         )
+
+    touch_user_session(db, user, token_data.session_id)
     
     # Create new tokens
-    access_token = auth_utils.create_access_token(user.id, user.email, user.role.value)
-    refresh_token_new = auth_utils.create_refresh_token(user.id, user.email, user.role.value)
+    access_token = auth_utils.create_access_token(
+        user.id,
+        user.email,
+        user.role.value,
+        token_data.session_id,
+    )
+    refresh_token_new = auth_utils.create_refresh_token(
+        user.id,
+        user.email,
+        user.role.value,
+        token_data.session_id,
+    )
 
     must_change_password = (
         user.role == UserRole.TRAINEE
@@ -301,16 +327,21 @@ async def refresh_token(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=str(exc),
             ) from exc
+
+    db.commit()
     
     return LoginResponse(
         success=True,
         message="Session refreshed",
         access_token=access_token,
         refresh_token=refresh_token_new,
+        session_id=token_data.session_id,
         supabase_access_token=supabase_session.get("access_token"),
         supabase_refresh_token=supabase_session.get("refresh_token"),
         supabase_expires_at=supabase_session.get("expires_at"),
         supabase_expires_in=supabase_session.get("expires_in"),
+        strict_single_session=strict_single_session_enabled(),
+        session_timeout_seconds=get_session_timeout_seconds(),
         user=UserResponse.from_orm(user),
         must_change_password=must_change_password,
         batch_id=batch_context.get("batch_id"),
@@ -329,6 +360,49 @@ async def verify_token_endpoint(
         "user_id": current_user.id,
         "role": current_user.role.value,
         "user_name": current_user.full_name,
+    }
+
+
+@router.post("/session/activity", response_model=dict)
+async def update_session_activity(
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    """Refresh active-session activity so unexpected browser closes recover after timeout."""
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization header",
+        )
+
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication scheme",
+            )
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header",
+        )
+
+    token_data = auth_utils.decode_token(token, allowed_types={"access"})
+    user = db.query(User).filter(User.id == token_data.user_id).first()
+    if not user or not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found or inactive",
+        )
+
+    session = touch_user_session(db, user, token_data.session_id)
+    db.commit()
+    return {
+        "success": True,
+        "session_id": session.session_id,
+        "last_activity": session.last_activity.isoformat(),
+        "session_timeout_seconds": get_session_timeout_seconds(),
     }
 
 

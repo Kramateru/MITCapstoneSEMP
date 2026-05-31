@@ -1,7 +1,5 @@
 'use client';
 
-import NotificationBell from '@/app/components/shared/notification-bell';
-import ProfileManagementDialog from '@/app/components/shared/profile-management-dialog';
 import { Badge } from '@/app/components/ui/badge';
 import { Toaster } from '@/app/components/ui/sonner';
 import { useAuth } from '@/app/context/AuthContext';
@@ -505,19 +503,6 @@ export function DashboardLayout({
             </div>
           </div>
 
-          {/* Right Section */}
-          <div className="flex w-full self-stretch flex-wrap items-center justify-end gap-3 rounded-[1.35rem] border border-border/70 bg-white/84 px-3 py-2.5 shadow-[0_14px_34px_-30px_rgba(15,23,42,0.32)] sm:w-auto sm:min-w-[18rem] sm:self-auto sm:flex-nowrap sm:gap-4 sm:px-3.5 lg:min-w-[19rem] lg:gap-5">
-            <div className="hidden min-w-0 flex-1 text-right sm:block">
-              <p className="truncate text-sm font-semibold text-foreground">
-                {user.user_name || 'Signed in'}
-              </p>
-              <p className="truncate text-xs text-muted-foreground">
-                {currentPageSection}
-              </p>
-            </div>
-            <NotificationBell />
-            <ProfileManagementDialog />
-          </div>
         </header>
 
         {isTopNavigation ? (

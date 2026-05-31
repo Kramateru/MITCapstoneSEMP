@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 
-from sqlalchemy import JSON, Boolean, Column, Date, DateTime
+from sqlalchemy import JSON, Boolean, Column, Date, DateTime, Index
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy import Float, ForeignKey, Integer, LargeBinary, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
@@ -178,6 +178,36 @@ class NotificationEvent(Base):
 
     recipient = relationship("User", foreign_keys=[recipient_id])
     trainee = relationship("User", foreign_keys=[trainee_id])
+
+
+class UserSession(Base):
+    """Active login session tracked server-side for single-session enforcement."""
+
+    __tablename__ = "user_session"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("user.id"), nullable=False, index=True)
+    session_id = Column(String(128), unique=True, nullable=False, index=True)
+    login_time = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_activity = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    browser_info = Column(String(500), nullable=True)
+    device_info = Column(String(255), nullable=True)
+    ip_address = Column(String(64), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    user = relationship("User", foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index(
+            "uq_user_session_one_active_per_user",
+            "user_id",
+            unique=True,
+            postgresql_where=is_active.is_(True),
+            sqlite_where=is_active.is_(True),
+        ),
+    )
 
 
 class LineOfBusiness(Base):

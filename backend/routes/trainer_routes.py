@@ -3446,12 +3446,14 @@ async def trainer_live_updates(websocket: WebSocket, token: str):
     db = SessionLocal()
     channel = "trainers"
     try:
-        token_data = auth_utils.decode_token(token)
+        token_data = auth_utils.decode_token(token, allowed_types={"access"})
         user = db.query(User).filter(User.id == token_data.user_id).first()
 
         if not user or user.role not in (UserRole.TRAINER, UserRole.ADMIN):
             await websocket.close(code=4403)
             return
+
+        auth_utils.validate_current_session(db, user, token_data)
 
         if user.role == UserRole.ADMIN:
             channel = "admins"

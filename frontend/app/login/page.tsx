@@ -15,7 +15,7 @@ import {
   ShieldCheck,
 } from 'lucide-react'
 
-import { useAuth } from '@/app/context/AuthContext'
+import { readAndClearAuthNotice, useAuth } from '@/app/context/AuthContext'
 import {
   getHttpErrorMessage,
   getUnexpectedJsonResponseMessage,
@@ -46,6 +46,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     setHasHydrated(true)
+    const authNotice = readAndClearAuthNotice()
+    if (authNotice) {
+      setError(authNotice)
+    }
   }, [])
 
   useEffect(() => {

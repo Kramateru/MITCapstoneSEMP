@@ -300,11 +300,12 @@ async def assess_practice(
             await websocket.close(code=4401)
             return
 
-        token_data = auth_utils.decode_token(token)
+        token_data = auth_utils.decode_token(token, allowed_types={"access"})
         current_user = db.query(User).filter(User.id == token_data.user_id).first()
         if not current_user:
             await websocket.close(code=4401)
             return
+        auth_utils.validate_current_session(db, current_user, token_data)
         if current_user.role.value != "trainee":
             await websocket.close(code=4403)
             return

@@ -32,10 +32,13 @@ class LoginResponse(BaseModel):
     message: str = "Login successful"
     access_token: str
     refresh_token: Optional[str] = None
+    session_id: Optional[str] = None
     supabase_access_token: Optional[str] = None
     supabase_refresh_token: Optional[str] = None
     supabase_expires_at: Optional[int] = None
     supabase_expires_in: Optional[int] = None
+    strict_single_session: bool = False
+    session_timeout_seconds: int = 600
     token_type: str = "bearer"
     user: "UserResponse"
     must_change_password: bool = False

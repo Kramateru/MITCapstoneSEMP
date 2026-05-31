@@ -9,6 +9,7 @@ This document is a codebase-level analysis of the Speech Enabled BPO Platform ba
 - `backend/models.py`
 - `backend/services`
 - `backend/main.py`
+- `supabase/single_active_sessions.sql`
 - `README.md`
 
 Its purpose is to explain the overall concept of the system, the major modules, how the business process works, what each user role can and cannot do, and the important technical and operational limitations that affect the platform.
@@ -163,12 +164,17 @@ Many features only fully work when Supabase is correctly configured:
 
 **Purpose**
 
-Controls login, access tokens, refresh tokens, current-user lookup, password changes, and integration with Supabase-authenticated sessions.
+Controls login, access tokens, refresh tokens, current-user lookup, password changes, integration with Supabase-authenticated sessions, and strict single active session enforcement.
 
 **Primary code areas**
 
 - `backend/routes/auth_routes.py`
 - `backend/routes/user_routes.py`
+- `backend/services/session_service.py`
+- `backend/auth_utils.py`
+- `backend/models.py`
+- `supabase/single_active_sessions.sql`
+- `frontend/app/context/AuthContext.tsx`
 - `frontend/app/login`
 - `frontend/app/dashboard`
 
@@ -176,6 +182,13 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 
 - authenticate user credentials
 - issue backend JWT access and refresh tokens
+- generate and store a unique server-side `session_id`
+- block a second active login for the same user account by default
+- support configurable replacement behavior through `SINGLE_SESSION_MODE`
+- validate the active `session_id` on protected backend requests
+- update `last_activity` through frontend heartbeat tracking
+- expire stale sessions after the configured inactivity timeout
+- mark sessions inactive on logout
 - optionally issue Supabase session tokens
 - return active user profile
 - refresh active session
@@ -192,12 +205,29 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 
 - `User`
 - `UserRole`
+- `UserSession`
+- backend JWT `session_id`
+- Supabase-backed `user_session` rows
+
+**Single active session behavior**
+
+- Only one active `user_session` row is allowed per user account.
+- Default mode is `SINGLE_SESSION_MODE=block`, which denies a new login when an active session already exists.
+- The user-facing login error is: `Your account is already logged in on another device or browser. Please log out first.`
+- If `SINGLE_SESSION_MODE=replace` is configured, the old active session is marked inactive and the new login is allowed.
+- `STRICT_SINGLE_SESSION=false` allows multiple tabs in the same browser storage context while still blocking another browser or device.
+- `STRICT_SINGLE_SESSION=true` stores auth state in tab-scoped session storage so separate tabs do not share the same local browser session.
+- `SESSION_INACTIVITY_TIMEOUT_MINUTES` controls stale session recovery. The default documented value is 10 minutes.
+- If the browser closes unexpectedly, the last heartbeat stops and the active session becomes reusable after the inactivity timeout.
 
 **Key limitations**
 
 - Login quality depends on correct Supabase and backend environment setup.
-- If Supabase auth configuration is incomplete, some session behavior may degrade to backend-only fallback behavior.
+- Strict single-session enforcement depends on the backend database being reachable because Supabase/Postgres is the source of truth for `user_session`.
+- Existing deployments must run `supabase/single_active_sessions.sql` or allow backend metadata creation to create the `user_session` table and unique active-session index.
 - All protected modules depend on successful role resolution from authentication.
+- Very recent duplicate login attempts are protected by the database unique active-session index, but operational reliability still depends on successful database transactions.
+- Stale-session recovery is timeout-based. A crashed browser is not marked inactive instantly; it becomes reusable after the configured inactivity window.
 
 ### 7.2 User and Profile Management
 
@@ -948,12 +978,18 @@ This indicates the trainee experience is focused on assigned work, completion, r
 1. User enters credentials on the login page.
 2. Backend validates the credentials.
 3. Supabase session issuance is attempted.
-4. Backend JWT tokens are created.
-5. Current role is resolved.
-6. User is redirected to the correct dashboard:
+4. Backend checks Supabase/Postgres for an existing active `user_session`.
+5. If an active session already exists and `SINGLE_SESSION_MODE=block`, login is denied.
+6. If no active session exists, backend creates a new `user_session` row with a unique `session_id`.
+7. Backend JWT access and refresh tokens are created with the `session_id` embedded.
+8. Current role is resolved.
+9. User is redirected to the correct dashboard:
    - Admin dashboard
    - Trainer dashboard
    - Trainee dashboard
+10. The frontend verifies the session on startup and sends periodic activity heartbeats.
+11. Every protected backend route validates both the JWT and active server-side `session_id`.
+12. Logout marks the session inactive and clears local storage, session storage, cookies, and auth state.
 
 ### 9.2 Content Authoring Flow
 
@@ -1050,7 +1086,10 @@ The current project centers on these data groupings:
 
 - `User`
 - `UserRole`
+- `UserSession`
 - authentication tokens and session state
+- Supabase-backed active session status
+- `last_activity` heartbeat timestamps
 
 ### 10.2 Training Structure
 
@@ -1221,7 +1260,22 @@ Full feature completeness depends on:
 
 If any of these fail, the user experience may fall back, partially degrade, or stop for affected modules.
 
-### 13.2 Audio and Speech Reliability
+### 13.2 Single Active Session Constraints
+
+The system now enforces one active login session per user account across browsers, devices, and normal browser storage contexts.
+
+Important constraints:
+
+- Supabase/Postgres is the source of truth for active login state.
+- Login blocking requires the `user_session` table and the unique active-session index.
+- A normal logout immediately marks the session inactive.
+- A browser crash, closed tab, device shutdown, or network disconnect is recovered by inactivity timeout, not by instant close detection.
+- Protected backend routes reject tokens whose embedded `session_id` no longer maps to an active session.
+- Frontend route checks are not the security boundary. Backend token and session validation are the security boundary.
+- If `SINGLE_SESSION_MODE=replace` is enabled later, the platform changes from blocking new logins to terminating the previous active session.
+- If `STRICT_SINGLE_SESSION=true`, additional tabs may not share the same stored auth state, depending on browser session-storage behavior.
+
+### 13.3 Audio and Speech Reliability
 
 Speech-related modules are sensitive to:
 
@@ -1233,7 +1287,7 @@ Speech-related modules are sensitive to:
 
 This especially affects practice sessions and call simulation.
 
-### 13.3 Overlapping Module Generations
+### 13.4 Overlapping Module Generations
 
 The codebase contains legacy, intermediate, and redesigned versions of some learning modules. This is especially visible in:
 
@@ -1243,7 +1297,7 @@ The codebase contains legacy, intermediate, and redesigned versions of some lear
 
 This increases flexibility, but it also increases maintenance complexity and can create naming confusion.
 
-### 13.4 Role Model Simplicity
+### 13.5 Role Model Simplicity
 
 Only three formal roles are currently implemented:
 
@@ -1253,16 +1307,17 @@ Only three formal roles are currently implemented:
 
 Any requirement for more granular governance roles would require code changes.
 
-### 13.5 Cloud-First Behavior
+### 13.6 Cloud-First Behavior
 
 The project may support local development fallbacks in some places, but the intended operational design is cloud-backed. Production-grade behavior assumes working Supabase integration for:
 
 - database persistence
 - auth synchronization
+- active login session tracking
 - storage uploads
 - media retrieval
 
-### 13.6 AI Output Quality
+### 13.7 AI Output Quality
 
 AI-supported outputs such as:
 
@@ -1273,7 +1328,7 @@ AI-supported outputs such as:
 
 are only as strong as the underlying services, prompt design, transcript quality, and available keys.
 
-### 13.7 Reporting Consistency Depends on Status Discipline
+### 13.8 Reporting Consistency Depends on Status Discipline
 
 Analytics, notifications, coaching, and certificates rely on activity status values being updated correctly across modules. If upstream modules do not save or transition state correctly, downstream reports can become incomplete or misleading.
 
@@ -1286,11 +1341,12 @@ If someone is trying to understand the platform quickly, these are the most impo
 3. The system has three formal roles only: Admin, Trainer, and Trainee.
 4. Trainer is the main content-delivery role.
 5. Trainee should see only assigned work.
-6. Scenarios, assessments, and call simulations are related but not identical modules.
-7. There are multiple assessment implementations in the same codebase.
-8. Audio, transcript, and AI features are central to the platform concept.
-9. Coaching and certification depend on clean data coming from earlier stages.
-10. Navigation shows the main experience, but the codebase contains additional support routes beyond the sidebar.
+6. A user account can only have one active login session by default.
+7. Scenarios, assessments, and call simulations are related but not identical modules.
+8. There are multiple assessment implementations in the same codebase.
+9. Audio, transcript, and AI features are central to the platform concept.
+10. Coaching and certification depend on clean data coming from earlier stages.
+11. Navigation shows the main experience, but the codebase contains additional support routes beyond the sidebar.
 
 ## 15. Conclusion
 
