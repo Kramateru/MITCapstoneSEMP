@@ -9,7 +9,7 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="card"
       className={cn(
-        "dashboard-card bg-card text-card-foreground flex min-w-0 flex-col gap-4 rounded-[1.2rem] border border-border/80 sm:gap-5 sm:rounded-[1.3rem]",
+        "dashboard-card bg-card text-card-foreground flex min-w-0 flex-col gap-4 rounded-xl border border-border/80 sm:gap-5",
         className,
       )}
       {...props}
@@ -34,7 +34,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <h4
       data-slot="card-title"
-      className={cn("max-w-[28ch] text-[1.02rem] font-bold leading-tight tracking-[-0.02em] text-balance sm:text-[1.1rem]", className)}
+      className={cn("max-w-[32ch] text-[1.02rem] font-bold leading-tight tracking-normal text-balance sm:text-[1.1rem]", className)}
       {...props}
     />
   );

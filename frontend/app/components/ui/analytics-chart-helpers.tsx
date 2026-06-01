@@ -85,7 +85,7 @@ export function truncateChartLabel(value: unknown, max = 18) {
     return normalized
   }
 
-  return `${normalized.slice(0, Math.max(1, max - 1)).trimEnd()}…`
+  return `${normalized.slice(0, Math.max(1, max - 3)).trimEnd()}...`
 }
 
 export function getCategoricalChartHeight(rowCount: number, min = 320, perRow = 46, max = 560) {
@@ -150,7 +150,7 @@ export function AnalyticsChartPanel({
   className?: string
 }) {
   return (
-    <div className={cn('rounded-2xl border border-slate-200 bg-gradient-to-b from-white via-white to-slate-50/70 p-4', className)}>
+    <div className={cn('rounded-xl border border-slate-200 bg-gradient-to-b from-white via-white to-slate-50/70 p-4', className)}>
       <AnalyticsMetaStrip items={meta} className="mb-4" />
       {children}
       {note ? <p className="mt-3 text-xs leading-5 text-slate-500">{note}</p> : null}
@@ -160,7 +160,7 @@ export function AnalyticsChartPanel({
 
 export function AnalyticsChartEmpty({ message }: { message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+    <div className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
       {message}
     </div>
   )

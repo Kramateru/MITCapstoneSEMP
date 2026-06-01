@@ -210,6 +210,49 @@ class UserSession(Base):
     )
 
 
+class AuditLog(Base):
+    """Append-only audit trail entry for user, system, and database activity."""
+
+    __tablename__ = "audit_logs"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String(36), ForeignKey("user.id"), nullable=True, index=True)
+    user_name = Column(String(255), nullable=True, index=True)
+    user_email = Column(String(255), nullable=True, index=True)
+    role = Column(String(40), nullable=True, index=True)
+    action_type = Column(String(120), nullable=False, index=True)
+    module_name = Column(String(120), nullable=True, index=True)
+    entity_type = Column(String(120), nullable=True, index=True)
+    entity_id = Column(String(120), nullable=True, index=True)
+    description = Column(Text, nullable=True)
+    old_data = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    new_data = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    changed_fields = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
+    status = Column(String(40), nullable=False, default="success", index=True)
+    severity = Column(String(40), nullable=False, default="info", index=True)
+    ip_address = Column(String(64), nullable=True)
+    browser_info = Column(String(500), nullable=True)
+    device_type = Column(String(120), nullable=True)
+    batch_id = Column(String(36), nullable=True, index=True)
+    trainee_id = Column(String(36), nullable=True, index=True)
+    trainer_id = Column(String(36), nullable=True, index=True)
+    session_id = Column(String(128), nullable=True, index=True)
+    request_id = Column(String(128), nullable=True, index=True)
+    endpoint = Column(String(255), nullable=True)
+    http_method = Column(String(12), nullable=True)
+    http_status = Column(Integer, nullable=True)
+    metadata_json = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    actor = relationship("User", foreign_keys=[user_id])
+
+    __table_args__ = (
+        Index("ix_audit_logs_timestamp_role", "timestamp", "role"),
+        Index("ix_audit_logs_module_action", "module_name", "action_type"),
+        Index("ix_audit_logs_entity", "entity_type", "entity_id"),
+    )
+
+
 class LineOfBusiness(Base):
     """Line of Business configuration"""
 

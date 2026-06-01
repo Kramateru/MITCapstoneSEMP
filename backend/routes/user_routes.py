@@ -33,6 +33,7 @@ from ..services.session_service import (
     start_login_session,
     strict_single_session_enabled,
 )
+from ..services.audit import create_audit_log, snapshot_model
 from ..supabase_client import get_supabase_client
 from ..schemas import (
     ChangePasswordRequest,
@@ -58,6 +59,63 @@ MAX_FULL_NAME_LENGTH = 100
 PASSWORD_COMPLEXITY_PATTERN = re.compile(
     r"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9]).{8,}$"
 )
+AUDIT_USER_FIELDS = (
+    "id",
+    "email",
+    "full_name",
+    "role",
+    "department",
+    "language_dialect",
+    "theme",
+    "layout",
+    "big_font",
+    "high_contrast",
+    "profile_image_url",
+    "is_active",
+    "last_login",
+)
+
+
+def _audit_user_snapshot(user: User) -> dict[str, Any]:
+    return snapshot_model(user, AUDIT_USER_FIELDS)
+
+
+def _write_user_audit(
+    db: Session,
+    *,
+    actor: Optional[User],
+    request: Optional[Request],
+    action_type: str,
+    target_user: User,
+    description: str,
+    old_data: Optional[dict[str, Any]] = None,
+    new_data: Optional[dict[str, Any]] = None,
+    status_value: str = "success",
+    severity: str = "info",
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    try:
+        create_audit_log(
+            db,
+            user=actor,
+            request=request,
+            action_type=action_type,
+            module_name="User Management",
+            entity_type="user",
+            entity_id=target_user.id,
+            description=description,
+            old_data=old_data,
+            new_data=new_data,
+            status=status_value,
+            severity=severity,
+            trainee_id=target_user.id if target_user.role == UserRole.TRAINEE else None,
+            trainer_id=target_user.id if target_user.role == UserRole.TRAINER else None,
+            metadata=metadata,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Unable to write user audit log for action=%s user_id=%s", action_type, target_user.id)
 
 
 def _normalize_optional_text(value: Optional[str]) -> Optional[str]:
@@ -184,7 +242,11 @@ def _sync_user_to_supabase_or_raise(
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, db: Session = Depends(get_db)):
+async def register(
+    user_data: UserCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
     """Register a new user"""
     # Check if email already exists
     normalized_email = user_data.email.strip().lower()
@@ -229,6 +291,18 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
         raise
     db.commit()
     db.refresh(new_user)
+
+    _write_user_audit(
+        db,
+        actor=new_user,
+        request=request,
+        action_type="user_created",
+        target_user=new_user,
+        description=f"User account created for {new_user.email}.",
+        new_data=_audit_user_snapshot(new_user),
+        severity="info",
+        metadata={"source": "self_registration"},
+    )
     
     return UserResponse.from_orm(new_user)
 
@@ -346,11 +420,13 @@ async def get_current_user(
 @router.put("/me", response_model=UserResponse)
 async def update_current_user(
     user_update: UserUpdate,
+    request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
     """Update current user profile"""
     current_user = await auth_utils.get_current_user(authorization, db)
+    old_data = _audit_user_snapshot(current_user)
 
     _apply_self_profile_updates(current_user, user_update, db)
     try:
@@ -361,17 +437,31 @@ async def update_current_user(
     db.commit()
     db.refresh(current_user)
 
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type="profile_updated",
+        target_user=current_user,
+        description=f"{current_user.full_name} updated their profile.",
+        old_data=old_data,
+        new_data=_audit_user_snapshot(current_user),
+        severity="info",
+    )
+
     return UserResponse.from_orm(current_user)
 
 
 @router.post("/me/profile-image", response_model=SuccessResponse)
 async def upload_current_user_profile_image(
+    request: Request,
     file: UploadFile = File(...),
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
     """Upload or replace the current user's profile image."""
     current_user = await auth_utils.get_current_user(authorization, db)
+    old_data = _audit_user_snapshot(current_user)
 
     content_type = (file.content_type or "").split(";", 1)[0].strip().lower()
     extension = ALLOWED_PROFILE_IMAGE_TYPES.get(content_type)
@@ -418,6 +508,19 @@ async def upload_current_user_profile_image(
     db.commit()
     db.refresh(current_user)
 
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type="profile_image_uploaded",
+        target_user=current_user,
+        description=f"{current_user.full_name} uploaded a profile image.",
+        old_data=old_data,
+        new_data=_audit_user_snapshot(current_user),
+        severity="info",
+        metadata={"content_type": content_type, "file_size": len(file_bytes)},
+    )
+
     if previous_profile_image_url and previous_profile_image_url != new_profile_image_url:
         _delete_profile_image(previous_profile_image_url)
 
@@ -432,11 +535,13 @@ async def upload_current_user_profile_image(
 
 @router.delete("/me/profile-image", response_model=SuccessResponse)
 async def delete_current_user_profile_image(
+    request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db),
 ):
     """Remove the current user's profile image."""
     current_user = await auth_utils.get_current_user(authorization, db)
+    old_data = _audit_user_snapshot(current_user)
     previous_profile_image_url = current_user.profile_image_url
     current_user.profile_image_url = None
     try:
@@ -446,6 +551,18 @@ async def delete_current_user_profile_image(
         raise
     db.commit()
     db.refresh(current_user)
+
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type="profile_image_deleted",
+        target_user=current_user,
+        description=f"{current_user.full_name} removed their profile image.",
+        old_data=old_data,
+        new_data=_audit_user_snapshot(current_user),
+        severity="info",
+    )
 
     if previous_profile_image_url:
         _delete_profile_image(previous_profile_image_url)
@@ -462,6 +579,7 @@ async def delete_current_user_profile_image(
 @router.post("/change-password", response_model=SuccessResponse)
 async def change_password(
     password_change: ChangePasswordRequest,
+    request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
@@ -504,6 +622,17 @@ async def change_password(
         db.rollback()
         raise
     db.commit()
+
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type="password_changed",
+        target_user=current_user,
+        description=f"{current_user.full_name} changed their password.",
+        new_data={"password_changed": True},
+        severity="warning",
+    )
     
     return SuccessResponse(message="Password changed successfully")
 
@@ -563,6 +692,7 @@ async def get_user(
 async def update_user(
     user_id: str,
     user_update: UserUpdate,
+    request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
@@ -582,6 +712,7 @@ async def update_user(
             detail="User not found"
         )
 
+    old_data = _audit_user_snapshot(user)
     _apply_admin_user_updates(user, user_update, db)
     try:
         _sync_user_to_supabase_or_raise(db, user)
@@ -591,12 +722,29 @@ async def update_user(
     db.commit()
     db.refresh(user)
 
+    new_data = _audit_user_snapshot(user)
+    changed = [field for field in old_data if old_data.get(field) != new_data.get(field)]
+    action_type = "role_changed" if "role" in changed else "user_updated"
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type=action_type,
+        target_user=user,
+        description=f"Admin {current_user.email} updated user {user.email}.",
+        old_data=old_data,
+        new_data=new_data,
+        severity="warning" if action_type == "role_changed" else "info",
+        metadata={"changed_fields": changed},
+    )
+
     return UserResponse.from_orm(user)
 
 
 @router.delete("/{user_id}", response_model=SuccessResponse)
 async def delete_user(
     user_id: str,
+    request: Request,
     authorization: Optional[str] = Header(None),
     db: Session = Depends(get_db)
 ):
@@ -616,8 +764,22 @@ async def delete_user(
             detail="User not found"
         )
     
+    old_data = _audit_user_snapshot(user)
     # Soft delete
     user.is_active = False
     db.commit()
+    db.refresh(user)
+
+    _write_user_audit(
+        db,
+        actor=current_user,
+        request=request,
+        action_type="user_deactivated",
+        target_user=user,
+        description=f"Admin {current_user.email} deactivated user {user.email}.",
+        old_data=old_data,
+        new_data=_audit_user_snapshot(user),
+        severity="warning",
+    )
     
     return SuccessResponse(message="User deactivated successfully")

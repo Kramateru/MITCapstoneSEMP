@@ -13,4 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . /app
 RUN chmod +x ./scripts/start-backend.sh
 
+# Allow build-time declaration of the exposed port (default 8000).
+ARG PORT=8000
+EXPOSE ${PORT}
+
 CMD ["bash", "./scripts/start-backend.sh"]

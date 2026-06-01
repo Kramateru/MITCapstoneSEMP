@@ -36,7 +36,7 @@
   --chart-3: #d97706;
   --chart-4: #0ea5e9;
   --chart-5: #4b5563;
-  --radius: 0.95rem;
+  --radius: 0.75rem;
   --sidebar: #0d2340;
   --sidebar-foreground: #dfe9f8;
   --sidebar-primary: #1d56d8;
@@ -47,7 +47,7 @@
   --sidebar-ring: #3b82f6;
   --dashboard-shadow: 0 24px 54px -34px rgba(15, 23, 42, 0.24);
   --dashboard-shell-shadow: 0 40px 96px -56px rgba(15, 23, 42, 0.28);
-  --dashboard-card-radius: 1.25rem;
+  --dashboard-card-radius: 0.9rem;
   --dashboard-gap: clamp(1rem, 0.85rem + 0.6vw, 1.5rem);
   --dashboard-padding: clamp(1rem, 0.85rem + 0.8vw, 1.45rem);
   --dashboard-reading-width: 68ch;
@@ -173,26 +173,28 @@
     font-size: clamp(1.85rem, 1.45rem + 1.2vw, 2.75rem);
     font-weight: 700;
     line-height: 1.15;
-    letter-spacing: -0.03em;
+    letter-spacing: 0;
   }
 
   h2 {
     font-size: clamp(1.5rem, 1.2rem + 0.8vw, 2.2rem);
     font-weight: 700;
     line-height: 1.18;
-    letter-spacing: -0.025em;
+    letter-spacing: 0;
   }
 
   h3 {
     font-size: clamp(1.15rem, 1rem + 0.45vw, 1.55rem);
     font-weight: 700;
     line-height: 1.25;
+    letter-spacing: 0;
   }
 
   h4 {
     font-size: var(--text-base, 1rem);
     font-weight: 700;
     line-height: 1.45;
+    letter-spacing: 0;
   }
 
   h5,
@@ -324,6 +326,7 @@
   table {
     color: var(--foreground);
     border-collapse: collapse;
+    table-layout: auto;
   }
 
   th {
@@ -406,6 +409,21 @@
 
   .dashboard-page > * {
     min-width: 0;
+  }
+
+  .dashboard-page :where(h1, h2, h3, h4, h5, h6, p, span, label, th, td, button, a),
+  [data-slot="dialog-content"] :where(h1, h2, h3, h4, h5, h6, p, span, label, th, td, button, a),
+  [data-slot="alert-dialog-content"] :where(h1, h2, h3, h4, h5, h6, p, span, label, th, td, button, a),
+  [data-slot="sheet-content"] :where(h1, h2, h3, h4, h5, h6, p, span, label, th, td, button, a) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .dashboard-page :where([class*="tracking-"]),
+  [data-slot="dialog-content"] :where([class*="tracking-"]),
+  [data-slot="alert-dialog-content"] :where([class*="tracking-"]),
+  [data-slot="sheet-content"] :where([class*="tracking-"]) {
+    letter-spacing: 0;
   }
 
   .workspace-shell {
@@ -546,6 +564,18 @@
     padding-bottom: max(0.15rem, env(safe-area-inset-bottom));
   }
 
+  [data-slot="dialog-header"],
+  [data-slot="alert-dialog-header"] {
+    margin-top: -0.15rem;
+    min-width: 0;
+  }
+
+  [data-slot="dialog-footer"],
+  [data-slot="alert-dialog-footer"] {
+    min-width: 0;
+    margin-bottom: calc(-1 * max(0.15rem, env(safe-area-inset-bottom)));
+  }
+
   .dashboard-card {
     background: var(--card);
     box-shadow: var(--dashboard-shadow);
@@ -574,14 +604,7 @@
   }
 
   .dashboard-hero::after {
-    content: "";
-    position: absolute;
-    inset: auto -3rem -3rem auto;
-    height: 11rem;
-    width: 11rem;
-    border-radius: 9999px;
-    background: radial-gradient(circle, rgba(20, 147, 107, 0.16), transparent 70%);
-    pointer-events: none;
+    content: none;
   }
 
   .dashboard-kicker {
@@ -787,6 +810,34 @@
     gap: 0.5rem;
   }
 
+  .dashboard-page :where(.recharts-wrapper, .recharts-responsive-container),
+  [data-slot="dialog-content"] :where(.recharts-wrapper, .recharts-responsive-container),
+  [data-slot="alert-dialog-content"] :where(.recharts-wrapper, .recharts-responsive-container) {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .dashboard-page :where(.recharts-surface),
+  [data-slot="dialog-content"] :where(.recharts-surface),
+  [data-slot="alert-dialog-content"] :where(.recharts-surface) {
+    overflow: visible;
+  }
+
+  .dashboard-page :where(.recharts-text, .recharts-label, .recharts-cartesian-axis-tick-value),
+  [data-slot="dialog-content"] :where(.recharts-text, .recharts-label, .recharts-cartesian-axis-tick-value),
+  [data-slot="alert-dialog-content"] :where(.recharts-text, .recharts-label, .recharts-cartesian-axis-tick-value) {
+    fill: #475569;
+    font-size: 0.78rem;
+    font-weight: 500;
+  }
+
+  .dashboard-page :where(.recharts-legend-wrapper),
+  [data-slot="dialog-content"] :where(.recharts-legend-wrapper),
+  [data-slot="alert-dialog-content"] :where(.recharts-legend-wrapper) {
+    max-width: 100%;
+    line-height: 1.45 !important;
+  }
+
   .table-scroll-area {
     max-width: 100%;
     overflow-x: auto;
@@ -797,6 +848,64 @@
 
   .table-scroll-area > div {
     min-width: 100%;
+  }
+
+  [data-slot="dialog-content"] :is(form, fieldset),
+  [data-slot="alert-dialog-content"] :is(form, fieldset),
+  [data-slot="sheet-content"] :is(form, fieldset),
+  .dashboard-page :is(form, fieldset) {
+    min-width: 0;
+  }
+
+  [data-slot="dialog-content"] :is(input, textarea, select, [data-slot="select-trigger"]),
+  [data-slot="alert-dialog-content"] :is(input, textarea, select, [data-slot="select-trigger"]),
+  [data-slot="sheet-content"] :is(input, textarea, select, [data-slot="select-trigger"]),
+  .dashboard-page :is(input, textarea, select, [data-slot="select-trigger"]) {
+    max-width: 100%;
+  }
+
+  [data-slot="dialog-content"] :is([data-slot="button"], button),
+  [data-slot="alert-dialog-content"] :is([data-slot="button"], button),
+  [data-slot="sheet-content"] :is([data-slot="button"], button) {
+    white-space: normal;
+  }
+
+  [data-slot="dialog-content"] :is(.grid, .flex),
+  [data-slot="alert-dialog-content"] :is(.grid, .flex),
+  [data-slot="sheet-content"] :is(.grid, .flex),
+  .dashboard-page :is(.grid, .flex) {
+    min-width: 0;
+  }
+
+  .dashboard-page :where(table) {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-page :where(th, td),
+  [data-slot="dialog-content"] :where(th, td),
+  [data-slot="alert-dialog-content"] :where(th, td),
+  [data-slot="sheet-content"] :where(th, td) {
+    line-height: 1.55;
+  }
+
+  [data-slot="table"] :is(th, td) {
+    max-width: min(34rem, 68vw);
+    vertical-align: top;
+  }
+
+  [data-slot="table-cell"] :is([data-slot="button"], button, a),
+  [data-slot="table-head"] :is([data-slot="button"], button, a) {
+    max-width: 100%;
+  }
+
+  .dashboard-page :where([class*="overflow-hidden"]:has(> table)),
+  [data-slot="dialog-content"] :where([class*="overflow-hidden"]:has(> table)),
+  [data-slot="alert-dialog-content"] :where([class*="overflow-hidden"]:has(> table)),
+  [data-slot="sheet-content"] :where([class*="overflow-hidden"]:has(> table)) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-gutter: stable both-edges;
   }
 }
 
@@ -843,7 +952,7 @@
 @media (max-width: 640px) {
   :root {
     --font-size: 15px;
-    --dashboard-card-radius: 1.2rem;
+    --dashboard-card-radius: 0.85rem;
   }
 
   body {

@@ -346,19 +346,19 @@ export function DashboardLayout({
                   />
                 </div>
                 <div className={`min-w-0 space-y-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                  <p className="text-[0.66rem] font-semibold uppercase tracking-[0.24em] text-sidebar-foreground/58">
+                  <p className="text-[0.66rem] font-semibold uppercase tracking-normal text-sidebar-foreground/58">
                     {systemNameLines[0]}
                   </p>
-                  <h2 className="text-balance text-[1.08rem] font-semibold leading-5 tracking-[-0.03em] text-white">
+                  <h2 className="text-balance text-[1.08rem] font-semibold leading-5 tracking-normal text-white">
                     {systemNameLines[1]}
                   </h2>
                 </div>
               </div>
               {!isMinifiedSidebar ? (
-                <div className="rounded-[1.35rem] border border-white/8 bg-white/[0.05] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                <div className="rounded-xl border border-white/8 bg-white/[0.05] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[0.68rem] font-semibold uppercase tracking-[0.22em] text-sidebar-foreground/55">
+                      <p className="text-[0.68rem] font-semibold uppercase tracking-normal text-sidebar-foreground/55">
                         {roleLabelMap[resolvedUserRole]}
                       </p>
                       <p className="mt-1 text-sm leading-6 text-sidebar-foreground/68">
@@ -381,7 +381,7 @@ export function DashboardLayout({
               <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
                 {!isMinifiedSidebar ? (
                   <div className="flex items-center gap-2 px-2.5">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-[0.2em] text-sidebar-foreground/54">
+                    <div className="text-[0.68rem] font-semibold uppercase tracking-normal text-sidebar-foreground/54">
                       {group.section}
                     </div>
                     <div className="h-px flex-1 bg-white/8" />
@@ -467,10 +467,10 @@ export function DashboardLayout({
 
             <div className="min-w-0 space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-primary">
+                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-normal text-primary">
                   {roleLabelMap[resolvedUserRole]}
                 </span>
-                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-normal text-muted-foreground">
                   {currentPageSection}
                 </span>
                 <Badge variant="info" className="text-[0.7rem]">
@@ -491,7 +491,7 @@ export function DashboardLayout({
                   </div>
                 ))}
               </div>
-              <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-[-0.025em] text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
+              <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-normal text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
                 {currentPageLabel}
               </h1>
               <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
@@ -515,10 +515,10 @@ export function DashboardLayout({
                 {groupedSidebarItems.map((group) => (
                   <div
                     key={`top-group-${group.section}`}
-                    className="rounded-[1.3rem] border border-border/70 bg-white/90 px-3.5 py-3 shadow-[0_16px_34px_-30px_rgba(15,23,42,0.26)]"
+                    className="rounded-xl border border-border/70 bg-white/90 px-3.5 py-3 shadow-[0_16px_34px_-30px_rgba(15,23,42,0.26)]"
                   >
                     <div className="mb-2.5 flex items-center gap-2">
-                      <div className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                      <div className="text-[0.68rem] font-semibold uppercase tracking-normal text-muted-foreground">
                         {group.section}
                       </div>
                       <div className="h-px flex-1 bg-border/80" />
@@ -561,7 +561,7 @@ export function DashboardLayout({
         <main className="flex-1 overflow-auto">
           <div className={`dashboard-page mx-auto w-full ${contentOuterSpacingClass} ${contentWidthClass}`}>
             <div
-              className={`workspace-shell rounded-[1.1rem] sm:rounded-[1.45rem] lg:rounded-[1.55rem] text-card-foreground ${contentInnerSpacingClass}`}
+              className={`workspace-shell rounded-xl text-card-foreground ${contentInnerSpacingClass}`}
             >
               {children}
             </div>

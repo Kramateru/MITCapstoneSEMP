@@ -2,6 +2,7 @@
 
 import {
     BarChart3,
+    ClipboardList,
     FileText,
     MessageSquare,
     Settings,
@@ -14,6 +15,7 @@ export const adminSidebarItems = [
   // Removed Overview section items
   { label: 'Users', icon: <Users size={20} />, href: '/admin/users', section: 'Operations' },
   { label: 'Coaching', icon: <MessageSquare size={20} />, href: '/admin/coaching', section: 'Operations' },
+  { label: 'Audit Trail', icon: <ClipboardList size={20} />, href: '/admin/audit-trail', section: 'Operations' },
   { label: 'Analytics', icon: <BarChart3 size={20} />, href: '/admin/analytics', section: 'Insights' },
   { label: 'Reports', icon: <FileText size={20} />, href: '/admin/reports', section: 'Insights' },
   { label: 'Profile', icon: <UserRound size={20} />, href: '/admin/profile', section: 'Account' },

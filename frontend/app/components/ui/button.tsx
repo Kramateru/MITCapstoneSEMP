@@ -7,7 +7,7 @@ import * as React from "react";
 import { cn } from "./utils";
 
 const buttonVariants = cva(
-  "inline-flex min-w-0 max-w-full items-center justify-center gap-2 whitespace-normal break-words text-center sm:whitespace-nowrap rounded-[1rem] text-sm font-semibold leading-5 transition-[transform,background-color,border-color,box-shadow,color] duration-200 ease-in-out hover:-translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:saturate-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none shadow-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-offset-2 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive touch-manipulation",
+  "inline-flex min-w-0 max-w-full items-center justify-center gap-2 whitespace-normal break-words text-center sm:whitespace-nowrap rounded-xl text-sm font-semibold leading-5 tracking-normal transition-[transform,background-color,border-color,box-shadow,color] duration-200 ease-in-out hover:-translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:saturate-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none shadow-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-offset-2 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive touch-manipulation",
   {
     variants: {
       variant: {
@@ -25,9 +25,9 @@ const buttonVariants = cva(
       },
       size: {
         default: "min-h-11 px-4 py-2.5 text-[0.95rem] has-[>svg]:px-3",
-        sm: "min-h-9 rounded-[0.85rem] gap-1.5 px-3.5 py-2 text-[0.88rem] has-[>svg]:px-3",
-        lg: "min-h-12 rounded-[1rem] px-6 py-3 text-[0.98rem] has-[>svg]:px-[1.125rem]",
-        icon: "size-11 rounded-[1rem]",
+        sm: "min-h-9 rounded-lg gap-1.5 px-3.5 py-2 text-[0.88rem] has-[>svg]:px-3",
+        lg: "min-h-12 rounded-xl px-6 py-3 text-[0.98rem] has-[>svg]:px-[1.125rem]",
+        icon: "size-11 rounded-xl",
       },
     },
     defaultVariants: {

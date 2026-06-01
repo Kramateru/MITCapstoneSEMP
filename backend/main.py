@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+from time import perf_counter
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
@@ -244,8 +245,11 @@ def validate_environment():
     logger.info("Environment validation passed")
 
 
-# Validate environment before starting
-validate_environment()
+# NOTE: Validate environment during application startup (lifespan) instead of
+# at import time. Running validation at import time may raise and cause the
+# process to exit before the server binds to the port (Render port-scan
+# failures). We'll perform validation inside the lifespan below and log any
+# validation errors so the service can still bind and surface errors in logs.
 
 # Configure Gemini-related availability messaging.
 GEMINI_API_KEY = resolve_gemini_api_key(os.getenv)
@@ -280,8 +284,10 @@ from backend.routes import (
     notification_routes,
     call_simulation_routes,
     call_simulation_recordings,
+    audit_routes,
 )
 from backend.database import Base, engine, SessionLocal
+from backend.services.audit import should_audit_request, write_request_audit_log
 from backend.services.sample_data_cleanup import cleanup_legacy_sample_dataset
 from backend.services.speech_pipeline import (
     SpeechPipelineController,
@@ -291,6 +297,24 @@ from backend.supabase_client import get_supabase_client
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Validate environment early during startup so the process has already
+    # bound its port when validation errors occur (avoids Render port-scan timeouts).
+    try:
+        validate_environment()
+        app.state.validation_error = None
+    except Exception as exc:
+        msg = _summarize_startup_exception(exc)
+        logger.error(
+            "Environment validation failed during startup: %s. Continuing startup so the process can bind its port.",
+            msg,
+        )
+        app.state.validation_error = msg
+        # If strict mode is requested, re-raise to make startup fail fast.
+        strict_mode = str(os.getenv("STRICT_ENV_VALIDATION", "0")).strip().lower() in {"1", "true", "yes", "on"}
+        if strict_mode:
+            logger.error("STRICT_ENV_VALIDATION is enabled; aborting startup due to validation error.")
+            raise
+
     if STARTUP_DATABASE_REACHABLE:
         ensure_admin_user()
         sync_runtime_users_to_supabase_auth(fail_fast=False)
@@ -309,6 +333,69 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Expose a simple health endpoint that reports validation and DB reachability.
+app.state.validation_error = None
+
+
+def _collect_validation_diagnostics() -> dict:
+    """Gather lightweight environment diagnostics for the /health endpoint."""
+    diagnostics = {}
+
+    secret = normalize_env_value(os.getenv("SECRET_KEY"))
+    diagnostics["SECRET_KEY"] = {
+        "present": bool(secret),
+        "length": len(secret) if secret else 0,
+        "uses_default": secret == "your-secret-key-change-in-production",
+        "ok": bool(secret) and len(secret) >= 32 and secret != "your-secret-key-change-in-production",
+    }
+
+    backend_url = normalize_env_value(os.getenv("BACKEND_URL"))
+    try:
+        parsed = urlparse(backend_url) if backend_url else None
+        backend_url_valid = bool(parsed and parsed.scheme and parsed.netloc)
+    except Exception:
+        backend_url_valid = False
+    diagnostics["BACKEND_URL"] = {"present": bool(backend_url), "valid": backend_url_valid}
+
+    supabase_url = resolve_supabase_url(os.getenv)
+    publishable = resolve_supabase_publishable_key(os.getenv)
+    service = resolve_supabase_service_key(os.getenv)
+
+    diagnostics["SUPABASE_URL"] = {"present": bool(supabase_url), "usable": is_usable_supabase_url(supabase_url)}
+    diagnostics["SUPABASE_PUBLISHABLE_KEY"] = {
+        "present": bool(publishable),
+        "usable": is_usable_supabase_publishable_key(publishable),
+        "matches_url": bool(supabase_url and publishable and supabase_key_matches_url(supabase_url, publishable)),
+    }
+    diagnostics["SUPABASE_SERVICE_KEY"] = {
+        "present": bool(service),
+        "usable": is_usable_supabase_service_key(service) if service else False,
+        "matches_url": bool(supabase_url and service and supabase_key_matches_url(supabase_url, service)),
+    }
+
+    return diagnostics
+
+
+@app.get("/health")
+async def health():
+    """Basic health endpoint used by platforms (non-fatal).
+
+    Returns `status: ok` when environment validation passed and the
+    startup database probe succeeded, otherwise `degraded` with details.
+    Includes diagnostics about keys and URLs to help debug validation failures.
+    """
+    validation_error = getattr(app.state, "validation_error", None)
+    diagnostics = _collect_validation_diagnostics()
+    strict_mode = str(os.getenv("STRICT_ENV_VALIDATION", "0")).strip() in {"1", "true", "yes", "on"}
+    status = "ok" if validation_error is None and STARTUP_DATABASE_REACHABLE else "degraded"
+    return {
+        "status": status,
+        "strict_mode": strict_mode,
+        "validation_error": validation_error,
+        "database_reachable": STARTUP_DATABASE_REACHABLE,
+        "diagnostics": diagnostics,
+    }
+
 @app.exception_handler(OperationalError)
 async def handle_database_operational_error(request: Request, exc: OperationalError):
     logger.warning(
@@ -323,6 +410,26 @@ async def handle_database_operational_error(request: Request, exc: OperationalEr
             "detail": "The primary database is temporarily unavailable. Please try again in a moment.",
         },
     )
+
+
+@app.middleware("http")
+async def audit_request_middleware(request: Request, call_next):
+    if not should_audit_request(request):
+        return await call_next(request)
+
+    started_at = perf_counter()
+    http_status = 500
+    try:
+        response = await call_next(request)
+        http_status = response.status_code
+        return response
+    finally:
+        duration_ms = (perf_counter() - started_at) * 1000
+        write_request_audit_log(
+            request=request,
+            http_status=http_status,
+            duration_ms=duration_ms,
+        )
 
 
 def _summarize_startup_exception(exc: Exception) -> str:
@@ -1918,6 +2025,7 @@ app.include_router(notification_routes.router)
 app.include_router(call_simulation_routes.router)
 app.include_router(call_simulation_recordings.router)
 app.include_router(assessment_redesign_routes.router)
+app.include_router(audit_routes.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))

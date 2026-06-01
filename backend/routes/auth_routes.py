@@ -36,6 +36,7 @@ from ..services.session_service import (
     start_login_session,
     touch_user_session,
 )
+from ..services.audit import create_audit_log
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
@@ -91,6 +92,34 @@ def _auth_error_response(status_code: int, message: str) -> JSONResponse:
     )
 
 
+def _log_login_failure(
+    db: Session,
+    request: Request,
+    *,
+    email: str,
+    reason: str,
+    status_code: int,
+) -> None:
+    try:
+        create_audit_log(
+            db,
+            request=request,
+            action_type="login_failure",
+            module_name="Authentication",
+            entity_type="user",
+            entity_id=email,
+            description=f"Login failed for {email}: {reason}",
+            new_data={"email": email, "status_code": status_code},
+            status="failed",
+            severity="warning" if status_code < 500 else "critical",
+            http_status=status_code,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Unable to write login failure audit log")
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     credentials: LoginRequest,
@@ -106,15 +135,19 @@ async def login(
         supabase_session = authenticate_supabase_credentials(db, normalized_email, credentials.password)
     except SupabaseAuthInputError as exc:
         logger.info("Login rejected for %s due to invalid input: %s", normalized_email, exc)
+        _log_login_failure(db, request, email=normalized_email, reason=str(exc), status_code=status.HTTP_400_BAD_REQUEST)
         return _auth_error_response(status.HTTP_400_BAD_REQUEST, str(exc))
     except SupabaseAuthenticationError as exc:
         logger.info("Login rejected for %s due to failed credentials", normalized_email)
+        _log_login_failure(db, request, email=normalized_email, reason=str(exc), status_code=status.HTTP_401_UNAUTHORIZED)
         return _auth_error_response(status.HTTP_401_UNAUTHORIZED, str(exc))
     except SupabaseAuthConfigurationError as exc:
         logger.exception("Supabase auth configuration error during login for %s", normalized_email)
+        _log_login_failure(db, request, email=normalized_email, reason=str(exc), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         return _auth_error_response(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
     except SupabaseAuthServiceError as exc:
         logger.exception("Supabase auth service error during login for %s", normalized_email)
+        _log_login_failure(db, request, email=normalized_email, reason=str(exc), status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
         return _auth_error_response(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc))
 
     session_user_id, session_user_email = get_supabase_session_user_identity(supabase_session)
@@ -138,6 +171,13 @@ async def login(
             session_user_email,
             session_user_id,
         )
+        _log_login_failure(
+            db,
+            request,
+            email=normalized_email,
+            reason="Supabase account is missing a platform profile.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
         return _auth_error_response(
             status.HTTP_403_FORBIDDEN,
             "Your Supabase account does not have a platform profile.",
@@ -145,6 +185,13 @@ async def login(
 
     if not user.is_active:
         logger.info("Inactive account blocked from login: %s", normalized_email)
+        _log_login_failure(
+            db,
+            request,
+            email=normalized_email,
+            reason="User account is inactive.",
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
         return _auth_error_response(
             status.HTTP_403_FORBIDDEN,
             "User account is inactive",
@@ -189,6 +236,32 @@ async def login(
         batch_context.get("batch_id"),
         batch_context.get("wave_number"),
     )
+    try:
+        create_audit_log(
+            db,
+            user=user,
+            request=request,
+            action_type="login_success",
+            module_name="Authentication",
+            entity_type="user",
+            entity_id=user.id,
+            description=f"{user.full_name} logged in successfully.",
+            new_data={
+                "email": user.email,
+                "role": user.role.value,
+                "redirect": redirect_destination,
+                "batch_id": batch_context.get("batch_id"),
+            },
+            status="success",
+            severity="info",
+            batch_id=batch_context.get("batch_id"),
+            session_id=login_session.session_id,
+            http_status=status.HTTP_200_OK,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Unable to write login success audit log")
 
     return LoginResponse(
         success=True,
@@ -216,6 +289,7 @@ from fastapi import Response, Cookie
 
 @router.post("/logout", response_model=SuccessResponse)
 async def logout(
+    request: Request,
     authorization: Optional[str] = Header(None),
     session_id: Optional[str] = Cookie(None),
     db: Session = Depends(get_db),
@@ -226,6 +300,8 @@ async def logout(
     Supports both JWT and session-based authentication.
     """
     session_invalidated = False
+    logout_user = None
+    resolved_session_id = session_id
     # Invalidate session by JWT (Authorization header)
     if authorization:
         try:
@@ -235,8 +311,9 @@ async def logout(
                     token,
                     allowed_types={"access", "refresh"},
                 )
+                logout_user = db.query(User).filter(User.id == token_data.user_id).first()
+                resolved_session_id = token_data.session_id
                 deactivate_session(db, token_data.session_id)
-                db.commit()
                 session_invalidated = True
         except Exception:
             db.rollback()
@@ -244,10 +321,29 @@ async def logout(
     if session_id:
         try:
             deactivate_session(db, session_id)
-            db.commit()
             session_invalidated = True
         except Exception:
             db.rollback()
+    db.commit()
+    try:
+        create_audit_log(
+            db,
+            user=logout_user,
+            request=request,
+            action_type="logout",
+            module_name="Authentication",
+            entity_type="user_session",
+            entity_id=resolved_session_id,
+            description="User logged out successfully." if session_invalidated else "Logout requested with no active session.",
+            status="success" if session_invalidated else "failed",
+            severity="info" if session_invalidated else "warning",
+            session_id=resolved_session_id,
+            http_status=status.HTTP_200_OK,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Unable to write logout audit log")
     # Clear cookies (JWT, session, refresh, etc.)
     if response:
         response.delete_cookie("session_id", path="/")

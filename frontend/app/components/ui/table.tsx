@@ -8,7 +8,7 @@ function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
     <div
       data-slot="table-container"
-      className="relative w-full max-w-full overflow-x-auto overflow-y-hidden rounded-[1.15rem] border border-border/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,253,0.94))] shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)] sm:rounded-[1.25rem]"
+      className="relative w-full max-w-full overflow-x-auto overflow-y-hidden rounded-xl border border-border/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(248,250,253,0.94))] shadow-[0_18px_42px_-34px_rgba(15,23,42,0.24)]"
     >
       <table
         data-slot="table"
@@ -70,7 +70,7 @@ function TableHead({ className, ...props }: React.ComponentProps<"th">) {
     <th
       data-slot="table-head"
       className={cn(
-        "text-muted-foreground h-11 px-3 text-left align-middle text-[0.7rem] font-semibold uppercase tracking-[0.14em] whitespace-normal sm:h-12 sm:px-4 sm:text-[0.77rem] [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
+        "text-muted-foreground h-11 px-3 text-left align-middle text-[0.75rem] font-semibold uppercase tracking-normal whitespace-normal sm:h-12 sm:px-4 sm:text-[0.8rem] [&:has([role=checkbox])]:pr-0 [&_[role=checkbox]]:translate-y-[2px]",
         className,
       )}
       {...props}

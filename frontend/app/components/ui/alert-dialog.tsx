@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog";
+import { XIcon } from "lucide-react";
 
 import { cn } from "./utils";
 import { buttonVariants } from "./button";
@@ -9,10 +10,10 @@ import { buttonVariants } from "./button";
 type AlertDialogContentSize = "sm" | "md" | "lg" | "xl";
 
 const alertDialogSizeClasses: Record<AlertDialogContentSize, string> = {
-  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[75vw] lg:!max-w-[1160px] 2xl:!max-w-[1240px]",
-  md: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[78vw] lg:!max-w-[1240px] 2xl:!max-w-[1320px]",
-  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[82vw] lg:!max-w-[1360px] 2xl:!max-w-[1460px]",
-  xl: "!w-[calc(100vw-0.5rem)] sm:!w-[calc(100vw-1rem)] lg:!w-[85vw] lg:!max-w-[1480px] 2xl:!max-w-[1600px]",
+  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[75vw] lg:!max-w-[920px] 2xl:!max-w-[1040px]",
+  md: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[78vw] lg:!max-w-[1060px] 2xl:!max-w-[1180px]",
+  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1220px] 2xl:!max-w-[1340px]",
+  xl: "!w-[calc(100vw-0.5rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1400px] 2xl:!max-w-[1520px]",
 };
 
 function AlertDialog({
@@ -54,8 +55,9 @@ function AlertDialogOverlay({
 }
 
 function AlertDialogContent({
-  size = "xl",
+  size = "md",
   className,
+  children,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Content> & {
   size?: AlertDialogContentSize;
@@ -71,7 +73,13 @@ function AlertDialogContent({
           alertDialogSizeClasses[size],
         )}
         {...props}
-      />
+      >
+        <AlertDialogPrimitive.Cancel className="ring-offset-background focus:ring-ring sticky top-0 z-30 -mb-14 ml-auto inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/96 opacity-95 shadow-[0_18px_36px_-26px_rgba(15,23,42,0.32)] transition-all hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
+          <XIcon />
+          <span className="sr-only">Close</span>
+        </AlertDialogPrimitive.Cancel>
+        {children}
+      </AlertDialogPrimitive.Content>
     </AlertDialogPortal>
   );
 }
@@ -115,7 +123,7 @@ function AlertDialogTitle({
   return (
     <AlertDialogPrimitive.Title
       data-slot="alert-dialog-title"
-      className={cn("text-[clamp(1.55rem,1.2rem+0.9vw,2.35rem)] font-bold tracking-[-0.025em]", className)}
+      className={cn("text-[clamp(1.35rem,1.12rem+0.65vw,2rem)] font-bold tracking-normal", className)}
       {...props}
     />
   );

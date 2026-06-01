@@ -9,11 +9,11 @@ import { cn } from "./utils";
 type DialogContentSize = "sm" | "md" | "lg" | "xl" | "full";
 
 const dialogSizeClasses: Record<DialogContentSize, string> = {
-  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[75vw] lg:!max-w-[1180px] 2xl:!max-w-[1240px]",
-  md: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[78vw] lg:!max-w-[1260px] 2xl:!max-w-[1340px]",
-  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[82vw] lg:!max-w-[1380px] 2xl:!max-w-[1480px]",
-  xl: "!w-[calc(100vw-0.85rem)] sm:!w-[calc(100vw-1.75rem)] lg:!w-[86vw] lg:!max-w-[1480px] 2xl:!max-w-[1600px]",
-  full: "!w-[calc(100vw-0.5rem)] sm:!w-[calc(100vw-1rem)] lg:!w-[92vw] !max-w-[1720px]",
+  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[75vw] lg:!max-w-[980px] 2xl:!max-w-[1080px]",
+  md: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[78vw] lg:!max-w-[1120px] 2xl:!max-w-[1220px]",
+  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1280px] 2xl:!max-w-[1380px]",
+  xl: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1420px] 2xl:!max-w-[1520px]",
+  full: "!w-[calc(100vw-0.5rem)] sm:!w-[90vw] lg:!w-[80vw] !max-w-[1600px]",
 };
 
 function Dialog({
@@ -57,7 +57,7 @@ function DialogOverlay({
 }
 
 function DialogContent({
-  size = "xl",
+  size = "md",
   className,
   children,
   ...props
@@ -76,11 +76,11 @@ function DialogContent({
         )}
         {...props}
       >
-        {children}
-        <DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground absolute top-3.5 right-3.5 inline-flex size-10 items-center justify-center rounded-full border border-slate-200/90 bg-white/96 opacity-90 shadow-[0_18px_36px_-26px_rgba(15,23,42,0.32)] transition-all hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none sm:top-5 sm:right-5 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
+        <DialogPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary data-[state=open]:text-foreground sticky top-0 z-30 -mb-14 ml-auto inline-flex size-10 shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/96 opacity-95 shadow-[0_18px_36px_-26px_rgba(15,23,42,0.32)] transition-all hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4">
           <XIcon />
           <span className="sr-only">Close</span>
         </DialogPrimitive.Close>
+        {children}
       </DialogPrimitive.Content>
     </DialogPortal>
   );
@@ -91,7 +91,7 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="dialog-header"
       className={cn(
-        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-4 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:pb-6",
+        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-4 pr-12 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90 sm:pb-6",
         className,
       )}
       {...props}
@@ -119,7 +119,7 @@ function DialogTitle({
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("pr-12 text-[clamp(1.55rem,1.2rem+0.9vw,2.35rem)] leading-tight font-bold tracking-[-0.025em]", className)}
+      className={cn("text-[clamp(1.35rem,1.12rem+0.65vw,2rem)] leading-tight font-bold tracking-normal", className)}
       {...props}
     />
   );

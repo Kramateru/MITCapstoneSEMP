@@ -60,13 +60,13 @@ function SheetContent({
         className={cn(
           "bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 border-border/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(249,251,253,0.95))] text-[0.97rem] shadow-[0_28px_80px_-34px_rgba(15,23,42,0.32)] transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 [&_input]:text-base [&_textarea]:text-base [&_[data-slot=button]]:min-h-11 [&_[data-slot=label]]:text-[0.98rem] [&_[data-slot=label]]:leading-6",
           side === "right" &&
-            "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-[97vw] border-l sm:w-[94vw] lg:w-[80vw] xl:w-[76vw] 2xl:w-[72vw] sm:max-w-none",
+            "data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-[97vw] border-l sm:w-[90vw] lg:w-[80vw] xl:w-[78vw] 2xl:w-[76vw] sm:max-w-none",
           side === "left" &&
-            "data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-[97vw] border-r sm:w-[94vw] lg:w-[80vw] xl:w-[76vw] 2xl:w-[72vw] sm:max-w-none",
+            "data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left inset-y-0 left-0 h-full w-[97vw] border-r sm:w-[90vw] lg:w-[80vw] xl:w-[78vw] 2xl:w-[76vw] sm:max-w-none",
           side === "top" &&
-            "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 h-auto border-b",
+            "data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top inset-x-0 top-0 max-h-[92dvh] border-b",
           side === "bottom" &&
-            "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t",
+            "data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 max-h-[92dvh] border-t",
           className,
         )}
         {...props}
@@ -110,7 +110,7 @@ function SheetTitle({
   return (
     <SheetPrimitive.Title
       data-slot="sheet-title"
-      className={cn("text-foreground text-[clamp(1.2rem,1rem+0.4vw,1.7rem)] font-semibold tracking-[-0.02em]", className)}
+      className={cn("text-foreground text-[clamp(1.2rem,1rem+0.4vw,1.7rem)] font-semibold tracking-normal", className)}
       {...props}
     />
   );

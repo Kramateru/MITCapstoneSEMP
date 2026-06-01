@@ -59,8 +59,8 @@ function DrawerContent({
           "group/drawer-content bg-background fixed z-50 flex h-auto flex-col text-[0.97rem]",
           "data-[vaul-drawer-direction=top]:inset-x-0 data-[vaul-drawer-direction=top]:top-0 data-[vaul-drawer-direction=top]:mb-24 data-[vaul-drawer-direction=top]:max-h-[80vh] data-[vaul-drawer-direction=top]:rounded-b-lg data-[vaul-drawer-direction=top]:border-b",
           "data-[vaul-drawer-direction=bottom]:inset-x-0 data-[vaul-drawer-direction=bottom]:bottom-0 data-[vaul-drawer-direction=bottom]:mt-24 data-[vaul-drawer-direction=bottom]:max-h-[80vh] data-[vaul-drawer-direction=bottom]:rounded-t-lg data-[vaul-drawer-direction=bottom]:border-t",
-          "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-[95vw] data-[vaul-drawer-direction=right]:border-l md:data-[vaul-drawer-direction=right]:w-[86vw] lg:data-[vaul-drawer-direction=right]:w-[72vw] xl:data-[vaul-drawer-direction=right]:w-[64vw] 2xl:data-[vaul-drawer-direction=right]:w-[60vw]",
-          "data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-[95vw] data-[vaul-drawer-direction=left]:border-r md:data-[vaul-drawer-direction=left]:w-[86vw] lg:data-[vaul-drawer-direction=left]:w-[72vw] xl:data-[vaul-drawer-direction=left]:w-[64vw] 2xl:data-[vaul-drawer-direction=left]:w-[60vw]",
+          "data-[vaul-drawer-direction=right]:inset-y-0 data-[vaul-drawer-direction=right]:right-0 data-[vaul-drawer-direction=right]:w-[97vw] data-[vaul-drawer-direction=right]:border-l md:data-[vaul-drawer-direction=right]:w-[88vw] lg:data-[vaul-drawer-direction=right]:w-[80vw] xl:data-[vaul-drawer-direction=right]:w-[78vw] 2xl:data-[vaul-drawer-direction=right]:w-[76vw]",
+          "data-[vaul-drawer-direction=left]:inset-y-0 data-[vaul-drawer-direction=left]:left-0 data-[vaul-drawer-direction=left]:w-[97vw] data-[vaul-drawer-direction=left]:border-r md:data-[vaul-drawer-direction=left]:w-[88vw] lg:data-[vaul-drawer-direction=left]:w-[80vw] xl:data-[vaul-drawer-direction=left]:w-[78vw] 2xl:data-[vaul-drawer-direction=left]:w-[76vw]",
           className,
         )}
         {...props}
@@ -99,7 +99,7 @@ function DrawerTitle({
   return (
     <DrawerPrimitive.Title
       data-slot="drawer-title"
-      className={cn("text-foreground text-[clamp(1.2rem,1rem+0.4vw,1.7rem)] font-semibold tracking-[-0.02em]", className)}
+      className={cn("text-foreground text-[clamp(1.2rem,1rem+0.4vw,1.7rem)] font-semibold tracking-normal", className)}
       {...props}
     />
   );
