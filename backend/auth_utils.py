@@ -216,8 +216,15 @@ def verify_token(token: str) -> TokenData:
 
 
 def validate_current_session(db: Session, user: User, token_data: TokenData):
-    """Validate that the token belongs to the active server-side login session."""
-    return validate_user_session(db, user, token_data.session_id)
+    """Validate that the token belongs to the active server-side login session.
+    
+    Returns the UserSession if found and valid, or None if session table unavailable.
+    Raises HTTPException if there's a forced logout (different active session).
+    """
+    result = validate_user_session(db, user, token_data.session_id)
+    # If result is None, it could mean session doesn't exist or table is unavailable
+    # In either case, we'll handle it in get_current_user
+    return result
 
 
 # ===================== Dependency: Get Current User =====================
@@ -230,6 +237,8 @@ async def get_current_user(
     
     This function can be used as a FastAPI dependency with automatic header extraction,
     or called directly with an explicit authorization token.
+    
+    Session validation is attempted but won't block access if the session table is unavailable.
     """
     if not authorization:
         raise HTTPException(
@@ -267,6 +276,7 @@ async def get_current_user(
             detail="Inactive user",
         )
 
+    # Attempt session validation (may return None if table unavailable, or raise exception if forced logout)
     validate_current_session(db, user, token_data)
     
     return user

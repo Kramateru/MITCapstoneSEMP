@@ -458,6 +458,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(storedAuth.user)
       writeAuthSessionCookies(storedAuth.token, storedAuth.user, storedAuth.refreshToken)
 
+      // If we're already on the login page, don't verify stale tokens
+      // The user is about to log in anyway, so let them proceed
+      const isOnLoginPage = typeof window !== 'undefined' && window.location.pathname === '/login'
+      
+      if (isOnLoginPage) {
+        // Skip verification but still load the user for UI purposes
+        if (isMounted) {
+          setIsLoading(false)
+        }
+        return
+      }
+
       if (!storedAuth.refreshToken || !isTokenExpired(storedAuth.token)) {
         try {
           await verifyBackendSession(storedAuth.token)
