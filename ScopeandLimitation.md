@@ -1469,33 +1469,9 @@ That decision is important because each family uses different data structures, w
 - Monitor session table growth and clean up expired sessions periodically
 
 ## 16. Implementation Documentation
+For recent enhancements (notably automatic session termination on browser/tab close and related session validation), the implementation details are consolidated into this document and the source code. Maintain the code as the primary reference; key locations:
 
-For detailed information about recent implementations and enhancements, refer to:
+- Code references: `frontend/app/hooks/useSessionTermination.ts`, `frontend/app/utils/session-validation.ts`, `frontend/app/context/AuthContext.tsx`, and the backend auth/session routes under `backend/routes/` (for example `backend/routes/auth_routes.py`).
+- Branch with the feature changes: https://github.com/Kramateru/MITCapstoneSEMP/compare/main...feature/my-updates?expand=1
 
-1. **AUTOMATIC_SESSION_TERMINATION_IMPLEMENTATION.md**
-   - Comprehensive guide to browser close session termination feature
-   - Frontend and backend component descriptions
-   - Data flow diagrams and scenarios
-   - Testing procedures and troubleshooting
-   - Security considerations and best practices
-
-2. **BACKEND_SESSION_TERMINATION_DETAILS.md**
-   - Detailed backend implementation of session management
-   - API endpoint documentation
-   - Session deactivation and validation logic
-   - Database schema and indexes
-   - Monitoring and debugging queries
-
-3. **CODEBASE_COMPREHENSIVE_ANALYSIS.md**
-   - Complete codebase structure analysis
-   - All backend routes and services documented
-   - Frontend navigation structure
-   - Data model relationships
-   - Integration points and dependencies
-
-These documents provide comprehensive technical reference for:
-- Understanding the current implementation
-- Troubleshooting issues
-- Extending or modifying the system
-- Training new developers
-- Security audits and compliance reviews
+If an external, separate long-form technical reference is required for audits or onboarding, please request it from the repository owner. Otherwise, rely on this consolidated section and the source files above for implementation and troubleshooting guidance.
