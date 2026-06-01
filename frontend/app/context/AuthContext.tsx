@@ -2,11 +2,12 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 
+import { useSessionTermination } from '@/app/hooks/useSessionTermination'
 import { clearAuthSessionCookies, isTokenExpired, writeAuthSessionCookies } from '@/app/utils/auth-session'
 import {
-  getHttpErrorMessage,
-  getUnexpectedJsonResponseMessage,
-  readHttpResponse,
+    getHttpErrorMessage,
+    getUnexpectedJsonResponseMessage,
+    readHttpResponse,
 } from '@/app/utils/http-response'
 import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
@@ -742,6 +743,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [handleInvalidSession, token, user])
+
+  // Attach automatic session termination on browser close
+  useSessionTermination(token, logout)
 
   return (
     <AuthContext.Provider
