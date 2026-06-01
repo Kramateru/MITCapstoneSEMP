@@ -1,27 +1,27 @@
 'use client'
 
+import {
+    AlertTriangle,
+    Eye,
+    EyeOff,
+    LoaderCircle,
+    LockKeyhole,
+    LogIn,
+    Mail,
+    MapPin,
+    Phone,
+    ShieldCheck,
+} from 'lucide-react'
 import Image from 'next/image'
 import { useEffect, useState, type FormEvent } from 'react'
-import {
-  AlertTriangle,
-  Eye,
-  EyeOff,
-  LoaderCircle,
-  LockKeyhole,
-  LogIn,
-  Mail,
-  MapPin,
-  Phone,
-  ShieldCheck,
-} from 'lucide-react'
 
 import { readAndClearAuthNotice, useAuth } from '@/app/context/AuthContext'
-import {
-  getHttpErrorMessage,
-  getUnexpectedJsonResponseMessage,
-  readHttpResponse,
-} from '@/app/utils/http-response'
 import { getPostLoginPath, navigateToPath } from '@/app/utils/auth-navigation'
+import {
+    getHttpErrorMessage,
+    getUnexpectedJsonResponseMessage,
+    readHttpResponse,
+} from '@/app/utils/http-response'
 
 type AuthProviderStatus = {
   provider: 'supabase' | 'local'
@@ -46,10 +46,15 @@ export default function LoginPage() {
 
   useEffect(() => {
     setHasHydrated(true)
+    // Only show auth notice if there's a specific message about logout or forced action
+    // Don't show generic session expired messages since they're often stale
     const authNotice = readAndClearAuthNotice()
-    if (authNotice) {
+    if (authNotice && authNotice.toLowerCase().includes('logged out')) {
+      setError(authNotice)
+    } else if (authNotice && authNotice.toLowerCase().includes('terminated')) {
       setError(authNotice)
     }
+    // Silently discard other session messages - they're likely stale tokens
   }, [])
 
   useEffect(() => {

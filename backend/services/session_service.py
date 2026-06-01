@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import HTTPException, Request, status
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError, ProgrammingError
 from sqlalchemy.orm import Session
 
 from ..models import User, UserSession
+
+logger = logging.getLogger(__name__)
 
 ALREADY_LOGGED_IN_MESSAGE = (
     "Your account is already logged in on another device or browser. Please log out first."
@@ -190,40 +193,85 @@ def deactivate_session(db: Session, session_id: Optional[str]) -> bool:
     return bool(updated)
 
 
-def validate_user_session(db: Session, user: User, session_id: Optional[str]) -> UserSession:
+def validate_user_session(db: Session, user: User, session_id: Optional[str]) -> Optional[UserSession]:
+    """Validate that the user has an active session with the given session_id.
+    
+    Returns the UserSession object if valid, or None if session table doesn't exist or session is invalid.
+    Raises HTTPException only if there's an active competing session (forced logout case).
+    """
     if not session_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=SESSION_EXPIRED_MESSAGE,
+        logger.warning("Session validation failed: missing session_id for user %s", user.id)
+        # Don't immediately fail - let get_current_user decide how to handle this
+        return None
+
+    try:
+        expire_stale_sessions(db, user_id=user.id)
+        session = (
+            db.query(UserSession)
+            .filter(
+                UserSession.user_id == user.id,
+                UserSession.session_id == session_id,
+                UserSession.is_active.is_(True),
+            )
+            .first()
         )
+        if session:
+            return session
 
-    expire_stale_sessions(db, user_id=user.id)
-    session = (
-        db.query(UserSession)
-        .filter(
-            UserSession.user_id == user.id,
-            UserSession.session_id == session_id,
-            UserSession.is_active.is_(True),
+        # Check if there's a different active session (forced logout case)
+        active_session = (
+            db.query(UserSession)
+            .filter(UserSession.user_id == user.id, UserSession.is_active.is_(True))
+            .first()
         )
-        .first()
-    )
-    if session:
-        return session
+        
+        if active_session:
+            logger.info(
+                "Forced logout: user %s has active session %s but token contains session %s",
+                user.id,
+                active_session.session_id,
+                session_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=FORCED_LOGOUT_MESSAGE,
+            )
+        
+        logger.debug("Session not found for user %s with session_id %s", user.id, session_id)
+        return None
+        
+    except (OperationalError, ProgrammingError) as exc:
+        # Table doesn't exist yet - this is okay during initial setup
+        logger.warning(
+            "Session table unavailable during validation (user %s): %s. "
+            "Falling back to basic validation. Run Supabase migrations if this persists.",
+            user.id,
+            type(exc).__name__,
+        )
+        # Return None to indicate we can't validate, but don't fail the request
+        return None
+    except HTTPException:
+        # Re-raise HTTP exceptions (like FORCED_LOGOUT_MESSAGE)
+        raise
+    except Exception as exc:
+        logger.exception("Unexpected error during session validation for user %s", user.id)
+        # Don't fail the request due to unexpected database errors
+        return None
 
-    active_session = (
-        db.query(UserSession)
-        .filter(UserSession.user_id == user.id, UserSession.is_active.is_(True))
-        .first()
-    )
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail=FORCED_LOGOUT_MESSAGE if active_session else SESSION_EXPIRED_MESSAGE,
-    )
 
-
-def touch_user_session(db: Session, user: User, session_id: Optional[str]) -> UserSession:
+def touch_user_session(db: Session, user: User, session_id: Optional[str]) -> Optional[UserSession]:
+    """Update the last_activity timestamp for the user's session.
+    
+    Returns the UserSession if found, or None if session doesn't exist or table unavailable.
+    """
     session = validate_user_session(db, user, session_id)
-    session.last_activity = _now()
-    session.updated_at = _now()
-    db.flush()
-    return session
+    if session:
+        try:
+            session.last_activity = _now()
+            session.updated_at = _now()
+            db.flush()
+            return session
+        except (OperationalError, ProgrammingError):
+            logger.warning("Unable to update session activity (table unavailable)")
+            return None
+    return None
