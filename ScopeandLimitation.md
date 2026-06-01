@@ -164,7 +164,7 @@ Many features only fully work when Supabase is correctly configured:
 
 **Purpose**
 
-Controls login, access tokens, refresh tokens, current-user lookup, password changes, integration with Supabase-authenticated sessions, and strict single active session enforcement.
+Controls login, access tokens, refresh tokens, current-user lookup, password changes, integration with Supabase-authenticated sessions, strict single active session enforcement, and automatic session termination on browser close.
 
 **Primary code areas**
 
@@ -175,12 +175,14 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 - `backend/models.py`
 - `supabase/single_active_sessions.sql`
 - `frontend/app/context/AuthContext.tsx`
+- `frontend/app/hooks/useSessionTermination.ts` (NEW)
+- `frontend/app/utils/session-validation.ts` (NEW)
 - `frontend/app/login`
 - `frontend/app/dashboard`
 
 **Main functions**
 
-- authenticate user credentials
+- authenticate user credentials via Supabase
 - issue backend JWT access and refresh tokens
 - generate and store a unique server-side `session_id`
 - block a second active login for the same user account by default
@@ -189,6 +191,9 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 - update `last_activity` through frontend heartbeat tracking
 - expire stale sessions after the configured inactivity timeout
 - mark sessions inactive on logout
+- automatically terminate sessions when browser/tab closes (NEW)
+- validate session restoration on app startup (NEW)
+- detect terminated sessions and force re-authentication (NEW)
 - optionally issue Supabase session tokens
 - return active user profile
 - refresh active session
@@ -220,6 +225,18 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 - `SESSION_INACTIVITY_TIMEOUT_MINUTES` controls stale session recovery. The default documented value is 10 minutes.
 - If the browser closes unexpectedly, the last heartbeat stops and the active session becomes reusable after the inactivity timeout.
 
+**Automatic session termination on browser close (NEW feature)**
+
+- Frontend detects browser/tab close using `beforeunload`, `unload`, and `pagehide` events for cross-browser compatibility
+- On close detection, sends logout request to backend with `keepalive: true` to ensure delivery even during page unload
+- Backend invalidates the session immediately in response
+- Frontend clears authentication tokens (JWT, refresh token) from localStorage and sessionStorage
+- Frontend clears session ID from browser storage
+- If user reopens the application or logs in again, the destroyed session is not valid
+- Session validation endpoint (`GET /api/auth/session`) checks server-side session state on app startup
+- If stored tokens exist but server session is invalid, user is redirected to login with message: "Your session was ended because you closed the browser. Please log in again."
+- Provides defense-in-depth: even if logout request fails, frontend has cleared tokens and backend will reject any subsequent requests with invalid session
+
 **Key limitations**
 
 - Login quality depends on correct Supabase and backend environment setup.
@@ -228,6 +245,8 @@ Controls login, access tokens, refresh tokens, current-user lookup, password cha
 - All protected modules depend on successful role resolution from authentication.
 - Very recent duplicate login attempts are protected by the database unique active-session index, but operational reliability still depends on successful database transactions.
 - Stale-session recovery is timeout-based. A crashed browser is not marked inactive instantly; it becomes reusable after the configured inactivity window.
+- Browser close detection relies on browser-supported events. Some edge cases may not trigger (e.g., OS crashes, immediate OS shutdown).
+- Logout during page unload is best-effort; if network is offline at moment of close, the keepalive fetch may not complete, but frontend has already cleared tokens.
 
 ### 7.2 User and Profile Management
 
@@ -1063,7 +1082,34 @@ This indicates the trainee experience is focused on assigned work, completion, r
 11. Session is scored.
 12. Trainer reviews the result, recording, transcript, and coaching notes.
 
-### 9.8 Coaching and Certification Flow
+### 9.9 Session Termination on Browser Close Flow
+
+1. User is logged in and authenticated with valid JWT token and session_id.
+2. User closes the browser tab, closes the browser window, or exits the application.
+3. Frontend JavaScript detects the close event using `beforeunload`, `unload`, and/or `pagehide` events.
+4. Frontend initiates an async logout request to `/api/auth/logout` with `keepalive: true` (survives page unload).
+5. Frontend immediately clears all authentication tokens from localStorage and sessionStorage.
+6. Backend receives logout request and marks the user's session as `is_active = false`.
+7. Backend commits the change to Supabase database.
+8. User closes the browser completely.
+9. User opens the browser and navigates to the application.
+10. Frontend AuthContext checks for stored auth tokens.
+11. Frontend finds stored tokens (if browser didn't clear data) but calls `GET /api/auth/session` to validate.
+12. Backend queries the UserSession table and finds the session is inactive.
+13. Backend returns `401 Unauthorized` response.
+14. Frontend detects the invalid session and clears all tokens.
+15. Frontend redirects user to login page with message: "Your session was ended because you closed the browser. Please log in again."
+16. User must re-authenticate with credentials.
+
+**Scenarios and variations:**
+
+- **Scenario A: Logout request succeeds**: Session marked inactive immediately, tokens cleared from frontend, user sees login page on reopening.
+- **Scenario B: Logout request fails (network down)**: Frontend has already cleared tokens; backend session may remain active until timeout expires, but user cannot reuse the token because frontend no longer has it.
+- **Scenario C: Browser crash/OS shutdown**: Close events don't fire; session remains active until inactivity timeout expires (~10 minutes by default).
+- **Scenario D: Private/Incognito mode**: Tokens may not persist after close; behavior depends on browser implementation.
+- **Scenario E: Multiple tabs**: Each tab has independent session termination; closing one tab affects the whole user session, requiring re-authentication in other tabs if accessing the app again.
+
+### 9.10 Coaching and Certification Flow
 
 1. Performance records are created from practice, assessments, or simulations.
 2. Trainer or automated logic generates feedback or coaching.
@@ -1071,7 +1117,7 @@ This indicates the trainee experience is focused on assigned work, completion, r
 4. Certificates may be issued when thresholds are satisfied.
 5. Trainee sees coaching history and certificate outcomes.
 
-### 9.9 Reporting Flow
+### 9.11 Reporting Flow
 
 1. Operational activity records accumulate in the system.
 2. Analytics routes aggregate performance data.
@@ -1255,8 +1301,9 @@ Full feature completeness depends on:
 - valid database connection settings
 - valid storage configuration
 - valid auth configuration
-- working AI provider keys
+- working AI provider keys (Gemini, Azure Speech, etc.)
 - browser microphone and audio APIs
+- JavaScript enabled in browser for session lifecycle management
 
 If any of these fail, the user experience may fall back, partially degrade, or stop for affected modules.
 
@@ -1275,7 +1322,26 @@ Important constraints:
 - If `SINGLE_SESSION_MODE=replace` is enabled later, the platform changes from blocking new logins to terminating the previous active session.
 - If `STRICT_SINGLE_SESSION=true`, additional tabs may not share the same stored auth state, depending on browser session-storage behavior.
 
-### 13.3 Audio and Speech Reliability
+### 13.3 Automatic Session Termination on Browser Close (NEW)
+
+When a user closes the browser or tab:
+
+- Frontend detects close using `beforeunload`, `unload`, and `pagehide` events
+- A logout request is sent with `keepalive: true` for guaranteed delivery
+- Session is invalidated on the backend
+- Tokens are cleared from browser storage
+- User must re-authenticate when the browser is reopened or app is revisited
+- Session validation occurs on app startup; if tokens are present but server session is invalid, user is redirected to login
+
+Important behavioral notes:
+
+- Event detection may not trigger in extreme scenarios (OS crash, immediate power loss)
+- If the browser closes before the logout request completes (offline scenario), the frontend has already cleared tokens; backend will reject any reuse of the token
+- Session inactivity timeout still applies: if a browser is closed and network is down, the session may remain in "is_active=true" state until the timeout period expires
+- This feature works across all browsers that support the `beforeunload`, `unload`, and `pagehide` events (virtually all modern browsers)
+- The feature respects bfcache (Back-Forward Cache) by using the `pagehide.persisted` flag to avoid false logout triggers
+
+### 13.4 Audio and Speech Reliability
 
 Speech-related modules are sensitive to:
 
@@ -1287,17 +1353,17 @@ Speech-related modules are sensitive to:
 
 This especially affects practice sessions and call simulation.
 
-### 13.4 Overlapping Module Generations
+### 13.5 Overlapping Module Generations
 
 The codebase contains legacy, intermediate, and redesigned versions of some learning modules. This is especially visible in:
 
-- assessments
-- scenario handling
-- call simulation support flows
+- assessments (standard CRUD, redesign workspace, MCQ layer)
+- scenario handling (generic scenarios, call-simulation-specific scenarios)
+- call simulation support flows (main flow plus variations)
 
 This increases flexibility, but it also increases maintenance complexity and can create naming confusion.
 
-### 13.5 Role Model Simplicity
+### 13.6 Role Model Simplicity
 
 Only three formal roles are currently implemented:
 
@@ -1305,9 +1371,9 @@ Only three formal roles are currently implemented:
 - trainer
 - trainee
 
-Any requirement for more granular governance roles would require code changes.
+Any requirement for more granular governance roles (QA, Manager, Supervisor) would require code changes to the role system and permission checks throughout the codebase.
 
-### 13.6 Cloud-First Behavior
+### 13.7 Cloud-First Behavior
 
 The project may support local development fallbacks in some places, but the intended operational design is cloud-backed. Production-grade behavior assumes working Supabase integration for:
 
@@ -1317,20 +1383,29 @@ The project may support local development fallbacks in some places, but the inte
 - storage uploads
 - media retrieval
 
-### 13.7 AI Output Quality
+### 13.8 AI Output Quality
 
 AI-supported outputs such as:
 
-- TTS
+- TTS (Text-to-Speech)
 - evaluation summaries
 - speech scoring assistance
 - coaching suggestions
 
 are only as strong as the underlying services, prompt design, transcript quality, and available keys.
 
-### 13.8 Reporting Consistency Depends on Status Discipline
+### 13.9 Reporting Consistency Depends on Status Discipline
 
 Analytics, notifications, coaching, and certificates rely on activity status values being updated correctly across modules. If upstream modules do not save or transition state correctly, downstream reports can become incomplete or misleading.
+
+### 13.10 Browser Storage Dependency
+
+Session and authentication state relies on browser storage (localStorage, sessionStorage, cookies):
+
+- Clearing browser data will log the user out
+- Private/Incognito mode may have limited storage capacity
+- Some browsers or extensions may restrict storage access
+- Cross-domain storage restrictions apply (session data is not shared across different domains)
 
 ## 14. What Someone New to the System Should Know First
 
@@ -1342,11 +1417,15 @@ If someone is trying to understand the platform quickly, these are the most impo
 4. Trainer is the main content-delivery role.
 5. Trainee should see only assigned work.
 6. A user account can only have one active login session by default.
-7. Scenarios, assessments, and call simulations are related but not identical modules.
-8. There are multiple assessment implementations in the same codebase.
-9. Audio, transcript, and AI features are central to the platform concept.
-10. Coaching and certification depend on clean data coming from earlier stages.
-11. Navigation shows the main experience, but the codebase contains additional support routes beyond the sidebar.
+7. When a user closes their browser or tab, the session is automatically terminated and they must log in again.
+8. Scenarios, assessments, and call simulations are related but not identical modules.
+9. There are multiple assessment implementations in the same codebase.
+10. Audio, transcript, and AI features are central to the platform concept.
+11. Coaching and certification depend on clean data coming from earlier stages.
+12. Navigation shows the main experience, but the codebase contains additional support routes beyond the sidebar.
+13. Backend session validation is the true security boundary; frontend checks are UI-only.
+14. Session tokens are stored in browser storage and cleared on logout or browser close.
+15. The platform provides defense-in-depth: both frontend token clearing and backend session invalidation occur on logout.
 
 ## 15. Conclusion
 
@@ -1360,8 +1439,15 @@ The Speech Enabled BPO Platform is best understood as a role-based BPO training 
 - coaching
 - certification
 - analytics
+- secure session management with automatic termination
 
 Its strength is breadth: it can cover the full cycle from training creation to trainee completion to coaching and certification. Its main complexity comes from overlapping assessment systems, heavy media dependence, and strong reliance on Supabase and AI-related integrations.
+
+**Recent enhancements:**
+
+- Automatic session termination on browser/tab close adds an important security layer, ensuring that users cannot maintain persistent sessions across browser restarts without re-authentication
+- Session validation on app startup detects terminated sessions and redirects to login appropriately
+- Defense-in-depth approach with both frontend token clearing and backend session invalidation prevents session reuse
 
 Anyone extending the system should first decide which module family they are working in:
 
@@ -1373,3 +1459,19 @@ Anyone extending the system should first decide which module family they are wor
 - MCQ/certification
 
 That decision is important because each family uses different data structures, workflows, and role interactions even though they all belong to the same overall platform.
+
+**Security best practices to maintain:**
+
+- Always validate both JWT token and session_id on the backend
+- Treat frontend checks as UI convenience only, not security boundary
+- Ensure logout operations mark sessions as inactive (not deleted, for audit trails)
+- Use session timeouts and inactivity tracking to recover from unexpected closes
+- Monitor session table growth and clean up expired sessions periodically
+
+## 16. Implementation Documentation
+For recent enhancements (notably automatic session termination on browser/tab close and related session validation), the implementation details are consolidated into this document and the source code. Maintain the code as the primary reference; key locations:
+
+- Code references: `frontend/app/hooks/useSessionTermination.ts`, `frontend/app/utils/session-validation.ts`, `frontend/app/context/AuthContext.tsx`, and the backend auth/session routes under `backend/routes/` (for example `backend/routes/auth_routes.py`).
+- Branch with the feature changes: https://github.com/Kramateru/MITCapstoneSEMP/compare/main...feature/my-updates?expand=1
+
+If an external, separate long-form technical reference is required for audits or onboarding, please request it from the repository owner. Otherwise, rely on this consolidated section and the source files above for implementation and troubleshooting guidance.
