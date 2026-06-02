@@ -59,7 +59,7 @@ export default function MyCoaching() {
     try {
       setIsLoading(true);
       setLoadError('');
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const res = await fetch('/api/certification/coaching/logs', {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
@@ -116,7 +116,7 @@ export default function MyCoaching() {
 
   const handleAcknowledge = async (logId: string) => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const res = await fetch(`/api/certification/coaching/logs/${logId}/acknowledge`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,

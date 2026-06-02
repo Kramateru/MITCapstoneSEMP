@@ -2581,7 +2581,7 @@ export function TrainerAssessmentStudio({
 
 
       <Dialog open={categoryDialogOpen} onOpenChange={setCategoryDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{categoryDraft.id ? 'Edit Category' : 'Create Category'}</DialogTitle>
             <DialogDescription>Define the category name, description, and passing score requirement.</DialogDescription>
@@ -2613,7 +2613,7 @@ export function TrainerAssessmentStudio({
       </Dialog>
 
       <Dialog open={assessmentDialogOpen} onOpenChange={setAssessmentDialogOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{assessmentDraft.id ? 'Edit Assessment' : 'Create Assessment'}</DialogTitle>
             <DialogDescription>Choose the category, define the assessment title, and control its publish state.</DialogDescription>
@@ -2680,7 +2680,7 @@ export function TrainerAssessmentStudio({
       </Dialog>
 
       <Dialog open={questionDialogOpen} onOpenChange={setQuestionDialogOpen}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{questionDraft.id ? 'Edit Question' : 'Create Question Item'}</DialogTitle>
             <DialogDescription>Select a category and assessment, enter the answer choices, and define the scoring metadata.</DialogDescription>
@@ -2810,7 +2810,7 @@ export function TrainerAssessmentStudio({
       </Dialog>
 
       <Dialog open={assignmentDialogOpen} onOpenChange={setAssignmentDialogOpen}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent size="lg">
           <DialogHeader>
             <DialogTitle>{assignmentDraft.id ? 'Edit Assessment Assignment' : 'Assign Assessment to Trainee or Batch'}</DialogTitle>
             <DialogDescription>Choose the delivery target, linked assessment, question pool rules, and completion settings.</DialogDescription>
@@ -3108,7 +3108,7 @@ export function TrainerAssessmentStudio({
       </Dialog>
 
       <Dialog open={!!coachingTarget} onOpenChange={(open) => !open && setCoachingTarget(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Coach Attempt</DialogTitle>
             <DialogDescription>

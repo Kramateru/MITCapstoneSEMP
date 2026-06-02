@@ -120,7 +120,7 @@ export default function ProfileManagementDialog() {
     const loadProfile = async () => {
       setLoadingProfile(true);
       try {
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         const response = await fetch('/api/users/me', {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         });
@@ -199,7 +199,7 @@ export default function ProfileManagementDialog() {
 
     setSavingProfile(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const profileResponse = await fetch('/api/users/me', {
         method: 'PUT',
         headers: {
@@ -319,7 +319,7 @@ export default function ProfileManagementDialog() {
 
     setChangingPassword(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch('/api/users/change-password', {
         method: 'POST',
         headers: {

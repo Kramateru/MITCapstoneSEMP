@@ -355,7 +355,7 @@ export default function BatchManagement() {
                     Create Batch
                   </Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent size="sm">
                   <DialogHeader>
                     <DialogTitle>Create New Batch</DialogTitle>
                     <DialogDescription>Create a batch name, a wave number, or both for trainee assignment.</DialogDescription>
@@ -516,7 +516,7 @@ export default function BatchManagement() {
           }
         }}
       >
-        <DialogContent>
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Edit Batch</DialogTitle>
             <DialogDescription>Update the saved batch label or wave number used across your trainer navigation and reports.</DialogDescription>

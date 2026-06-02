@@ -34,7 +34,7 @@ function CardTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <h4
       data-slot="card-title"
-      className={cn("max-w-[32ch] text-[1.02rem] font-bold leading-tight tracking-normal text-balance sm:text-[1.1rem]", className)}
+      className={cn("max-w-full text-[1.02rem] font-bold leading-tight tracking-normal text-balance sm:text-[1.1rem]", className)}
       {...props}
     />
   );

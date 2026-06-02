@@ -1487,7 +1487,7 @@ export default function TrainerMcqWorkspace({ panel }: TrainerMcqWorkspaceProps)
       ) : null}
 
       <Dialog open={!!editingAssignment} onOpenChange={(open) => !open && closeAssignmentEditor()}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+        <DialogContent size="sm" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Published Category</DialogTitle>
             <DialogDescription>

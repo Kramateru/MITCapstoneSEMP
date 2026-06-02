@@ -119,7 +119,7 @@ export default function BranchingLogicEditor({ onSave }: BranchingLogicEditorPro
           Edit Branching Logic
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-7xl max-h-[90vh] overflow-hidden flex flex-col">
+      <DialogContent size="xl" className="max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
           <DialogTitle>Tree Structure Branching Editor</DialogTitle>
           <DialogDescription>

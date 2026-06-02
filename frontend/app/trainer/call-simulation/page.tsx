@@ -959,7 +959,7 @@ export default function TrainerSimFloorPage() {
   const sessionAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const authedFetch = useCallback(async (url: string, init?: RequestInit) => {
-    const token = localStorage.getItem('token') || '';
+    const token = sessionStorage.getItem('token') || '';
     const headers = new Headers(init?.headers || {});
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
@@ -3338,7 +3338,7 @@ export default function TrainerSimFloorPage() {
           }
         }}
       >
-        <DialogContent className="flex !max-h-[94vh] flex-col overflow-hidden p-0">
+        <DialogContent size="xl" className="flex !max-h-[94vh] flex-col overflow-hidden p-0">
           <DialogHeader className="shrink-0 border-b bg-white px-6 py-5">
             <DialogTitle>{editingScenarioId ? 'Edit Scenario' : 'Create Scenario'}</DialogTitle>
             <DialogDescription>
@@ -3912,7 +3912,7 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showKpiDialog} onOpenChange={setShowKpiDialog}>
-        <DialogContent className="flex !max-h-[90vh] flex-col overflow-hidden p-0">
+        <DialogContent size="lg" className="flex !max-h-[90vh] flex-col overflow-hidden p-0">
           <DialogHeader className="border-b px-6 py-5">
             <DialogTitle>KPI Rubric Builder</DialogTitle>
             <DialogDescription>
@@ -3994,7 +3994,7 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showBulkDialog} onOpenChange={setShowBulkDialog}>
-        <DialogContent>
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Bulk Upload Call Scenarios</DialogTitle>
             <DialogDescription>
@@ -4038,7 +4038,7 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showAssignDialog} onOpenChange={setShowAssignDialog}>
-        <DialogContent>
+        <DialogContent size="md">
           <DialogHeader>
             <DialogTitle>Assign Call Scenario to Trainees</DialogTitle>
             <DialogDescription>
@@ -4190,7 +4190,7 @@ export default function TrainerSimFloorPage() {
           }
         }}
       >
-        <DialogContent className="!max-h-[88vh] overflow-y-auto">
+        <DialogContent size="lg" className="!max-h-[88vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Trainer Coaching Review</DialogTitle>
             <DialogDescription>
@@ -4590,7 +4590,7 @@ export default function TrainerSimFloorPage() {
       </Dialog>
 
       <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <DialogContent>
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Delete Call Scenario</DialogTitle>
             <DialogDescription>

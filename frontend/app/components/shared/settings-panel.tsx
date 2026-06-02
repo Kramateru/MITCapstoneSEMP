@@ -497,7 +497,7 @@ export default function SettingsPanel({
           {triggerLabel}
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-6xl overflow-hidden p-0">
+      <DialogContent size="lg" className="overflow-hidden p-0">
         <div className="max-h-[88vh] overflow-y-auto px-6 py-6">
           <DialogHeader className="mb-6">
             <DialogTitle>Layout Settings</DialogTitle>

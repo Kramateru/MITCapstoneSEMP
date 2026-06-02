@@ -91,9 +91,6 @@ export function proxy(request: NextRequest) {
   const session = getActiveSession(request)
 
   if (pathname === '/login') {
-    if (session.isActive && session.role) {
-      return redirect(request, ROLE_HOME[session.role])
-    }
     return NextResponse.next()
   }
 

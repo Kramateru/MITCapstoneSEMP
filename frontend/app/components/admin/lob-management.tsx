@@ -48,7 +48,7 @@ export default function LOBManagement() {
   const [form, setForm] = useState<LobFormState>(EMPTY_FORM);
 
   const authHeaders = () => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     return {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -204,7 +204,7 @@ export default function LOBManagement() {
                     Add LOB
                   </Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent size="sm">
                   <DialogHeader>
                     <DialogTitle>
                       {editingLob ? 'Modify LOB' : 'Create New LOB'}

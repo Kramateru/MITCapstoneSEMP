@@ -276,7 +276,7 @@ export function DashboardLayout({
   }, [currentPageLabel, currentPageSection, resolvedUserRole, roleHomePath]);
 
   const handleLogout = () => {
-    logout();
+    logout('You have been logged out successfully.');
     navigateToPath('/login');
   };
 
@@ -308,7 +308,7 @@ export function DashboardLayout({
         className="absolute inset-0"
         style={{
           backgroundImage:
-            'radial-gradient(circle at top right, rgba(29,86,216,0.11), transparent 26%), radial-gradient(circle at bottom left, rgba(17,144,111,0.07), transparent 24%), linear-gradient(180deg, #fbfdff 0%, var(--background) 36%, #eef3f9 100%)',
+            'linear-gradient(180deg, #fbfdff 0%, var(--background) 36%, #eef3f9 100%)',
         }}
       />
       <Toaster position="top-right" richColors />

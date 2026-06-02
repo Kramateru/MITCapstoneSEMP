@@ -281,7 +281,7 @@ function createAuthHeaders() {
     };
   }
 
-  const token = window.localStorage.getItem('token');
+  const token = window.sessionStorage.getItem('token');
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -315,7 +315,7 @@ async function readJsonPayload<T>(response: Response): Promise<T | null> {
 
 export async function fetchUserSettingsBundle(): Promise<LoadedUserSettings> {
   const headers = createAuthHeaders();
-  const token = typeof window !== 'undefined' ? window.localStorage.getItem('token') : null;
+  const token = typeof window !== 'undefined' ? window.sessionStorage.getItem('token') : null;
 
   const systemPromise = fetch('/api/settings/system', {
     headers: token ? { Authorization: `Bearer ${token}` } : undefined,

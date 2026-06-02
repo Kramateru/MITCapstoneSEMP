@@ -399,7 +399,7 @@ export default function CoachingLogsManagement() {
 
       {/* Create Dialog */}
       <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent size="sm" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Create New Coaching Log</DialogTitle>
           </DialogHeader>
@@ -507,7 +507,7 @@ export default function CoachingLogsManagement() {
 
       {/* View Dialog */}
       <Dialog open={isViewDialogOpen} onOpenChange={setIsViewDialogOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent size="sm" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>Coaching Log: {selectedLog?.coachingId}</span>

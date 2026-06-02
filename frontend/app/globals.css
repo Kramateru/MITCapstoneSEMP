@@ -53,6 +53,10 @@
   --dashboard-reading-width: 68ch;
 }
 
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 .dark {
   color-scheme: dark;
   --background: #0f172a;
@@ -150,9 +154,8 @@
     min-height: 100dvh;
     width: 100%;
     overflow-x: hidden;
+    margin: 0;
     background:
-      radial-gradient(circle at top left, rgba(29, 86, 216, 0.1), transparent 26%),
-      radial-gradient(circle at bottom right, rgba(17, 144, 111, 0.06), transparent 24%),
       linear-gradient(180deg, #fbfdff 0%, var(--background) 38%, #eef3f9 100%);
     color: var(--foreground);
     font-family: var(--font-sans), "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
@@ -160,6 +163,18 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     font-feature-settings: "ss01" 1, "ss02" 1, "cv01" 1;
+  }
+
+  img,
+  video,
+  canvas,
+  svg {
+    max-width: 100%;
+    display: block;
+  }
+
+  audio {
+    max-width: 100%;
   }
 
   h1,
@@ -213,6 +228,7 @@
     font-size: 0.96rem;
     font-weight: 600;
     line-height: 1.5;
+    min-width: 0;
   }
 
   input {
@@ -449,7 +465,6 @@
 
   .workspace-topbar {
     background:
-      radial-gradient(circle at top right, rgba(29, 86, 216, 0.08), transparent 22%),
       linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 253, 0.92));
     backdrop-filter: blur(16px);
     box-shadow: 0 20px 44px -40px rgba(15, 23, 42, 0.24);
@@ -620,6 +635,9 @@
     font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
+    max-width: 100%;
+    white-space: normal;
+    text-align: left;
   }
 
   .metric-card {
@@ -864,6 +882,30 @@
     max-width: 100%;
   }
 
+  .dashboard-page :where(input:not([data-slot]), textarea:not([data-slot]), select:not([data-slot])),
+  [data-slot="dialog-content"] :where(input:not([data-slot]), textarea:not([data-slot]), select:not([data-slot])),
+  [data-slot="alert-dialog-content"] :where(input:not([data-slot]), textarea:not([data-slot]), select:not([data-slot])),
+  [data-slot="sheet-content"] :where(input:not([data-slot]), textarea:not([data-slot]), select:not([data-slot])) {
+    min-height: 2.75rem;
+    border-radius: 0.75rem;
+    border: 1px solid var(--input);
+    background: var(--input-background);
+    padding: 0.65rem 0.9rem;
+    color: var(--foreground);
+    line-height: 1.5;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.04);
+  }
+
+  .dashboard-page :where(button:not([data-slot])),
+  [data-slot="dialog-content"] :where(button:not([data-slot])),
+  [data-slot="alert-dialog-content"] :where(button:not([data-slot])),
+  [data-slot="sheet-content"] :where(button:not([data-slot])) {
+    max-width: 100%;
+    min-height: 2.5rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
   [data-slot="dialog-content"] :is([data-slot="button"], button),
   [data-slot="alert-dialog-content"] :is([data-slot="button"], button),
   [data-slot="sheet-content"] :is([data-slot="button"], button) {
@@ -892,6 +934,18 @@
   [data-slot="table"] :is(th, td) {
     max-width: min(34rem, 68vw);
     vertical-align: top;
+  }
+
+  [data-slot="table-container"],
+  .table-scroll-area {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .dashboard-page :where(.recharts-tooltip-wrapper),
+  [data-slot="dialog-content"] :where(.recharts-tooltip-wrapper),
+  [data-slot="alert-dialog-content"] :where(.recharts-tooltip-wrapper) {
+    max-width: min(92vw, 28rem);
+    white-space: normal !important;
   }
 
   [data-slot="table-cell"] :is([data-slot="button"], button, a),

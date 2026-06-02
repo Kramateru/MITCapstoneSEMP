@@ -7,7 +7,7 @@ import * as React from "react";
 import { cn } from "./utils";
 
 const buttonVariants = cva(
-  "inline-flex min-w-0 max-w-full items-center justify-center gap-2 whitespace-normal break-words text-center sm:whitespace-nowrap rounded-xl text-sm font-semibold leading-5 tracking-normal transition-[transform,background-color,border-color,box-shadow,color] duration-200 ease-in-out hover:-translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:saturate-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none shadow-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-offset-2 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive touch-manipulation",
+  "inline-flex min-w-0 max-w-full items-center justify-center gap-2 whitespace-normal break-words text-center rounded-xl text-sm font-semibold leading-5 tracking-normal transition-[transform,background-color,border-color,box-shadow,color] duration-200 ease-in-out hover:-translate-y-px disabled:pointer-events-none disabled:opacity-50 disabled:saturate-50 [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 shrink-0 [&_svg]:shrink-0 outline-none shadow-sm focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:ring-offset-2 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive touch-manipulation",
   {
     variants: {
       variant: {

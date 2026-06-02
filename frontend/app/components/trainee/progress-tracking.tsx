@@ -333,7 +333,7 @@ export default function ProgressTracking({
   })
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
+    const token = sessionStorage.getItem('token')
     if (!token || !traineeId) {
       return undefined
     }

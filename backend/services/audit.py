@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from typing import Any, Iterable, Optional
+from urllib.parse import parse_qs
 from uuid import uuid4
 
 from fastapi import Request
 from sqlalchemy.orm import Session
+
+import json
 
 from backend import auth_utils
 from backend.database import SessionLocal
@@ -108,6 +111,50 @@ def get_device_type(user_agent: Optional[str]) -> Optional[str]:
     if "ipad" in lowered or "tablet" in lowered:
         return "tablet"
     return "desktop"
+
+
+def parse_request_payload(request: Request, body_bytes: bytes | None) -> Optional[Any]:
+    if not body_bytes:
+        return None
+
+    content_type = (request.headers.get("content-type") or "").lower()
+    if "multipart/form-data" in content_type:
+        return {
+            "content_type": content_type,
+            "note": "multipart body omitted from audit payload",
+        }
+
+    def parse_json(data: bytes) -> Optional[Any]:
+        try:
+            return json.loads(data.decode("utf-8"))
+        except Exception:
+            return None
+
+    if "application/json" in content_type:
+        parsed = parse_json(body_bytes)
+        if parsed is not None:
+            return sanitize_for_audit(parsed)
+    if "application/x-www-form-urlencoded" in content_type:
+        try:
+            parsed = parse_qs(body_bytes.decode("utf-8"))
+            return sanitize_for_audit({k: v[0] if len(v) == 1 else v for k, v in parsed.items()})
+        except Exception:
+            pass
+
+    if len(body_bytes) > 4096:
+        return {
+            "content_type": content_type,
+            "raw_length": len(body_bytes),
+            "note": "payload too large to store",
+        }
+
+    try:
+        return sanitize_for_audit(body_bytes.decode("utf-8", errors="replace"))
+    except Exception:
+        return {
+            "content_type": content_type,
+            "raw_length": len(body_bytes),
+        }
 
 
 def action_from_request(method: str, path: str) -> str:
@@ -276,6 +323,7 @@ def write_request_audit_log(
     request: Request,
     http_status: int,
     duration_ms: float,
+    request_body: bytes | None = None,
 ) -> None:
     db = SessionLocal()
     try:
@@ -285,6 +333,14 @@ def write_request_audit_log(
         status_value = "success" if http_status < 400 else "failed"
         severity = "critical" if http_status >= 500 else "warning" if http_status >= 400 else "info"
         description = f"{request.method.upper()} {request.url.path} completed with HTTP {http_status}."
+        payload = parse_request_payload(request, request_body)
+        metadata: dict[str, Any] = {
+            "query_params": dict(request.query_params),
+            "duration_ms": round(duration_ms, 2),
+            "path": request.url.path,
+        }
+        if payload is not None:
+            metadata["request_body"] = payload
         create_audit_log(
             db,
             user=user,
@@ -298,11 +354,7 @@ def write_request_audit_log(
             severity=severity,
             session_id=session_id,
             http_status=http_status,
-            metadata={
-                "query_params": dict(request.query_params),
-                "duration_ms": round(duration_ms, 2),
-                "path": request.url.path,
-            },
+            metadata=metadata,
         )
         db.commit()
     except Exception:

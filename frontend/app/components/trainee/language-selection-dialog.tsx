@@ -35,7 +35,7 @@ export default function LanguageSelectionDialog({ open, onSelect }: LanguageSele
 
   return (
     <Dialog open={open}>
-      <DialogContent className="max-w-3xl" onInteractOutside={(e) => e.preventDefault()}>
+      <DialogContent size="sm" onInteractOutside={(e) => e.preventDefault()}>
         <DialogHeader>
           <div className="flex items-center gap-3 mb-2">
             <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">

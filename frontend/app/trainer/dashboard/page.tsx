@@ -237,7 +237,7 @@ export default function TrainerDashboardPage() {
       }
       setError('');
 
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       if (!token) {
         setLoading(false);
         return;
@@ -325,7 +325,7 @@ export default function TrainerDashboardPage() {
   useEffect(() => {
     void fetchTrainerData();
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     if (!token) {
       return undefined;
     }

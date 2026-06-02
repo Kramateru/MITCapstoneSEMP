@@ -417,6 +417,17 @@ async def audit_request_middleware(request: Request, call_next):
     if not should_audit_request(request):
         return await call_next(request)
 
+    content_type = (request.headers.get("content-type") or "").lower()
+    content_length = 0
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 0
+
+    request_body: bytes | None = None
+    if "multipart/form-data" not in content_type and content_length <= 10000:
+        request_body = await request.body()
+
     started_at = perf_counter()
     http_status = 500
     try:
@@ -429,6 +440,7 @@ async def audit_request_middleware(request: Request, call_next):
             request=request,
             http_status=http_status,
             duration_ms=duration_ms,
+            request_body=request_body,
         )
 
 

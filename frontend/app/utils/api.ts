@@ -49,7 +49,7 @@ export async function apiFetch<T>(
   input: RequestInfo,
   init?: RequestInit
 ): Promise<T> {
-  const token = localStorage.getItem('token')
+  const token = sessionStorage.getItem('token')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init?.headers instanceof Headers
@@ -111,7 +111,7 @@ export async function downloadApiFile(
   fallbackFileName: string,
   init?: RequestInit,
 ) {
-  const token = localStorage.getItem('token')
+  const token = sessionStorage.getItem('token')
   const headers: Record<string, string> = {
     ...(init?.headers instanceof Headers
       ? Object.fromEntries(init.headers.entries())

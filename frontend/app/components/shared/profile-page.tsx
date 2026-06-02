@@ -122,7 +122,7 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
   const loadProfile = useCallback(async () => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch('/api/users/me', {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
@@ -182,7 +182,7 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
     }
     setSavingName(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch('/api/users/me', {
         method: 'PUT',
         headers: {
@@ -218,7 +218,7 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
     }
     setUploading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const formData = new FormData();
       formData.append('file', selectedFile);
       const response = await fetch('/api/users/me/profile-image', {
@@ -255,7 +255,7 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
     }
     setChangingPassword(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch('/api/users/change-password', {
         method: 'POST',
         headers: {

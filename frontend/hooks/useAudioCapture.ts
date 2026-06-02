@@ -174,7 +174,7 @@ export const useAudioCapture = (options: UseAudioCaptureOptions = {}) => {
 
   const uploadRecording = async (blob: Blob): Promise<AssessmentResult> => {
     const { scenarioId, referenceText, onResult } = optionsRef.current;
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
 
     if (!scenarioId && !referenceText) {
       throw new Error('A scenario or reference script is required before recording.');

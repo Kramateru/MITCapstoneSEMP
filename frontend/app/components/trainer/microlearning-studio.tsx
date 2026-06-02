@@ -1536,7 +1536,7 @@ export default function TrainerMicrolearningStudio() {
       </div>
 
       <Dialog open={showCategoryDialog} onOpenChange={setShowCategoryDialog}>
-        <DialogContent>
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>{editingCategory ? 'Edit Category' : 'Create Category'}</DialogTitle>
             <DialogDescription>Trainers can add, modify, and delete microlearning categories.</DialogDescription>
@@ -1553,7 +1553,7 @@ export default function TrainerMicrolearningStudio() {
       </Dialog>
 
       <Dialog open={showModuleDialog} onOpenChange={setShowModuleDialog}>
-        <DialogContent className="flex h-[95vh] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:h-[93vh]">
+        <DialogContent size="xl" className="flex h-[95vh] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:h-[93vh]">
           <DialogHeader className="shrink-0 border-b px-5 py-5 pr-12 sm:px-7">
             <DialogTitle className="text-2xl sm:text-[1.65rem]">{editingModule ? 'Edit Module' : 'Create Module'}</DialogTitle>
             <DialogDescription className="max-w-4xl text-sm leading-6 sm:text-base">

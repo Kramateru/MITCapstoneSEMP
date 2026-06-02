@@ -29,11 +29,11 @@ const DEFAULT_RETRY_COUNT = 3
 const DEFAULT_RETRY_DELAY_MS = 1000
 
 function getToken() {
-  return window.localStorage.getItem('token')
+  return window.sessionStorage.getItem('token')
 }
 
 function getSupabaseAccessToken() {
-  return window.localStorage.getItem('supabase_access_token')
+  return window.sessionStorage.getItem('supabase_access_token')
 }
 
 async function sleep(ms: number) {

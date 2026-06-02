@@ -63,6 +63,7 @@ const SUPABASE_REFRESH_TOKEN_KEY = 'supabase_refresh_token'
 const ACTIVE_SESSION_ID_KEY = 'active_session_id'
 const STRICT_SINGLE_SESSION_KEY = 'strict_single_session'
 const AUTH_NOTICE_KEY = 'auth_notice'
+const SESSION_ENDED_NOTICE = 'Your session has ended. Please log in again.'
 const AUTH_STORAGE_KEYS = [
   'token',
   'refresh_token',
@@ -205,10 +206,7 @@ function readStrictSingleSessionFlag() {
   }
 
   try {
-    return (
-      window.sessionStorage.getItem(STRICT_SINGLE_SESSION_KEY) === '1'
-      || window.localStorage.getItem(STRICT_SINGLE_SESSION_KEY) === '1'
-    )
+    return window.sessionStorage.getItem(STRICT_SINGLE_SESSION_KEY) === '1'
   } catch {
     return false
   }
@@ -220,7 +218,7 @@ function getStoredValue(key: string) {
   }
 
   try {
-    return window.sessionStorage.getItem(key) || window.localStorage.getItem(key)
+    return window.sessionStorage.getItem(key)
   } catch {
     return null
   }
@@ -231,11 +229,7 @@ function getAuthStorageForWrite() {
     return null
   }
 
-  if (readStrictSingleSessionFlag() || window.sessionStorage.getItem('token')) {
-    return window.sessionStorage
-  }
-
-  return window.localStorage
+  return window.sessionStorage
 }
 
 function readStoredAuthState() {
@@ -248,7 +242,7 @@ function readStoredAuthState() {
   }
 
   try {
-    const storageCandidates = [window.sessionStorage, window.localStorage]
+    const storageCandidates = [window.sessionStorage]
     const selectedStorage = storageCandidates.find((storage) => {
       return Boolean(storage.getItem('token') && storage.getItem('user'))
     })
@@ -368,8 +362,8 @@ function persistAuthState(payload: AuthApiPayload, nextUser: User, fallbackRefre
     typeof payload.strict_single_session === 'boolean'
       ? payload.strict_single_session
       : readStrictSingleSessionFlag()
-  const targetStorage = strictSingleSession ? window.sessionStorage : window.localStorage
-  const secondaryStorage = strictSingleSession ? window.localStorage : window.sessionStorage
+  const targetStorage = window.sessionStorage
+  const secondaryStorage = window.localStorage
 
   clearStorage(secondaryStorage)
 
@@ -434,7 +428,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })
 
     if (!response.ok) {
-      throw new Error(await getApiErrorMessage(response, 'Your session has expired. Please log in again.'))
+      throw new Error(await getApiErrorMessage(response, SESSION_ENDED_NOTICE))
     }
 
     return true
@@ -479,7 +473,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             clearCurrentSession(
               verificationError instanceof Error
                 ? verificationError.message
-                : 'Your session has expired. Please log in again.',
+                : SESSION_ENDED_NOTICE,
             )
             setIsLoading(false)
           }
@@ -508,7 +502,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })
 
         if (!response.ok) {
-          throw new Error(await getApiErrorMessage(response, 'Session expired. Please sign in again.'))
+          throw new Error(await getApiErrorMessage(response, SESSION_ENDED_NOTICE))
         }
 
         const payload = await parseAuthSuccessResponse(
@@ -537,7 +531,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           clearCurrentSession(
             initializationError instanceof Error
               ? initializationError.message
-              : 'Your session has expired. Please log in again.',
+              : SESSION_ENDED_NOTICE,
           )
         }
       } finally {
@@ -660,7 +654,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
 
       if (!response.ok) {
-        const message = await getApiErrorMessage(response, 'Session expired. Please sign in again.')
+        const message = await getApiErrorMessage(response, SESSION_ENDED_NOTICE)
         logout(message, { skipRemote: true })
         throw new Error(message)
       }
@@ -693,7 +687,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return nextAccessToken
     } catch (error) {
       console.error('Token refresh error:', error)
-      logout('Your session has expired. Please log in again.', { skipRemote: true })
+      logout(SESSION_ENDED_NOTICE, { skipRemote: true })
       return null
     }
   }
@@ -724,7 +718,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })
 
         if (!response.ok) {
-          const message = await getApiErrorMessage(response, 'Your session has expired. Please log in again.')
+          const message = await getApiErrorMessage(response, SESSION_ENDED_NOTICE)
           if (!isStopped) {
             handleInvalidSession(message)
           }

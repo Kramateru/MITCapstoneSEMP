@@ -22,7 +22,7 @@ export default function TrainerWorkspacePage() {
         setIsLoading(true);
         setError('');
 
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         const authHeaders = token ? { Authorization: `Bearer ${token}` } : undefined;
 
         const listResponse = await fetch('/api/workspace', {

@@ -55,11 +55,11 @@ function getSupabaseAnonKey() {
 }
 
 function getToken() {
-  return window.localStorage.getItem('token')
+  return window.sessionStorage.getItem('token')
 }
 
 function getSupabaseAccessToken() {
-  return window.localStorage.getItem('supabase_access_token')
+  return window.sessionStorage.getItem('supabase_access_token')
 }
 
 export function openCallSimulationRealtimeStream(options?: { batchId?: string | null }) {

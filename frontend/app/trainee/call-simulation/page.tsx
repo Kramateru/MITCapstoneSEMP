@@ -792,15 +792,15 @@ function TraineeSimFloorPageContent() {
     isRecording
     || canResumeMemberTurn
     || isOnHold;
-  const holdControlLabel = canResumeMemberTurn || isOnHold ? 'Unhold' : 'Hold';
+  const holdControlLabel = 'HOLD';
   const holdControlNote = isRecording
-    ? 'Finish your CSR response, then click Hold to save it and automatically play the next Member AI reply.'
+    ? 'Finish your CSR response, then click HOLD to save it and automatically play the next Member AI reply.'
     : memberTurnState === 'playing' && queuedMemberHasPlayback
-      ? 'Member AI is speaking now. Wait for the cue sound, then click Unhold to continue the next CSR scenario.'
+      ? 'Member AI is speaking now. Wait for the cue sound, then click HOLD again to continue the next CSR scenario.'
     : memberTurnState === 'playing'
-      ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click Unhold to continue.'
+      ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click HOLD again to continue.'
     : canResumeMemberTurn
-      ? 'The Member AI reply is done. Click Unhold to move the queue to the next CSR scenario.'
+      ? 'Member response completed. Click HOLD again to continue.'
       : 'Hold becomes available as soon as your live CSR turn starts recording.';
   const queueFocusIndex = useMemo(() => {
     if (
@@ -883,7 +883,7 @@ function TraineeSimFloorPageContent() {
       : String(currentQueueStep.speaker_label || 'CSR / Trainee').trim()
     : 'No active step';
   const queueStatusNote = canResumeMemberTurn
-    ? 'Member AI finished speaking. Click Unhold to continue with the next CSR scenario.'
+    ? 'Member response completed. Click HOLD again to continue.'
     : memberTurnState === 'playing' && !queuedMemberHasPlayback
       ? 'The next CSR scenario is being prepared. Wait for the cue sound before you continue.'
     : callState === 'member-speaking'
@@ -891,7 +891,7 @@ function TraineeSimFloorPageContent() {
       : callState === 'accepted'
         ? `The call is accepted. Scenario 1 unlocks in ${acceptedCountdown ?? 5} second${(acceptedCountdown ?? 5) === 1 ? '' : 's'}.`
         : currentQueueStep?.actor === 'csr'
-          ? 'This is your live CSR scenario. Speak naturally, then use Hold to continue the script.'
+          ? 'This is your live CSR scenario. Speak naturally, then use HOLD to continue the script.'
           : 'This step is delivered automatically by the Member AI voice.';
   const queuePreviewSteps = useMemo(() => {
     if (!steps.length) {
@@ -942,7 +942,7 @@ function TraineeSimFloorPageContent() {
     setIsLoadingScenarios(true);
     setScenarioLoadError(null);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch('/api/call-simulation/available', {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
         cache: 'no-store',
@@ -968,7 +968,7 @@ function TraineeSimFloorPageContent() {
 
   const loadSessionPlaybackUrl = useCallback(async (sessionId: string) => {
     setSessionPlaybackError(null);
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const response = await fetch(`/api/call-simulation/session/${sessionId}/audio`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: 'no-store',
@@ -994,7 +994,7 @@ function TraineeSimFloorPageContent() {
       restoreCompletedWorkspace?: boolean;
     },
   ) => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const response = await fetch(`/api/call-simulation/session/${sessionId}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: 'no-store',
@@ -1034,7 +1034,7 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       cache: 'no-store',
@@ -1395,7 +1395,7 @@ function TraineeSimFloorPageContent() {
       }
 
       try {
-        const token = localStorage.getItem('token');
+        const token = sessionStorage.getItem('token');
         setIsGeneratingMemberAudio(true);
         const canPersistForRecording = Boolean(
           options?.scenarioId
@@ -1563,7 +1563,7 @@ function TraineeSimFloorPageContent() {
       throw new Error('The final call recording is no longer available. Restart the call to capture a fresh recording.');
     }
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const formData = new FormData();
     formData.append('audio_duration_seconds', recording.durationSeconds.toFixed(2));
     formData.append('file', recording.blob, `session-${sessionData.session_id}.${recording.fileExtension || 'mp3'}`);
@@ -1601,7 +1601,7 @@ function TraineeSimFloorPageContent() {
         return;
       }
 
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       setIsLoadingFeedbackReport(true);
       try {
         const response = await fetch(`/api/call-simulation/session/${sessionData.session_id}/feedback`, {
@@ -1660,7 +1660,7 @@ function TraineeSimFloorPageContent() {
   );
 
   const downloadCertificate = useCallback(async (certificateId: string) => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const response = await fetch(`/api/certification/certificate/${certificateId}/pdf`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
@@ -1684,7 +1684,7 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     setIsEndingCall(true);
     setCallState('processing');
     stopBrowserTranscript();
@@ -1946,7 +1946,7 @@ function TraineeSimFloorPageContent() {
     setIgnoredRestoredSessionId(null);
     setLatestAttemptError(null);
     setSessionPlaybackError(null);
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     setIsStartingCall(true);
     try {
       await startCapture();
@@ -2121,12 +2121,12 @@ function TraineeSimFloorPageContent() {
       setQueuedMemberStepIndex(nextPlayback.sourceStepIndex ?? null);
       setQueuedMemberPlayback(nextPlayback);
       await playQueuedMemberResponse(nextPlayback);
-      toast.success('Member response delivered. Click Unhold to continue to the next CSR step.');
+      toast.success('Member response completed. Click HOLD again to continue.');
       return;
     }
 
     await armNextScenarioResume(resolvedNextIndex);
-    toast.success('Turn saved. Click Unhold to continue to the next CSR step.');
+    toast.success('Turn saved. Click HOLD again to continue to the next CSR step.');
   }, [
     armNextScenarioResume,
     buildQueuedMemberPlaybackFromIndex,
@@ -2289,7 +2289,7 @@ function TraineeSimFloorPageContent() {
       return;
     }
 
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     const scenarioIdToRestart = selectedScenarioId;
     setIsResettingCall(true);
 
@@ -2325,7 +2325,7 @@ function TraineeSimFloorPageContent() {
     }
 
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/certification/coaching/logs/${sessionResult.coaching_id}/acknowledge`, {
         method: 'POST',
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
@@ -2687,7 +2687,7 @@ function TraineeSimFloorPageContent() {
 
   const busyStatus = callState !== 'idle' && callState !== 'completed';
   const currentStatus = canResumeMemberTurn
-    ? 'Click Unhold to continue'
+    ? 'Click HOLD again to continue'
     : statusLabel(callState, isOnHold);
   const currentStatusNote = callState === 'ringing'
     ? ringerStatus === 'playing'
@@ -2699,14 +2699,14 @@ function TraineeSimFloorPageContent() {
           : 'Preparing the call ringer. Click Accept Call once the line is ready.'
     : callState === 'accepted'
       ? `The line is connected. Your first CSR turn will unlock in ${acceptedCountdown ?? 5} second${(acceptedCountdown ?? 5) === 1 ? '' : 's'}.`
-      : memberTurnState === 'playing' && isOnHold && !queuedMemberHasPlayback
-        ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click Unhold.'
+    : memberTurnState === 'playing' && isOnHold && !queuedMemberHasPlayback
+        ? 'The next CSR scenario is being prepared. Wait for the cue sound, then click HOLD again.'
       : canResumeMemberTurn
-        ? 'The member reply already played. Click Unhold to reactivate your microphone.'
+        ? 'Member response completed. Click HOLD again to continue.'
         : callState === 'member-speaking'
           ? 'Listen to the Member AI voice. Your microphone is locked until the reply ends.'
           : isRecording
-            ? 'You are live on the CSR turn. Click Hold to save the turn and play the member reply.'
+            ? 'You are live on the CSR turn. Click HOLD to save the turn and play the member reply.'
             : callState === 'processing'
               ? 'The current turn or final call result is being saved to Supabase.'
               : 'Use the controls below to move through the assigned scenario.';
@@ -2718,7 +2718,7 @@ function TraineeSimFloorPageContent() {
           <div>
             <h2 className="text-3xl font-bold text-foreground">Call Simulations</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Select an assigned scenario, start the call, act as the CSR, and move through the queue with Hold and Unhold while the full conversation is recorded and saved to Supabase.
+              Select an assigned scenario, start the call, act as the CSR, and move through the queue with HOLD while the full conversation is recorded and saved to Supabase.
             </p>
           </div>
           <div className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm text-slate-600 shadow-sm">
@@ -3019,7 +3019,7 @@ function TraineeSimFloorPageContent() {
                           />
                         </div>
                         <div className="mt-3 text-xs leading-5 text-cyan-50/90">
-                          Use Hold to save each CSR turn and play the next Member AI response. Use Unhold to continue the next live CSR scenario.
+                          Use HOLD to save each CSR turn and play the next Member AI response. When the member response completes, click HOLD again to continue the next live CSR scenario.
                         </div>
                       </div>
                       <Button

@@ -1,32 +1,32 @@
 'use client';
 
+import {
+    Activity,
+    AlertTriangle,
+    Download,
+    Eye,
+    FileSpreadsheet,
+    FileText,
+    Loader2,
+    RefreshCw,
+    Search,
+    ShieldCheck,
+    UserCheck,
+} from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
-  Activity,
-  AlertTriangle,
-  Download,
-  Eye,
-  FileSpreadsheet,
-  FileText,
-  Loader2,
-  RefreshCw,
-  Search,
-  ShieldCheck,
-  UserCheck,
-} from 'lucide-react';
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
+    Bar,
+    BarChart,
+    CartesianGrid,
+    Cell,
+    Line,
+    LineChart,
+    Pie,
+    PieChart,
+    ResponsiveContainer,
+    Tooltip,
+    XAxis,
+    YAxis,
 } from 'recharts';
 
 import { adminSidebarItems } from '@/app/admin/nav';
@@ -34,11 +34,11 @@ import { DashboardLayout } from '@/app/components/DashboardLayout';
 import { Badge } from '@/app/components/ui/badge';
 import { Button } from '@/app/components/ui/button';
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogHeader,
+    DialogTitle,
 } from '@/app/components/ui/dialog';
 import { apiFetch, downloadApiFile } from '@/app/utils/api';
 
@@ -102,6 +102,7 @@ type FilterOptions = {
   actions: string[];
   severities: string[];
   statuses: string[];
+  endpoints: string[];
 };
 
 type AuditFilters = {
@@ -111,6 +112,8 @@ type AuditFilters = {
   action_type: string;
   severity: string;
   status: string;
+  endpoint: string;
+  request_id: string;
   start_date: string;
   end_date: string;
   sort: 'newest' | 'oldest';
@@ -125,6 +128,8 @@ const DEFAULT_FILTERS: AuditFilters = {
   action_type: '',
   severity: '',
   status: '',
+  endpoint: '',
+  request_id: '',
   start_date: '',
   end_date: '',
   sort: 'newest',
@@ -247,6 +252,7 @@ export default function AdminAuditTrailPage() {
     actions: [],
     severities: [],
     statuses: [],
+    endpoints: [],
   });
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [total, setTotal] = useState(0);
@@ -479,7 +485,7 @@ export default function AdminAuditTrailPage() {
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
             <select value={filters.role} onChange={(event) => updateFilter('role', event.target.value)} className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm">
               <option value="">All roles</option>
               {options.roles.map((role) => <option key={role} value={role}>{labelize(role)}</option>)}
@@ -500,6 +506,8 @@ export default function AdminAuditTrailPage() {
               <option value="">All statuses</option>
               {options.statuses.map((statusValue) => <option key={statusValue} value={statusValue}>{labelize(statusValue)}</option>)}
             </select>
+            <input value={filters.endpoint} onChange={(event) => updateFilter('endpoint', event.target.value)} placeholder="Filter by endpoint" className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm" />
+            <input value={filters.request_id} onChange={(event) => updateFilter('request_id', event.target.value)} placeholder="Request ID" className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm" />
             <input type="date" value={filters.start_date} onChange={(event) => updateFilter('start_date', event.target.value)} className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm" />
             <input type="date" value={filters.end_date} onChange={(event) => updateFilter('end_date', event.target.value)} className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm" />
             <select value={filters.sort} onChange={(event) => updateFilter('sort', event.target.value as AuditFilters['sort'])} className="min-h-11 rounded-xl border border-border bg-white px-3 text-sm">

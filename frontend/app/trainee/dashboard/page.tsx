@@ -151,7 +151,7 @@ export default function TraineeDashboard() {
 
   const fetchTraineeData = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const [statsRes, sessionsRes, coachingRes] = await Promise.all([
         fetch('/api/trainee/stats', {
           headers: { Authorization: `Bearer ${token}` },
@@ -189,7 +189,7 @@ export default function TraineeDashboard() {
   const loadSimFloorWorkspace = useCallback(async () => {
     try {
       if (!user?.user_id) return;
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const [reportResponse, availableResponse] = await Promise.all([
         fetch(`/api/call-simulation/reports/trainee/${user.user_id}`, {
           headers: { Authorization: `Bearer ${token}` },
@@ -344,7 +344,7 @@ export default function TraineeDashboard() {
                     return;
                   }
 
-                  const token = localStorage.getItem('token');
+                  const token = sessionStorage.getItem('token');
                   if (!token) {
                     setChangeError('Missing session. Please log in again.');
                     return;

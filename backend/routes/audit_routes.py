@@ -80,6 +80,8 @@ def _filtered_query(
     batch_id: Optional[str] = None,
     trainee_id: Optional[str] = None,
     trainer_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    request_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ):
@@ -95,6 +97,7 @@ def _filtered_query(
                 AuditLog.entity_type.ilike(pattern),
                 AuditLog.entity_id.ilike(pattern),
                 AuditLog.description.ilike(pattern),
+                AuditLog.endpoint.ilike(pattern),
             )
         )
     if role:
@@ -113,6 +116,10 @@ def _filtered_query(
         query = query.filter(AuditLog.trainee_id == trainee_id)
     if trainer_id:
         query = query.filter(AuditLog.trainer_id == trainer_id)
+    if endpoint:
+        query = query.filter(AuditLog.endpoint.ilike(f"%{endpoint.strip()}%"))
+    if request_id:
+        query = query.filter(AuditLog.request_id == request_id)
     parsed_start = _parse_date(start_date)
     parsed_end = _parse_date(end_date, end_of_day=True)
     if parsed_start:
@@ -133,6 +140,8 @@ async def list_audit_logs(
     batch_id: Optional[str] = None,
     trainee_id: Optional[str] = None,
     trainer_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    request_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     sort: str = Query("newest", pattern="^(newest|oldest)$"),
@@ -152,6 +161,8 @@ async def list_audit_logs(
         batch_id=batch_id,
         trainee_id=trainee_id,
         trainer_id=trainer_id,
+        endpoint=endpoint,
+        request_id=request_id,
         start_date=start_date,
         end_date=end_date,
     )
@@ -288,6 +299,7 @@ async def audit_filter_options(
         "actions": values(AuditLog.action_type),
         "severities": values(AuditLog.severity),
         "statuses": values(AuditLog.status),
+        "endpoints": values(AuditLog.endpoint),
         "admin_user_id": current_user.id,
     }
 
@@ -313,6 +325,8 @@ async def export_audit_logs(
     batch_id: Optional[str] = None,
     trainee_id: Optional[str] = None,
     trainer_id: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    request_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     db: Session = Depends(get_db),
@@ -329,6 +343,8 @@ async def export_audit_logs(
         batch_id=batch_id,
         trainee_id=trainee_id,
         trainer_id=trainer_id,
+        endpoint=endpoint,
+        request_id=request_id,
         start_date=start_date,
         end_date=end_date,
     )

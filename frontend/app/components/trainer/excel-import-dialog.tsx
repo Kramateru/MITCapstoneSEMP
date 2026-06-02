@@ -91,7 +91,7 @@ export default function ExcelImportDialog({ onImport }: ExcelImportDialogProps) 
           Excel Import
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent size="sm" className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Bulk Import Scenarios from Excel</DialogTitle>
           <DialogDescription>

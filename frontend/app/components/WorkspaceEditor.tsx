@@ -81,7 +81,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
   const loadWorkspaceData = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/config`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -100,7 +100,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
   const loadStats = useCallback(async () => {
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/statistics`, {
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -129,7 +129,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/empathy-statements`, {
         method: 'POST',
         headers: {
@@ -157,7 +157,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
   const deleteEmpathyStatement = async (id: string) => {
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/empathy-statements/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
@@ -183,7 +183,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/probing-questions`, {
         method: 'POST',
         headers: {
@@ -217,7 +217,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/forbidden-words`, {
         method: 'POST',
         headers: {
@@ -251,7 +251,7 @@ export default function WorkspaceEditor({ workspaceId }: { workspaceId: string }
 
     setLoading(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/workspace/${workspaceId}/required-keywords`, {
         method: 'POST',
         headers: {

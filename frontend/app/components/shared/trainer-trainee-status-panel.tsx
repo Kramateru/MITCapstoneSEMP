@@ -46,7 +46,7 @@ export function TrainerTraineeStatusPanel() {
     const fetchTrainees = async () => {
       try {
         setIsLoading(true);
-        const token = window.localStorage.getItem('token');
+        const token = window.sessionStorage.getItem('token');
         if (!token) {
           setError('Authentication required');
           return;
@@ -103,7 +103,7 @@ export function TrainerTraineeStatusPanel() {
   const handleStatusToggle = async (traineeId: string, newStatus: boolean) => {
     try {
       setIsUpdating(traineeId);
-      const token = window.localStorage.getItem('token');
+      const token = window.sessionStorage.getItem('token');
       if (!token) {
         throw new Error('Authentication required');
       }

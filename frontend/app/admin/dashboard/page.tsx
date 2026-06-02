@@ -203,7 +203,7 @@ export default function AdminDashboardPage() {
   const [liveStatus, setLiveStatus] = useState('');
 
   const authHeaders = () => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     return token ? { Authorization: `Bearer ${token}` } : undefined;
   };
 
@@ -240,7 +240,7 @@ export default function AdminDashboardPage() {
   }, [loadData]);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
+    const token = sessionStorage.getItem('token');
     if (!token) {
       return undefined;
     }

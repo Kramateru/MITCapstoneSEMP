@@ -284,7 +284,7 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
     try {
       setIsLoadingAssessment(true);
       setLoadError('');
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
       const detailRes = await fetch(`/api/certification/mcq/assessment/${nextAssessmentId}`, { headers });
       const detailPayload = await readApiPayload<ApiAssessmentResponse>(detailRes);
@@ -335,7 +335,7 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
     try {
       setIsLoadingAssessments(true);
       setLoadError('');
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
 
       const assessmentsRes = await fetch('/api/certification/mcq/my-assessments', { headers });
@@ -458,7 +458,7 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
 
     setIsSubmitting(true);
     try {
-      const token = localStorage.getItem('token');
+      const token = sessionStorage.getItem('token');
       const response = await fetch(`/api/certification/mcq/assessment/${assessmentId}/submit`, {
         method: 'POST',
         headers: {

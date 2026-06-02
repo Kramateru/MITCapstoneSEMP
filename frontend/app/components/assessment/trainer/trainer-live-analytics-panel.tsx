@@ -317,7 +317,7 @@ export function TrainerLiveAnalyticsPanel({
       </div>
 
       <Dialog open={!!coachingTarget} onOpenChange={(open) => !open && setCoachingTarget(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent size="sm">
           <DialogHeader>
             <DialogTitle>Coach Attempt</DialogTitle>
             <DialogDescription>

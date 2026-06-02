@@ -49,9 +49,15 @@ export default function LoginPage() {
     // Only show auth notice if there's a specific message about logout or forced action
     // Don't show generic session expired messages since they're often stale
     const authNotice = readAndClearAuthNotice()
-    if (authNotice && authNotice.toLowerCase().includes('logged out')) {
+    const normalizedAuthNotice = authNotice.toLowerCase()
+    if (authNotice && normalizedAuthNotice.includes('logged out')) {
       setError(authNotice)
-    } else if (authNotice && authNotice.toLowerCase().includes('terminated')) {
+    } else if (
+      authNotice &&
+      (normalizedAuthNotice.includes('session has ended') ||
+        normalizedAuthNotice.includes('session has expired') ||
+        normalizedAuthNotice.includes('terminated'))
+    ) {
       setError(authNotice)
     }
     // Silently discard other session messages - they're likely stale tokens
@@ -242,18 +248,19 @@ export default function LoginPage() {
             <div className="mx-auto flex h-full w-full max-w-[31rem] flex-col justify-center">
               <div>
                 <div
-                  className={`inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] ${
+                  aria-label={providerIsReady ? 'Supabase connected' : 'Credential source check'}
+                  title={providerIsReady ? 'Supabase connected' : 'Credential source check'}
+                  className={`inline-flex h-9 w-9 items-center justify-center rounded-full ${
                     providerIsReady
                       ? 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-100'
                       : 'bg-amber-50 text-amber-700 ring-1 ring-amber-100'
                   }`}
                 >
                   {providerIsReady ? (
-                    <ShieldCheck className="h-3.5 w-3.5" />
+                    <ShieldCheck className="h-4 w-4" />
                   ) : (
-                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <AlertTriangle className="h-4 w-4" />
                   )}
-                  <span>{providerIsReady ? 'Supabase Connected' : 'Credential Source Check'}</span>
                 </div>
 
                 <h2 className="mt-4 text-[clamp(2.15rem,3.35vw,3rem)] font-bold tracking-[-0.04em] text-slate-900">

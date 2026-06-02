@@ -56,12 +56,12 @@ export function isTokenExpired(token?: string | null, now = Date.now()) {
   return expiresAt.getTime() <= now
 }
 
-function setCookie(name: string, value: string, expiresAt?: Date | null) {
+function setCookie(name: string, value: string) {
   if (typeof document === 'undefined') {
     return
   }
 
-  document.cookie = `${name}=${encodeURIComponent(value)}; ${getCookieAttributes(expiresAt)}`
+  document.cookie = `${name}=${encodeURIComponent(value)}; ${getCookieAttributes()}`
 }
 
 function clearCookie(name: string) {
@@ -77,19 +77,16 @@ export function writeAuthSessionCookies(token: string, user: User, refreshToken?
     return
   }
 
-  const accessExpiresAt = getTokenExpiryDate(token)
-  const sessionExpiresAt = getTokenExpiryDate(refreshToken || '') || accessExpiresAt
-  setCookie(ACCESS_TOKEN_COOKIE, token, accessExpiresAt)
+  setCookie(ACCESS_TOKEN_COOKIE, token)
   if (refreshToken) {
-    setCookie(REFRESH_TOKEN_COOKIE, refreshToken, sessionExpiresAt)
+    setCookie(REFRESH_TOKEN_COOKIE, refreshToken)
   } else {
     clearCookie(REFRESH_TOKEN_COOKIE)
   }
-  setCookie(USER_ROLE_COOKIE, user.user_role, sessionExpiresAt)
+  setCookie(USER_ROLE_COOKIE, user.user_role)
   setCookie(
     MUST_CHANGE_PASSWORD_COOKIE,
     user.must_change_password ? '1' : '0',
-    sessionExpiresAt,
   )
 }
 

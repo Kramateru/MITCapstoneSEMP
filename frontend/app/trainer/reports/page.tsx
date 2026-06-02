@@ -190,7 +190,7 @@ export default function ReportsPage() {
   })
 
   useEffect(() => {
-    const token = localStorage.getItem('token')
+    const token = sessionStorage.getItem('token')
     if (!token) {
       return undefined
     }

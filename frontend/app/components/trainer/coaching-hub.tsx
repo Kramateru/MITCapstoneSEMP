@@ -985,7 +985,7 @@ export default function TrainerCoachingHub({
       </Tabs>
 
       <Dialog open={!!selectedLog} onOpenChange={(open) => !open && setSelectedLog(null)}>
-        <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+        <DialogContent size="md" className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex flex-wrap items-center gap-2">
               <span>{selectedLog?.coaching_id}</span>
