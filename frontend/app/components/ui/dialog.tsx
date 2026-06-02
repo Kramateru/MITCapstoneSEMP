@@ -1,18 +1,18 @@
 "use client";
 
-import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { XIcon } from "lucide-react";
+import * as React from "react";
 
 import { cn } from "./utils";
 
 type DialogContentSize = "sm" | "md" | "lg" | "xl" | "full";
 
 const dialogSizeClasses: Record<DialogContentSize, string> = {
-  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[75vw] lg:!max-w-[980px] 2xl:!max-w-[1080px]",
-  md: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[78vw] lg:!max-w-[1120px] 2xl:!max-w-[1220px]",
-  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1280px] 2xl:!max-w-[1380px]",
-  xl: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1420px] 2xl:!max-w-[1520px]",
+  sm: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[75vw] lg:!max-w-[900px] 2xl:!max-w-[980px]",
+  md: "!w-[calc(100vw-0.85rem)] sm:!w-[88vw] lg:!w-[76vw] lg:!max-w-[1040px] 2xl:!max-w-[1120px]",
+  lg: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[78vw] lg:!max-w-[1180px] 2xl:!max-w-[1280px]",
+  xl: "!w-[calc(100vw-0.85rem)] sm:!w-[90vw] lg:!w-[80vw] lg:!max-w-[1320px] 2xl:!max-w-[1380px]",
   full: "!w-[calc(100vw-0.5rem)] sm:!w-[90vw] lg:!w-[80vw] !max-w-[1600px]",
 };
 
@@ -139,14 +139,15 @@ function DialogDescription({
 }
 
 export {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogOverlay,
-  DialogPortal,
-  DialogTitle,
-  DialogTrigger,
+    Dialog,
+    DialogClose,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogOverlay,
+    DialogPortal,
+    DialogTitle,
+    DialogTrigger
 };
+

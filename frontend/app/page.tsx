@@ -24,7 +24,7 @@ export default function Home() {
 
       <div className="relative w-full max-w-3xl rounded-[2rem] border border-white/12 bg-white/10 p-8 text-center shadow-[0_40px_120px_-52px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:p-10">
         <div className="space-y-3">
-          <span className="inline-flex rounded-full border border-white/14 bg-white/8 px-3 py-1 text-[0.72rem] font-semibold uppercase tracking-[0.18em] text-sky-100">
+          <span className="inline-flex rounded-full border border-white/14 bg-white/8 px-3 py-1 text-sm font-semibold uppercase tracking-[0.18em] text-sky-100">
             Speech-Enabled Microlearning Platform
           </span>
           <h1 className="text-balance text-4xl font-bold tracking-[-0.04em] text-white sm:text-5xl">

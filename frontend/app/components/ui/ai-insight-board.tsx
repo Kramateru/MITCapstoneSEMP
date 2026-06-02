@@ -97,7 +97,7 @@ export function AiInsightBoard({
                 </div>
                 <span
                   className={cn(
-                    'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-3 py-1.5 text-[0.72rem] font-semibold uppercase tracking-[0.1em] shadow-sm',
+                    'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-3 py-1.5 text-sm font-semibold uppercase tracking-[0.1em] shadow-sm',
                     tone.badge,
                   )}
                 >

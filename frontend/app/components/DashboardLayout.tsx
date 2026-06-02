@@ -346,7 +346,7 @@ export function DashboardLayout({
                   />
                 </div>
                 <div className={`min-w-0 space-y-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                  <p className="text-[0.66rem] font-semibold uppercase tracking-normal text-sidebar-foreground/58">
+                  <p className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/58">
                     {systemNameLines[0]}
                   </p>
                   <h2 className="text-balance text-[1.08rem] font-semibold leading-5 tracking-normal text-white">
@@ -358,14 +358,14 @@ export function DashboardLayout({
                 <div className="rounded-xl border border-white/8 bg-white/[0.05] px-4 py-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="text-[0.68rem] font-semibold uppercase tracking-normal text-sidebar-foreground/55">
+                      <p className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/55">
                         {roleLabelMap[resolvedUserRole]}
                       </p>
                       <p className="mt-1 text-sm leading-6 text-sidebar-foreground/68">
                         {roleWorkspaceHintMap[resolvedUserRole]}
                       </p>
                     </div>
-                    <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold text-sidebar-foreground/70">
+                    <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-sm font-semibold text-sidebar-foreground/70">
                       {resolvedSidebarItems.length} Links
                     </div>
                   </div>
@@ -381,7 +381,7 @@ export function DashboardLayout({
               <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
                 {!isMinifiedSidebar ? (
                   <div className="flex items-center gap-2 px-2.5">
-                    <div className="text-[0.68rem] font-semibold uppercase tracking-normal text-sidebar-foreground/54">
+                    <div className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/54">
                       {group.section}
                     </div>
                     <div className="h-px flex-1 bg-white/8" />
@@ -467,13 +467,13 @@ export function DashboardLayout({
 
             <div className="min-w-0 space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-normal text-primary">
+                <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-sm font-semibold uppercase tracking-normal text-primary">
                   {roleLabelMap[resolvedUserRole]}
                 </span>
-                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-[0.7rem] font-semibold uppercase tracking-normal text-muted-foreground">
+                <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-sm font-semibold uppercase tracking-normal text-muted-foreground">
                   {currentPageSection}
                 </span>
-                <Badge variant="info" className="text-[0.7rem]">
+                <Badge variant="info" className="text-sm">
                   Live Workspace
                 </Badge>
               </div>
@@ -497,7 +497,7 @@ export function DashboardLayout({
               <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
                 {roleDescriptionMap[resolvedUserRole]}
               </p>
-              <p className="text-xs leading-5 text-muted-foreground/85 sm:hidden">
+              <p className="text-sm leading-5 text-muted-foreground/85 sm:hidden">
                 {roleWorkspaceHintMap[resolvedUserRole]}
               </p>
             </div>

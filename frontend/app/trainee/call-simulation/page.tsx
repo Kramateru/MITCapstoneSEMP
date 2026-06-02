@@ -1394,8 +1394,9 @@ function TraineeSimFloorPageContent() {
         return cachedAudioUrl;
       }
 
+      let token: string | null = null;
       try {
-        const token = sessionStorage.getItem('token');
+        token = sessionStorage.getItem('token');
         setIsGeneratingMemberAudio(true);
         const canPersistForRecording = Boolean(
           options?.scenarioId

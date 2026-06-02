@@ -117,7 +117,7 @@ export function MetricCard({
     <Card className={cn("metric-card border-border/75 bg-gradient-to-br p-0", toneStyle.surface, className)}>
       <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-6">
         <div className="min-w-0 space-y-2">
-          <p className="text-[0.72rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+          <p className="text-sm font-bold uppercase tracking-[0.14em] text-muted-foreground">
             {label}
           </p>
           <p className="break-words text-[1.7rem] font-bold tracking-[-0.03em] text-foreground sm:text-[2.15rem]">

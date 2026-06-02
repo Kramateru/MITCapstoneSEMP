@@ -162,10 +162,10 @@ export function AssessmentSectionNav<TSection extends string>({
       <CardContent className="space-y-3 p-4 sm:p-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="space-y-1">
-            <div className="text-[0.7rem] font-semibold uppercase tracking-[0.22em] text-slate-500">Workspace Navigation</div>
+            <div className="text-sm font-semibold uppercase tracking-[0.22em] text-slate-500">Workspace Navigation</div>
             <div className="text-sm text-slate-600">Jump between the core workflow cards on this one-page assessment workspace.</div>
           </div>
-          <div className="inline-flex items-center self-start rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-500">
+          <div className="inline-flex items-center self-start rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-semibold text-slate-500">
             {sections.length} Sections
           </div>
         </div>
@@ -208,7 +208,7 @@ export function AssessmentSectionNav<TSection extends string>({
               {currentSection.icon}
             </span>
             <div className="min-w-0">
-              <div className="text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-slate-500">Current Section</div>
+              <div className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">Current Section</div>
               <div className="mt-1 text-sm font-semibold text-slate-950">{currentSection.label}</div>
               <div className="mt-1 text-xs leading-5 text-slate-600">{currentSection.description}</div>
             </div>
