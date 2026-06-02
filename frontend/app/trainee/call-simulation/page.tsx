@@ -1425,8 +1425,12 @@ function TraineeSimFloorPageContent() {
           throw new Error(payload?.detail || 'Member AI audio could not be generated and saved to Supabase for this step.');
         }
 
-        if (payload.warning || payload.fallback_mode === 'browser' || !payload.audio_url) {
+        if (payload.fallback_mode === 'browser' || !payload.audio_url) {
           throw new Error(payload.warning || 'Member AI audio did not return a Supabase playback URL for this step.');
+        }
+
+        if (payload.warning) {
+          setMemberAudioWarning(payload.warning);
         }
 
         synthesizedPlaybackCacheRef.current.set(cacheKey, payload.audio_url);

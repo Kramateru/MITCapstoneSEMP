@@ -7401,18 +7401,25 @@ async def synthesize_member_speech(
             )
         audio_base64 = None
 
-    if not audio_url and not audio_base64:
-        if provider_error:
-            logger.warning("Call Simulation backend TTS returned no playable audio. Browser fallback will be used: %s", provider_error)
-        return {
-            "audio_url": None,
-            "audio_base64": None,
-            "duration": round(max(duration, 0.0), 2),
-            "provider": "browser_fallback",
-            "storage_mode": "browser-fallback" if fallback_mode == "browser" else storage_mode,
-            "warning": browser_fallback_message,
-            "fallback_mode": "browser",
-        }
+    if not audio_url:
+        if audio_base64:
+            try:
+                audio_url = _build_audio_data_url(b64decode(audio_base64), audio_content_type)
+            except Exception:
+                audio_url = None
+        elif audio_bytes is not None:
+            try:
+                audio_url = _build_audio_data_url(audio_bytes, audio_content_type)
+            except Exception:
+                audio_url = None
+
+    if not audio_url:
+        error_detail = provider_error or "Generated speech could not be synthesized by the backend."
+        logger.warning(
+            "Call Simulation backend TTS returned no playable audio. error=%s",
+            error_detail,
+        )
+        raise HTTPException(status_code=503, detail=error_detail)
 
     return {
         "audio_url": audio_url,

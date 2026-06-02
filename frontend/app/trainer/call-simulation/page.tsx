@@ -2330,9 +2330,10 @@ export default function TrainerSimFloorPage() {
         });
         payload = (await fallbackResponse.json().catch(() => null)) as MemberSpeechAssetResponse | null;
         if (!fallbackResponse.ok || !payload || !payload.audio_url) {
+          const fallbackDetail = payload?.detail;
           throw new Error(
             (error instanceof Error ? error.message : 'Unable to generate member speech')
-            || payload?.detail
+            || fallbackDetail
             || 'Unable to generate member speech',
           );
         }
