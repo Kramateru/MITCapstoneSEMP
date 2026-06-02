@@ -279,8 +279,15 @@ def _coerce_audio_bytes(payload: Any) -> Optional[bytes]:
         except Exception:
             return None
     if isinstance(payload, str) and payload.strip():
+        text_payload = payload.strip()
+        if text_payload.startswith("data:"):
+            try:
+                _, base64_part = text_payload.split(",", 1)
+                return b64decode(base64_part)
+            except Exception:
+                pass
         try:
-            return b64decode(payload)
+            return b64decode(text_payload)
         except Exception:
             return None
     return None
@@ -7183,6 +7190,15 @@ async def synthesize_member_speech(
             except Exception as exc:
                 logger.warning("Unable to decode generated TTS audio for persistence: %s", exc)
                 upload_bytes = None
+
+        if upload_bytes is None and audio_url:
+            upload_bytes = _coerce_audio_bytes(audio_url)
+            if upload_bytes is None:
+                logger.warning(
+                    "Generated TTS audio URL could not be decoded for persistence. "
+                    "audio_url=%s",
+                    audio_url[:128],
+                )
 
         if upload_bytes is None and gemini_tts_engine.is_available():
             try:

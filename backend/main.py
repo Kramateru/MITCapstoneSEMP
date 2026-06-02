@@ -317,6 +317,14 @@ async def lifespan(app: FastAPI):
 
     if STARTUP_DATABASE_REACHABLE:
         ensure_admin_user()
+        # Ensure the `public.profiles` table exists in case Supabase schema is not present
+        # This allows the startup user-sync to insert rows without failing when the
+        # hosting Postgres instance lacks Supabase-specific tables.
+        try:
+            ensure_profiles_table_exists()
+        except Exception:
+            logger.exception("Failed to ensure public.profiles table exists; continuing startup")
+
         sync_runtime_users_to_supabase_auth(fail_fast=False)
     else:
         logger.warning(
@@ -545,6 +553,38 @@ def ensure_user_settings_columns() -> None:
 
 if STARTUP_DATABASE_REACHABLE:
     ensure_user_settings_columns()
+
+
+def ensure_profiles_table_exists() -> None:
+    """Create a minimal `public.profiles` table if it does not exist.
+
+    Some deployments may not have the Supabase auth/profile schema. The
+    startup sync attempts to insert into `public.profiles`; creating a
+    minimal compatible table prevents startup failures while preserving
+    Supabase-compatible columns.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS public.profiles (
+                        id UUID PRIMARY KEY,
+                        full_name TEXT,
+                        avatar_url TEXT,
+                        role TEXT,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT now(),
+                        updated_at TIMESTAMP WITH TIME ZONE DEFAULT now()
+                    )
+                    """
+                )
+            )
+        logger.info("Ensured minimal public.profiles table exists")
+    except Exception:
+        logger.exception("Failed to ensure public.profiles table exists")
 
 
 def ensure_supabase_realtime_publication() -> None:
@@ -1571,7 +1611,20 @@ def ensure_call_simulation_reporting_views() -> None:
     try:
         with engine.begin() as connection:
             for statement in view_statements:
-                connection.execute(text(statement))
+                # Some Postgres versions complain when CREATE OR REPLACE VIEW attempts
+                # to change column names. For the KPI view we prefer to drop-and-create
+                # to avoid the "cannot change name of view column" error.
+                if "public.call_simulation_kpis" in statement and "CREATE OR REPLACE VIEW" in statement:
+                    try:
+                        connection.execute(text("DROP VIEW IF EXISTS public.call_simulation_kpis CASCADE"))
+                    except Exception:
+                        # Non-fatal if drop fails; continue to attempt create
+                        logger.debug("Drop of call_simulation_kpis view failed or unnecessary")
+                    # Ensure we create (not replace) to reset column definitions cleanly
+                    create_stmt = statement.replace("CREATE OR REPLACE VIEW", "CREATE VIEW")
+                    connection.execute(text(create_stmt))
+                else:
+                    connection.execute(text(statement))
         logger.info("Ensured Call Simulation reporting views are available in Supabase Postgres")
     except Exception:
         logger.exception("Failed to create Call Simulation reporting views")
