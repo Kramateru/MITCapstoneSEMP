@@ -1431,11 +1431,35 @@ function TraineeSimFloorPageContent() {
         synthesizedPlaybackCacheRef.current.set(cacheKey, payload.audio_url);
         return payload.audio_url;
       } catch (error) {
-        const warningMessage = error instanceof Error
+        const persistentWarning = error instanceof Error
           ? error.message
           : 'Member AI audio could not be generated and saved to Supabase for this step.';
-        setMemberAudioWarning(warningMessage);
-        throw new Error(warningMessage);
+
+        try {
+          const fallbackParams = new URLSearchParams({
+            text: normalizedScript,
+            persist: 'false',
+            scenario_id: options?.scenarioId ? String(options.scenarioId) : '',
+            step_number: typeof options?.stepNumber === 'number' ? String(options.stepNumber) : '',
+            asset_kind: 'member-step',
+          });
+          const fallbackResponse = await fetch(`/api/call-simulation/tts?${fallbackParams.toString()}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          });
+          const fallbackPayload = (await fallbackResponse.json().catch(() => null)) as TtsResponsePayload | null;
+
+          if (fallbackResponse.ok && fallbackPayload && fallbackPayload.audio_url) {
+            const fallbackMessage = 'Member AI audio could not be saved to Supabase, using browser playback fallback instead.';
+            setMemberAudioWarning(fallbackMessage);
+            synthesizedPlaybackCacheRef.current.set(cacheKey, fallbackPayload.audio_url);
+            return fallbackPayload.audio_url;
+          }
+        } catch (fallbackError) {
+          console.warn('Browser fallback request failed:', fallbackError);
+        }
+
+        setMemberAudioWarning(persistentWarning);
+        throw new Error(persistentWarning);
       } finally {
         setIsGeneratingMemberAudio(false);
       }

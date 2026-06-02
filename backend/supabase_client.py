@@ -730,6 +730,33 @@ class SupabaseClient:
             content_type="audio/wav",
         )
 
+    def save_microlearning_tts_local(
+        self,
+        audio_data: bytes,
+        module_id: str,
+        filename: Optional[str] = None,
+    ) -> Optional[str]:
+        """
+        Save text-to-speech generated audio locally as fallback.
+        
+        Args:
+            audio_data: TTS audio bytes (WAV format)
+            module_id: Microlearning module ID
+            filename: Optional custom filename
+        
+        Returns:
+            Local media URL path (e.g., /media/microlearning/tts/...), or None if save fails
+        """
+        if not filename:
+            timestamp = datetime.utcnow().isoformat().replace(":", "-")
+            filename = f"{module_id}/tts_{timestamp}.wav"
+
+        relative_path = f"microlearning/tts/{filename}"
+        return self._write_local_media_copy(
+            relative_path=relative_path,
+            file_data=audio_data,
+        )
+
     def upload_microlearning_binary(
         self,
         *,

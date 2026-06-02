@@ -801,12 +801,22 @@ async def upload_module_audio(
                 language_code=module.audio_language or "en-US",
             )
             
-            if tts_result:
-                # Upload TTS audio to Supabase
+            if tts_result and tts_result.audio_bytes:
+                # Try to upload TTS audio to Supabase
                 tts_url = supabase_client.upload_microlearning_tts(
                     audio_data=tts_result.audio_bytes,
                     module_id=module_id,
                 )
+                
+                # Fallback to local save if Supabase upload failed
+                if not tts_url:
+                    tts_url = supabase_client.save_microlearning_tts_local(
+                        audio_data=tts_result.audio_bytes,
+                        module_id=module_id,
+                    )
+                    if tts_url:
+                        logger.info(f"TTS saved to local fallback for module {module_id}")
+                
                 if tts_url:
                     module.audio_tts_url = tts_url
                     _sync_audio_content_data(
@@ -820,11 +830,13 @@ async def upload_module_audio(
                     logger.info(f"✓ TTS audio generated: {tts_result.provider}")
                 else:
                     logger.warning(
-                        "Supabase storage could not save generated TTS for microlearning module %s",
+                        "Could not save TTS for microlearning module %s (Supabase and local both failed)",
                         module_id,
                     )
+            elif tts_result and tts_result.error:
+                logger.warning(f"TTS generation failed for module {module_id}: {tts_result.error}")
         except Exception as e:
-            logger.warning(f"TTS generation failed: {e}")
+            logger.warning(f"TTS generation failed for module {module_id}: {e}", exc_info=True)
 
     db.commit()
     db.refresh(module)
@@ -973,38 +985,75 @@ async def generate_tts_audio(
             "module_id": module_id,
             "tts_url": None,
             "provider": "browser_fallback",
-            "warning": "AI voice is using browser fallback mode.",
+            "error": "No TTS providers available (Gemini API key or pyttsx3 not configured). Using browser fallback.",
         }
 
     # Generate TTS
+    logger.info(f"Generating TTS for module {module_id}, transcript length: {len(module.audio_transcript)}")
     tts_result = text_to_speech_service.synthesize(
         text=module.audio_transcript,
         language_code=module.audio_language or "en-US",
     )
 
-    if not tts_result:
+    if not tts_result or not tts_result.audio_bytes:
+        error_msg = tts_result.error if tts_result else "Unknown TTS synthesis error"
+        logger.error(f"TTS synthesis failed for module {module_id}: {error_msg}")
         return {
             "module_id": module_id,
             "tts_url": None,
-            "provider": "browser_fallback",
-            "warning": "AI voice is using browser fallback mode.",
+            "provider": tts_result.provider if tts_result else "unknown",
+            "error": f"Failed to generate speech: {error_msg}. Please try again or use browser fallback.",
         }
 
-    supabase_client = _require_supabase_storage()
-    tts_url = supabase_client.upload_microlearning_tts(
-        audio_data=tts_result.audio_bytes,
-        module_id=module_id,
-    )
+    # Try to save to Supabase
+    supabase_client = get_supabase_client()
+    tts_url = None
+    local_url = None
+    
+    if supabase_client.is_available:
+        try:
+            tts_url = supabase_client.upload_microlearning_tts(
+                audio_data=tts_result.audio_bytes,
+                module_id=module_id,
+            )
+            if tts_url:
+                logger.info(f"TTS saved to Supabase: {tts_url}")
+        except Exception as e:
+            logger.warning(f"Failed to upload TTS to Supabase: {e}")
+            tts_url = None
+    else:
+        logger.warning("Supabase not available for TTS upload")
+    
+    # Fallback: Save locally if Supabase upload failed or unavailable
     if not tts_url:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Supabase storage could not save the generated TTS audio.",
-        )
+        try:
+            local_url = supabase_client.save_microlearning_tts_local(
+                audio_data=tts_result.audio_bytes,
+                module_id=module_id,
+            )
+            if local_url:
+                logger.info(f"TTS saved locally: {local_url}")
+        except Exception as e:
+            logger.error(f"Failed to save TTS locally: {e}")
+            local_url = None
 
-    module.audio_tts_url = tts_url
+    # Use whichever URL was successfully created
+    final_tts_url = tts_url or local_url
+    
+    if not final_tts_url:
+        logger.error(f"Failed to save TTS for module {module_id} - both Supabase and local save failed")
+        return {
+            "module_id": module_id,
+            "tts_url": None,
+            "provider": tts_result.provider,
+            "error": "Generated speech could not be saved to Supabase or local storage. Check server logs for details.",
+        }
+
+    # Update module with TTS URL
+    module.audio_tts_url = final_tts_url
     _sync_audio_content_data(
         module,
-        tts_url=tts_url,
+        tts_url=final_tts_url,
         duration_seconds=module.audio_duration_seconds,
         language_code=module.audio_language or "en-US",
     )
@@ -1012,9 +1061,11 @@ async def generate_tts_audio(
 
     return {
         "module_id": module_id,
-        "tts_url": tts_url,
+        "tts_url": final_tts_url,
         "provider": tts_result.provider,
         "duration_seconds": tts_result.duration_seconds,
+        "storage_method": "supabase" if tts_url else "local_fallback",
+        "message": "TTS audio generated and saved successfully",
     }
 
 

@@ -2306,20 +2306,44 @@ export default function TrainerSimFloorPage() {
         params.set('replace_audio_url', managedReplaceAudioUrl);
       }
 
-      const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
-        method: 'POST',
-      });
-      const payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
-      if (!response.ok || !payload) {
-        throw new Error(payload?.detail || 'Unable to generate member speech');
+      let payload: MemberSpeechAssetResponse | null = null;
+      try {
+        const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
+          method: 'POST',
+        });
+        payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+        if (!response.ok || !payload) {
+          throw new Error(payload?.detail || 'Unable to generate member speech');
+        }
+      } catch (error) {
+        const fallbackParams = new URLSearchParams({
+          text: script.trim(),
+          persist: 'false',
+          asset_kind: 'member-step',
+          step_number: String(rowIndex + 1),
+        });
+        if (editingScenarioId) {
+          fallbackParams.set('scenario_id', editingScenarioId);
+        }
+        const fallbackResponse = await authedFetch(`/api/call-simulation/tts?${fallbackParams.toString()}`, {
+          method: 'POST',
+        });
+        payload = (await fallbackResponse.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+        if (!fallbackResponse.ok || !payload || !payload.audio_url) {
+          throw new Error(
+            (error instanceof Error ? error.message : 'Unable to generate member speech')
+            || payload?.detail
+            || 'Unable to generate member speech',
+          );
+        }
       }
 
       return {
-        audioUrl: payload.audio_url || null,
-        warning: payload.warning || null,
-        storageMode: payload.storage_mode || null,
-        fallbackMode: payload.fallback_mode || null,
-        audioAsset: payload.audio_asset || null,
+        audioUrl: payload?.audio_url || null,
+        warning: payload?.warning || null,
+        storageMode: payload?.storage_mode || null,
+        fallbackMode: payload?.fallback_mode || null,
+        audioAsset: payload?.audio_asset || null,
       };
     }, [authedFetch, editingScenarioId]);
 

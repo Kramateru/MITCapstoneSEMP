@@ -62,6 +62,7 @@ class TTSResult:
     format: str  # "wav", "mp3"
     duration_seconds: float
     provider: str  # "gemini", "pyttsx3"
+    error: Optional[str] = None  # Error message if synthesis failed
 
 
 class TextToSpeechService:
@@ -130,7 +131,7 @@ class TextToSpeechService:
             voice_name: Voice name (for Gemini: "Kore", "Puck"; for pyttsx3: voice ID)
 
         Returns:
-            TTSResult with audio bytes and metadata
+            TTSResult with audio bytes and metadata, or None if no providers available
         """
         if not text or not text.strip():
             logger.warning("Empty text provided for TTS")
@@ -141,12 +142,23 @@ class TextToSpeechService:
             provider = self._select_provider()
 
         if provider == "gemini":
-            return self._synthesize_gemini(text, language_code, voice_name)
+            result = self._synthesize_gemini(text, language_code, voice_name)
+            # Return result even if it has an error (caller will check error field)
+            return result
         if provider == "pyttsx3":
-            return self._synthesize_pyttsx3(text, language_code, voice_name)
+            result = self._synthesize_pyttsx3(text, language_code, voice_name)
+            # Return result even if it has an error (caller will check error field)
+            return result
 
-        logger.error(f"Unknown or unavailable TTS provider: {provider}")
-        return None
+        error_msg = f"Unknown or unavailable TTS provider: {provider}"
+        logger.error(error_msg)
+        return TTSResult(
+            audio_bytes=b"",
+            format="wav",
+            duration_seconds=0,
+            provider=provider or "unknown",
+            error=error_msg,
+        )
 
     def _select_provider(self) -> str:
         """Select best available provider"""
@@ -186,6 +198,8 @@ class TextToSpeechService:
                 )
             }
 
+            logger.info(f"Generating Gemini TTS with voice: {voice_name}, style: {speaking_style}")
+            
             response = self.gemini_client.models.generate_content(
                 model=self.gemini_tts_model,
                 contents=text,
@@ -195,19 +209,39 @@ class TextToSpeechService:
                 ),
             )
 
-            # Extract audio data
-            if not (
-                response.candidates
-                and response.candidates[0].content
-                and response.candidates[0].content.parts
-                and response.candidates[0].content.parts[0].inline_data
-            ):
-                logger.warning("No audio in Gemini response")
-                return None
+            # Extract audio data - handle different response structures
+            audio_data = None
+            
+            # Try to extract from candidates
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                
+                if hasattr(candidate, 'content') and candidate.content:
+                    content = candidate.content
+                    
+                    # Check for parts in content
+                    if hasattr(content, 'parts') and content.parts and len(content.parts) > 0:
+                        part = content.parts[0]
+                        
+                        # Check for inline_data
+                        if hasattr(part, 'inline_data') and part.inline_data:
+                            if hasattr(part.inline_data, 'data'):
+                                audio_data = part.inline_data.data
+                            elif isinstance(part.inline_data, dict) and 'data' in part.inline_data:
+                                audio_data = part.inline_data['data']
+            
+            if not audio_data:
+                error_msg = "No audio data found in Gemini response. Response structure: " + str(response)
+                logger.warning(error_msg)
+                return TTSResult(
+                    audio_bytes=b"",
+                    format="wav",
+                    duration_seconds=0,
+                    provider="gemini",
+                    error=error_msg,
+                )
 
-            audio_data = response.candidates[0].content.parts[0].inline_data.data
-
-            # Convert to WAV format
+            # Convert to WAV format if needed
             import wave
 
             buffer = io.BytesIO()
@@ -218,20 +252,41 @@ class TextToSpeechService:
                 wf.writeframes(audio_data)
 
             audio_bytes = buffer.getvalue()
+            
+            if not audio_bytes or len(audio_bytes) < 44:  # WAV header is at least 44 bytes
+                error_msg = f"Generated audio is invalid or empty (size: {len(audio_bytes)} bytes)"
+                logger.error(error_msg)
+                return TTSResult(
+                    audio_bytes=b"",
+                    format="wav",
+                    duration_seconds=0,
+                    provider="gemini",
+                    error=error_msg,
+                )
 
             # Estimate duration (rough)
-            duration = len(audio_data) / (24000 * 2)
+            duration = len(audio_data) / (24000 * 2) if audio_data else 0
 
+            logger.info(f"Successfully generated Gemini TTS audio: {len(audio_bytes)} bytes, {duration:.2f}s")
+            
             return TTSResult(
                 audio_bytes=audio_bytes,
                 format="wav",
                 duration_seconds=duration,
                 provider="gemini",
+                error=None,
             )
 
         except Exception as e:
-            logger.error(f"Gemini TTS synthesis failed: {e}")
-            return None
+            error_msg = f"Gemini TTS synthesis failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="gemini",
+                error=error_msg,
+            )
 
     def _synthesize_pyttsx3(
         self,
@@ -241,8 +296,15 @@ class TextToSpeechService:
     ) -> Optional[TTSResult]:
         """Synthesize speech using pyttsx3 (offline)"""
         if not self.pyttsx3_engine:
-            logger.warning("pyttsx3 engine not available")
-            return None
+            error_msg = "pyttsx3 engine not available"
+            logger.warning(error_msg)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="pyttsx3",
+                error=error_msg,
+            )
 
         try:
             # Get available voices
@@ -276,19 +338,40 @@ class TextToSpeechService:
             except OSError:
                 pass
 
+            if not audio_bytes or len(audio_bytes) < 44:
+                error_msg = f"pyttsx3 generated invalid audio (size: {len(audio_bytes)} bytes)"
+                logger.error(error_msg)
+                return TTSResult(
+                    audio_bytes=b"",
+                    format="wav",
+                    duration_seconds=0,
+                    provider="pyttsx3",
+                    error=error_msg,
+                )
+
             # Estimate duration
             duration = len(audio_bytes) / (22050 * 2)  # Default pyttsx3 rate
 
+            logger.info(f"Successfully generated pyttsx3 TTS audio: {len(audio_bytes)} bytes, {duration:.2f}s")
+            
             return TTSResult(
                 audio_bytes=audio_bytes,
                 format="wav",
                 duration_seconds=duration,
                 provider="pyttsx3",
+                error=None,
             )
 
         except Exception as e:
-            logger.error(f"pyttsx3 TTS synthesis failed: {e}")
-            return None
+            error_msg = f"pyttsx3 TTS synthesis failed: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="pyttsx3",
+                error=error_msg,
+            )
 
     def _detect_speaking_style(self, text: str) -> str:
         """Detect appropriate speaking style based on text content"""
