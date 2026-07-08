@@ -1,0 +1,2 @@
+# Keep the root install path aligned with the backend deployment dependencies.
+-r backend/requirements.txt

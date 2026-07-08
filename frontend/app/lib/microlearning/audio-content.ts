@@ -1,0 +1,1215 @@
+import 'server-only'
+
+import { GoogleAIFileManager } from '@google/generative-ai/server'
+
+import { AssessmentHttpError } from '@/app/lib/assessment/backend-auth'
+import { fetchBackendPath } from '@/app/lib/backend-proxy'
+import { getConfigValue } from '@/app/lib/assessment/env'
+import { createSupabaseAdminClient } from '@/app/lib/assessment/supabase-admin'
+import type { BackendSessionUser } from '@/app/lib/assessment/types'
+
+const DEFAULT_AUDIO_BUCKET = 'microlearning-videos'
+const DEFAULT_GEMINI_AUDIO_MODEL = 'gemini-2.5-flash'
+const GEMINI_READY_ATTEMPTS = 20
+const GEMINI_READY_DELAY_MS = 1500
+const SIGNED_URL_TTL_SECONDS = 60 * 60
+const GEMINI_API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
+const SUPABASE_PUBLIC_OBJECT_MARKER = '/storage/v1/object/public/'
+const SUPPORTED_AUDIO_UPLOAD_MIME_TYPES = new Set([
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mpga',
+  'audio/mpeg3',
+  'audio/x-mpeg-3',
+  'audio/x-mp3',
+  'audio/mpg',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/ogg',
+  'audio/aac',
+  'audio/flac',
+  'audio/webm',
+])
+
+type AudioContentRow = {
+  id: string
+  module_id: string
+  title: string
+  trainer_id: string
+  url: string
+  storage_path: string
+  mime_type: string
+  transcript: string | null
+  transcript_text: string | null
+  summary_text: string | null
+  duration_seconds: number | null
+  gemini_model: string | null
+  gemini_file_uri: string | null
+  created_at: string
+  updated_at: string
+}
+
+type AuthorizedAudioContent = AudioContentRow & {
+  bucket_name?: string | null
+}
+
+type BackendModuleDetail = {
+  content_data?: Record<string, unknown> | null
+  audio_language?: string | null
+  audio_transcript?: string | null
+}
+
+type BackendModuleAudioMetadata = {
+  title?: string | null
+  audio_url?: string | null
+  signed_url?: string | null
+  transcript?: string | null
+  summary_text?: string | null
+  audio_duration_seconds?: number | null
+  audio_language?: string | null
+  captions_url?: string | null
+  content_type?: string | null
+}
+
+type BackendModuleAssetPayload = {
+  module_id?: string | null
+  module_type?: string | null
+  asset_url?: string | null
+  storage_path?: string | null
+  bucket_name?: string | null
+  content_type?: string | null
+  signed_url_required?: boolean | null
+}
+
+type TrainerModuleListResponse = {
+  modules?: Array<{ id?: string | null }>
+}
+
+type BackendAudioUploadResponse = {
+  module_id?: string | null
+  audio_url?: string | null
+  signed_url?: string | null
+  storage_path?: string | null
+  bucket_name?: string | null
+  filename?: string | null
+  original_filename?: string | null
+  content_type?: string | null
+  duration_seconds?: number | null
+  transcript?: string | null
+  transcript_provider?: string | null
+  captions_url?: string | null
+}
+
+type UploadMicrolearningAudioParams = {
+  authorization: string
+  moduleId: string
+  trainerId: string
+  title: string
+  fileName: string
+  mimeType: string
+  fileBytes: Buffer
+  audioLanguage?: string | null
+}
+
+type UploadMicrolearningAudioUrlParams = {
+  authorization: string
+  moduleId: string
+  trainerId: string
+  title: string
+  audioUrl: string
+  audioLanguage?: string | null
+}
+
+export type UploadMicrolearningAudioResult = {
+  audio_content_id: string
+  module_id: string
+  title: string
+  audio_url: string
+  signed_url: string
+  storage_path: string
+  bucket_name: string
+  transcript: string
+  transcript_text: string
+  summary_text: string
+  transcript_provider: string
+  transcript_model: string
+  duration_seconds: number | null
+  mime_type: string
+  audio_language: string
+  original_filename: string
+  captions_url?: string | null
+  caption_data: CaptionCue[]
+}
+
+type GeminiAudioAnalysis = {
+  transcript_text: string
+  summary_text: string
+}
+
+type CaptionCue = {
+  start: number
+  end: number
+  text: string
+}
+
+function normalizeConfigValue(value: string | null | undefined) {
+  const trimmed = (value || '').trim()
+  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') {
+    return ''
+  }
+
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"'))
+    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1).trim()
+  }
+
+  return trimmed
+}
+
+function getAudioBucketName() {
+  return normalizeConfigValue(getConfigValue([
+    'AUDIO_MODULE_STORAGE_BUCKET_NAME',
+    'MICROLEARNING_STORAGE_BUCKET_NAME',
+  ], DEFAULT_AUDIO_BUCKET)) || DEFAULT_AUDIO_BUCKET
+}
+
+function getGeminiAudioModel() {
+  return normalizeConfigValue(getConfigValue([
+    'GEMINI_AUDIO_MODEL',
+    'GEMINI_TRANSCRIBE_MODEL',
+  ], DEFAULT_GEMINI_AUDIO_MODEL)) || DEFAULT_GEMINI_AUDIO_MODEL
+}
+
+function getGeminiApiKey() {
+  return normalizeConfigValue(getConfigValue(['GEMINI_API_KEY'], ''))
+}
+
+function sanitizeAudioFileName(fileName: string) {
+  const cleaned = fileName.trim().replace(/[^A-Za-z0-9._-]+/g, '-')
+  return cleaned.replace(/^-+|-+$/g, '') || 'audio-module.mp3'
+}
+
+function isSupportedAudioUpload(fileName: string, mimeType: string) {
+  const normalizedName = fileName.trim().toLowerCase()
+  const normalizedMimeType = mimeType.trim().toLowerCase()
+  return (
+    normalizedName.endsWith('.mp3')
+    || normalizedName.endsWith('.wav')
+    || normalizedName.endsWith('.m4a')
+    || normalizedName.endsWith('.ogg')
+    || normalizedName.endsWith('.aac')
+    || normalizedName.endsWith('.flac')
+    || normalizedName.endsWith('.webm')
+    || SUPPORTED_AUDIO_UPLOAD_MIME_TYPES.has(normalizedMimeType)
+  )
+}
+
+function assertSupportedAudioUpload(fileName: string, mimeType: string) {
+  if (!isSupportedAudioUpload(fileName, mimeType)) {
+    throw new AssessmentHttpError(
+      400,
+      'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.',
+    )
+  }
+}
+
+function buildStoragePath(trainerId: string, moduleId: string, fileName: string) {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `microlearning/audio/${trainerId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
+}
+
+function resolveSupabasePublicObject(assetUrl?: string | null) {
+  const normalized = (assetUrl || '').trim()
+  if (!normalized) {
+    return null
+  }
+
+  try {
+    const parsed = new URL(normalized)
+    const markerIndex = parsed.pathname.indexOf(SUPABASE_PUBLIC_OBJECT_MARKER)
+    if (markerIndex < 0) {
+      return null
+    }
+
+    const suffix = decodeURIComponent(parsed.pathname.slice(markerIndex + SUPABASE_PUBLIC_OBJECT_MARKER.length))
+    const slashIndex = suffix.indexOf('/')
+    if (slashIndex < 0) {
+      return null
+    }
+
+    const bucketName = suffix.slice(0, slashIndex).trim()
+    const storagePath = suffix.slice(slashIndex + 1).trim().replace(/^\/+/, '')
+    if (!bucketName || !storagePath) {
+      return null
+    }
+
+    return {
+      bucketName,
+      storagePath,
+    }
+  } catch {
+    return null
+  }
+}
+
+function resolvePreferredStoragePath(
+  storedPath?: string | null,
+  inferredObject?: { bucketName: string; storagePath: string } | null,
+) {
+  const normalizedStoredPath = (storedPath || '').trim().replace(/^\/+/, '')
+  const inferredPath = inferredObject?.storagePath?.trim().replace(/^\/+/, '') || ''
+  if (
+    inferredPath
+    && (
+      !normalizedStoredPath
+      || normalizedStoredPath !== inferredPath
+      || !normalizedStoredPath.startsWith('microlearning/')
+    )
+  ) {
+    return inferredPath
+  }
+
+  return normalizedStoredPath
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function getSupabaseObjectUrl(bucketName: string, storagePath: string) {
+  const supabase = createSupabaseAdminClient()
+  return supabase.storage.from(bucketName).getPublicUrl(storagePath).data.publicUrl
+}
+
+function inferAudioMimeType(assetUrl: string, contentType?: string | null) {
+  const normalizedContentType = normalizeConfigValue(contentType || '')
+  if (normalizedContentType) {
+    return normalizedContentType
+  }
+
+  const normalizedUrl = assetUrl.trim().toLowerCase().split('?', 1)[0]
+  if (normalizedUrl.endsWith('.wav')) {
+    return 'audio/wav'
+  }
+  if (normalizedUrl.endsWith('.m4a')) {
+    return 'audio/mp4'
+  }
+  if (normalizedUrl.endsWith('.ogg')) {
+    return 'audio/ogg'
+  }
+
+  return 'audio/mpeg'
+}
+
+function extensionForAudioMimeType(mimeType: string) {
+  const normalizedMimeType = mimeType.trim().toLowerCase()
+  if (normalizedMimeType === 'audio/wav' || normalizedMimeType === 'audio/x-wav') {
+    return '.wav'
+  }
+  if (normalizedMimeType === 'audio/mp4' || normalizedMimeType === 'audio/x-m4a') {
+    return '.m4a'
+  }
+  if (normalizedMimeType === 'audio/ogg') {
+    return '.ogg'
+  }
+  if (normalizedMimeType === 'audio/aac') {
+    return '.aac'
+  }
+  if (normalizedMimeType === 'audio/flac') {
+    return '.flac'
+  }
+  if (normalizedMimeType === 'audio/webm') {
+    return '.webm'
+  }
+  return '.mp3'
+}
+
+function deriveAudioFileNameFromUrl(assetUrl: string, mimeType?: string | null) {
+  try {
+    const parsed = new URL(assetUrl)
+    const candidate = decodeURIComponent(parsed.pathname.split('/').filter(Boolean).pop() || '').trim()
+    if (candidate) {
+      if (/\.[A-Za-z0-9]+$/.test(candidate)) {
+        return sanitizeAudioFileName(candidate)
+      }
+      return sanitizeAudioFileName(`${candidate}${extensionForAudioMimeType(mimeType || '')}`)
+    }
+  } catch {
+    // Fall through to the default file name below.
+  }
+
+  return `audio-module${extensionForAudioMimeType(mimeType || '')}`
+}
+
+function buildCaptionCues(transcript: string, durationSeconds?: number | null) {
+  const normalizedTranscript = transcript.replace(/\s+/g, ' ').trim()
+  if (!normalizedTranscript) {
+    return [] as CaptionCue[]
+  }
+
+  const words = normalizedTranscript.split(' ').filter(Boolean)
+  if (!words.length) {
+    return [] as CaptionCue[]
+  }
+
+  const chunks: string[] = []
+  let buffer: string[] = []
+
+  for (const word of words) {
+    buffer.push(word)
+    const sentenceBoundary = /[.!?]$/.test(word)
+    if (buffer.length >= 8 || sentenceBoundary) {
+      chunks.push(buffer.join(' '))
+      buffer = []
+    }
+  }
+
+  if (buffer.length) {
+    chunks.push(buffer.join(' '))
+  }
+
+  const safeDuration =
+    Number.isFinite(Number(durationSeconds)) && Number(durationSeconds) > 0
+      ? Number(durationSeconds)
+      : Math.max(chunks.length * 2.8, words.length * 0.45)
+  const secondsPerChunk = safeDuration / chunks.length
+
+  return chunks.map((text, index) => ({
+    start: Number((index * secondsPerChunk).toFixed(3)),
+    end: Number(
+      (
+        index === chunks.length - 1
+          ? safeDuration
+          : (index + 1) * secondsPerChunk
+      ).toFixed(3),
+    ),
+    text,
+  }))
+}
+
+async function loadAudioAssetBytes(assetUrl: string) {
+  const assetFile = await loadAudioAssetFile(assetUrl)
+  return assetFile.fileBytes
+}
+
+async function loadAudioAssetFile(assetUrl: string) {
+  if (assetUrl.startsWith('http://') || assetUrl.startsWith('https://')) {
+    const response = await fetch(assetUrl, { cache: 'no-store' })
+    if (!response.ok) {
+      throw new AssessmentHttpError(
+        response.status || 500,
+        `Unable to download the lesson audio asset (${response.status}).`,
+      )
+    }
+    const mimeType = inferAudioMimeType(assetUrl, response.headers.get('content-type'))
+    const fileName = deriveAudioFileNameFromUrl(assetUrl, mimeType)
+    return {
+      fileBytes: Buffer.from(await response.arrayBuffer()),
+      mimeType,
+      fileName,
+    }
+  }
+
+  throw new AssessmentHttpError(400, 'Unsupported lesson audio asset URL.')
+}
+
+async function readJsonSafely<T>(response: Response) {
+  return (await response.json().catch(() => null)) as T | null
+}
+
+function extractBackendErrorMessage(
+  payload: unknown,
+  fallback: string,
+) {
+  if (typeof payload === 'string' && payload.trim()) {
+    return payload
+  }
+
+  if (payload && typeof payload === 'object') {
+    const candidate = payload as { detail?: unknown; error?: unknown; message?: unknown }
+    for (const value of [candidate.detail, candidate.error, candidate.message]) {
+      if (typeof value === 'string' && value.trim()) {
+        return value
+      }
+    }
+  }
+
+  return fallback
+}
+
+async function fetchBackendJson<T>(
+  path: string,
+  init: RequestInit,
+  fallback: string,
+) {
+  const response = await fetchBackendPath(path, {
+    ...init,
+    cache: 'no-store',
+  })
+  if (!response.ok) {
+    const payload = await readJsonSafely(response)
+    throw new AssessmentHttpError(
+      response.status || 500,
+      extractBackendErrorMessage(payload, fallback),
+    )
+  }
+  return readJsonSafely<T>(response)
+}
+
+async function uploadMicrolearningAudioToBackend(
+  authorization: string,
+  {
+    moduleId,
+    fileName,
+    mimeType,
+    fileBytes,
+  }: {
+    moduleId: string
+    fileName: string
+    mimeType: string
+    fileBytes: Buffer
+  },
+) {
+  const formData = new FormData()
+  formData.append('file', new Blob([new Uint8Array(fileBytes)], { type: mimeType }), fileName)
+
+  return fetchBackendJson<BackendAudioUploadResponse>(
+    `/api/microlearning/modules/${moduleId}/audio?generate_transcript=true&generate_tts=true`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: authorization,
+      },
+      body: formData,
+    },
+    'Unable to upload the lesson audio to the microlearning service.',
+  )
+}
+
+async function waitForGeminiFileToBeReady(
+  fileManager: GoogleAIFileManager,
+  fileId: string,
+) {
+  for (let attempt = 0; attempt < GEMINI_READY_ATTEMPTS; attempt += 1) {
+    const fileState = await fileManager.getFile(fileId)
+    if (fileState.state === 'ACTIVE') {
+      return fileState
+    }
+    if (fileState.state === 'FAILED') {
+      throw new Error('Gemini could not process the uploaded audio file.')
+    }
+    await sleep(GEMINI_READY_DELAY_MS)
+  }
+
+  throw new Error('Gemini did not finish preparing the uploaded audio in time.')
+}
+
+async function transcribeAudioWithGemini(
+  fileBytes: Buffer,
+  {
+    mimeType,
+    title,
+  }: {
+    mimeType: string
+    title: string
+  },
+) {
+  const apiKey = getGeminiApiKey()
+  if (!apiKey) {
+    throw new AssessmentHttpError(503, 'GEMINI_API_KEY is not configured for audio transcription.')
+  }
+
+  const geminiModel = getGeminiAudioModel()
+  const fileManager = new GoogleAIFileManager(apiKey)
+
+  const uploadedFile = await fileManager.uploadFile(fileBytes, {
+    displayName: title,
+    mimeType,
+  })
+
+  try {
+    const readyFile = await waitForGeminiFileToBeReady(fileManager, uploadedFile.file.name)
+    // Use the Gemini REST endpoint directly so the request shape is explicit
+    // and matches the Google AI Gateway / generateContent flow.
+    const response = await fetch(`${GEMINI_API_BASE_URL}/models/${geminiModel}:generateContent`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: [
+                  'Analyze this microlearning lesson audio for a BPO training platform.',
+                  'Return JSON only.',
+                  'transcript_text must contain a highly accurate verbatim transcript with punctuation.',
+                  'summary_text must contain a concise 2 to 3 sentence lesson summary for trainee navigation.',
+                  'Do not include markdown, timestamps, or extra keys.',
+                ].join(' '),
+              },
+              {
+                fileData: {
+                  fileUri: readyFile.uri,
+                  mimeType: readyFile.mimeType,
+                },
+              },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseJsonSchema: {
+            type: 'object',
+            properties: {
+              transcript_text: {
+                type: 'string',
+                description: 'Highly accurate transcript of the uploaded lesson audio.',
+              },
+              summary_text: {
+                type: 'string',
+                description: 'Concise 2 to 3 sentence summary of the lesson for trainee playback navigation.',
+              },
+            },
+            required: ['transcript_text', 'summary_text'],
+          },
+        },
+      }),
+    })
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          candidates?: Array<{
+            content?: {
+              parts?: Array<{
+                text?: string
+              }>
+            }
+          }>
+          error?: {
+            message?: string
+          }
+        }
+      | null
+
+    if (!response.ok) {
+      throw new Error(
+        payload?.error?.message
+        || `Gemini returned ${response.status} while processing the uploaded audio.`,
+      )
+    }
+
+    const responseText = payload?.candidates
+      ?.flatMap((candidate) => candidate.content?.parts || [])
+      .map((part) => part.text?.trim() || '')
+      .find(Boolean)
+
+    if (!responseText) {
+      throw new Error('Gemini returned an empty structured response for the uploaded audio.')
+    }
+
+    const parsed = JSON.parse(responseText) as Partial<GeminiAudioAnalysis>
+    const transcript_text = parsed.transcript_text?.trim() || ''
+    const summary_text = parsed.summary_text?.trim() || ''
+
+    if (!transcript_text) {
+      throw new Error('Gemini returned an empty transcript for the uploaded audio.')
+    }
+
+    return {
+      transcript: transcript_text,
+      transcript_text,
+      summary_text,
+      geminiModel,
+      geminiFileUri: readyFile.uri,
+    }
+  } finally {
+    await fileManager.deleteFile(uploadedFile.file.name).catch(() => undefined)
+  }
+}
+
+async function getTrainerModuleIds(authorization: string) {
+  const payload = await fetchBackendJson<TrainerModuleListResponse>(
+    '/api/trainer/microlearning-modules',
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'Unable to verify trainer access to the requested microlearning module.',
+  )
+
+  return new Set(
+    (payload?.modules || [])
+      .map((moduleRow) => moduleRow.id || '')
+      .filter((moduleId): moduleId is string => moduleId.length > 0),
+  )
+}
+
+export async function assertTrainerOwnsMicrolearningModule(
+  authorization: string,
+  moduleId: string,
+) {
+  const moduleIds = await getTrainerModuleIds(authorization)
+  if (!moduleIds.has(moduleId)) {
+    throw new AssessmentHttpError(404, 'Microlearning module not found for this trainer.')
+  }
+}
+
+async function getBackendMicrolearningModule(
+  authorization: string,
+  moduleId: string,
+) {
+  return fetchBackendJson<BackendModuleDetail>(
+    `/api/microlearning/modules/${moduleId}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'Unable to load the existing microlearning audio metadata.',
+  )
+}
+
+async function getAuthorizedModuleAssetMetadata(
+  authorization: string,
+  moduleId: string,
+) {
+  const payload = await fetchBackendJson<BackendModuleAssetPayload>(
+    `/api/microlearning/modules/${moduleId}/asset`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'Unable to load the microlearning media metadata.',
+  )
+
+  const inferredObject = resolveSupabasePublicObject(payload?.asset_url)
+  return {
+    assetUrl: payload?.asset_url?.trim() || '',
+    storagePath: resolvePreferredStoragePath(payload?.storage_path, inferredObject),
+    bucketName: payload?.bucket_name?.trim() || inferredObject?.bucketName || getAudioBucketName(),
+    contentType: payload?.content_type?.trim() || '',
+    signedUrlRequired: payload?.signed_url_required !== false,
+  }
+}
+
+async function syncBackendMicrolearningAudio(
+  authorization: string,
+  {
+    moduleId,
+    audioUrl,
+    transcript,
+    summaryText,
+    audioContentId,
+    storagePath,
+    bucketName,
+    mimeType,
+    audioLanguage,
+    transcriptProvider,
+    transcriptModel,
+    durationSeconds,
+    originalFilename,
+    captionData,
+  }: {
+    moduleId: string
+    audioUrl: string
+    transcript: string
+    summaryText: string
+    audioContentId: string
+    storagePath: string
+    bucketName: string
+    mimeType: string
+    audioLanguage: string
+    transcriptProvider: string
+    transcriptModel: string
+    durationSeconds: number | null
+    originalFilename: string
+    captionData: CaptionCue[]
+  },
+) {
+  const currentModule = await getBackendMicrolearningModule(authorization, moduleId)
+  const currentContentData = currentModule?.content_data || {}
+  const normalizedTranscript = transcript.trim()
+    || String(
+      currentContentData.transcript_text
+      ?? currentContentData.transcript
+      ?? currentContentData.captions_text
+      ?? currentContentData.content
+      ?? currentModule?.audio_transcript
+      ?? '',
+    ).trim()
+  const normalizedSummary = summaryText.trim()
+    || String(
+      currentContentData.summary_text
+      ?? currentContentData.audio_summary
+      ?? currentContentData.summary
+      ?? '',
+    ).trim()
+  const normalizedTranscriptProvider = transcriptProvider.trim()
+    || String(currentContentData.transcript_provider ?? '').trim()
+  const normalizedTranscriptModel = transcriptModel.trim()
+    || String(currentContentData.transcript_model ?? '').trim()
+  const existingCaptionData = Array.isArray(currentContentData.caption_data)
+    ? currentContentData.caption_data
+    : []
+  const normalizedCaptionData = captionData.length ? captionData : existingCaptionData
+
+  const contentData: Record<string, unknown> = {
+    ...currentContentData,
+    asset_url: audioUrl,
+    audio_url: audioUrl,
+    audio_content_id: audioContentId,
+    audio_storage_path: storagePath,
+    audio_bucket: bucketName,
+    audio_content_type: mimeType,
+    audio_language: audioLanguage,
+    audio_original_filename: originalFilename,
+    signed_url_required: true,
+    audio_source_type: 'supabase_upload',
+  }
+
+  if (normalizedTranscript) {
+    contentData.transcript = normalizedTranscript
+    contentData.transcript_text = normalizedTranscript
+    contentData.content = normalizedTranscript
+    contentData.captions_text = normalizedTranscript
+  }
+
+  if (normalizedSummary) {
+    contentData.summary = normalizedSummary
+    contentData.summary_text = normalizedSummary
+    contentData.audio_summary = normalizedSummary
+  }
+
+  if (normalizedTranscriptProvider) {
+    contentData.transcript_provider = normalizedTranscriptProvider
+  }
+
+  if (normalizedTranscriptModel) {
+    contentData.transcript_model = normalizedTranscriptModel
+  }
+
+  if (normalizedCaptionData.length) {
+    contentData.caption_data = normalizedCaptionData
+    contentData.live_caption_mode = 'speech_to_text_playback'
+  }
+
+  await fetchBackendJson(
+    `/api/microlearning/modules/${moduleId}`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: authorization,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        content_url: audioUrl,
+        content_data: contentData,
+        audio_url: audioUrl,
+        audio_transcript: normalizedTranscript || undefined,
+        audio_duration_seconds: durationSeconds ?? undefined,
+        audio_language: audioLanguage || currentModule?.audio_language || 'en-US',
+      }),
+    },
+    'Unable to sync the uploaded audio metadata to the microlearning module.',
+  )
+}
+
+async function fetchAudioContentRow(moduleId: string) {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .from('audio_content')
+    .select('*')
+    .eq('module_id', moduleId)
+    .maybeSingle()
+
+  if (error) {
+    throw error
+  }
+
+  return (data as AudioContentRow | null) || null
+}
+
+async function assertTraineeHasAudioModuleAccess(
+  authorization: string,
+  moduleId: string,
+) {
+  await fetchBackendJson(
+    `/api/microlearning/modules/${moduleId}/audio`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'You do not have access to this microlearning audio lesson.',
+  )
+}
+
+export async function getAuthorizedAudioPlaybackMetadata(
+  authorization: string,
+  moduleId: string,
+) {
+  const payload = await fetchBackendJson<BackendModuleAudioMetadata>(
+    `/api/microlearning/modules/${moduleId}/audio`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: authorization,
+      },
+    },
+    'Unable to load the microlearning audio transcript metadata.',
+  )
+
+  return {
+    title: payload?.title?.trim() || '',
+    audioUrl: payload?.audio_url?.trim() || '',
+    signedUrl: payload?.signed_url?.trim() || '',
+    transcriptText: payload?.transcript?.trim() || '',
+    summaryText: payload?.summary_text?.trim() || '',
+    durationSeconds:
+      typeof payload?.audio_duration_seconds === 'number' && Number.isFinite(payload.audio_duration_seconds)
+        ? payload.audio_duration_seconds
+        : null,
+    audioLanguage: payload?.audio_language?.trim() || '',
+    captionsUrl: payload?.captions_url?.trim() || '',
+    contentType: payload?.content_type?.trim() || '',
+  }
+}
+
+export async function generateAuthorizedAudioTranscript(
+  authorization: string,
+  moduleId: string,
+) {
+  const playbackMetadata = await getAuthorizedAudioPlaybackMetadata(authorization, moduleId)
+  if (playbackMetadata.transcriptText) {
+    return {
+      transcriptText: playbackMetadata.transcriptText,
+      summaryText: playbackMetadata.summaryText || '',
+      durationSeconds: playbackMetadata.durationSeconds,
+      audioUrl: playbackMetadata.signedUrl || playbackMetadata.audioUrl,
+      audioLanguage: playbackMetadata.audioLanguage,
+      transcriptProvider: 'stored',
+    }
+  }
+
+  const playbackUrl = playbackMetadata.signedUrl || playbackMetadata.audioUrl
+  if (!playbackUrl) {
+    throw new AssessmentHttpError(404, 'No lesson audio file is attached to this microlearning module.')
+  }
+
+  const audioBytes = await loadAudioAssetBytes(playbackUrl)
+  const analysis = await transcribeAudioWithGemini(audioBytes, {
+    mimeType: inferAudioMimeType(playbackUrl, playbackMetadata.contentType),
+    title: playbackMetadata.title || `Microlearning audio ${moduleId}`,
+  })
+
+  return {
+    transcriptText: analysis.transcript_text || analysis.transcript,
+    summaryText: analysis.summary_text || playbackMetadata.summaryText || '',
+    durationSeconds: playbackMetadata.durationSeconds,
+    audioUrl: playbackUrl,
+    audioLanguage: playbackMetadata.audioLanguage,
+    transcriptProvider: 'gemini',
+  }
+}
+
+export async function getAuthorizedAudioContent(
+  authorization: string,
+  sessionUser: BackendSessionUser,
+  moduleId: string,
+) {
+  const row = await fetchAudioContentRow(moduleId)
+
+  if (row) {
+    const inferredObject = resolveSupabasePublicObject(row.url)
+    const normalizedStoragePath = resolvePreferredStoragePath(row.storage_path, inferredObject)
+    const normalizedBucketName = inferredObject?.bucketName || getAudioBucketName()
+    const normalizedRow = {
+      ...row,
+      storage_path: normalizedStoragePath || row.storage_path,
+    }
+
+    if (sessionUser.role === 'admin') {
+      return {
+        ...normalizedRow,
+        bucket_name: normalizedBucketName,
+      } satisfies AuthorizedAudioContent
+    }
+
+    if (sessionUser.role === 'trainer') {
+      if (row.trainer_id !== sessionUser.userId) {
+        throw new AssessmentHttpError(403, 'You do not have access to this trainer-owned audio module.')
+      }
+      return {
+        ...normalizedRow,
+        bucket_name: normalizedBucketName,
+      } satisfies AuthorizedAudioContent
+    }
+
+    await assertTraineeHasAudioModuleAccess(authorization, moduleId)
+    return {
+      ...normalizedRow,
+      bucket_name: normalizedBucketName,
+    } satisfies AuthorizedAudioContent
+  }
+
+  if (sessionUser.role === 'trainer') {
+    await assertTrainerOwnsMicrolearningModule(authorization, moduleId)
+  } else if (sessionUser.role === 'trainee') {
+    await assertTraineeHasAudioModuleAccess(authorization, moduleId)
+  }
+
+  const playbackMetadata = await getAuthorizedAudioPlaybackMetadata(authorization, moduleId)
+  const assetMetadata = await getAuthorizedModuleAssetMetadata(authorization, moduleId)
+  const storagePath = assetMetadata.storagePath.trim()
+  const audioUrl = playbackMetadata.audioUrl || assetMetadata.assetUrl
+
+  if (!storagePath || !audioUrl) {
+    throw new AssessmentHttpError(404, 'No uploaded audio module was found for this lesson.')
+  }
+
+  return {
+    id: `fallback-${moduleId}`,
+    module_id: moduleId,
+    title: playbackMetadata.title || `Microlearning audio ${moduleId}`,
+    trainer_id: sessionUser.role === 'trainer' ? sessionUser.userId : '',
+    url: audioUrl,
+    storage_path: storagePath,
+    mime_type: playbackMetadata.contentType || assetMetadata.contentType || inferAudioMimeType(audioUrl),
+    transcript: playbackMetadata.transcriptText || null,
+    transcript_text: playbackMetadata.transcriptText || null,
+    summary_text: null,
+    duration_seconds: playbackMetadata.durationSeconds,
+    gemini_model: null,
+    gemini_file_uri: null,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    bucket_name: assetMetadata.bucketName || getAudioBucketName(),
+  } satisfies AuthorizedAudioContent
+}
+
+export async function createAudioModuleSignedUrl(storagePath: string, bucketName?: string) {
+  const supabase = createSupabaseAdminClient()
+  const { data, error } = await supabase
+    .storage
+    .from(bucketName || getAudioBucketName())
+    .createSignedUrl(storagePath, SIGNED_URL_TTL_SECONDS)
+
+  if (error || !data?.signedUrl) {
+    throw error || new Error('Unable to create a signed playback URL for the microlearning audio module.')
+  }
+
+  return data.signedUrl
+}
+
+async function persistAudioContentRow(
+  supabase: ReturnType<typeof createSupabaseAdminClient>,
+  existingRow: AudioContentRow | null,
+  {
+    moduleId,
+    title,
+    trainerId,
+    canonicalAudioUrl,
+    storagePath,
+    mimeType,
+    transcript,
+    summaryText,
+    geminiModel,
+    geminiFileUri,
+  }: {
+    moduleId: string
+    title: string
+    trainerId: string
+    canonicalAudioUrl: string
+    storagePath: string
+    mimeType: string
+    transcript: string
+    summaryText: string
+    geminiModel: string
+    geminiFileUri: string
+  },
+) {
+  const rowPayload = {
+    module_id: moduleId,
+    title,
+    trainer_id: trainerId,
+    url: canonicalAudioUrl,
+    storage_path: storagePath,
+    mime_type: mimeType,
+    transcript,
+    transcript_text: transcript,
+    summary_text: summaryText,
+    duration_seconds: null,
+    gemini_model: geminiModel,
+    gemini_file_uri: geminiFileUri,
+  }
+
+  if (existingRow?.id) {
+    const { data, error } = await supabase
+      .from('audio_content')
+      .update(rowPayload)
+      .eq('id', existingRow.id)
+      .select('*')
+      .single()
+
+    if (error || !data) {
+      throw error || new Error('Unable to update the audio module metadata.')
+    }
+
+    return data as AudioContentRow
+  }
+
+  const { data, error } = await supabase
+    .from('audio_content')
+    .insert(rowPayload)
+    .select('*')
+    .single()
+
+  if (error || !data) {
+    throw error || new Error('Unable to save the audio module metadata.')
+  }
+
+  return data as AudioContentRow
+}
+
+export async function uploadMicrolearningAudioContent({
+  authorization,
+  moduleId,
+  trainerId,
+  title,
+  fileName,
+  mimeType,
+  fileBytes,
+  audioLanguage,
+}: UploadMicrolearningAudioParams): Promise<UploadMicrolearningAudioResult> {
+  assertSupportedAudioUpload(fileName, mimeType)
+
+  const backendUpload = await uploadMicrolearningAudioToBackend(authorization, {
+    moduleId,
+    fileName,
+    mimeType,
+    fileBytes,
+  })
+
+  const audioUrl = backendUpload?.audio_url?.trim() || ''
+  const signedUrl = backendUpload?.signed_url?.trim() || audioUrl
+  const storagePath = backendUpload?.storage_path?.trim() || ''
+  const bucketName = backendUpload?.bucket_name?.trim() || getAudioBucketName()
+  const transcriptText = backendUpload?.transcript?.trim() || ''
+  const transcriptProvider = backendUpload?.transcript_provider?.trim() || ''
+  const durationSeconds =
+    typeof backendUpload?.duration_seconds === 'number' && Number.isFinite(backendUpload.duration_seconds)
+      ? backendUpload.duration_seconds
+      : null
+  const originalFilename = backendUpload?.original_filename?.trim()
+    || backendUpload?.filename?.trim()
+    || fileName
+  const normalizedMimeType = backendUpload?.content_type?.trim() || mimeType
+  const audioContentId = `module-${moduleId}`
+
+  let normalizedTranscriptText = transcriptText
+  let summaryText = ''
+  let transcriptModel = transcriptProvider
+  let normalizedTranscriptProvider = transcriptProvider
+
+  if (!normalizedTranscriptText && getGeminiApiKey()) {
+    try {
+      const analysis = await transcribeAudioWithGemini(fileBytes, {
+        mimeType: normalizedMimeType,
+        title,
+      })
+      normalizedTranscriptText = analysis.transcript_text || analysis.transcript
+      summaryText = analysis.summary_text || ''
+      transcriptModel = analysis.geminiModel
+      normalizedTranscriptProvider = 'gemini'
+    } catch {
+      // Keep the upload successful even when optional Gemini analysis is unavailable.
+    }
+  }
+
+  const captionData = buildCaptionCues(normalizedTranscriptText, durationSeconds)
+
+  if (audioUrl && storagePath) {
+    await syncBackendMicrolearningAudio(authorization, {
+      moduleId,
+      audioUrl,
+      transcript: normalizedTranscriptText,
+      summaryText,
+      audioContentId,
+      storagePath,
+      bucketName,
+      mimeType: normalizedMimeType,
+      audioLanguage: audioLanguage || 'en-US',
+      transcriptProvider: normalizedTranscriptProvider,
+      transcriptModel,
+      durationSeconds,
+      originalFilename,
+      captionData,
+    })
+  }
+
+  return {
+    audio_content_id: audioContentId,
+    module_id: moduleId,
+    title,
+    audio_url: audioUrl,
+    signed_url: signedUrl,
+    storage_path: storagePath,
+    bucket_name: bucketName,
+    transcript: normalizedTranscriptText,
+    transcript_text: normalizedTranscriptText,
+    summary_text: summaryText,
+    transcript_provider: normalizedTranscriptProvider || 'speech_to_text',
+    transcript_model: transcriptModel || normalizedTranscriptProvider || 'speech_to_text',
+    duration_seconds: durationSeconds,
+    mime_type: normalizedMimeType,
+    audio_language: audioLanguage || 'en-US',
+    original_filename: originalFilename,
+    captions_url: backendUpload?.captions_url?.trim() || null,
+    caption_data: captionData,
+  }
+}
+
+export async function uploadMicrolearningAudioContentFromUrl({
+  authorization,
+  moduleId,
+  trainerId,
+  title,
+  audioUrl,
+  audioLanguage,
+}: UploadMicrolearningAudioUrlParams): Promise<UploadMicrolearningAudioResult> {
+  const normalizedAudioUrl = audioUrl.trim()
+  if (!normalizedAudioUrl) {
+    throw new AssessmentHttpError(400, 'A direct audio URL is required.')
+  }
+
+  const {
+    fileBytes,
+    mimeType,
+    fileName,
+  } = await loadAudioAssetFile(normalizedAudioUrl)
+
+  return uploadMicrolearningAudioContent({
+    authorization,
+    moduleId,
+    trainerId,
+    title,
+    fileName,
+    mimeType,
+    fileBytes,
+    audioLanguage,
+  })
+}

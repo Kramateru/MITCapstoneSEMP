@@ -1,0 +1,25 @@
+
+> frontend@0.1.0 build
+> next build --webpack
+
+▲ Next.js 16.1.6 (webpack)
+- Environments: .env.local
+- Experiments (use with caution):
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 45s
+  Running TypeScript ...
+Failed to compile.
+
+./app/components/shared/notification-bell.tsx:423:24
+Type error: Cannot find name 'ExternalLink'. Did you mean 'External'?
+
+[0m [90m 421 |[39m                     [33m<[39m[33mdiv[39m className[33m=[39m[32m"mt-3 inline-flex items-center gap-2 text-xs font-medium text-primary"[39m[33m>[39m
+ [90m 422 |[39m                       {notification[33m.[39maction_label}
+[31m[1m>[22m[39m[90m 423 |[39m                       [33m<[39m[33mExternalLink[39m className[33m=[39m[32m"size-3.5"[39m [33m/[39m[33m>[39m
+ [90m     |[39m                        [31m[1m^[22m[39m
+ [90m 424 |[39m                     [33m<[39m[33m/[39m[33mdiv[39m[33m>[39m
+ [90m 425 |[39m                   [33m<[39m[33m/[39m[33mbutton[39m[33m>[39m
+ [90m 426 |[39m                 ))}[0m
+Next.js build worker exited with code: 1 and signal: null

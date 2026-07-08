@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <defs>
+    <style>
+      .bg{fill:#08216a}
+      .ring{fill:#e11d2d}
+      .inner{fill:#ffd400}
+      .text{fill:#08216a;font-family:Segoe UI,Arial,sans-serif;font-weight:700}
+    </style>
+  </defs>
+  <circle cx="100" cy="100" r="98" class="ring"/>
+  <circle cx="100" cy="100" r="82" class="bg"/>
+  <circle cx="100" cy="100" r="58" class="inner"/>
+  <text x="100" y="96" font-size="20" text-anchor="middle" class="text">ST. PETER</text>
+  <text x="100" y="120" font-size="14" text-anchor="middle" class="text">TECHNICAL TRAINING</text>
+  <text x="100" y="138" font-size="12" text-anchor="middle" class="text">CENTER</text>
+</svg>

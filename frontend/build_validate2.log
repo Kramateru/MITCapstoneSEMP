@@ -1,0 +1,25 @@
+
+> frontend@0.1.0 build
+> next build --webpack
+
+▲ Next.js 16.1.6 (webpack)
+- Environments: .env.local
+- Experiments (use with caution):
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 15.6s
+  Running TypeScript ...
+Failed to compile.
+
+./app/components/DashboardLayout.tsx:563:20
+Type error: Cannot find name 'UserRound'.
+
+[0m [90m 561 |[39m                 [33m<[39m[33mp[39m className[33m=[39m[32m"truncate text-sm font-semibold leading-5 text-foreground"[39m[33m>[39m{userDisplayName}[33m<[39m[33m/[39m[33mp[39m[33m>[39m
+ [90m 562 |[39m                 [33m<[39m[33mp[39m className[33m=[39m[32m"flex items-center gap-1.5 truncate text-xs font-medium text-muted-foreground"[39m[33m>[39m
+[31m[1m>[22m[39m[90m 563 |[39m                   [33m<[39m[33mUserRound[39m className[33m=[39m[32m"size-3.5 shrink-0"[39m [33m/[39m[33m>[39m
+ [90m     |[39m                    [31m[1m^[22m[39m
+ [90m 564 |[39m                   {user[33m.[39memail}
+ [90m 565 |[39m                 [33m<[39m[33m/[39m[33mp[39m[33m>[39m
+ [90m 566 |[39m               [33m<[39m[33m/[39m[33mdiv[39m[33m>[39m[0m
+Next.js build worker exited with code: 1 and signal: null

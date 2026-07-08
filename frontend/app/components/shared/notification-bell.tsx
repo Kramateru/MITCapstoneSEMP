@@ -1,0 +1,496 @@
+'use client';
+
+import { Button } from '@/app/components/ui/button';
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/app/components/ui/dialog';
+import { LazyIcon } from '@/app/components/ui/LazyIcon';
+import { Popover, PopoverContent, PopoverTrigger } from '@/app/components/ui/popover';
+import { useAuth } from '@/app/context/AuthContext';
+import { getHttpErrorMessage, readHttpResponse } from '@/app/utils/http-response';
+import { useRouter } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+
+type NotificationItem = {
+  id: string;
+  title: string;
+  message: string;
+  href: string;
+  level: 'critical' | 'warning' | 'info' | 'success';
+  action_label: string;
+  created_at: string | null;
+  status: 'unread' | 'read';
+  is_cleared: boolean;
+  event_type?: string;
+  details?: Record<string, unknown>;
+  recipient_role?: string | null;
+  trainee_id?: string | null;
+};
+
+type NotificationsPayload = {
+  count: number;
+  notifications: NotificationItem[];
+  role: string;
+  generated_at: string;
+};
+
+function createEmptyNotificationsPayload(): NotificationsPayload {
+  return {
+    count: 0,
+    notifications: [],
+    role: '',
+    generated_at: new Date().toISOString(),
+  };
+}
+
+const Loader2 = (props: any) => <LazyIcon name="Loader2" {...props} />;
+const RefreshCw = (props: any) => <LazyIcon name="RefreshCw" {...props} />;
+
+function relativeTimeLabel(value: string | null) {
+  if (!value) {
+    return 'Just now';
+  }
+
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) {
+    return 'Just now';
+  }
+
+  const deltaSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (deltaSeconds < 60) {
+    return 'Just now';
+  }
+  if (deltaSeconds < 3600) {
+    const minutes = Math.floor(deltaSeconds / 60);
+    return `${minutes} min ago`;
+  }
+  if (deltaSeconds < 86400) {
+    const hours = Math.floor(deltaSeconds / 3600);
+    return `${hours} hr ago`;
+  }
+  const days = Math.floor(deltaSeconds / 86400);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+function iconForLevel(level: NotificationItem['level']) {
+  if (level === 'critical' || level === 'warning') {
+    return <LazyIcon name="TriangleAlert" className="size-4 text-amber-600" />;
+  }
+  if (level === 'success') {
+    return <LazyIcon name="CheckCircle2" className="size-4 text-emerald-600" />;
+  }
+  return <LazyIcon name="Info" className="size-4 text-sky-600" />;
+}
+
+function borderClassForLevel(level: NotificationItem['level']) {
+  if (level === 'critical') {
+    return 'border-rose-200 bg-rose-50/80';
+  }
+  if (level === 'warning') {
+    return 'border-amber-200 bg-amber-50/80';
+  }
+  if (level === 'success') {
+    return 'border-emerald-200 bg-emerald-50/80';
+  }
+  return 'border-slate-200 bg-slate-50/80';
+}
+
+async function readErrorMessage(response: Response, fallback: string) {
+  const parsed = await readHttpResponse<Record<string, unknown>>(response);
+  return getHttpErrorMessage(response, parsed, fallback);
+}
+
+async function readNotificationsPayload(response: Response) {
+  const parsed = await readHttpResponse<Partial<NotificationsPayload>>(response);
+  if (!parsed.data || typeof parsed.data !== 'object') {
+    return createEmptyNotificationsPayload();
+  }
+
+  const notifications = Array.isArray(parsed.data.notifications)
+    ? parsed.data.notifications.filter(Boolean) as NotificationItem[]
+    : [];
+  const count = typeof parsed.data.count === 'number' && Number.isFinite(parsed.data.count)
+    ? parsed.data.count
+    : notifications.length;
+
+  return {
+    count,
+    notifications,
+    role: typeof parsed.data.role === 'string' ? parsed.data.role : '',
+    generated_at:
+      typeof parsed.data.generated_at === 'string' && parsed.data.generated_at.trim()
+        ? parsed.data.generated_at
+        : new Date().toISOString(),
+  } satisfies NotificationsPayload;
+}
+
+function openNotificationsRealtimeStream(token: string) {
+  const params = new URLSearchParams({ token });
+  return new EventSource(`/api/notifications/stream?${params.toString()}`);
+}
+
+function formatDetailLabel(key: string) {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+export default function NotificationBell() {
+  const router = useRouter();
+  const { token, isAuthenticated, isLoading, refreshToken, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const [selectedNotification, setSelectedNotification] = useState<NotificationItem | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
+  const [payload, setPayload] = useState<NotificationsPayload>(createEmptyNotificationsPayload);
+
+  const fetchWithAuthRetry = useCallback(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const sendRequest = async (authToken: string | null) => {
+        const headers = new Headers(init?.headers || undefined);
+        if (authToken || token) {
+          headers.set('Authorization', `Bearer ${authToken || token}`);
+        }
+        return fetch(input, {
+          ...init,
+          headers,
+          cache: 'no-store',
+        });
+      };
+
+      let response = await sendRequest(token);
+      if (response.status !== 401) {
+        return response;
+      }
+
+      const nextToken = await refreshToken();
+      if (!nextToken) {
+        throw new Error('Session expired. Please sign in again.');
+      }
+
+      response = await sendRequest(nextToken);
+      if (response.status === 401) {
+        logout();
+        throw new Error('Session expired. Please sign in again.');
+      }
+
+      return response;
+    },
+    [logout, refreshToken, token],
+  );
+
+  const loadNotifications = useCallback(
+    async (mode: 'initial' | 'refresh' = 'initial') => {
+      if (isLoading) {
+        return;
+      }
+
+      if (!isAuthenticated || !token) {
+        setPayload(createEmptyNotificationsPayload());
+        setError('');
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+
+      if (mode === 'initial') {
+        setLoading(true);
+      } else {
+        setRefreshing(true);
+      }
+      setError('');
+
+      try {
+        const response = await fetchWithAuthRetry('/api/notifications');
+        if (!response.ok) {
+          throw new Error(await readErrorMessage(response, 'Unable to load notifications right now.'));
+        }
+        const nextPayload = await readNotificationsPayload(response);
+        setPayload(nextPayload);
+      } catch (loadError) {
+        setError(loadError instanceof Error ? loadError.message : 'Unable to load notifications right now.');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+    },
+    [fetchWithAuthRetry, isAuthenticated, isLoading, token],
+  );
+
+  useEffect(() => {
+    void loadNotifications();
+  }, [loadNotifications]);
+
+  useEffect(() => {
+    if (!isAuthenticated || !token) {
+      return undefined;
+    }
+
+    let stream: EventSource | null = null;
+    const intervalId = window.setInterval(() => {
+      void loadNotifications('refresh');
+    }, 60000);
+
+    try {
+      stream = openNotificationsRealtimeStream(token);
+      stream.addEventListener('notifications', () => {
+        void loadNotifications('refresh');
+      });
+      stream.onerror = () => {
+        stream?.close();
+      };
+    } catch {
+      // Polling remains available when realtime cannot connect.
+    }
+
+    return () => {
+      window.clearInterval(intervalId);
+      stream?.close();
+    };
+  }, [isAuthenticated, loadNotifications, token]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    void loadNotifications('refresh');
+  }, [loadNotifications, open]);
+
+  const handleReadNotification = useCallback(async (notificationId: string, href?: string) => {
+    const normalizedHref = (href || '').trim();
+
+    // Immediate UI update
+    setPayload((prevPayload) => {
+      const filtered = prevPayload.notifications.filter((item) => {
+        if (item.id === notificationId) {
+          return false;
+        }
+        if (normalizedHref && item.href === normalizedHref) {
+          return false;
+        }
+        return true;
+      });
+      return {
+        ...prevPayload,
+        notifications: filtered,
+        count: filtered.length,
+      };
+    });
+
+    try {
+      const response = await fetchWithAuthRetry('/api/notifications/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notification_id: notificationId,
+          href: normalizedHref,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(await readErrorMessage(response, 'Unable to update the notification right now.'));
+      }
+    } catch (error) {
+      console.error('Error marking notification as read:', error);
+      setError(error instanceof Error ? error.message : 'Unable to update the notification right now.');
+    } finally {
+      void loadNotifications('refresh');
+    }
+  }, [fetchWithAuthRetry, loadNotifications]);
+
+  const handleOpenNotification = useCallback(
+    async (notification: NotificationItem) => {
+      setOpen(false);
+      setSelectedNotification(notification);
+      await handleReadNotification(notification.id, notification.href);
+    },
+    [handleReadNotification],
+  );
+
+  const badgeLabel = useMemo(() => {
+    if (!payload.count) {
+      return '';
+    }
+    return payload.count > 9 ? '9+' : String(payload.count);
+  }, [payload.count]);
+  const detailEntries = useMemo(
+    () =>
+      Object.entries(selectedNotification?.details || {}).filter(([, value]) => {
+        if (value === null || value === undefined) {
+          return false;
+        }
+        if (typeof value === 'string') {
+          return value.trim().length > 0;
+        }
+        if (Array.isArray(value)) {
+          return value.length > 0;
+        }
+        return true;
+      }),
+    [selectedNotification],
+  );
+
+  return (
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label="Open notifications"
+            title="Notifications"
+            className="relative rounded-lg p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <LazyIcon name="Bell" size={20} />
+            {payload.count > 0 ? (
+              <span className="absolute -right-1 -top-1 inline-flex min-h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
+                {badgeLabel}
+              </span>
+            ) : null}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-[420px] max-w-[calc(100vw-1.5rem)] p-0">
+          <div className="border-b border-border px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-foreground">Notifications</div>
+                <div className="text-xs text-muted-foreground">
+                  Role-based alerts for tasks and updates you need to know.
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadNotifications('refresh')}
+                className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Refresh notifications"
+                title="Refresh notifications"
+              >
+                {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+              </button>
+            </div>
+          </div>
+
+          <div className="max-h-[420px] overflow-y-auto px-4 py-3">
+            {loading ? (
+              <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+                <Loader2 className="size-4 animate-spin" />
+                Loading notifications...
+              </div>
+            ) : null}
+
+            {!loading && error ? (
+              <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-700">
+                {error}
+              </div>
+            ) : null}
+
+            {!loading && !error && !payload.notifications.length ? (
+              <div className="rounded-xl border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                No new notifications.
+              </div>
+            ) : null}
+
+            {!loading && !error ? (
+              <div className="space-y-3">
+                {payload.notifications.map((notification) => (
+                  <button
+                    key={notification.id}
+                    type="button"
+                    onClick={() => {
+                      void handleOpenNotification(notification);
+                    }}
+                    className={`block w-full rounded-2xl border px-4 py-3 text-left transition-colors hover:bg-muted/70 ${borderClassForLevel(notification.level)}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        <span className="mt-0.5">{iconForLevel(notification.level)}</span>
+                        <div>
+                          <div className="text-sm font-semibold text-foreground">{notification.title}</div>
+                          <div className="mt-1 text-sm text-muted-foreground">{notification.message}</div>
+                        </div>
+                      </div>
+                      <span className="text-[11px] text-muted-foreground">
+                        {relativeTimeLabel(notification.created_at)}
+                      </span>
+                    </div>
+                    <div className="mt-3 inline-flex items-center gap-2 text-xs font-medium text-primary">
+                      {notification.action_label}
+                      <LazyIcon name="ExternalLink" className="size-3.5" />
+                    </div>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </PopoverContent>
+      </Popover>
+
+      <Dialog open={!!selectedNotification} onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          setSelectedNotification(null);
+        }
+      }}>
+        <DialogContent size="lg">
+          <DialogHeader>
+            <DialogTitle>{selectedNotification?.title || 'Notification'}</DialogTitle>
+            <DialogDescription>
+              {selectedNotification?.message || 'Review the full notification details below.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className={`rounded-2xl border px-4 py-4 ${borderClassForLevel(selectedNotification?.level || 'info')}`}>
+              <div className="flex items-start gap-3">
+                <span className="mt-0.5">{iconForLevel(selectedNotification?.level || 'info')}</span>
+                <div className="space-y-2">
+                  <div className="text-sm font-medium text-foreground">{selectedNotification?.message}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {selectedNotification?.created_at ? `Received ${relativeTimeLabel(selectedNotification.created_at)}` : 'Received just now'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {detailEntries.length ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {detailEntries.map(([key, value]) => (
+                  <div key={key} className="rounded-2xl border border-border/70 bg-muted/25 px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                      {formatDetailLabel(key)}
+                    </div>
+                    <div className="mt-2 text-sm text-foreground">
+                      {Array.isArray(value) ? value.join(', ') : String(value)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setSelectedNotification(null)}>
+              Close
+            </Button>
+            {selectedNotification?.href ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  const href = selectedNotification.href;
+                  setSelectedNotification(null);
+                  router.push(href);
+                }}
+              >
+                {selectedNotification.action_label || 'Open'}
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}

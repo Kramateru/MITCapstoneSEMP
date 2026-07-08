@@ -1,0 +1,37 @@
+Syncing frontend dependencies to the latest checked-in state...
+npm error code ERESOLVE
+npm error ERESOLVE could not resolve
+npm error
+npm error While resolving: react-day-picker@8.10.1
+npm error Found: react@19.2.3
+npm error node_modules/react
+npm error   react@"19.2.3" from the root project
+npm error   peer react@">=16.8.0" from @floating-ui/react-dom@2.1.8
+npm error   node_modules/@floating-ui/react-dom
+npm error     @floating-ui/react-dom@"^2.0.0" from @radix-ui/react-popper@1.2.2
+npm error     node_modules/@radix-ui/react-popper
+npm error       @radix-ui/react-popper@"1.2.2" from @radix-ui/react-hover-card@1.1.6
+npm error       node_modules/@radix-ui/react-hover-card
+npm error         @radix-ui/react-hover-card@"1.1.6" from the root project
+npm error       4 more (@radix-ui/react-menu, @radix-ui/react-popover, ...)
+npm error   68 more (@radix-ui/react-accordion, ...)
+npm error
+npm error Could not resolve dependency:
+npm error peer react@"^16.8.0 || ^17.0.0 || ^18.0.0" from react-day-picker@8.10.1
+npm error node_modules/react-day-picker
+npm error   react-day-picker@"8.10.1" from the root project
+npm error
+npm error Conflicting peer dependency: react@18.3.1
+npm error node_modules/react
+npm error   peer react@"^16.8.0 || ^17.0.0 || ^18.0.0" from react-day-picker@8.10.1
+npm error   node_modules/react-day-picker
+npm error     react-day-picker@"8.10.1" from the root project
+npm error
+npm error Fix the upstream dependency conflict, or retry
+npm error this command with --force or --legacy-peer-deps
+npm error to accept an incorrect (and potentially broken) dependency resolution.
+npm error
+npm error
+npm error For a full report see:
+npm error C:\Users\Mark Ureta\AppData\Local\npm-cache\_logs\2026-07-03T09_00_35_329Z-eresolve-report.txt
+npm error A complete log of this run can be found in: C:\Users\Mark Ureta\AppData\Local\npm-cache\_logs\2026-07-03T09_00_35_329Z-debug-0.log
