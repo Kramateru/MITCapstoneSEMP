@@ -192,6 +192,17 @@ Startup limitations to keep in mind:
 - The backend launcher requires a valid Python runtime in `backend\venv\Scripts\python.exe`, `venv\Scripts\python.exe`, or on `PATH` as `python.exe` / `py.exe`.
 - If the frontend or backend dependency install is skipped, the existing installed artifacts must already be present and valid.
 
+### 6.6 Current Runtime Notes and Recent Improvements
+
+The current implementation has been hardened to reduce avoidable authentication failures during normal startup and login flow. Recent updates improved session handling so that:
+
+- stale or previously stored tokens no longer trigger a false "session expired" message while the user is still on the login page;
+- backend session validation degrades gracefully when the session tracking table is temporarily unavailable;
+- explicit logout or forced-termination events are surfaced clearly, while generic stale-session errors are suppressed to avoid confusing the user;
+- the platform can still authenticate and route users correctly when session tracking is partially unavailable, provided the core Supabase and backend configuration are valid.
+
+In practice, the recommended runtime path remains the same: start the backend and frontend through the repository launch scripts from the project root so both services use the same environment configuration.
+
 ## 7. Functional Module Catalog
 
 ### 7.1 Authentication and Session Management

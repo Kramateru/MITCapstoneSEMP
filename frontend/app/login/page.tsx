@@ -63,7 +63,10 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!isAuthLoading && isAuthenticated && user) {
-      navigateToPath(getPostLoginPath(user))
+      const redirectPath = getPostLoginPath(user)
+      if (redirectPath) {
+        navigateToPath(redirectPath)
+      }
     }
   }, [isAuthLoading, isAuthenticated, user])
 
@@ -148,9 +151,10 @@ export default function LoginPage() {
         role: signedInUser.user_role,
         redirectPath,
       })
-      if (!navigateToPath(redirectPath)) {
-        setIsSubmitting(false)
+      if (redirectPath) {
+        navigateToPath(redirectPath)
       }
+      setIsSubmitting(false)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Login failed'
       setError(message)

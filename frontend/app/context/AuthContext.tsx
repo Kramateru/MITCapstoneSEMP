@@ -73,6 +73,11 @@ const AUTH_STORAGE_KEYS = [
   STRICT_SINGLE_SESSION_KEY,
   'user',
 ]
+
+const AUTH_STORAGE_CANDIDATES = [
+  window?.sessionStorage,
+  window?.localStorage,
+].filter(Boolean) as Storage[]
 const expectedLoginErrorPatterns = [
   /^invalid email or password$/i,
   /^email is required\.?$/i,
@@ -218,11 +223,19 @@ function getStoredValue(key: string) {
     return null
   }
 
-  try {
-    return window.sessionStorage.getItem(key)
-  } catch {
-    return null
+  const storages = [window.sessionStorage, window.localStorage]
+  for (const storage of storages) {
+    try {
+      const value = storage.getItem(key)
+      if (value) {
+        return value
+      }
+    } catch {
+      // Ignore storage access errors and continue to the next candidate.
+    }
   }
+
+  return null
 }
 
 function getAuthStorageForWrite() {
@@ -231,6 +244,25 @@ function getAuthStorageForWrite() {
   }
 
   return window.sessionStorage
+}
+
+function persistAuthValueToAllStorages(key: string, value: string | null) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  const storages = [window.sessionStorage, window.localStorage]
+  for (const storage of storages) {
+    try {
+      if (value === null) {
+        storage.removeItem(key)
+      } else {
+        storage.setItem(key, value)
+      }
+    } catch {
+      // Ignore storage access errors.
+    }
+  }
 }
 
 function readStoredAuthState() {
@@ -243,14 +275,14 @@ function readStoredAuthState() {
   }
 
   try {
-    const storageCandidates = [window.sessionStorage]
+    const storageCandidates = [window.sessionStorage, window.localStorage]
     const selectedStorage = storageCandidates.find((storage) => {
       return Boolean(storage.getItem('token') && storage.getItem('user'))
     })
 
-    const savedToken = selectedStorage?.getItem('token') || null
-    const savedRefreshToken = selectedStorage?.getItem('refresh_token') || null
-    const savedUser = selectedStorage?.getItem('user') || null
+    const savedToken = selectedStorage?.getItem('token') || getStoredValue('token') || null
+    const savedRefreshToken = selectedStorage?.getItem('refresh_token') || getStoredValue('refresh_token') || null
+    const savedUser = selectedStorage?.getItem('user') || getStoredValue('user') || null
 
     if (!savedToken || !savedUser) {
       return {
@@ -364,32 +396,29 @@ function persistAuthState(payload: AuthApiPayload, nextUser: User, fallbackRefre
     typeof payload.strict_single_session === 'boolean'
       ? payload.strict_single_session
       : readStrictSingleSessionFlag()
-  const targetStorage = window.sessionStorage
-  const secondaryStorage = window.localStorage
+  clearStorage(window.localStorage)
 
-  clearStorage(secondaryStorage)
-
-  targetStorage.setItem('token', accessToken)
+  persistAuthValueToAllStorages('token', accessToken)
   if (refreshToken) {
-    targetStorage.setItem('refresh_token', refreshToken)
+    persistAuthValueToAllStorages('refresh_token', refreshToken)
   } else {
-    targetStorage.removeItem('refresh_token')
+    persistAuthValueToAllStorages('refresh_token', null)
   }
   if (typeof payload.supabase_access_token === 'string' && payload.supabase_access_token.trim()) {
-    targetStorage.setItem(SUPABASE_ACCESS_TOKEN_KEY, payload.supabase_access_token)
+    persistAuthValueToAllStorages(SUPABASE_ACCESS_TOKEN_KEY, payload.supabase_access_token)
   } else {
-    targetStorage.removeItem(SUPABASE_ACCESS_TOKEN_KEY)
+    persistAuthValueToAllStorages(SUPABASE_ACCESS_TOKEN_KEY, null)
   }
   if (typeof payload.supabase_refresh_token === 'string' && payload.supabase_refresh_token.trim()) {
-    targetStorage.setItem(SUPABASE_REFRESH_TOKEN_KEY, payload.supabase_refresh_token)
+    persistAuthValueToAllStorages(SUPABASE_REFRESH_TOKEN_KEY, payload.supabase_refresh_token)
   } else {
-    targetStorage.removeItem(SUPABASE_REFRESH_TOKEN_KEY)
+    persistAuthValueToAllStorages(SUPABASE_REFRESH_TOKEN_KEY, null)
   }
   if (typeof payload.session_id === 'string' && payload.session_id.trim()) {
-    targetStorage.setItem(ACTIVE_SESSION_ID_KEY, payload.session_id)
+    persistAuthValueToAllStorages(ACTIVE_SESSION_ID_KEY, payload.session_id)
   }
-  targetStorage.setItem(STRICT_SINGLE_SESSION_KEY, strictSingleSession ? '1' : '0')
-  targetStorage.setItem('user', JSON.stringify(nextUser))
+  persistAuthValueToAllStorages(STRICT_SINGLE_SESSION_KEY, strictSingleSession ? '1' : '0')
+  persistAuthValueToAllStorages('user', JSON.stringify(nextUser))
   writeAuthSessionCookies(accessToken, nextUser, refreshToken)
 }
 
