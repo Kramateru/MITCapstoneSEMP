@@ -407,16 +407,6 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
     return () => window.clearInterval(intervalId);
   }, [assessmentStarted, questions, results]);
 
-  useEffect(() => {
-    if (!assessmentStarted || !questions.length || results || timeRemaining > 0 || isSubmitting) {
-      return;
-    }
-
-    toast.error('Time is up. Your current answers are being submitted.');
-    void submitAssessment(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assessmentStarted, isSubmitting, questions.length, results, timeRemaining]);
-
   const handleSelectAnswer = (answerIndex: number) => {
     const current = questions[currentQuestion];
     if (!current) {
@@ -541,6 +531,16 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    if (!assessmentStarted || !questions.length || results || timeRemaining > 0 || isSubmitting) {
+      return;
+    }
+
+    toast.error('Time is up. Your current answers are being submitted.');
+    void submitAssessment(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assessmentStarted, isSubmitting, questions.length, results, timeRemaining]);
 
   const startAssessment = async () => {
     if (!selectedAssessment) {

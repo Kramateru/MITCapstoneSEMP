@@ -87,7 +87,7 @@ export function AiInsightBoard({
             <div
               key={section.title}
               className={cn(
-                'analytics-note-card flex h-full flex-col rounded-[1.55rem] border p-5 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.18)] sm:p-6',
+                'analytics-note-card flex flex-col rounded-[1.55rem] border p-5 shadow-[0_18px_38px_-30px_rgba(15,23,42,0.18)] sm:p-6',
                 tone.card,
               )}
             >
@@ -105,7 +105,7 @@ export function AiInsightBoard({
                 </span>
               </div>
 
-              <div className="mt-4 flex-1 text-[0.95rem] leading-7 text-slate-700">
+              <div className="mt-4 text-[0.95rem] leading-7 text-slate-700">
                 {items.length ? (
                   <ul className="space-y-3">
                     {items.map((item, index) => (

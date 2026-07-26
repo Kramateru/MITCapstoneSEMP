@@ -646,7 +646,7 @@ export function DashboardLayout({
           className="flex-1 min-h-0 overflow-x-hidden overflow-y-auto overscroll-contain [scrollbar-gutter:stable_both-edges]"
           tabIndex={-1}
         >
-          <div className={`dashboard-page mx-auto w-full min-h-full ${contentOuterSpacingClass} ${contentWidthClass}`}>
+          <div className={`dashboard-page mx-auto w-full ${contentOuterSpacingClass} ${contentWidthClass}`}>
             <div
               className={`workspace-shell rounded-[1.35rem] text-card-foreground ${contentInnerSpacingClass}`}
             >

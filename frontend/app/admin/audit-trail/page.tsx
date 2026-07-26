@@ -417,7 +417,7 @@ export default function AdminAuditTrailPage() {
           </div>
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid gap-5">
           <div className="data-card p-5">
             <div className="flex items-center justify-between gap-3">
               <div>
@@ -436,34 +436,6 @@ export default function AdminAuditTrailPage() {
                   <Bar dataKey="count" radius={[6, 6, 0, 0]} fill="#11906f" />
                 </BarChart>
               </ResponsiveContainer>
-            </div>
-          </div>
-
-          <div className="data-card p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-semibold text-foreground">Recent Critical Actions</h3>
-                <p className="mt-1 text-sm text-muted-foreground">Warnings and critical events for investigation.</p>
-              </div>
-              <Badge variant="warning">Watchlist</Badge>
-            </div>
-            <div className="mt-5 space-y-3">
-              {summary?.recent_critical.length ? summary.recent_critical.map((log) => (
-                <button
-                  key={log.id}
-                  type="button"
-                  onClick={() => setSelectedLog(log)}
-                  className="w-full rounded-xl border border-border/80 bg-white px-4 py-3 text-left transition hover:border-primary/20 hover:bg-slate-50"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-foreground">{labelize(log.action_type)}</span>
-                    <Badge variant={severityVariant(log.severity)}>{labelize(log.severity)}</Badge>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{log.description || log.endpoint}</p>
-                </button>
-              )) : (
-                <div className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">No warning or critical audit events yet.</div>
-              )}
             </div>
           </div>
         </div>

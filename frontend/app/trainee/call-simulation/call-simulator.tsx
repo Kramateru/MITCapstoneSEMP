@@ -260,7 +260,7 @@ export function CallSimulator({
         console.debug('Audit logging failed:', error);
       }
     },
-    [sessionData?.session_id],
+    [sessionData],
   );
 
   /**
@@ -547,7 +547,7 @@ export function CallSimulator({
     lastTranscript,
     logCallEvent,
     orderedSteps,
-    sessionData?.session_id,
+    sessionData,
     setMicrophoneMuted,
     startCurrentCsrRecording,
     stopRecording,
@@ -736,8 +736,7 @@ export function CallSimulator({
       });
     }
   }, [
-    sessionData?.session_id,
-    sessionData?.attempt_number,
+    sessionData,
     logCallEvent,
     selectedScenario,
     selectedScenarioId,
@@ -1633,6 +1632,7 @@ export function CallSimulator({
       {screen === 'preaccept' && renderPreAccept()}
       {screen === 'incoming' && renderIncoming()}
       {screen === 'countdown' && renderCountdown()}
+      {/* eslint-disable-next-line react-hooks/refs */}
       {screen === 'active' && renderActiveCall()}
       {screen === 'processing' && renderProcessing()}
       {screen === 'result' && renderResult()}

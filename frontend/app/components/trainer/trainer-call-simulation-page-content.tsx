@@ -2410,11 +2410,13 @@ export default function TrainerSimFloorPage() {
     rowIndex: number,
     replaceAudioUrl?: string | null,
     rows?: ScenarioRowForm[],
+    options?: { requireStoredAudio?: boolean },
   ) => {
+      const requireStoredAudio = options?.requireStoredAudio ?? Boolean(editingScenarioId);
       const params = new URLSearchParams({
         text: script.trim(),
         persist: 'true',
-        require_supabase: 'true',
+        require_supabase: requireStoredAudio ? 'true' : 'false',
         asset_kind: 'member-step',
       });
       const memberStepNumber = getMemberStepNumberForRowIndex(rows ?? scenarioForm.rows, rowIndex);
@@ -2440,7 +2442,7 @@ export default function TrainerSimFloorPage() {
         throw error instanceof Error ? error : new Error('Unable to generate member speech');
       }
 
-      if (!isSupabaseManagedScenarioAudioUrl(payload?.audio_url)) {
+      if (requireStoredAudio && !isSupabaseManagedScenarioAudioUrl(payload?.audio_url)) {
         throw new Error('Member speech generation did not return a stored audio URL.');
       }
 
@@ -2484,13 +2486,17 @@ export default function TrainerSimFloorPage() {
         upsertScenarioAudioAsset(result.audioAsset);
       }
       if (!result.audioUrl) {
-        throw new Error('The generated Member speech did not return a stored audio URL.');
+        throw new Error('The generated Member speech did not return playable audio.');
       }
       if (result.warning) {
-        toast.success('Member speech generated and saved for trainee playback.');
+        toast.success(isSupabaseManagedScenarioAudioUrl(result.audioUrl)
+          ? 'Member speech generated and saved for trainee playback.'
+          : 'Member speech generated for this draft.');
         toast.info(result.warning);
-      } else {
+      } else if (isSupabaseManagedScenarioAudioUrl(result.audioUrl)) {
         toast.success('Member speech generated and stored for trainee playback.');
+      } else {
+        toast.success('Member speech generated for this draft. Save the scenario to store it for trainee playback.');
       }
     } catch (error) {
       console.error(error);
@@ -2498,7 +2504,7 @@ export default function TrainerSimFloorPage() {
     } finally {
       setGeneratingSpeechRowIndex(null);
     }
-  }, [requestMemberSpeechAsset, scenarioForm.rows, upsertScenarioAudioAsset]);
+  }, [isSupabaseManagedScenarioAudioUrl, requestMemberSpeechAsset, scenarioForm.rows, upsertScenarioAudioAsset]);
 
   const generateMissingMemberSpeechForSave = useCallback(async (rows: ScenarioRowForm[]) => {
     const rowsToGenerate = rows
@@ -2516,7 +2522,9 @@ export default function TrainerSimFloorPage() {
     const nextRows = [...rows];
 
     for (const entry of rowsToGenerate) {
-      const result = await requestMemberSpeechAsset(entry.row.script.trim(), entry.index, entry.row.audio_url, rows);
+      const result = await requestMemberSpeechAsset(entry.row.script.trim(), entry.index, entry.row.audio_url, rows, {
+        requireStoredAudio: true,
+      });
       if (!result.audioUrl) {
         throw new Error(
           `Member speech generation failed for row ${entry.index + 1}. Please generate the audio manually or try again.`,
@@ -2576,7 +2584,7 @@ export default function TrainerSimFloorPage() {
             upsertScenarioAudioAsset(result.audioAsset);
           }
           if (!result.audioUrl) {
-            throw new Error(`The generated speech for Member row ${entry.index + 1} did not return a stored audio URL.`);
+            throw new Error(`The generated speech for Member row ${entry.index + 1} did not return playable audio.`);
           }
           successCount += 1;
         } catch (error) {
@@ -2592,7 +2600,7 @@ export default function TrainerSimFloorPage() {
       }
 
       if (failedCount === 0) {
-        toast.success(`Generated stored speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
+        toast.success(`Generated speech for ${successCount} Member row${successCount === 1 ? '' : 's'}.`);
         return;
       }
 
@@ -2705,7 +2713,7 @@ export default function TrainerSimFloorPage() {
     }
   };
 
-  const selectedTranscriptEntries = useMemo<TranscriptTimelineEntry[]>(() => {
+  const selectedTranscriptEntries: TranscriptTimelineEntry[] = (() => {
     if (!selectedInteraction?.transcript_log?.length) {
       return [];
     }
@@ -2726,7 +2734,7 @@ export default function TrainerSimFloorPage() {
           (left.timeline_start_seconds ?? left.step_number ?? 0) -
           (right.timeline_start_seconds ?? right.step_number ?? 0),
       );
-  }, [selectedInteraction?.transcript_log]);
+  })();
 
   const activeTranscriptIndex = useMemo(
     () =>

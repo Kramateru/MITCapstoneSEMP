@@ -260,17 +260,14 @@ export default function TraineeDashboard() {
     [prioritizedSimFloorScenario],
   );
 
-  const simFloorDescription = useMemo(
-    () =>
-      prioritizedSimFloorScenario
-        ? prioritizedSimFloorScenario.retake_required
-          ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest verdict.`
-          : `Open "${prioritizedSimFloorScenario.title}" and start your assigned mock call.`
-        : simFloorReport?.summary.retakes
-          ? `${simFloorReport.summary.retakes} call simulation retake${simFloorReport.summary.retakes === 1 ? '' : 's'} are still pending.`
-          : 'Resume assigned call scenarios, record your CSR responses, and review saved results.',
-    [prioritizedSimFloorScenario, simFloorReport?.summary.retakes],
-  );
+  const simFloorRetakes = simFloorReport?.summary.retakes ?? 0;
+  const simFloorDescription = prioritizedSimFloorScenario
+    ? prioritizedSimFloorScenario.retake_required
+      ? `Retake "${prioritizedSimFloorScenario.title}" and clear your trainer's latest verdict.`
+      : `Open "${prioritizedSimFloorScenario.title}" and start your assigned mock call.`
+    : simFloorRetakes
+      ? `${simFloorRetakes} call simulation retake${simFloorRetakes === 1 ? '' : 's'} are still pending.`
+      : 'Resume assigned call scenarios, record your CSR responses, and review saved results.';
 
   const strengthChecks = useMemo(
     () => ({

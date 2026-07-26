@@ -48,7 +48,7 @@ export function ReportNavigation({
               type="button"
               onClick={() => onChange(item.value)}
               className={cn(
-                'group flex min-h-full flex-col rounded-[26px] border bg-white p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 sm:p-5',
+                'group flex flex-col rounded-[26px] border bg-white p-4 text-left shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 sm:p-5',
                 isActive
                   ? 'border-sky-300 bg-sky-50/70 shadow-sky-100'
                   : 'border-slate-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md',
@@ -80,7 +80,7 @@ export function ReportNavigation({
                 <p className="mt-2 text-sm leading-6 text-slate-600">{item.description}</p>
               </div>
 
-              <div className="mt-4 grid gap-2 sm:mt-auto sm:grid-cols-3">
+              <div className="mt-4 grid gap-2 sm:grid-cols-3">
                 {item.metrics.map((metric) => (
                   <div key={`${item.value}-${metric.label}`} className="rounded-2xl bg-slate-50 px-3 py-2">
                     <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">

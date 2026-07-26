@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { DayPicker, getDefaultClassNames } from "react-day-picker";
+import { DayPicker } from "react-day-picker";
 import { LazyIcon } from "./LazyIcon";
 
 import { buttonVariants } from "./button";
@@ -13,61 +13,53 @@ function Calendar({
   showOutsideDays = true,
   ...props
 }: React.ComponentProps<typeof DayPicker>) {
-  const defaultClassNames = getDefaultClassNames();
-
   const calendarClassNames = {
-    root: cn("p-3", classNames?.root, defaultClassNames.root),
-    months: cn("flex flex-col sm:flex-row gap-2", classNames?.months, defaultClassNames.months),
-    month: cn("flex flex-col gap-4", classNames?.month, defaultClassNames.month),
-    month_caption: cn(
+    root: cn("p-3", classNames?.root),
+    months: cn("flex flex-col sm:flex-row gap-2", classNames?.months),
+    month: cn("flex flex-col gap-4", classNames?.month),
+    caption: cn(
       "flex justify-center pt-1 relative items-center w-full",
-      classNames?.month_caption,
-      defaultClassNames.month_caption,
+      classNames?.caption,
     ),
-    caption_label: cn("text-sm font-medium", classNames?.caption_label, defaultClassNames.caption_label),
-    nav: cn("flex items-center gap-1", classNames?.nav, defaultClassNames.nav),
-    button_previous: cn(
+    caption_label: cn("text-sm font-medium", classNames?.caption_label),
+    caption_dropdowns: cn(classNames?.caption_dropdowns),
+    dropdown: cn(classNames?.dropdown),
+    nav: cn("flex items-center gap-1", classNames?.nav),
+    nav_button: cn(
       buttonVariants({ variant: "outline" }),
       "size-7 bg-transparent p-0 opacity-50 hover:opacity-100",
-      classNames?.button_previous,
-      defaultClassNames.button_previous,
+      classNames?.nav_button,
     ),
-    button_next: cn(
+    nav_button_previous: cn(
       buttonVariants({ variant: "outline" }),
       "size-7 bg-transparent p-0 opacity-50 hover:opacity-100",
-      classNames?.button_next,
-      defaultClassNames.button_next,
+      classNames?.nav_button_previous,
     ),
-    month_grid: cn("w-full border-collapse space-x-1", classNames?.month_grid, defaultClassNames.month_grid),
-    weekdays: cn("flex", classNames?.weekdays, defaultClassNames.weekdays),
-    weekday: cn(
+    nav_button_next: cn(
+      buttonVariants({ variant: "outline" }),
+      "size-7 bg-transparent p-0 opacity-50 hover:opacity-100",
+      classNames?.nav_button_next,
+    ),
+    table: cn("w-full border-collapse space-x-1", classNames?.table),
+    head_row: cn("flex", classNames?.head_row),
+    head_cell: cn(
       "flex-1 rounded-md text-[0.8rem] font-normal text-muted-foreground select-none",
-      classNames?.weekday,
-      defaultClassNames.weekday,
+      classNames?.head_cell,
     ),
-    week: cn("mt-2 flex w-full", classNames?.week, defaultClassNames.week),
-    week_number_header: cn("w-(--cell-size) select-none", classNames?.week_number_header, defaultClassNames.week_number_header),
-    week_number: cn("text-[0.8rem] text-muted-foreground select-none", classNames?.week_number, defaultClassNames.week_number),
+    row: cn("mt-2 flex w-full", classNames?.row),
+    weeknumber: cn("text-[0.8rem] text-muted-foreground select-none", classNames?.weeknumber),
+    cell: cn("relative aspect-square h-full w-full p-0 text-center select-none", classNames?.cell),
     day: cn(
-      "group/day relative aspect-square h-full w-full p-0 text-center select-none",
-      classNames?.day,
-      defaultClassNames.day,
-    ),
-    day_button: cn(
       "flex aspect-square size-auto w-full min-w-(--cell-size) flex-col gap-1 leading-none font-normal",
-      classNames?.day_button,
-      defaultClassNames.day_button,
+      classNames?.day,
     ),
-    range_start: cn("rounded-l-md bg-accent", classNames?.range_start, defaultClassNames.range_start),
-    range_middle: cn("rounded-none", classNames?.range_middle, defaultClassNames.range_middle),
-    range_end: cn("rounded-r-md bg-accent", classNames?.range_end, defaultClassNames.range_end),
-    today: cn("bg-accent text-accent-foreground", classNames?.today, defaultClassNames.today),
-    outside: cn("text-muted-foreground aria-selected:text-muted-foreground", classNames?.outside, defaultClassNames.outside),
-    disabled: cn("text-muted-foreground opacity-50", classNames?.disabled, defaultClassNames.disabled),
-    hidden: cn("invisible", classNames?.hidden, defaultClassNames.hidden),
-    dropdowns: cn(classNames?.dropdowns, defaultClassNames.dropdowns),
-    dropdown_root: cn(classNames?.dropdown_root, defaultClassNames.dropdown_root),
-    dropdown: cn(classNames?.dropdown, defaultClassNames.dropdown),
+    day_range_start: cn("rounded-l-md bg-accent", classNames?.day_range_start),
+    day_range_middle: cn("rounded-none", classNames?.day_range_middle),
+    day_range_end: cn("rounded-r-md bg-accent", classNames?.day_range_end),
+    day_today: cn("bg-accent text-accent-foreground", classNames?.day_today),
+    day_outside: cn("text-muted-foreground aria-selected:text-muted-foreground", classNames?.day_outside),
+    day_disabled: cn("text-muted-foreground opacity-50", classNames?.day_disabled),
+    day_hidden: cn("invisible", classNames?.day_hidden),
   };
 
   return (
@@ -76,19 +68,8 @@ function Calendar({
       className={cn("p-3", className)}
       classNames={calendarClassNames}
       components={{
-        Chevron: ({ className, orientation, ...props }) => (
-          <LazyIcon
-            name={
-              orientation === "left"
-                ? "ChevronLeft"
-                : orientation === "right"
-                  ? "ChevronRight"
-                  : "ChevronDown"
-            }
-            className={cn("size-4", className)}
-            {...props}
-          />
-        ),
+        IconLeft: ({ className, ...props }) => <LazyIcon name="ChevronLeft" className={cn("size-4", className)} {...props} />,
+        IconRight: ({ className, ...props }) => <LazyIcon name="ChevronRight" className={cn("size-4", className)} {...props} />,
       }}
       {...props}
     />

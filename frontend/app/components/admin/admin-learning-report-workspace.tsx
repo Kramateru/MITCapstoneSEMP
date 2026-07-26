@@ -489,7 +489,7 @@ export function AdminLearningReportWorkspace() {
     ],
   )
 
-  const scopeBadges = useMemo(() => {
+  const scopeBadges = (() => {
     if (!data?.scope) {
       return [] as string[]
     }
@@ -514,7 +514,7 @@ export function AdminLearningReportWorkspace() {
     }
 
     return badges
-  }, [data?.scope])
+  })()
 
   return (
     <div className="analytics-page-shell">

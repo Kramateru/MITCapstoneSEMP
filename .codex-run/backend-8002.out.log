@@ -1,0 +1,65 @@
+Verifying backend Python files before startup...
+Starting backend in Supabase production mode using the latest checked-in code...
+The backend will validate Supabase and sync local users into auth.users during startup.
+Backend URL: http://127.0.0.1:8000
+INFO:     127.0.0.1:56068 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51402 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59144 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51483 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51483 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/verify-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/system HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/user/preferences HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/analytics/trainer/learning-insights HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/trainer/stats HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/certification/coaching/compliance HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/certification/coaching/hub HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/trainer/batches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/system HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/user/preferences HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/assessment-module/trainer/bootstrap HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/system HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/settings/user/preferences HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/scenarios HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/audio-settings HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/audio-assets?scope=shared HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/trainer/batches HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/scenarios HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/kpi-config/ea7b62b4-ac4b-4e33-a7d8-4478534dd6c1 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59730 - "GET /api/auth/verify-token HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/batch/ea7b62b4-ac4b-4e33-a7d8-4478534dd6c1/scenarios HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/call-simulation/coaching/interactions?batch_id=ea7b62b4-ac4b-4e33-a7d8-4478534dd6c1&limit=100 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "POST /api/auth/session/activity HTTP/1.1" 503 Service Unavailable
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:0 - "GET /api/auth/provider-status HTTP/1.1" 200 OK

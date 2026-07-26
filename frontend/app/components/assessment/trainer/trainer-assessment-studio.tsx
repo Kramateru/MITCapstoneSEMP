@@ -669,7 +669,7 @@ export function TrainerAssessmentStudio({
     const ownerId = categories.find((category) => category.id === assignmentDraft.categoryId)?.createdBy
     return (workspace?.batches || []).filter((batch) => !ownerId || !batch.createdBy || batch.createdBy === ownerId)
   }, [assignmentDraft.categoryId, categories, workspace?.batches])
-  const availableWaveOptions = useMemo(() => {
+  const availableWaveOptions = (() => {
     if (!workspace?.batches?.length) {
       return []
     }
@@ -699,7 +699,7 @@ export function TrainerAssessmentStudio({
         batchCount: meta.batchCount,
         traineeCount: meta.traineeCount,
       }))
-  }, [assignmentDraft.categoryId, categories, workspace?.batches])
+  })()
 
   const filteredCategories = useMemo(() => {
     const normalizedSearch = categorySearch.trim().toLowerCase()

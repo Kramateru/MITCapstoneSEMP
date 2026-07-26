@@ -499,14 +499,14 @@
     gap: clamp(0.45rem, 0.35rem + 0.35vw, 0.8rem);
     min-width: 0;
     overflow: visible;
-    min-height: 100%;
+    height: auto;
+    min-height: 0;
     border-radius: 1.25rem;
     border: 1px solid color-mix(in srgb, var(--border) 82%, white 18%);
     background:
       linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(252, 253, 255, 0.94)),
       var(--card);
     box-shadow: var(--dashboard-shell-shadow);
-    min-height: calc(100dvh - 8rem);
     backdrop-filter: blur(8px);
   }
 
@@ -552,14 +552,14 @@
     display: grid;
     gap: clamp(0.6rem, 0.5rem + 0.3vw, 0.9rem);
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-actions-grid {
     display: grid;
     gap: clamp(0.6rem, 0.5rem + 0.3vw, 0.9rem);
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-balanced-grid {
@@ -573,7 +573,7 @@
     display: grid;
     gap: clamp(0.55rem, 0.45rem + 0.25vw, 0.8rem);
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-page .gap-10 {
@@ -690,7 +690,7 @@
     display: grid;
     gap: 0.5rem;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-two-grid,
@@ -699,7 +699,7 @@
   .dashboard-five-grid {
     display: grid;
     gap: clamp(0.65rem, 0.5rem + 0.35vw, 1rem);
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-two-grid {
@@ -723,7 +723,7 @@
   [data-slot="alert-dialog-content"] :where(.grid[class*="grid-cols-4"], .grid[class*="grid-cols-5"], .grid[class*="grid-cols-6"], .grid[class*="grid-cols-7"], .grid[class*="grid-cols-8"], .grid[class*="grid-cols-9"], .grid[class*="grid-cols-10"], .grid[class*="grid-cols-11"], .grid[class*="grid-cols-12"]),
   [data-slot="sheet-content"] :where(.grid[class*="grid-cols-4"], .grid[class*="grid-cols-5"], .grid[class*="grid-cols-6"], .grid[class*="grid-cols-7"], .grid[class*="grid-cols-8"], .grid[class*="grid-cols-9"], .grid[class*="grid-cols-10"], .grid[class*="grid-cols-11"], .grid[class*="grid-cols-12"]) {
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 15.5rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .dashboard-page :where(.grid[class*="grid-cols-4"], .grid[class*="grid-cols-5"], .grid[class*="grid-cols-6"], .grid[class*="grid-cols-7"], .grid[class*="grid-cols-8"], .grid[class*="grid-cols-9"], .grid[class*="grid-cols-10"], .grid[class*="grid-cols-11"], .grid[class*="grid-cols-12"]) > *,
@@ -996,7 +996,7 @@
     display: grid;
     gap: clamp(0.65rem, 0.5rem + 0.35vw, 1rem);
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .responsive-detail-grid {
@@ -1144,14 +1144,14 @@
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 16.25rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .analytics-auto-grid {
     display: grid;
     gap: 1rem;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 16.25rem), 1fr)) !important;
-    align-items: stretch;
+    align-items: start;
   }
 
   .analytics-inline-stats {
@@ -1226,11 +1226,18 @@
     max-width: 100%;
   }
 
+  .dashboard-page :where(.dashboard-fill-card, .dashboard-stretch-grid > *, .dashboard-metrics-grid > *, .dashboard-actions-grid > *),
+  [data-slot="dialog-content"] :where(.dashboard-fill-card, .dashboard-stretch-grid > *),
+  [data-slot="alert-dialog-content"] :where(.dashboard-fill-card, .dashboard-stretch-grid > *),
+  [data-slot="sheet-content"] :where(.dashboard-fill-card, .dashboard-stretch-grid > *) {
+    height: 100%;
+  }
+
   .dashboard-page :where([data-slot="card"], .dashboard-card, .data-card, .soft-panel, .dashboard-section),
   [data-slot="dialog-content"] :where([data-slot="card"], .dashboard-card, .data-card, .soft-panel),
   [data-slot="alert-dialog-content"] :where([data-slot="card"], .dashboard-card, .data-card, .soft-panel),
   [data-slot="sheet-content"] :where([data-slot="card"], .dashboard-card, .data-card, .soft-panel) {
-    height: 100%;
+    min-height: 0;
   }
 
   .dashboard-page :where(input:not([data-slot]), textarea:not([data-slot]), select:not([data-slot])),
@@ -1418,7 +1425,7 @@
   }
 
   .workspace-shell {
-    min-height: auto;
+    min-height: 0;
   }
 }
 
@@ -1459,7 +1466,7 @@
 
 @media (max-width: 1024px) {
   .workspace-shell {
-    min-height: calc(100dvh - 7rem);
+    min-height: 0;
   }
 
   .analytics-page-actions > * {
@@ -1480,7 +1487,7 @@
   }
 
   .workspace-shell {
-    min-height: calc(100dvh - 6.25rem);
+    min-height: 0;
     border-radius: 1rem;
     box-shadow: 0 28px 72px -56px rgba(15, 23, 42, 0.34);
   }

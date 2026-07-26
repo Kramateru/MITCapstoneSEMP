@@ -8,20 +8,15 @@ type LazyIconProps = React.ComponentPropsWithoutRef<'svg'> & {
   [key: string]: unknown
 }
 
-function loadIcon(name: string) {
-  return dynamic(async () => {
-    const mod = await import('lucide-react')
-    // @ts-expect-error dynamic index
-    const Icon = mod[name] || mod.Activity
-    return Icon as React.ComponentType<any>
-  }, { ssr: false })
-}
+const DynamicLucideIcon = dynamic(
+  () => import('./lucide-icon-renderer').then((mod) => mod.LucideIconRenderer),
+  { ssr: false },
+)
 
 export function LazyIcon({ name, className, ...props }: LazyIconProps) {
-  const Icon = React.useMemo(() => loadIcon(name), [name])
   return (
     <Suspense fallback={<span className={className} /> }>
-      <Icon className={className} {...props} />
+      <DynamicLucideIcon name={name} className={className} {...props} />
     </Suspense>
   )
 }

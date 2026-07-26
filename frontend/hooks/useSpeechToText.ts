@@ -215,6 +215,8 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
     [cleanupGraph, cleanupStream, lastResult],
   );
 
+  const getAnalyser = useCallback(() => analyserRef.current, []);
+
   useEffect(() => {
     return () => {
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
@@ -233,6 +235,6 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
     audioLevel,
     error,
     lastResult,
-    analyser: analyserRef.current,
+    getAnalyser,
   };
 }

@@ -114,8 +114,8 @@ export function MetricCard({
   const toneStyle = toneStyles[tone];
 
   return (
-    <Card className={cn("metric-card min-h-full border-border/75 bg-gradient-to-br p-0", toneStyle.surface, className)}>
-      <CardContent className="flex h-full flex-col gap-3 p-3 sm:p-4 md:flex-row md:items-start md:justify-between">
+    <Card className={cn("metric-card border-border/75 bg-gradient-to-br p-0", toneStyle.surface, className)}>
+      <CardContent className="flex flex-col gap-3 p-3 sm:p-4 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0 space-y-1.5">
           <p className="text-xs font-bold uppercase tracking-normal text-muted-foreground">
             {label}
@@ -189,11 +189,11 @@ export function ActionCard({
     <Link
       href={href}
       className={cn(
-        "group data-card block min-h-full w-full p-3 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-4",
+        "group data-card block w-full p-3 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-4",
         className,
       )}
     >
-      <div className="flex h-full flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-2.5">
           {icon ? (
             <div className={cn("mt-0.5 rounded-2xl p-2.5 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
