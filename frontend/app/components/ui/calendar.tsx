@@ -11,6 +11,9 @@ type DayPickerClassNames = NonNullable<
   React.ComponentProps<typeof DayPicker>["classNames"]
 >;
 type CalendarClassNames = Record<string, string | undefined>;
+type DayPickerComponents = NonNullable<
+  React.ComponentProps<typeof DayPicker>["components"]
+>;
 
 function Calendar({
   className,
@@ -69,15 +72,21 @@ function Calendar({
     day_hidden: cn("invisible", userClassNames["day_hidden"]),
   } as DayPickerClassNames;
 
+  const calendarComponents = {
+    IconLeft: ({ className, ...props }: { className?: string; [key: string]: unknown }) => (
+      <LazyIcon name="ChevronLeft" className={cn("size-4", className)} {...props} />
+    ),
+    IconRight: ({ className, ...props }: { className?: string; [key: string]: unknown }) => (
+      <LazyIcon name="ChevronRight" className={cn("size-4", className)} {...props} />
+    ),
+  } as Partial<DayPickerComponents>;
+
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
       className={cn("p-3", className)}
       classNames={calendarClassNames}
-      components={{
-        IconLeft: ({ className, ...props }) => <LazyIcon name="ChevronLeft" className={cn("size-4", className)} {...props} />,
-        IconRight: ({ className, ...props }) => <LazyIcon name="ChevronRight" className={cn("size-4", className)} {...props} />,
-      }}
+      components={calendarComponents}
       {...props}
     />
   );
