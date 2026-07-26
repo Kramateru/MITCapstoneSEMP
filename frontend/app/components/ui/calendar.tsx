@@ -10,26 +10,7 @@ import { cn } from "./utils";
 type DayPickerClassNames = NonNullable<
   React.ComponentProps<typeof DayPicker>["classNames"]
 >;
-type CalendarClassNameKey =
-  | keyof DayPickerClassNames
-  | "caption"
-  | "caption_label"
-  | "caption_dropdowns"
-  | "dropdown"
-  | "nav_button"
-  | "nav_button_previous"
-  | "nav_button_next"
-  | "head_row"
-  | "head_cell"
-  | "weeknumber"
-  | "day_range_start"
-  | "day_range_middle"
-  | "day_range_end"
-  | "day_today"
-  | "day_outside"
-  | "day_disabled"
-  | "day_hidden";
-type CalendarClassNames = Partial<Record<CalendarClassNameKey, string>>;
+type CalendarClassNames = Record<string, string | undefined>;
 
 function Calendar({
   className,
