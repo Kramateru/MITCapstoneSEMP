@@ -76,11 +76,18 @@ function Calendar({
       className={cn("p-3", className)}
       classNames={calendarClassNames}
       components={{
-        IconLeft: ({ className, ...props }) => (
-          <LazyIcon name="ChevronLeft" className={cn("size-4", className)} {...props} />
-        ),
-        IconRight: ({ className, ...props }) => (
-          <LazyIcon name="ChevronRight" className={cn("size-4", className)} {...props} />
+        Chevron: ({ className, orientation, ...props }) => (
+          <LazyIcon
+            name={
+              orientation === "left"
+                ? "ChevronLeft"
+                : orientation === "right"
+                  ? "ChevronRight"
+                  : "ChevronDown"
+            }
+            className={cn("size-4", className)}
+            {...props}
+          />
         ),
       }}
       {...props}
