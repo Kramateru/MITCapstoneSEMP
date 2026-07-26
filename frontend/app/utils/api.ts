@@ -105,6 +105,9 @@ export async function apiFetch<T>(
 const apiCache = typeof window !== 'undefined'
   ? new Map<string, { expiresAt: number; data: unknown }>()
   : new Map<string, { expiresAt: number; data: unknown }>()
+const inFlightGetRequests = typeof window !== 'undefined'
+  ? new Map<string, Promise<unknown>>()
+  : new Map<string, Promise<unknown>>()
 
 function getApiCacheKey(input: RequestInfo, init?: RequestInit) {
   const url = typeof input === 'string'
@@ -126,6 +129,11 @@ export async function apiFetchCached<T>(
     return apiFetch<T>(input, init)
   }
 
+  const method = (init?.method || 'GET').toUpperCase()
+  if (method !== 'GET') {
+    return apiFetch<T>(input, init)
+  }
+
   const cacheKey = getApiCacheKey(input, init)
   const now = Date.now()
   const cached = apiCache.get(cacheKey)
@@ -133,9 +141,22 @@ export async function apiFetchCached<T>(
     return cached.data as T
   }
 
-  const data = await apiFetch<T>(input, init)
-  apiCache.set(cacheKey, { expiresAt: now + ttlMs, data })
-  return data
+  const inFlightRequest = inFlightGetRequests.get(cacheKey)
+  if (inFlightRequest) {
+    return inFlightRequest as Promise<T>
+  }
+
+  const request = apiFetch<T>(input, init)
+    .then((data) => {
+      apiCache.set(cacheKey, { expiresAt: Date.now() + ttlMs, data })
+      return data
+    })
+    .finally(() => {
+      inFlightGetRequests.delete(cacheKey)
+    })
+
+  inFlightGetRequests.set(cacheKey, request)
+  return request
 }
 
 export async function getCached<T>(

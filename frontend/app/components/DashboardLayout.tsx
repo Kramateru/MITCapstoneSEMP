@@ -34,6 +34,10 @@ const ROLE_LABEL_MAP = {
   admin: 'Admin Console',
 } as const;
 
+const SIDEBAR_BADGE_CACHE_TTL_MS = 30_000;
+const sidebarBadgeCache = new Map<string, { expiresAt: number; badges: Record<string, number> }>();
+const sidebarBadgeRequests = new Map<string, Promise<Record<string, number> | null>>();
+
 const formatPathLabel = (value: string) =>
   value
     .replace(/\?.*$/, '')
@@ -173,34 +177,73 @@ export function DashboardLayout({
     }
 
     let isMounted = true;
+    const badgeCacheKey = `trainee:${token}`;
 
     const loadSidebarBadges = async () => {
-      try {
-        const response = await fetch('/api/notifications?limit=20', {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          cache: 'no-store',
-        });
-        if (!response.ok) {
-          return;
+      const cached = sidebarBadgeCache.get(badgeCacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        if (isMounted) {
+          setSidebarBadgeMap(cached.badges);
         }
-        const payload = (await response.json().catch(() => null)) as
-          | { notifications?: Array<{ href?: string | null }> }
-          | null;
+        return;
+      }
+
+      const inFlightRequest = sidebarBadgeRequests.get(badgeCacheKey);
+      if (inFlightRequest) {
+        const badges = await inFlightRequest;
+        if (isMounted && badges) {
+          setSidebarBadgeMap(badges);
+        }
+        return;
+      }
+
+      const request = (async () => {
+        try {
+          const response = await fetch('/api/notifications?limit=20', {
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            cache: 'no-store',
+          });
+          if (!response.ok) {
+            return null;
+          }
+          const payload = (await response.json().catch(() => null)) as
+            | { notifications?: Array<{ href?: string | null }> }
+            | null;
+          const notifications = payload?.notifications || [];
+          const certificateBadge = notifications.filter((item) => {
+            const href = item.href || '';
+            return href.startsWith('/trainee/certificates') || href.startsWith('/trainee/reports?tab=certificates');
+          }).length;
+          const callSimulationBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/call-simulation')).length;
+          const badges = {
+            '/trainee/certificates': certificateBadge,
+            '/trainee/call-simulation': callSimulationBadge,
+          };
+          sidebarBadgeCache.set(badgeCacheKey, {
+            expiresAt: Date.now() + SIDEBAR_BADGE_CACHE_TTL_MS,
+            badges,
+          });
+          return badges;
+        } catch {
+          // Keep the rest of the workspace responsive when notifications are temporarily unavailable.
+          return null;
+        } finally {
+          sidebarBadgeRequests.delete(badgeCacheKey);
+        }
+      })();
+
+      sidebarBadgeRequests.set(badgeCacheKey, request);
+
+      try {
         if (!isMounted) {
           return;
         }
-        const notifications = payload?.notifications || [];
-        const certificateBadge = notifications.filter((item) => {
-          const href = item.href || '';
-          return href.startsWith('/trainee/certificates') || href.startsWith('/trainee/reports?tab=certificates');
-        }).length;
-        const callSimulationBadge = notifications.filter((item) => (item.href || '').startsWith('/trainee/call-simulation')).length;
-        setSidebarBadgeMap({
-          '/trainee/certificates': certificateBadge,
-          '/trainee/call-simulation': callSimulationBadge,
-        });
+        const badges = await request;
+        if (isMounted && badges) {
+          setSidebarBadgeMap(badges);
+        }
       } catch {
         // Keep the rest of the workspace responsive when notifications are temporarily unavailable.
       }

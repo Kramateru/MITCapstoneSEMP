@@ -830,6 +830,10 @@ async def upload_module_audio(
 
     supabase_client = get_supabase_client()
     bucket_name = supabase_client.microlearning_bucket_name
+    local_audio_path = supabase_client.save_local_media_backup(
+        relative_path=storage_path,
+        file_data=audio_bytes,
+    )
     audio_url = supabase_client.upload_microlearning_audio(
         file_data=audio_bytes,
         module_id=module_id,
@@ -864,6 +868,8 @@ async def upload_module_audio(
     content_data["audio_file_size"] = int(upload_meta["file_size"])
     content_data["audio_uploaded_by"] = current_user.id
     content_data["audio_uploaded_at"] = datetime.utcnow().isoformat()
+    if local_audio_path:
+        content_data["audio_local_path"] = local_audio_path
     module.content_data = content_data
     signed_url = supabase_client.create_signed_storage_url(
         bucket_name=bucket_name,
@@ -881,6 +887,7 @@ async def upload_module_audio(
         "file_size": int(upload_meta["file_size"]),
         "lesson_id": lesson_id,
         "duration_seconds": estimated_duration,
+        "local_audio_path": local_audio_path,
     }
 
     # Generate transcript if requested
@@ -1007,6 +1014,7 @@ async def upload_module_audio(
             "file_size": int(upload_meta["file_size"]),
             "content_type": content_type,
             "lesson_id": lesson_id,
+            "local_audio_path": local_audio_path,
         },
     )
     db.commit()

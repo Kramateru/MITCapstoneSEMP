@@ -227,6 +227,16 @@ function clearStorage(storage: Storage) {
   }
 }
 
+function clearAuthStorageCandidates() {
+  for (const storage of getAuthStorageCandidates()) {
+    try {
+      clearStorage(storage)
+    } catch {
+      // Ignore storage access errors and continue to the next candidate.
+    }
+  }
+}
+
 function readStrictSingleSessionFlag() {
   if (typeof window === 'undefined') {
     return false
@@ -414,7 +424,7 @@ function persistAuthState(payload: AuthApiPayload, nextUser: User, fallbackRefre
     typeof payload.strict_single_session === 'boolean'
       ? payload.strict_single_session
       : readStrictSingleSessionFlag()
-  clearStorage(window.localStorage)
+  clearAuthStorageCandidates()
 
   persistAuthValueToAllStorages('token', accessToken)
   if (refreshToken) {

@@ -245,6 +245,18 @@ class SupabaseClient:
 
         return f"{backend_base_url.rstrip('/')}{normalized_local_url}"
 
+    def save_local_media_backup(
+        self,
+        *,
+        relative_path: str,
+        file_data: bytes,
+    ) -> Optional[str]:
+        """Save a best-effort local media backup and return its /media path."""
+        return self._write_local_media_copy(
+            relative_path=relative_path,
+            file_data=file_data,
+        )
+
     def _allow_local_media_fallback(self) -> bool:
         explicit_value = normalize_env_value(os.getenv("ALLOW_LOCAL_MEDIA_FALLBACK")).lower()
         if explicit_value in {"1", "true", "yes", "on"}:

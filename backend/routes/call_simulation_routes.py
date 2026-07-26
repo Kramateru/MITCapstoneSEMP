@@ -6984,6 +6984,14 @@ async def upload_call_simulation_audio_asset(
     )
 
     supabase = get_supabase_client()
+    if normalized_asset_kind == "member-step":
+        local_audio_relative_path = f"call-simulation/audio/{scenario_segment}/{storage_leaf}"
+    else:
+        local_audio_relative_path = f"call-simulation/audio/{scenario_segment}/{normalized_asset_kind}/{storage_leaf}"
+    local_audio_path = supabase.save_local_media_backup(
+        relative_path=local_audio_relative_path,
+        file_data=file_bytes,
+    )
     audio_url = supabase.upload_call_simulation_asset(
         file_data=file_bytes,
         trainer_id=current_user.id,
@@ -7021,6 +7029,32 @@ async def upload_call_simulation_audio_asset(
             public_url=audio_url,
             asset_kinds=[normalized_asset_kind],
         )
+        if audio_asset is None:
+            audio_asset = _create_call_simulation_audio_asset_record(
+                db,
+                trainer_id=current_user.id,
+                scenario_id=None,
+                script_turn_id=None,
+                step_number=None,
+                asset_kind=normalized_asset_kind,
+                source_type="upload",
+                public_url=audio_url,
+                file_name=storage_leaf,
+                file_type=str(upload_meta["content_type"]),
+                file_size=int(upload_meta["file_size"]),
+                asset_metadata={
+                    "uploaded_filename": file.filename or storage_leaf,
+                    "local_audio_path": local_audio_path,
+                    "scope": "shared",
+                },
+            )
+        elif local_audio_path:
+            audio_asset.asset_metadata = {
+                **_normalize_json_object(audio_asset.asset_metadata),
+                "local_audio_path": local_audio_path,
+            }
+            db.add(audio_asset)
+            db.commit()
     else:
         audio_asset = _create_call_simulation_audio_asset_record(
             db,
@@ -7034,7 +7068,10 @@ async def upload_call_simulation_audio_asset(
             file_name=storage_leaf,
             file_type=str(upload_meta["content_type"]),
             file_size=int(upload_meta["file_size"]),
-            asset_metadata={"uploaded_filename": file.filename or storage_leaf},
+            asset_metadata={
+                "uploaded_filename": file.filename or storage_leaf,
+                "local_audio_path": local_audio_path,
+            },
         )
         db.commit()
 
@@ -7090,6 +7127,7 @@ async def upload_call_simulation_audio_asset(
             "storage_path": getattr(audio_asset, "storage_path", None),
             "file_size": int(upload_meta["file_size"]),
             "content_type": str(upload_meta["content_type"]),
+            "local_audio_path": local_audio_path,
         },
     )
     db.commit()

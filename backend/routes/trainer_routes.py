@@ -693,9 +693,14 @@ def _upload_microlearning_asset(
     bucket_name = supabase_client.microlearning_bucket_name if supabase_client.is_available else None
     normalized_storage_folder = supabase_client._normalize_microlearning_folder(storage_folder)
     is_audio_asset = storage_folder == "audio"
+    local_backup_path: Optional[str] = None
     if is_audio_asset:
         lesson_segment = normalized_module_id or module_storage_segment
         storage_path = f"microlearning/audio/{module_storage_segment}/{lesson_segment}/{sanitized}"
+        local_backup_path = supabase_client.save_local_media_backup(
+            relative_path=storage_path,
+            file_data=file_bytes,
+        )
         asset_url = supabase_client.upload_microlearning_audio(
             module_id=module_storage_segment,
             trainer_id=trainer_id,
@@ -764,6 +769,7 @@ def _upload_microlearning_asset(
         "byte_size": asset_byte_size,
         "file_name": sanitized,
         "file_size": asset_byte_size,
+        "local_backup_path": local_backup_path,
         "uploaded_at": datetime.utcnow().isoformat(),
     }
 

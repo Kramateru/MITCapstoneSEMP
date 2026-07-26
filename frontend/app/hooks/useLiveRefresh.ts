@@ -16,22 +16,37 @@ export function useLiveRefresh({
   onRefresh,
 }: UseLiveRefreshOptions) {
   const lastRefreshAtRef = useRef(0);
+  const isRefreshingRef = useRef(false);
+  const onRefreshRef = useRef(onRefresh);
+
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
 
   useEffect(() => {
     if (!enabled || intervalMs <= 0) {
       return;
     }
 
-    const triggerRefresh = () => {
+    const triggerRefresh = async () => {
+      if (isRefreshingRef.current) {
+        return;
+      }
+
+      isRefreshingRef.current = true;
       lastRefreshAtRef.current = Date.now();
-      void onRefresh();
+      try {
+        await onRefreshRef.current();
+      } finally {
+        isRefreshingRef.current = false;
+      }
     };
 
     const refreshWhenVisible = () => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") {
         return;
       }
-      triggerRefresh();
+      void triggerRefresh();
     };
 
     const maybeRefresh = () => {
@@ -58,5 +73,5 @@ export function useLiveRefresh({
       window.removeEventListener("online", maybeRefresh);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [enabled, focusThrottleMs, intervalMs, onRefresh]);
+  }, [enabled, focusThrottleMs, intervalMs]);
 }

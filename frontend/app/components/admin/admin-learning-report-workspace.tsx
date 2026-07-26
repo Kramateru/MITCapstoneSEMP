@@ -39,7 +39,7 @@ import {
     type AdminLearningFilterState,
     type AdminLearningInsightsResponse,
 } from '@/app/lib/admin-learning-insights'
-import { apiFetch, downloadApiFile } from '@/app/utils/api'
+import { apiFetchCached, downloadApiFile } from '@/app/utils/api'
 import { getBackendWebSocketUrl } from '@/app/utils/ws'
 import { AiInsightBoard, type AiInsightSection } from '../ui/ai-insight-board'
 import { Badge } from '../ui/badge'
@@ -229,7 +229,7 @@ export function AdminLearningReportWorkspace() {
       setError(null)
 
       try {
-        const payload = await apiFetch<AdminLearningInsightsResponse>(requestUrl)
+        const payload = await apiFetchCached<AdminLearningInsightsResponse>(requestUrl, { method: 'GET' }, 10_000)
         setData(payload)
         setLastSyncedAt(new Date().toISOString())
       } catch (loadError) {

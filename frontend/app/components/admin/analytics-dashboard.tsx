@@ -36,7 +36,7 @@ import {
     type AdminLearningFilterState,
     type AdminLearningInsightsResponse,
 } from '@/app/lib/admin-learning-insights'
-import { apiFetch } from '@/app/utils/api'
+import { apiFetchCached } from '@/app/utils/api'
 import { getBackendWebSocketUrl } from '@/app/utils/ws'
 import { AiInsightBoard, type AiInsightSection } from '../ui/ai-insight-board'
 import {
@@ -195,7 +195,7 @@ export default function AnalyticsDashboard() {
       setError(null)
 
       try {
-        const payload = await apiFetch<AdminLearningInsightsResponse>(requestUrl)
+        const payload = await apiFetchCached<AdminLearningInsightsResponse>(requestUrl, { method: 'GET' }, 10_000)
         setData(payload)
         setLastSyncedAt(new Date().toISOString())
       } catch (loadError) {

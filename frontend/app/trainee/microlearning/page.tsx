@@ -1,8 +1,17 @@
 'use client';
 
 import { DashboardLayout } from '@/app/components/DashboardLayout';
-import MicrolearningHub from '@/app/components/trainee/microlearning-hub';
+import { RouteLoadingState } from '@/app/components/ui/route-loading-state';
 import { traineeSidebarItems } from '@/app/trainee/nav';
+import dynamic from 'next/dynamic';
+
+const MicrolearningHub = dynamic(
+  () => import('@/app/components/trainee/microlearning-hub'),
+  {
+    ssr: false,
+    loading: () => <RouteLoadingState label="Loading learning workspace..." />,
+  },
+);
 
 export default function TraineeMicrolearningPage() {
   return (

@@ -24,6 +24,11 @@ type ChartContextProps = {
 
 const ChartContext = React.createContext<ChartContextProps | null>(null);
 
+const LazyChartRecharts = dynamic(
+  () => import("./chart.recharts").then((mod) => mod.default),
+  { ssr: false, loading: () => <div className="w-full h-64" /> },
+);
+
 function useChart() {
   const context = React.useContext(ChartContext);
 
@@ -50,11 +55,6 @@ function ChartContainer({
   const uniqueId = React.useId();
   const chartId = `chart-${id || uniqueId.replace(/:/g, "")}`;
 
-  const ChartRecharts = dynamic(
-    () => import("./chart.recharts").then((mod) => mod.default),
-    { ssr: false, loading: () => <div className="w-full h-64" /> },
-  );
-
   return (
     <ChartContext.Provider value={{ config }}>
       <div
@@ -67,7 +67,7 @@ function ChartContainer({
         {...props}
       >
         <ChartStyle id={chartId} config={config} />
-        <ChartRecharts>{children}</ChartRecharts>
+        <LazyChartRecharts>{children}</LazyChartRecharts>
       </div>
     </ChartContext.Provider>
   );

@@ -30,7 +30,7 @@ import {
     type TrainerLearningFilterState,
     type TrainerLearningInsightsResponse,
 } from '@/app/lib/trainer-learning-insights'
-import { apiFetch } from '@/app/utils/api'
+import { apiFetchCached } from '@/app/utils/api'
 import { getBackendWebSocketUrl } from '@/app/utils/ws'
 import { AiInsightBoard, type AiInsightSection } from '../ui/ai-insight-board'
 import {
@@ -193,7 +193,7 @@ export default function TrainerAnalytics() {
       setError(null)
 
       try {
-        const payload = await apiFetch<TrainerLearningInsightsResponse>(requestUrl)
+        const payload = await apiFetchCached<TrainerLearningInsightsResponse>(requestUrl, { method: 'GET' }, 10_000)
         setData(payload)
         const syncMessage =
           payload.summary.assigned_module_records
