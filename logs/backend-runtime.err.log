@@ -1,0 +1,15 @@
+INFO:backend.main:Local server-side TTS fallback is disabled.
+INFO:backend.main:Gemini API key detected for Gemini-enabled features
+C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\backend\venv\Lib\site-packages\requests\__init__.py:109: RequestsDependencyWarning: urllib3 (2.6.3) or chardet (7.4.3)/charset_normalizer (3.4.6) doesn't match a supported version!
+  warnings.warn(
+INFO:backend.services.audio_tts:Gemini TTS client initialized.
+INFO:backend.services.audio_tts:Local microlearning TTS fallback is disabled. Browser fallback should be used when server audio is unavailable.
+WARNING:backend.main:Primary database is unreachable during startup. Skipping database maintenance and bootstrap tasks until a later restart. Detail: (psycopg2.OperationalError) connection to server at "aws-1-us-east-1.pooler.supabase.com" (18.214.78.123), port 6543 failed: Permission denied (0x0000271D/10013)
+INFO:backend.main:Azure Speech credentials are not configured. Pronunciation assessment is disabled.
+INFO:     Started server process [10176]
+INFO:     Waiting for application startup.
+INFO:backend.main:Supabase admin storage configuration detected.
+INFO:backend.main:Environment validation passed
+WARNING:backend.main:Skipping startup admin/bootstrap synchronization because the primary database is unreachable.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
