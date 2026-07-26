@@ -394,7 +394,7 @@ export default function TraineeDashboard() {
                   />
                   {strengthTouched ? (
                     <div className="soft-panel space-y-2 px-3 py-3 text-xs text-muted-foreground">
-                      <div className="font-semibold text-foreground">Strength: {strengthLabel()}</div>
+                      <div className="font-semibold text-foreground">Strength: {strengthLabel}</div>
                       <div className="flex flex-wrap gap-2">
                         <Badge variant={strengthChecks.length ? 'success' : 'neutral'}>8+ chars</Badge>
                         <Badge variant={strengthChecks.number ? 'success' : 'neutral'}>Number</Badge>

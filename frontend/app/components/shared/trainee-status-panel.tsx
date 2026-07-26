@@ -258,7 +258,7 @@ export function TraineeStatusPanel() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Users className="size-5 text-primary" />
+              <LazyIcon name="Users" className="size-5 text-primary" />
               <div>
                 <CardTitle className="text-lg">All Registered Trainees</CardTitle>
                 <CardDescription>
@@ -268,7 +268,7 @@ export function TraineeStatusPanel() {
             </div>
             <div className="flex items-center gap-2">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                <LazyIcon name="Search" className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Search trainees..."
                   value={searchQuery}

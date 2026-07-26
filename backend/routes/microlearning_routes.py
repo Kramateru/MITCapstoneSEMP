@@ -34,16 +34,154 @@ from ..schemas import SuccessResponse
 from ..supabase_client import get_supabase_client
 from ..services.audio_transcription import speech_to_text_service
 from ..services.audio_tts import text_to_speech_service
+from ..services.audit import create_audit_log
 from ..services.microlearning import assignment_is_current, filter_current_assignments
 
 router = APIRouter(prefix="/api/microlearning", tags=["microlearning"])
 logger = logging.getLogger(__name__)
 SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
+MICROLEARNING_AUDIO_MAX_BYTES = 50 * 1024 * 1024
+MICROLEARNING_AUDIO_EXTENSION_CONTENT_TYPES = {
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".m4a": "audio/mp4",
+    ".ogg": "audio/ogg",
+}
+MICROLEARNING_AUDIO_CONTENT_TYPES = {
+    "audio/mpeg": "audio/mpeg",
+    "audio/mp3": "audio/mpeg",
+    "audio/mpga": "audio/mpeg",
+    "audio/wav": "audio/wav",
+    "audio/x-wav": "audio/wav",
+    "audio/wave": "audio/wav",
+    "audio/mp4": "audio/mp4",
+    "audio/x-m4a": "audio/mp4",
+    "audio/m4a": "audio/mp4",
+    "audio/ogg": "audio/ogg",
+}
 
 
 def _sanitize_asset_name(filename: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", (filename or "").strip())
     return cleaned.strip("-") or "asset.bin"
+
+
+def _normalize_microlearning_audio_content_type(content_type: Optional[str]) -> Optional[str]:
+    normalized = str(content_type or "").strip().lower()
+    if not normalized:
+        return None
+    return MICROLEARNING_AUDIO_CONTENT_TYPES.get(normalized)
+
+
+def _validate_microlearning_audio_upload(uploaded_file: UploadFile, audio_bytes: bytes) -> dict[str, Any]:
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    if len(audio_bytes) > MICROLEARNING_AUDIO_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Microlearning audio uploads must be 50 MB or smaller.",
+        )
+
+    filename = uploaded_file.filename or "audio.mp3"
+    extension = Path(filename).suffix.lower()
+    content_type = _normalize_microlearning_audio_content_type(uploaded_file.content_type)
+    extension_content_type = MICROLEARNING_AUDIO_EXTENSION_CONTENT_TYPES.get(extension)
+    if not extension_content_type and not content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.",
+        )
+    if content_type and extension_content_type and content_type != extension_content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded audio file type does not match its filename extension.",
+        )
+
+    return {
+        "filename": filename,
+        "content_type": content_type or extension_content_type or "audio/mpeg",
+        "extension": extension or mimetypes.guess_extension(content_type or "") or ".mp3",
+        "file_size": len(audio_bytes),
+    }
+
+
+def _log_microlearning_audio_action(
+    db: Session,
+    *,
+    user: User,
+    module_id: str,
+    action_type: str,
+    file_name: Optional[str] = None,
+    status_value: str = "success",
+    error_detail: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    create_audit_log(
+        db,
+        user=user,
+        action_type=action_type,
+        module_name="Microlearning",
+        entity_type="microlearning_audio",
+        entity_id=module_id,
+        description=f"Microlearning audio {action_type.replace('_', ' ')} {status_value}.",
+        status=status_value,
+        severity="warning" if status_value == "failed" else "info",
+        trainer_id=user.id if user.role in [UserRole.TRAINER, UserRole.ADMIN] else None,
+        trainee_id=user.id if user.role == UserRole.TRAINEE else None,
+        metadata={
+            "module_id": module_id,
+            "file_name": file_name,
+            "error_detail": error_detail,
+            **(metadata or {}),
+        },
+    )
+
+
+def _upsert_microlearning_audio_content_metadata(
+    *,
+    module: MicrolearningModule,
+    trainer_id: str,
+    audio_url: str,
+    storage_path: str,
+    bucket_name: str,
+    mime_type: str,
+    original_filename: str,
+) -> None:
+    supabase_client = get_supabase_client()
+    if not supabase_client.is_available or supabase_client.client is None:
+        logger.warning("Skipping audio_content upsert because Supabase client is unavailable.")
+        return
+
+    content_data = dict(module.content_data or {})
+    transcript_text = _resolve_module_transcript_text(module)
+    payload = {
+        "module_id": module.id,
+        "title": module.title or "Microlearning audio",
+        "trainer_id": trainer_id,
+        "url": audio_url,
+        "storage_path": storage_path,
+        "mime_type": mime_type,
+        "transcript": transcript_text or None,
+        "transcript_text": transcript_text or None,
+        "summary_text": (
+            content_data.get("summary_text")
+            or content_data.get("audio_summary")
+            or content_data.get("summary")
+        ),
+        "duration_seconds": module.audio_duration_seconds,
+        "bucket_name": bucket_name,
+        "original_filename": original_filename,
+        "caption_data": content_data.get("caption_data"),
+    }
+    try:
+        (
+            supabase_client.client
+            .table("audio_content")
+            .upsert(payload, on_conflict="module_id")
+            .execute()
+        )
+    except Exception:
+        logger.warning("Unable to upsert audio_content metadata for module %s", module.id, exc_info=True)
 
 
 def _seconds_to_vtt_timestamp(value: float) -> str:
@@ -677,18 +815,17 @@ async def upload_module_audio(
     if not module:
         raise HTTPException(status_code=404, detail="Module not found")
 
-    # Read audio file
     audio_bytes = await uploaded_file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Empty audio file")
-
-    # Determine content type
-    content_type = uploaded_file.content_type or "audio/mpeg"
-    filename = uploaded_file.filename or "audio.mp3"
+    upload_meta = _validate_microlearning_audio_upload(uploaded_file, audio_bytes)
+    content_type = str(upload_meta["content_type"])
+    filename = str(upload_meta["filename"])
+    previous_audio_url = _resolve_module_audio_asset_url(module)
+    previous_storage = _resolve_module_audio_storage_metadata(module)
     storage_filename = (
-        f"{module_id}/{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{_sanitize_asset_name(filename)}"
+        f"{datetime.utcnow().strftime('%Y%m%dT%H%M%S')}_{_sanitize_asset_name(filename)}"
     )
-    storage_path = f"microlearning/audio/{current_user.id}/{storage_filename}"
+    lesson_id = str((module.content_data or {}).get("lesson_id") or module_id).strip() or module_id
+    storage_path = f"microlearning/audio/{module_id}/{lesson_id}/{storage_filename}"
     bucket_name = None
 
     supabase_client = get_supabase_client()
@@ -699,6 +836,7 @@ async def upload_module_audio(
         trainer_id=current_user.id,
         filename=storage_filename,
         content_type=content_type,
+        lesson_id=lesson_id,
         allow_local_fallback=False,
     )
     if not audio_url:
@@ -721,6 +859,12 @@ async def upload_module_audio(
         storage_path=storage_path,
         bucket_name=bucket_name,
     )
+    content_data = dict(module.content_data or {})
+    content_data["lesson_id"] = lesson_id
+    content_data["audio_file_size"] = int(upload_meta["file_size"])
+    content_data["audio_uploaded_by"] = current_user.id
+    content_data["audio_uploaded_at"] = datetime.utcnow().isoformat()
+    module.content_data = content_data
     signed_url = supabase_client.create_signed_storage_url(
         bucket_name=bucket_name,
         path=storage_path,
@@ -734,6 +878,8 @@ async def upload_module_audio(
         "filename": filename,
         "original_filename": filename,
         "content_type": content_type,
+        "file_size": int(upload_meta["file_size"]),
+        "lesson_id": lesson_id,
         "duration_seconds": estimated_duration,
     }
 
@@ -830,14 +976,139 @@ async def upload_module_audio(
         except Exception as e:
             logger.warning(f"TTS generation failed for module {module_id}: {e}", exc_info=True)
 
+    _upsert_microlearning_audio_content_metadata(
+        module=module,
+        trainer_id=current_user.id,
+        audio_url=audio_url,
+        storage_path=storage_path,
+        bucket_name=bucket_name,
+        mime_type=content_type,
+        original_filename=filename,
+    )
+
     db.commit()
     db.refresh(module)
+    if previous_audio_url and previous_audio_url != audio_url:
+        previous_path = previous_storage.get("storage_path")
+        previous_bucket = previous_storage.get("bucket_name")
+        if previous_path and previous_bucket:
+            supabase_client.delete_storage_object(bucket_name=previous_bucket, path=previous_path)
+        else:
+            supabase_client.delete_by_public_url(previous_audio_url)
+    _log_microlearning_audio_action(
+        db,
+        user=current_user,
+        module_id=module_id,
+        action_type="upload_audio" if not previous_audio_url else "replace_audio",
+        file_name=filename,
+        metadata={
+            "bucket_name": bucket_name,
+            "storage_path": storage_path,
+            "file_size": int(upload_meta["file_size"]),
+            "content_type": content_type,
+            "lesson_id": lesson_id,
+        },
+    )
+    db.commit()
 
     return {
         "module_id": module_id,
         "message": "Audio uploaded successfully",
         **result,
     }
+
+
+@router.delete("/modules/{module_id}/audio", response_model=SuccessResponse)
+async def delete_module_audio(
+    module_id: str,
+    authorization: Optional[str] = Header(None),
+    db: Session = Depends(get_db),
+):
+    current_user = await auth_utils.get_current_user(authorization, db)
+    require_trainer(current_user)
+
+    module = db.query(MicrolearningModule).filter(MicrolearningModule.id == module_id).first()
+    if not module:
+        raise HTTPException(status_code=404, detail="Module not found")
+    if current_user.role != UserRole.ADMIN and module.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="You do not have access to this module")
+
+    content_data = dict(module.content_data or {})
+    original_filename = str(content_data.get("audio_original_filename") or "").strip()
+    audio_url = _resolve_module_audio_asset_url(module)
+    storage_metadata = _resolve_module_audio_storage_metadata(module)
+    supabase_client = get_supabase_client()
+
+    deleted_storage_targets: list[str] = []
+    storage_path = storage_metadata.get("storage_path")
+    bucket_name = storage_metadata.get("bucket_name")
+    if storage_path and bucket_name and supabase_client.delete_storage_object(bucket_name=bucket_name, path=storage_path):
+        deleted_storage_targets.append(f"{bucket_name}/{storage_path}")
+    elif audio_url and supabase_client.delete_by_public_url(audio_url):
+        deleted_storage_targets.append(audio_url)
+
+    for related_url_key in ("tts_url", "captions_url"):
+        related_url = str(content_data.get(related_url_key) or "").strip()
+        if related_url and supabase_client.delete_by_public_url(related_url):
+            deleted_storage_targets.append(related_url)
+
+    module.audio_url = None
+    module.audio_tts_url = None
+    module.audio_transcript = None
+    module.audio_duration_seconds = None
+    if module.content_url == audio_url:
+        module.content_url = None
+
+    for key in (
+        "asset_url",
+        "audio_url",
+        "audio_content_id",
+        "audio_storage_path",
+        "audio_bucket",
+        "audio_content_type",
+        "audio_original_filename",
+        "audio_file_size",
+        "audio_uploaded_by",
+        "audio_uploaded_at",
+        "audio_summary",
+        "summary",
+        "summary_text",
+        "tts_url",
+        "captions_url",
+        "caption_data",
+        "content",
+        "transcript",
+        "transcript_text",
+        "captions_text",
+        "transcript_provider",
+        "transcript_confidence",
+        "live_caption_mode",
+    ):
+        content_data.pop(key, None)
+    module.content_data = content_data
+
+    try:
+        if supabase_client.is_available and supabase_client.client is not None:
+            supabase_client.client.table("audio_content").delete().eq("module_id", module_id).execute()
+    except Exception:
+        logger.warning("Unable to delete audio_content metadata for module %s", module_id, exc_info=True)
+
+    db.add(module)
+    db.commit()
+    _log_microlearning_audio_action(
+        db,
+        user=current_user,
+        module_id=module_id,
+        action_type="delete_audio",
+        file_name=original_filename,
+        metadata={
+            "deleted_storage_targets": deleted_storage_targets,
+            "bucket_name": bucket_name,
+            "storage_path": storage_path,
+        },
+    )
+    db.commit()
+    return SuccessResponse(message="Microlearning audio deleted.")
 
 
 @router.post("/modules/{module_id}/transcribe")
@@ -1037,6 +1308,19 @@ async def generate_tts_audio(
         tts_url=tts_url,
         duration_seconds=module.audio_duration_seconds,
         language_code=module.audio_language or "en-US",
+    )
+    db.commit()
+    _log_microlearning_audio_action(
+        db,
+        user=current_user,
+        module_id=module_id,
+        action_type="generate_speech" if not force_regenerate else "regenerate_speech",
+        file_name=Path(tts_url.split("?", 1)[0]).name,
+        metadata={
+            "tts_url": tts_url,
+            "provider": tts_result.provider,
+            "duration_seconds": tts_result.duration_seconds,
+        },
     )
     db.commit()
 

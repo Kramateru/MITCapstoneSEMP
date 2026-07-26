@@ -92,7 +92,7 @@ export function AiInsightBoard({
               )}
             >
               <div className="space-y-3">
-                <div className="text-[1.05rem] font-semibold leading-7 tracking-[-0.015em] text-slate-950">
+                <div className="text-[1.05rem] font-semibold leading-7 tracking-normal text-slate-950">
                   {section.title}
                 </div>
                 <span

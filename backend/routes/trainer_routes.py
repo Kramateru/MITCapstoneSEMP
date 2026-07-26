@@ -80,24 +80,18 @@ logger = logging.getLogger(__name__)
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
 SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
 SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".ogg", ".m4v")
-SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".webm")
+SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg")
 SUPPORTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
 SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/mpeg",
     "audio/mp3",
     "audio/mpga",
-    "audio/mpeg3",
-    "audio/x-mpeg-3",
     "audio/x-mp3",
-    "audio/mpg",
     "audio/wav",
     "audio/x-wav",
     "audio/mp4",
     "audio/x-m4a",
-    "audio/aac",
     "audio/ogg",
-    "audio/webm",
-    "audio/flac",
 }
 MAX_TRAINER_MICROLEARNING_ASSET_SIZE = MICROLEARNING_BUCKET_FILE_SIZE_LIMIT
 
@@ -472,7 +466,7 @@ def _validate_uploadable_media_asset(
             return
         raise HTTPException(
             status_code=400,
-            detail="Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.",
+            detail="Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.",
         )
 
     if normalized_module_type == "infographic":
@@ -698,16 +692,30 @@ def _upload_microlearning_asset(
     supabase_client = get_supabase_client()
     bucket_name = supabase_client.microlearning_bucket_name if supabase_client.is_available else None
     normalized_storage_folder = supabase_client._normalize_microlearning_folder(storage_folder)
-    storage_path = f"{normalized_storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
-    asset_url = supabase_client.upload_microlearning_binary(
-        module_id=module_storage_segment,
-        trainer_id=trainer_id,
-        filename=sanitized,
-        file_data=file_bytes,
-        content_type=content_type or "application/octet-stream",
-        folder=storage_folder,
-        allow_local_fallback=False,
-    )
+    is_audio_asset = storage_folder == "audio"
+    if is_audio_asset:
+        lesson_segment = normalized_module_id or module_storage_segment
+        storage_path = f"microlearning/audio/{module_storage_segment}/{lesson_segment}/{sanitized}"
+        asset_url = supabase_client.upload_microlearning_audio(
+            module_id=module_storage_segment,
+            trainer_id=trainer_id,
+            lesson_id=lesson_segment,
+            filename=sanitized,
+            file_data=file_bytes,
+            content_type=content_type or "audio/mpeg",
+            allow_local_fallback=False,
+        )
+    else:
+        storage_path = f"{normalized_storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
+        asset_url = supabase_client.upload_microlearning_binary(
+            module_id=module_storage_segment,
+            trainer_id=trainer_id,
+            filename=sanitized,
+            file_data=file_bytes,
+            content_type=content_type or "application/octet-stream",
+            folder=storage_folder,
+            allow_local_fallback=False,
+        )
     if not asset_url:
         raise HTTPException(
             status_code=503,
@@ -722,27 +730,28 @@ def _upload_microlearning_asset(
 
     asset_record_id: Optional[str] = None
     asset_byte_size = len(file_bytes)
-    try:
-        asset = MicrolearningUploadedAsset(
-            trainer_id=trainer_id,
-            filename=sanitized,
-            content_type=content_type or "application/octet-stream",
-            byte_size=asset_byte_size,
-            file_bytes=file_bytes,
-        )
-        db.add(asset)
-        db.commit()
-        db.refresh(asset)
-        asset_record_id = asset.id
-        asset_byte_size = asset.byte_size
-    except SQLAlchemyError:
-        db.rollback()
-        logger.warning(
-            "Trainer microlearning asset metadata could not be persisted for trainer %s. "
-            "Continuing with Supabase storage-backed upload only.",
-            trainer_id,
-            exc_info=True,
-        )
+    if not is_audio_asset:
+        try:
+            asset = MicrolearningUploadedAsset(
+                trainer_id=trainer_id,
+                filename=sanitized,
+                content_type=content_type or "application/octet-stream",
+                byte_size=asset_byte_size,
+                file_bytes=file_bytes,
+            )
+            db.add(asset)
+            db.commit()
+            db.refresh(asset)
+            asset_record_id = asset.id
+            asset_byte_size = asset.byte_size
+        except SQLAlchemyError:
+            db.rollback()
+            logger.warning(
+                "Trainer microlearning asset metadata could not be persisted for trainer %s. "
+                "Continuing with Supabase storage-backed upload only.",
+                trainer_id,
+                exc_info=True,
+            )
 
     return {
         "asset_url": asset_url,

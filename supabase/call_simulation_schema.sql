@@ -98,7 +98,7 @@ create table if not exists public.call_simulation_audio_assets (
   script_turn_id uuid references public.scenario_steps(id) on delete set null,
   step_number integer,
   asset_kind text not null check (
-    asset_kind in ('member-step', 'ringer', 'hold', 'scenario-ringer', 'scenario-hold', 'opening-prompts')
+    asset_kind in ('member-step', 'ringer', 'hold', 'scenario-ringer', 'scenario-hold', 'opening-prompts', 'step-prompts', 'conversation-audio')
   ),
   source_type text not null default 'upload' check (
     source_type in ('upload', 'generated_tts', 'manual_url')
@@ -445,6 +445,11 @@ values (
         'call-simulation-audio',
         'call-simulation-audio',
         true
+    ),
+    (
+        'recordings',
+        'recordings',
+        true
     ) on conflict (id) do nothing;
 
 drop policy if exists "audio_read_own_or_trainer" on storage.objects;
@@ -453,11 +458,11 @@ create policy "audio_read_own_or_trainer"
 on storage.objects
 for select
 using (
-  bucket_id = 'call-simulation-audio'
-  and split_part(name, '/', 1) = 'recordings'
+  bucket_id = 'recordings'
+  and split_part(name, '/', 1) = 'call-simulation'
   and (
     public.is_trainer_or_admin()
-    or split_part(name, '/', 2) = auth.uid()::text
+    or split_part(name, '/', 3) = auth.uid()::text
   )
 );
 
@@ -467,11 +472,11 @@ create policy "audio_insert_own_or_trainer"
 on storage.objects
 for insert
 with check (
-  bucket_id = 'call-simulation-audio'
-  and split_part(name, '/', 1) = 'recordings'
+  bucket_id = 'recordings'
+  and split_part(name, '/', 1) = 'call-simulation'
   and (
     public.is_trainer_or_admin()
-    or split_part(name, '/', 2) = auth.uid()::text
+    or split_part(name, '/', 3) = auth.uid()::text
   )
 );
 
@@ -481,19 +486,33 @@ create policy "audio_update_own_or_trainer"
 on storage.objects
 for update
 using (
-  bucket_id = 'call-simulation-audio'
-  and split_part(name, '/', 1) = 'recordings'
+  bucket_id = 'recordings'
+  and split_part(name, '/', 1) = 'call-simulation'
   and (
     public.is_trainer_or_admin()
-    or split_part(name, '/', 2) = auth.uid()::text
+    or split_part(name, '/', 3) = auth.uid()::text
   )
 )
 with check (
-  bucket_id = 'call-simulation-audio'
-  and split_part(name, '/', 1) = 'recordings'
+  bucket_id = 'recordings'
+  and split_part(name, '/', 1) = 'call-simulation'
   and (
     public.is_trainer_or_admin()
-    or split_part(name, '/', 2) = auth.uid()::text
+    or split_part(name, '/', 3) = auth.uid()::text
+  )
+);
+
+drop policy if exists "audio_delete_own_or_trainer" on storage.objects;
+
+create policy "audio_delete_own_or_trainer"
+on storage.objects
+for delete
+using (
+  bucket_id = 'recordings'
+  and split_part(name, '/', 1) = 'call-simulation'
+  and (
+    public.is_trainer_or_admin()
+    or split_part(name, '/', 3) = auth.uid()::text
   )
 );
 
@@ -502,7 +521,8 @@ drop policy if exists "call_simulation_assets_read_authenticated" on storage.obj
 create policy "call_simulation_assets_read_authenticated" on storage.objects for
 select using (
         bucket_id = 'call-simulation-audio'
-        and split_part (name, '/', 1) = 'assets'
+        and split_part (name, '/', 1) = 'call-simulation'
+        and split_part (name, '/', 2) = 'audio'
         and auth.role () = 'authenticated'
     );
 
@@ -513,7 +533,8 @@ insert
 with
     check (
         bucket_id = 'call-simulation-audio'
-        and split_part (name, '/', 1) = 'assets'
+        and split_part (name, '/', 1) = 'call-simulation'
+        and split_part (name, '/', 2) = 'audio'
         and public.is_trainer_or_admin ()
     );
 
@@ -522,15 +543,27 @@ drop policy if exists "call_simulation_assets_update_trainers" on storage.object
 create policy "call_simulation_assets_update_trainers" on storage.objects for
 update using (
     bucket_id = 'call-simulation-audio'
-    and split_part (name, '/', 1) = 'assets'
+    and split_part (name, '/', 1) = 'call-simulation'
+    and split_part (name, '/', 2) = 'audio'
     and public.is_trainer_or_admin ()
 )
 with
     check (
         bucket_id = 'call-simulation-audio'
-        and split_part (name, '/', 1) = 'assets'
+        and split_part (name, '/', 1) = 'call-simulation'
+        and split_part (name, '/', 2) = 'audio'
         and public.is_trainer_or_admin ()
     );
+
+drop policy if exists "call_simulation_assets_delete_trainers" on storage.objects;
+
+create policy "call_simulation_assets_delete_trainers" on storage.objects for
+delete using (
+    bucket_id = 'call-simulation-audio'
+    and split_part (name, '/', 1) = 'call-simulation'
+    and split_part (name, '/', 2) = 'audio'
+    and public.is_trainer_or_admin ()
+);
 
 drop policy if exists "call_sim_audio_assets_select_trainers" on public.call_simulation_audio_assets;
 
@@ -569,7 +602,7 @@ delete using (
 );
 
 comment on
-table public.mock_call_attempts is 'Storage path conventions: recordings/{trainee_id}/{scenario_id}/{attempt_id}/{timestamp}.wav for attempts and assets/{trainer_id}/{scenario_id_or_draft}/{asset_kind}/{timestamp}_{filename} for trainer-managed member, ringer, and hold audio. The live app defaults map recordings to the `call-recordings` bucket and trainer-managed assets to the `call-ringers` bucket unless overridden by env.';
+table public.mock_call_attempts is 'Storage path conventions: call-simulation/recordings/{trainee_id}/{scenario_id}/{attempt_id}/{timestamp}.wav in the `recordings` bucket for attempts and call-simulation/audio/{scenario_id_or_draft}/{asset_kind}/{timestamp}_{filename} in the `call-simulation-audio` bucket for trainer-managed member, ringer, and hold audio.';
 
 alter table public.scenarios
   add column if not exists topic text,

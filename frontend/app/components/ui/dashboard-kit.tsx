@@ -77,7 +77,7 @@ export function DashboardHero({
         <div className="space-y-2.5 reading-width">
           {eyebrow ? <span className="dashboard-kicker">{eyebrow}</span> : null}
           <div className="space-y-1.5">
-            <h2 className="text-2xl font-bold tracking-[-0.03em] text-foreground sm:text-3xl xl:text-[2.45rem]">
+            <h2 className="text-balance text-2xl font-bold tracking-normal text-foreground sm:text-3xl xl:text-[2.45rem]">
               {title}
             </h2>
             <p className="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-[0.98rem]">

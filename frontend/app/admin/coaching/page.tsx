@@ -180,11 +180,11 @@ export default function AdminCoachingPage() {
         <section className="rounded-[2rem] border border-border bg-card/95 p-6 shadow-sm sm:p-8">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-3">
-              <div className="inline-flex rounded-full border border-primary/12 bg-primary/6 px-3 py-1 text-sm font-semibold uppercase tracking-[0.16em] text-primary">
+              <div className="inline-flex rounded-full border border-primary/12 bg-primary/6 px-3 py-1 text-sm font-semibold uppercase tracking-normal text-primary">
                 Admin Coaching Oversight
               </div>
               <div>
-                <h2 className="text-[clamp(1.85rem,1.25rem+1vw,2.8rem)] font-bold tracking-[-0.03em] text-foreground">
+                <h2 className="text-balance text-[clamp(1.85rem,1.25rem+1vw,2.8rem)] font-bold tracking-normal text-foreground">
                   Coaching Configuration
                 </h2>
                 <p className="mt-3 max-w-4xl text-sm leading-7 text-muted-foreground sm:text-[1.02rem]">

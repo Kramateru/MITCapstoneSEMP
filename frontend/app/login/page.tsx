@@ -216,9 +216,9 @@ export default function LoginPage() {
                     />
                   </div>
                 </div>
-                <h1 className="mx-auto max-w-[28rem] text-balance text-[clamp(2rem,3.18vw,3.15rem)] leading-[0.94] font-bold tracking-[-0.05em] text-white">
+                <h1 className="mx-auto max-w-[28rem] text-balance text-[clamp(2rem,3.18vw,3.15rem)] leading-[0.98] font-bold tracking-normal text-white">
                   <span className="block">Speech-Enabled</span>
-                  <span className="mt-1.5 block text-[0.64em] tracking-[0.07em]">Microlearning Platform</span>
+                  <span className="mt-1.5 block text-[0.64em] tracking-normal">Microlearning Platform</span>
                 </h1>
                 <div className="mt-4 flex flex-col items-center gap-2.5">
                   <span className="h-1 w-18 rounded-full bg-amber-400" />
@@ -267,7 +267,7 @@ export default function LoginPage() {
                   )}
                 </div>
 
-                <h2 className="mt-4 text-[clamp(2.15rem,3.35vw,3rem)] font-bold tracking-[-0.04em] text-slate-900">
+                <h2 className="mt-4 text-[clamp(2.15rem,3.35vw,3rem)] font-bold tracking-normal text-slate-900">
                   Welcome back
                 </h2>
               </div>

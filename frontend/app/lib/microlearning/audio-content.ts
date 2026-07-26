@@ -8,7 +8,7 @@ import { getConfigValue } from '@/app/lib/assessment/env'
 import { createSupabaseAdminClient } from '@/app/lib/assessment/supabase-admin'
 import type { BackendSessionUser } from '@/app/lib/assessment/types'
 
-const DEFAULT_AUDIO_BUCKET = 'microlearning-videos'
+const DEFAULT_AUDIO_BUCKET = 'microlearning-audio'
 const DEFAULT_GEMINI_AUDIO_MODEL = 'gemini-2.5-flash'
 const GEMINI_READY_ATTEMPTS = 20
 const GEMINI_READY_DELAY_MS = 1500
@@ -19,18 +19,12 @@ const SUPPORTED_AUDIO_UPLOAD_MIME_TYPES = new Set([
   'audio/mpeg',
   'audio/mp3',
   'audio/mpga',
-  'audio/mpeg3',
-  'audio/x-mpeg-3',
   'audio/x-mp3',
-  'audio/mpg',
   'audio/wav',
   'audio/x-wav',
   'audio/mp4',
   'audio/x-m4a',
   'audio/ogg',
-  'audio/aac',
-  'audio/flac',
-  'audio/webm',
 ])
 
 type AudioContentRow = {
@@ -171,10 +165,14 @@ function normalizeConfigValue(value: string | null | undefined) {
 }
 
 function getAudioBucketName() {
-  return normalizeConfigValue(getConfigValue([
+  const configured = normalizeConfigValue(getConfigValue([
     'AUDIO_MODULE_STORAGE_BUCKET_NAME',
     'MICROLEARNING_STORAGE_BUCKET_NAME',
-  ], DEFAULT_AUDIO_BUCKET)) || DEFAULT_AUDIO_BUCKET
+  ], DEFAULT_AUDIO_BUCKET))
+  if (!configured || configured === 'microlearning-videos' || configured === 'audio-modules') {
+    return DEFAULT_AUDIO_BUCKET
+  }
+  return configured
 }
 
 function getGeminiAudioModel() {
@@ -201,9 +199,6 @@ function isSupportedAudioUpload(fileName: string, mimeType: string) {
     || normalizedName.endsWith('.wav')
     || normalizedName.endsWith('.m4a')
     || normalizedName.endsWith('.ogg')
-    || normalizedName.endsWith('.aac')
-    || normalizedName.endsWith('.flac')
-    || normalizedName.endsWith('.webm')
     || SUPPORTED_AUDIO_UPLOAD_MIME_TYPES.has(normalizedMimeType)
   )
 }
@@ -212,14 +207,14 @@ function assertSupportedAudioUpload(fileName: string, mimeType: string) {
   if (!isSupportedAudioUpload(fileName, mimeType)) {
     throw new AssessmentHttpError(
       400,
-      'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.',
+      'Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.',
     )
   }
 }
 
 function buildStoragePath(trainerId: string, moduleId: string, fileName: string) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `microlearning/audio/${trainerId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
+  return `microlearning/audio/${moduleId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
 }
 
 function resolveSupabasePublicObject(assetUrl?: string | null) {

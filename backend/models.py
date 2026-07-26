@@ -1285,9 +1285,6 @@ class SimSession(Base):
     transcript_confidence = Column(Float)
     transcript_log = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
     turn_logs = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
-    
-    # Member Speech Tracking for Enhanced Recording (Phase 2)
-    member_speech_log = Column(JSONB().with_variant(JSON, "sqlite"), default=list)
 
     # Core KPI Scores
     speech_to_text_accuracy = Column(Float)  # 0-100

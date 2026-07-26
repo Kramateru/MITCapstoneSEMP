@@ -6,6 +6,7 @@ import useEmblaCarousel, {
 import * as React from "react";
 
 import { Button } from "./button";
+import { LazyIcon } from "./LazyIcon";
 import { cn } from "./utils";
 
 type CarouselApi = UseEmblaCarouselType[1];
@@ -194,7 +195,7 @@ function CarouselPrevious({
       onClick={scrollPrev}
       {...props}
     >
-      <ArrowLeft />
+      <LazyIcon name="ArrowLeft" />
       <span className="sr-only">Previous slide</span>
     </Button>
   );
@@ -224,7 +225,7 @@ function CarouselNext({
       onClick={scrollNext}
       {...props}
     >
-      <ArrowRight />
+      <LazyIcon name="ArrowRight" />
       <span className="sr-only">Next slide</span>
     </Button>
   );

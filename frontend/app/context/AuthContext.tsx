@@ -74,10 +74,6 @@ const AUTH_STORAGE_KEYS = [
   'user',
 ]
 
-const AUTH_STORAGE_CANDIDATES = [
-  window?.sessionStorage,
-  window?.localStorage,
-].filter(Boolean) as Storage[]
 const expectedLoginErrorPatterns = [
   /^invalid email or password$/i,
   /^email is required\.?$/i,
@@ -88,6 +84,31 @@ const expectedLoginErrorPatterns = [
   /^your account is already logged in on another device or browser\.? please log out first\.?$/i,
   /^this account is already active on another device or browser\.?$/i,
 ]
+
+function getAuthStorageCandidates(): Storage[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  const storages: Storage[] = []
+  try {
+    if (window.sessionStorage) {
+      storages.push(window.sessionStorage)
+    }
+  } catch {
+    // Some browser modes can block storage access.
+  }
+
+  try {
+    if (window.localStorage) {
+      storages.push(window.localStorage)
+    }
+  } catch {
+    // Some browser modes can block storage access.
+  }
+
+  return storages
+}
 
 function normalizeUserRole(value: unknown): User['user_role'] | null {
   if (typeof value !== 'string') {
@@ -223,8 +244,7 @@ function getStoredValue(key: string) {
     return null
   }
 
-  const storages = [window.sessionStorage, window.localStorage]
-  for (const storage of storages) {
+  for (const storage of getAuthStorageCandidates()) {
     try {
       const value = storage.getItem(key)
       if (value) {
@@ -243,7 +263,7 @@ function getAuthStorageForWrite() {
     return null
   }
 
-  return window.sessionStorage
+  return getAuthStorageCandidates()[0] ?? null
 }
 
 function persistAuthValueToAllStorages(key: string, value: string | null) {
@@ -251,8 +271,7 @@ function persistAuthValueToAllStorages(key: string, value: string | null) {
     return
   }
 
-  const storages = [window.sessionStorage, window.localStorage]
-  for (const storage of storages) {
+  for (const storage of getAuthStorageCandidates()) {
     try {
       if (value === null) {
         storage.removeItem(key)
@@ -275,8 +294,7 @@ function readStoredAuthState() {
   }
 
   try {
-    const storageCandidates = [window.sessionStorage, window.localStorage]
-    const selectedStorage = storageCandidates.find((storage) => {
+    const selectedStorage = getAuthStorageCandidates().find((storage) => {
       return Boolean(storage.getItem('token') && storage.getItem('user'))
     })
 

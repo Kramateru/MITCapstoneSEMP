@@ -259,7 +259,7 @@ export function SettingsWorkspace({
       {loading ? (
         <Card className="border-border/70 bg-card/80">
           <CardContent className="flex items-center gap-3 py-6 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
+            <LazyIcon name="Loader2" className="size-4 animate-spin" />
             Loading saved settings from the database...
           </CardContent>
         </Card>
@@ -493,7 +493,7 @@ export default function SettingsPanel({
     <Dialog>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
-          <Settings className="mr-2 size-4" />
+          <LazyIcon name="Settings" className="mr-2 size-4" />
           {triggerLabel}
         </Button>
       </DialogTrigger>

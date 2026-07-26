@@ -993,7 +993,7 @@ export default function TrainerUsersPage() {
                           {isInactive ? 'Inactive' : 'Active'}
                         </span>
                       </div>
-                      <div className="break-all text-sm leading-5 text-gray-600">{trainee.email}</div>
+                      <div className="break-words text-sm leading-5 text-gray-600">{trainee.email}</div>
                       <div className="mt-1 text-xs leading-5 text-gray-600">
                         Status: {isInactive ? 'Inactive' : 'Active'} | Current batches: {formatBatchSummary(trainee)}
                       </div>

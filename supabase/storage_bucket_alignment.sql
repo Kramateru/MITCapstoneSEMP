@@ -4,16 +4,13 @@
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values
   (
-    'microlearning-videos',
-    'microlearning-videos',
+    'microlearning-audio',
+    'microlearning-audio',
     true,
     52428800,
     array[
-      'video/*',
       'audio/*',
-      'image/*',
       'text/*',
-      'application/pdf',
       'application/octet-stream'
     ]
   ),
@@ -25,15 +22,15 @@ values
     array['image/jpeg', 'image/png', 'image/webp']
   ),
   (
-    'call-recordings',
-    'call-recordings',
+    'recordings',
+    'recordings',
     true,
     52428800,
     array['audio/*', 'video/webm']
   ),
   (
-    'call-ringers',
-    'call-ringers',
+    'call-simulation-audio',
+    'call-simulation-audio',
     true,
     52428800,
     array['audio/*']
@@ -59,12 +56,20 @@ set
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
 
-drop policy if exists "microlearning_videos_read_authenticated" on storage.objects;
-create policy "microlearning_videos_read_authenticated"
+drop policy if exists "microlearning_audio_read_authenticated" on storage.objects;
+create policy "microlearning_audio_read_authenticated"
 on storage.objects
 for select
 to authenticated
-using (bucket_id = 'microlearning-videos');
+using (bucket_id = 'microlearning-audio');
+
+drop policy if exists "microlearning_audio_manage_trainers" on storage.objects;
+create policy "microlearning_audio_manage_trainers"
+on storage.objects
+for all
+to authenticated
+using (bucket_id = 'microlearning-audio' and public.is_trainer_or_admin())
+with check (bucket_id = 'microlearning-audio' and public.is_trainer_or_admin());
 
 drop policy if exists "profile_pictures_read_authenticated" on storage.objects;
 create policy "profile_pictures_read_authenticated"
@@ -73,19 +78,35 @@ for select
 to authenticated
 using (bucket_id = 'profile-pictures');
 
-drop policy if exists "call_recordings_read_authenticated" on storage.objects;
-create policy "call_recordings_read_authenticated"
+drop policy if exists "recordings_read_authenticated" on storage.objects;
+create policy "recordings_read_authenticated"
 on storage.objects
 for select
 to authenticated
-using (bucket_id = 'call-recordings');
+using (bucket_id = 'recordings');
 
-drop policy if exists "call_ringers_read_authenticated" on storage.objects;
-create policy "call_ringers_read_authenticated"
+drop policy if exists "recordings_manage_authenticated" on storage.objects;
+create policy "recordings_manage_authenticated"
+on storage.objects
+for all
+to authenticated
+using (bucket_id = 'recordings')
+with check (bucket_id = 'recordings');
+
+drop policy if exists "call_simulation_audio_read_authenticated" on storage.objects;
+create policy "call_simulation_audio_read_authenticated"
 on storage.objects
 for select
 to authenticated
-using (bucket_id = 'call-ringers');
+using (bucket_id = 'call-simulation-audio');
+
+drop policy if exists "call_simulation_audio_manage_trainers" on storage.objects;
+create policy "call_simulation_audio_manage_trainers"
+on storage.objects
+for all
+to authenticated
+using (bucket_id = 'call-simulation-audio' and public.is_trainer_or_admin())
+with check (bucket_id = 'call-simulation-audio' and public.is_trainer_or_admin());
 
 drop policy if exists "attachments_read_authenticated" on storage.objects;
 create policy "attachments_read_authenticated"

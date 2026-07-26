@@ -452,7 +452,7 @@ export function DashboardLayout({
                       {item.icon}
                     </span>
                     <div className={`min-w-0 flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                      <div className="truncate text-[0.95rem] font-medium leading-6">{item.label}</div>
+                      <div className="line-clamp-2 text-[0.95rem] font-medium leading-5 text-pretty">{item.label}</div>
                     </div>
                     {item.badge && !isMinifiedSidebar ? (
                       <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
@@ -528,7 +528,7 @@ export function DashboardLayout({
                     </div>
                   ))}
                 </div>
-                <h1 className="line-clamp-2 text-[1.18rem] font-bold tracking-normal text-foreground sm:text-[1.38rem] lg:line-clamp-1 lg:text-[1.62rem] xl:text-[1.82rem]">
+                <h1 className="line-clamp-2 text-balance text-[1.18rem] font-bold tracking-normal text-foreground sm:text-[1.38rem] lg:text-[1.62rem] xl:text-[1.82rem]">
                   {currentPageLabel}
                 </h1>
                 <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">

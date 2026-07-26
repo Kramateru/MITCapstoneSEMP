@@ -169,9 +169,6 @@ const TRAINER_AUDIO_FILE_ACCEPT = [
   'audio/mp4',
   'audio/x-m4a',
   'audio/ogg',
-  'audio/aac',
-  'audio/flac',
-  'audio/webm',
 ].join(',');
 
 function getTrainerMediaUploadSizeError(file: File, moduleType: ModuleFormState['module_type']) {
@@ -203,8 +200,8 @@ function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['mod
   if (moduleType === 'audio' || moduleType === 'case_study') {
     const isSupported =
       SUPPORTED_TRAINER_AUDIO_MIME_TYPES.has(normalizedMimeType)
-      || /\.(mp3|wav|m4a|ogg|aac|flac|webm)$/i.test(normalizedName);
-    return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM audio.';
+      || /\.(mp3|wav|m4a|ogg)$/i.test(normalizedName);
+    return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.';
   }
 
   if (moduleType === 'infographic') {
@@ -783,6 +780,9 @@ export default function TrainerMicrolearningStudio() {
       });
 
       const result = await response.json();
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(result, 'Audio upload and transcription failed.'));
+      }
 
       setAudioPreviewUrl(result.signed_url || '');
       setModuleForm((current) => ({
@@ -847,6 +847,80 @@ export default function TrainerMicrolearningStudio() {
       return null;
     } finally {
       setAudioUploading(false);
+      setAudioProcessing(false);
+    }
+  }
+
+  async function deleteAudioContent() {
+    const moduleId = editingModule?.id;
+    if (!moduleId) {
+      toast.error('Please save the module first.');
+      return;
+    }
+    if (!moduleForm.content_url && !moduleForm.audio_storage_path) {
+      toast.info('No audio is attached to this module.');
+      return;
+    }
+
+    setAudioProcessing(true);
+    try {
+      const response = await authedFetch(`/api/microlearning/modules/${moduleId}/audio`, {
+        method: 'DELETE',
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(payload, 'Unable to delete the audio file.'));
+      }
+
+      setAudioPreviewUrl('');
+      setModuleForm((current) => ({
+        ...current,
+        content_url: '',
+        case_study_content: '',
+        audio_content_id: '',
+        audio_storage_path: '',
+        audio_bucket_name: '',
+        audio_content_type: '',
+        audio_original_filename: '',
+        audio_transcript_provider: '',
+        audio_captions_url: '',
+        audio_caption_data_json: '',
+        audio_duration_seconds: 0,
+        audio_summary_text: '',
+        audio_tts_url: '',
+      }));
+      setEditingModule((current) => current ? ({
+        ...current,
+        content_url: '',
+        audio_url: '',
+        audio_transcript: '',
+        audio_tts_url: '',
+        audio_duration_seconds: null,
+        content_data: {
+          ...(current.content_data || {}),
+          asset_url: '',
+          audio_url: '',
+          transcript: '',
+          transcript_text: '',
+          captions_text: '',
+          summary: '',
+          summary_text: '',
+          audio_summary: '',
+          audio_content_id: '',
+          audio_storage_path: '',
+          audio_bucket: '',
+          audio_content_type: '',
+          audio_original_filename: '',
+          captions_url: '',
+          caption_data: [],
+          tts_url: '',
+        },
+      }) : current);
+      toast.success('Audio deleted from Supabase.');
+      void loadData();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Unable to delete the audio file.');
+    } finally {
       setAudioProcessing(false);
     }
   }
@@ -1920,7 +1994,7 @@ export default function TrainerMicrolearningStudio() {
                           ? 'Upload a lesson audio file or process a direct audio link. The system will automatically:'
                           : 'Upload MP3, WAV, M4A, or OGG lesson audio. The system will automatically:'}
                         <ul className="mt-2 list-inside list-disc space-y-1">
-                          <li>Upload the file to the Supabase `microlearning-videos` bucket</li>
+                          <li>Upload the file to the Supabase `microlearning-audio` bucket</li>
                           <li>Send the audio to Gemini for speech-to-text captions and a concise summary</li>
                           <li>Store the transcript, caption data, summary, and file metadata in `audio_content` plus the module record</li>
                         </ul>
@@ -1967,7 +2041,7 @@ export default function TrainerMicrolearningStudio() {
                           placeholder="https://example.com/lesson.mp3 or a Supabase-hosted audio URL"
                         />
                         <p className="text-xs text-muted-foreground">
-                          Paste a direct MP3, WAV, M4A, OGG, AAC, FLAC, or WEBM link, then process it to generate transcript and caption text automatically.
+                          Paste a direct MP3, WAV, M4A, or OGG link, then process it to generate transcript and caption text automatically.
                         </p>
                       </div>
                       <div className="flex items-end">
@@ -2033,6 +2107,15 @@ export default function TrainerMicrolearningStudio() {
                           <RefreshCw className="mr-2 size-4" />
                           {audioPreviewLoading ? 'Refreshing Preview...' : 'Refresh Preview URL'}
                         </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => { void deleteAudioContent(); }}
+                          disabled={audioProcessing || !moduleForm.content_url.trim()}
+                        >
+                          <Trash2 className="mr-2 size-4" />
+                          Delete Audio
+                        </Button>
                       </div>
 
                       <div className="grid gap-3 lg:grid-cols-3">
@@ -2055,7 +2138,7 @@ export default function TrainerMicrolearningStudio() {
                           </div>
                           {moduleForm.audio_tts_url ? (
                             <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-700">
-                              TTS audio saved to: <span className="break-all font-medium">{moduleForm.audio_tts_url}</span>
+                              TTS audio saved to: <span className="break-words font-medium">{moduleForm.audio_tts_url}</span>
                             </div>
                           ) : (
                             <div className="mt-3 text-sm text-slate-500">
@@ -2074,7 +2157,7 @@ export default function TrainerMicrolearningStudio() {
                           <div className="mt-2 space-y-1 text-sm text-slate-600">
                             <div>Audio Content ID: {moduleForm.audio_content_id || 'Pending'}</div>
                             <div>Storage Path: {moduleForm.audio_storage_path || 'Pending'}</div>
-                            <div>Bucket: {moduleForm.audio_bucket_name || 'microlearning-videos'}</div>
+                            <div>Bucket: {moduleForm.audio_bucket_name || 'microlearning-audio'}</div>
                             <div>Format: {moduleForm.audio_content_type || 'Pending'}</div>
                             <div>Language: {moduleForm.audio_language || 'en-US'}</div>
                             <div>Duration: {moduleForm.audio_duration_seconds ? `${moduleForm.audio_duration_seconds}s` : 'Pending'}</div>

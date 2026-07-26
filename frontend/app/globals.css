@@ -165,6 +165,10 @@
     font-feature-settings: "ss01" 1, "ss02" 1, "cv01" 1;
   }
 
+  :where([class*="tracking-"]) {
+    letter-spacing: 0;
+  }
+
   img,
   video,
   canvas,
@@ -464,7 +468,21 @@
     min-width: 0;
     overflow-wrap: break-word;
     word-break: normal;
-    hyphens: manual;
+    hyphens: none;
+  }
+
+  .dashboard-page :where(p, li, dd, figcaption, [data-slot="card-description"], [data-slot="dialog-description"]),
+  [data-slot="dialog-content"] :where(p, li, dd, figcaption, [data-slot="card-description"], [data-slot="dialog-description"]),
+  [data-slot="alert-dialog-content"] :where(p, li, dd, figcaption, [data-slot="card-description"]),
+  [data-slot="sheet-content"] :where(p, li, dd, figcaption, [data-slot="card-description"]) {
+    text-wrap: pretty;
+  }
+
+  .dashboard-page :where(h1, h2, h3, [data-slot="card-title"], [data-slot="dialog-title"]),
+  [data-slot="dialog-content"] :where(h1, h2, h3, [data-slot="card-title"], [data-slot="dialog-title"]),
+  [data-slot="alert-dialog-content"] :where(h1, h2, h3, [data-slot="card-title"]),
+  [data-slot="sheet-content"] :where(h1, h2, h3, [data-slot="card-title"]) {
+    text-wrap: balance;
   }
 
   .dashboard-page :where([class*="tracking-"]),
@@ -532,28 +550,28 @@
 
   .dashboard-metrics-grid {
     display: grid;
-    gap: 0.5rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)) !important;
+    gap: clamp(0.6rem, 0.5rem + 0.3vw, 0.9rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14.5rem), 1fr)) !important;
     align-items: stretch;
   }
 
   .dashboard-actions-grid {
     display: grid;
-    gap: 0.5rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr)) !important;
+    gap: clamp(0.6rem, 0.5rem + 0.3vw, 0.9rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)) !important;
     align-items: stretch;
   }
 
   .dashboard-balanced-grid {
     display: grid;
-    gap: 0.5rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)) !important;
+    gap: clamp(0.65rem, 0.5rem + 0.35vw, 1rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)) !important;
     align-items: start;
   }
 
   .dashboard-compact-grid {
     display: grid;
-    gap: 0.6rem;
+    gap: clamp(0.55rem, 0.45rem + 0.25vw, 0.8rem);
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr)) !important;
     align-items: stretch;
   }
@@ -680,7 +698,7 @@
   .dashboard-four-grid,
   .dashboard-five-grid {
     display: grid;
-    gap: 0.5rem;
+    gap: clamp(0.65rem, 0.5rem + 0.35vw, 1rem);
     align-items: stretch;
   }
 
@@ -717,8 +735,8 @@
 
   .dashboard-toolbar {
     display: grid;
-    gap: 0.45rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)) !important;
+    gap: clamp(0.55rem, 0.45rem + 0.25vw, 0.8rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)) !important;
     align-items: end;
   }
 
@@ -739,13 +757,13 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.55rem;
+    gap: clamp(0.5rem, 0.45rem + 0.25vw, 0.75rem);
     min-width: 0;
   }
 
   .dashboard-control-row > * {
-    flex: 1 1 10rem;
-    min-width: min(100%, 10rem);
+    flex: 1 1 11rem;
+    min-width: min(100%, 11rem);
   }
 
   @media (min-width: 1024px) {
@@ -760,8 +778,8 @@
 
   .dashboard-form-grid {
     display: grid;
-    gap: 0.6rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)) !important;
+    gap: clamp(0.65rem, 0.5rem + 0.3vw, 0.9rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)) !important;
     align-items: end;
   }
 
@@ -773,7 +791,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: end;
-    gap: 0.55rem;
+    gap: clamp(0.55rem, 0.45rem + 0.25vw, 0.8rem);
   }
 
   .dashboard-form-actions > * {
@@ -976,15 +994,15 @@
 
   .responsive-card-grid {
     display: grid;
-    gap: 0.6rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)) !important;
+    gap: clamp(0.65rem, 0.5rem + 0.35vw, 1rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)) !important;
     align-items: stretch;
   }
 
   .responsive-detail-grid {
     display: grid;
-    gap: 0.6rem;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)) !important;
+    gap: clamp(0.75rem, 0.6rem + 0.4vw, 1.1rem);
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr)) !important;
     align-items: start;
   }
 
@@ -992,11 +1010,11 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 0.55rem;
+    gap: clamp(0.55rem, 0.45rem + 0.25vw, 0.8rem);
   }
 
   .action-row > * {
-    flex: 1 1 10rem;
+    flex: 1 1 11rem;
     min-width: 0;
   }
 
@@ -1345,6 +1363,15 @@
     max-width: 100%;
   }
 
+  [data-slot="table-cell"] :is([data-slot="button"], button) {
+    min-height: 2.25rem;
+  }
+
+  [data-slot="table-cell"]:last-child,
+  [data-slot="table-head"]:last-child {
+    width: 1%;
+  }
+
   .dashboard-page :where([data-slot="badge"]) {
     flex-shrink: 1;
     min-width: 0;
@@ -1364,6 +1391,17 @@
   [data-slot="alert-dialog-content"] {
     width: min(95vw, 80rem);
     max-width: 95vw;
+  }
+
+  [data-slot="dialog-content"] :where(.max-h-\[90vh\], .max-h-\[95vh\], .\!max-h-\[90vh\], .\!max-h-\[94vh\], .\!max-h-\[88vh\]) {
+    max-height: calc(100dvh - 1.25rem) !important;
+  }
+
+  [data-slot="dialog-content"] :where(.overflow-y-auto, .overflow-auto),
+  [data-slot="alert-dialog-content"] :where(.overflow-y-auto, .overflow-auto),
+  [data-slot="sheet-content"] :where(.overflow-y-auto, .overflow-auto) {
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable both-edges;
   }
 
   [data-slot="dialog-content"] > *,
@@ -1407,6 +1445,15 @@
   [data-slot="alert-dialog-footer"],
   [data-slot="sheet-footer"] {
     gap: 0.6rem;
+  }
+
+  [data-slot="table"] {
+    min-width: max(100%, 42rem);
+  }
+
+  [data-slot="table-head"],
+  [data-slot="table-cell"] {
+    padding-inline: 0.75rem;
   }
 }
 

@@ -3,7 +3,7 @@
 import * as React from "react"
 import * as Recharts from "recharts"
 
-export function ChartRecharts({ children }: { children: React.ReactNode }) {
+export function ChartRecharts({ children }: { children: React.ReactElement }) {
   return <Recharts.ResponsiveContainer>{children}</Recharts.ResponsiveContainer>
 }
 

@@ -17,6 +17,7 @@ const Trophy = (props: any) => <LazyIcon name="Trophy" {...props} />;
 const XCircle = (props: any) => <LazyIcon name="XCircle" {...props} />;
 
 const CheckCircle2 = (props: any) => <LazyIcon name="CheckCircle2" {...props} />;
+const ClipboardCheck = (props: any) => <LazyIcon name="ClipboardCheck" {...props} />;
 const Loader2 = (props: any) => <LazyIcon name="Loader2" {...props} />;
 
 type ApiAssessment = {

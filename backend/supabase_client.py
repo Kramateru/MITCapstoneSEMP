@@ -53,17 +53,24 @@ class SupabaseClient:
         self.profile_bucket_name = (
             normalize_env_value(os.getenv("PROFILE_STORAGE_BUCKET_NAME")) or "profile-pictures"
         )
+        configured_call_recordings_bucket = normalize_env_value(os.getenv("CALL_SIMULATION_STORAGE_BUCKET_NAME"))
         self.call_simulation_bucket_name = (
-            normalize_env_value(os.getenv("CALL_SIMULATION_STORAGE_BUCKET_NAME"))
-            or "call-recordings"
+            "recordings"
+            if configured_call_recordings_bucket in {"", "call-recordings"}
+            else configured_call_recordings_bucket
         )
-        self.call_simulation_asset_bucket_name = normalize_env_value(
-            os.getenv("CALL_SIMULATION_ASSET_BUCKET_NAME")
-        ) or "call-ringers"
+        configured_call_asset_bucket = normalize_env_value(os.getenv("CALL_SIMULATION_ASSET_BUCKET_NAME"))
+        self.call_simulation_asset_bucket_name = (
+            "call-simulation-audio"
+            if configured_call_asset_bucket in {"", "call-ringers"}
+            else configured_call_asset_bucket
+        )
         # Shared bucket for trainer-uploaded lesson video and related media.
+        configured_microlearning_bucket = normalize_env_value(os.getenv("MICROLEARNING_STORAGE_BUCKET_NAME"))
         self.microlearning_bucket_name = (
-            normalize_env_value(os.getenv("MICROLEARNING_STORAGE_BUCKET_NAME"))
-            or "microlearning-videos"
+            "microlearning-audio"
+            if configured_microlearning_bucket in {"", "microlearning-videos", "audio-modules"}
+            else configured_microlearning_bucket
         )
         self.is_available = False
         self.config_status = "not_configured"
@@ -458,14 +465,14 @@ class SupabaseClient:
         content_type: Optional[str] = None,
         save_local_backup: bool = False,
     ) -> Optional[str]:
-        """Upload a Call Simulation recording using the call-simulations/recordings/{trainee}/{scenario}/... layout."""
-        relative_path = f"call-simulations/recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+        """Upload a Call Simulation recording to the dedicated recordings bucket."""
+        relative_path = f"call-simulation/recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
 
         if not self.is_available:
             logger.warning("Supabase not available. Call Simulation audio upload was rejected.")
             return None
 
-        path = f"call-simulations/recordings/{trainee_id}/{scenario_id}/{session_id}/{filename}"
+        path = relative_path
         public_url = self._upload_bytes_to_bucket(
             bucket_name=self.call_simulation_bucket_name,
             path=path,
@@ -522,7 +529,11 @@ class SupabaseClient:
             return None
 
         scenario_segment = scenario_id or "draft"
-        path = f"assets/{trainer_id}/{scenario_segment}/{asset_kind}/{filename}"
+        normalized_asset_kind = (asset_kind or "member-step").strip().lower()
+        if normalized_asset_kind == "member-step":
+            path = f"call-simulation/audio/{scenario_segment}/{filename}"
+        else:
+            path = f"call-simulation/audio/{scenario_segment}/{normalized_asset_kind}/{filename}"
         public_url = self._upload_bytes_to_bucket(
             bucket_name=self.call_simulation_asset_bucket_name,
             path=path,
@@ -627,6 +638,7 @@ class SupabaseClient:
         trainer_id: str,
         filename: Optional[str] = None,
         content_type: Optional[str] = None,
+        lesson_id: Optional[str] = None,
         allow_local_fallback: bool = True,
     ) -> Optional[str]:
         """
@@ -646,9 +658,11 @@ class SupabaseClient:
         if not filename:
             timestamp = datetime.utcnow().isoformat().replace(":", "-")
             ext = "mp3" if (content_type or "").startswith("audio/mpeg") else "wav"
-            filename = f"{module_id}/{timestamp}.{ext}"
+            filename = f"{timestamp}.{ext}"
 
-        path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{trainer_id}/{filename}"
+        lesson_segment = (lesson_id or module_id or "lesson").strip().replace("\\", "/").strip("/") or "lesson"
+        safe_filename = (filename or "audio.mp3").strip().replace("\\", "/").split("/")[-1]
+        path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{module_id}/{lesson_segment}/{safe_filename}"
         relative_path = path
 
         if self.is_available:
@@ -700,9 +714,10 @@ class SupabaseClient:
 
         if not filename:
             timestamp = datetime.utcnow().isoformat().replace(":", "-")
-            filename = f"{module_id}/tts_{timestamp}.wav"
+            filename = f"tts_{timestamp}.wav"
 
-        path = f"{MICROLEARNING_STORAGE_ROOT}/tts/{filename}"
+        safe_filename = (filename or "tts.wav").strip().replace("\\", "/").split("/")[-1]
+        path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{module_id}/tts/{safe_filename}"
         return self._upload_bytes_to_bucket(
             bucket_name=self.microlearning_bucket_name,
             path=path,

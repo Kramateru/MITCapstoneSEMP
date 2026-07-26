@@ -215,6 +215,40 @@ def _save_generated_call_simulation_tts_local(
         return None
 
 
+def _log_call_simulation_audio_action(
+    db: Session,
+    *,
+    user: User,
+    action_type: str,
+    scenario_id: Optional[str] = None,
+    step_number: Optional[int] = None,
+    file_name: Optional[str] = None,
+    status_value: str = "success",
+    error_detail: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    create_audit_log(
+        db,
+        user=user,
+        action_type=action_type,
+        module_name="Call Simulation",
+        entity_type="call_simulation_audio",
+        entity_id=scenario_id,
+        description=f"Call Simulation audio {action_type.replace('_', ' ')} {status_value}.",
+        status=status_value,
+        severity="warning" if status_value == "failed" else "info",
+        trainer_id=user.id if user.role in [UserRole.TRAINER, UserRole.ADMIN] else None,
+        trainee_id=user.id if user.role == UserRole.TRAINEE else None,
+        metadata={
+            "scenario_id": scenario_id,
+            "step_number": step_number,
+            "file_name": file_name,
+            "error_detail": error_detail,
+            **(metadata or {}),
+        },
+    )
+
+
 def _is_missing_supabase_table_error(error: Exception) -> bool:
     normalized_error = str(error or "").strip().lower()
     if not normalized_error:
@@ -2437,8 +2471,8 @@ def _create_call_simulation_audio_asset_record(
         bucket_name=bucket_name,
         storage_path=storage_path,
         public_url=normalized_url,
-        voice_used=_normalize_optional_url(voice_used),
-        provider=_normalize_optional_url(provider),
+        voice_used=str(voice_used or "").strip() or None,
+        provider=str(provider or "").strip() or None,
         generated_text=str(generated_text or "").strip() or None,
         asset_metadata=_normalize_json_object(asset_metadata),
         is_active=True,
@@ -7042,6 +7076,24 @@ async def upload_call_simulation_audio_asset(
                 )
                 db.commit()
 
+    _log_call_simulation_audio_action(
+        db,
+        user=current_user,
+        action_type="upload_audio" if not replace_audio_url else "replace_audio",
+        scenario_id=None if scenario_segment in {"draft", "global"} else scenario_segment,
+        step_number=step_number,
+        file_name=storage_leaf,
+        metadata={
+            "asset_kind": normalized_asset_kind,
+            "audio_url": audio_url,
+            "bucket_name": getattr(audio_asset, "bucket_name", None),
+            "storage_path": getattr(audio_asset, "storage_path", None),
+            "file_size": int(upload_meta["file_size"]),
+            "content_type": str(upload_meta["content_type"]),
+        },
+    )
+    db.commit()
+
     return CallSimulationAudioAssetUploadResponse(
         audio_url=audio_url,
         asset_kind=normalized_asset_kind,
@@ -7116,6 +7168,19 @@ async def delete_call_simulation_audio_asset(
             delete_storage=not is_still_referenced,
         )
 
+    _log_call_simulation_audio_action(
+        db,
+        user=current_user,
+        action_type="delete_audio",
+        scenario_id=scenario_id,
+        step_number=step_number,
+        file_name=matching_assets[0].file_name if matching_assets else None,
+        metadata={
+            "asset_kind": normalized_asset_kind,
+            "audio_url": audio_url,
+            "deleted_storage": not is_still_referenced,
+        },
+    )
     db.commit()
     return SuccessResponse(message="Audio asset removed.")
 
@@ -7626,6 +7691,9 @@ async def synthesize_member_speech(
                         asset_metadata={
                             "storage_mode": storage_mode,
                             "scope": "shared",
+                            "voice_type": "Puck",
+                            "language": "en-US",
+                            "duration": round(max(duration, 0.0), 2),
                             "local_audio_path": local_audio_path,
                         },
                     )
@@ -7662,6 +7730,9 @@ async def synthesize_member_speech(
                     generated_text=normalized_text,
                     asset_metadata={
                         "storage_mode": storage_mode,
+                        "voice_type": "Puck",
+                        "language": "en-US",
+                        "duration": round(max(duration, 0.0), 2),
                         "local_audio_path": local_audio_path,
                     },
                 )
@@ -7686,6 +7757,27 @@ async def synthesize_member_speech(
                     }
                     db.add(persisted_scenario)
                 db.commit()
+
+            _log_call_simulation_audio_action(
+                db,
+                user=current_user,
+                action_type="regenerate_speech" if normalized_replace_audio_url else "generate_speech",
+                scenario_id=scenario_id,
+                step_number=step_number,
+                file_name=filename,
+                metadata={
+                    "asset_kind": normalized_asset_kind,
+                    "audio_url": uploaded_audio_url,
+                    "provider": provider,
+                    "voice_type": "Puck",
+                    "language": "en-US",
+                    "duration": round(max(duration, 0.0), 2),
+                    "bucket_name": getattr(audio_asset, "bucket_name", None),
+                    "storage_path": getattr(audio_asset, "storage_path", None),
+                    "local_audio_path": local_audio_path,
+                },
+            )
+            db.commit()
 
             if (
                 normalized_replace_audio_url
@@ -8346,19 +8438,60 @@ async def request_session_member_speech(
     if not step or _is_csr_actor(step.actor):
         raise HTTPException(status_code=400, detail="Requested step must be a Member AI step")
 
-    replace_audio_url = _normalize_optional_url(payload.get("replace_audio_url"))
+    saved_audio_url = _normalize_optional_url(
+        getattr(step, "audio_url", None)
+        or _normalize_json_object(getattr(step, "metadata", None)).get("member_audio_url")
+    )
+    if not _is_stored_call_simulation_audio_public_url(saved_audio_url):
+        _log_call_simulation_audio_action(
+            db,
+            user=current_user,
+            action_type="playback_member_speech",
+            scenario_id=session.scenario_id,
+            step_number=step_number,
+            status_value="failed",
+            error_detail="Saved Member AI audio is missing or is not stored in Supabase.",
+            metadata={"session_id": session_id},
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Saved Member AI speech is missing for this step. "
+                "Ask the trainer to generate or upload the audio before launching the simulation."
+            ),
+        )
 
-    return await synthesize_member_speech(
-        text=script,
-        persist=True,
-        require_supabase=True,
+    audio_asset = _find_active_call_simulation_audio_asset(
+        db,
+        trainer_id=str(session.assigned_by_id or scenario.created_by or ""),
+        public_url=saved_audio_url,
+        asset_kinds=["member-step"],
         scenario_id=session.scenario_id,
         step_number=step_number,
-        asset_kind="member-step",
-        replace_audio_url=replace_audio_url,
-        authorization=authorization,
-        db=db,
+    ) if (session.assigned_by_id or scenario.created_by) else None
+
+    _log_call_simulation_audio_action(
+        db,
+        user=current_user,
+        action_type="playback_member_speech",
+        scenario_id=session.scenario_id,
+        step_number=step_number,
+        metadata={
+            "session_id": session_id,
+            "audio_url": saved_audio_url,
+            "bucket_name": getattr(audio_asset, "bucket_name", None),
+            "storage_path": getattr(audio_asset, "storage_path", None),
+        },
     )
+    db.commit()
+    return {
+        "audio_url": saved_audio_url,
+        "duration": None,
+        "provider": "stored_supabase",
+        "storage_mode": "supabase",
+        "audio_asset": _serialize_call_simulation_audio_asset(audio_asset).model_dump() if audio_asset else None,
+    }
 
 
 @router.post("/session/{session_id}/feedback")

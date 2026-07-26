@@ -9,7 +9,7 @@ import { fetchBackendPath } from '@/app/lib/backend-proxy'
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
-const DEFAULT_MICROLEARNING_BUCKET = 'microlearning-videos'
+const DEFAULT_MICROLEARNING_BUCKET = 'microlearning-audio'
 const SIGNED_URL_TTL_SECONDS = 60 * 60
 const SUPABASE_PUBLIC_OBJECT_MARKER = '/storage/v1/object/public/'
 
@@ -46,10 +46,14 @@ function normalizeConfigValue(value: string | null | undefined) {
 }
 
 function getDefaultMicrolearningBucketName() {
-  return normalizeConfigValue(getConfigValue([
+  const configured = normalizeConfigValue(getConfigValue([
     'MICROLEARNING_STORAGE_BUCKET_NAME',
     'AUDIO_MODULE_STORAGE_BUCKET_NAME',
-  ], DEFAULT_MICROLEARNING_BUCKET)) || DEFAULT_MICROLEARNING_BUCKET
+  ], DEFAULT_MICROLEARNING_BUCKET))
+  if (!configured || configured === 'microlearning-videos' || configured === 'audio-modules') {
+    return DEFAULT_MICROLEARNING_BUCKET
+  }
+  return configured
 }
 
 function extractBackendErrorMessage(

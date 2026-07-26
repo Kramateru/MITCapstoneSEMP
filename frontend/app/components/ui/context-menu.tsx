@@ -73,6 +73,7 @@ function ContextMenuSubTrigger({
     >
       {children}
       <LazyIcon name="ChevronRightIcon" className="ml-auto" />
+    </ContextMenuPrimitive.SubTrigger>
   );
 }
 

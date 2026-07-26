@@ -26,8 +26,9 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-or-anon-key>
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<publishable-or-anon-key>
 VITE_SUPABASE_URL=https://<project>.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=<publishable-or-anon-key>
-CALL_SIMULATION_STORAGE_BUCKET_NAME=call-recordings
-CALL_SIMULATION_ASSET_BUCKET_NAME=call-ringers
+CALL_SIMULATION_STORAGE_BUCKET_NAME=recordings
+CALL_SIMULATION_ASSET_BUCKET_NAME=call-simulation-audio
+MICROLEARNING_STORAGE_BUCKET_NAME=microlearning-audio
 # Set to false in production. Critical uploads for profile images,
 # microlearning audio/assets, and call simulation assets require Supabase storage.
 ALLOW_LOCAL_MEDIA_FALLBACK=false
@@ -60,6 +61,7 @@ Backend service:
 - `DATABASE_URL`
 - `CALL_SIMULATION_STORAGE_BUCKET_NAME`
 - `CALL_SIMULATION_ASSET_BUCKET_NAME`
+- `MICROLEARNING_STORAGE_BUCKET_NAME`
 - `ALLOW_LOCAL_MEDIA_FALLBACK`
 - `BACKEND_URL`
 - `FRONTEND_URL`
@@ -80,17 +82,17 @@ Expected Render startup behavior:
 
 - The backend log should report `Supabase admin storage configuration detected.`
 - The warning `Supabase service role key is not configured...` should not appear once either service-key variable is set.
-- Trainer video uploads should write to the `microlearning-videos` bucket.
+- Trainer microlearning audio uploads should write to the `microlearning-audio` bucket.
 - Profile image uploads should write to the `profile-pictures` bucket.
 
 ## Storage Buckets
 
 Verify these buckets exist in Supabase Storage:
 
-- `microlearning-videos`
+- `microlearning-audio`
 - `profile-pictures`
-- `call-recordings`
-- `call-ringers`
+- `recordings`
+- `call-simulation-audio`
 - `attachments`
 
 Use `supabase/storage_bucket_alignment.sql` in the Supabase SQL editor to align the bucket and policy setup when provisioning a fresh project.

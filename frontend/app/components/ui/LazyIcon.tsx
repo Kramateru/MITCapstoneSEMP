@@ -21,7 +21,6 @@ export function LazyIcon({ name, className, ...props }: LazyIconProps) {
   const Icon = React.useMemo(() => loadIcon(name), [name])
   return (
     <Suspense fallback={<span className={className} /> }>
-      {/* @ts-expect-error Icon is a component */}
       <Icon className={className} {...props} />
     </Suspense>
   )

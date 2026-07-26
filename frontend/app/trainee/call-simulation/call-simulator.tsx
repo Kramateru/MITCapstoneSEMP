@@ -59,10 +59,13 @@ interface ScenarioStep {
 
 interface SessionData {
   session_id: string;
+  assignment_id?: string | null;
   scenario_title: string;
   scenario_description?: string | null;
   current_step: number;
   passing_score: number;
+  attempt_number?: number | null;
+  max_attempts?: number | null;
   assigned_by_id?: string | null;
   ringer_audio_url?: string | null;
   hold_audio_url?: string | null;
@@ -201,6 +204,7 @@ export function CallSimulator({
   const pendingRecordingRef = useRef<WavCallRecordingResult | null>(null);
   const finalRecordingUploadedRef = useRef(false);
   const isSubmittingTurnRef = useRef(false);
+  const consumedScenarioParamRef = useRef<string | null>(null);
   const completedCsrStepsRef = useRef(new Set<number>());
 
   const orderedSteps = useMemo(
@@ -331,6 +335,18 @@ export function CallSimulator({
   }, [selectedScenario, startScenarioSession]);
 
   /**
+   * Start CSR recording for current step
+   */
+  const startCurrentCsrRecording = useCallback(async () => {
+    const nextStep = orderedSteps[currentStepIndex];
+    if (!nextStep || normalizeActor(nextStep.actor) !== 'csr') return;
+    
+    setMicrophoneMuted(false);
+    await startRecording();
+    await logCallEvent('recording_started', { step_number: nextStep.step_number }, nextStep.step_number);
+  }, [currentStepIndex, orderedSteps, logCallEvent, setMicrophoneMuted, startRecording]);
+
+  /**
    * Handle incoming call confirmation (after countdown)
    */
   const handleConfirmIncoming = useCallback(async () => {
@@ -357,18 +373,6 @@ export function CallSimulator({
     setScreen('countdown');
     await logCallEvent('start_countdown');
   }, [logCallEvent, sessionData?.session_id, startCapture, startCurrentCsrRecording]);
-
-  /**
-   * Start CSR recording for current step
-   */
-  const startCurrentCsrRecording = useCallback(async () => {
-    const nextStep = orderedSteps[currentStepIndex];
-    if (!nextStep || normalizeActor(nextStep.actor) !== 'csr') return;
-    
-    setMicrophoneMuted(false);
-    await startRecording();
-    await logCallEvent('recording_started', { step_number: nextStep.step_number }, nextStep.step_number);
-  }, [currentStepIndex, orderedSteps, logCallEvent, setMicrophoneMuted, startRecording]);
 
   /**
    * Handle hold/unhold toggle with enhanced error recovery (Phase 3)
@@ -474,13 +478,32 @@ export function CallSimulator({
           });
 
           const audio = new Audio(payload.audio_url);
-          audio.onended = async () => {
-            setIsGeneratingAudio(false);
-            setMemberTurnState('awaiting-unhold');
-            await logCallEvent('ai_response_complete', { step_number: nextMemberStep.step_number });
-          };
-
+          audio.preload = 'auto';
+          const playbackComplete = new Promise<void>((resolve, reject) => {
+            const cleanup = () => {
+              audio.onended = null;
+              audio.onerror = null;
+              audio.onabort = null;
+            };
+            audio.onended = () => {
+              cleanup();
+              resolve();
+            };
+            audio.onerror = () => {
+              cleanup();
+              reject(new Error('Member speech audio could not be loaded from Supabase.'));
+            };
+            audio.onabort = () => {
+              cleanup();
+              reject(new Error('Member speech playback was interrupted.'));
+            };
+          });
+          audio.load();
           await audio.play();
+          await playbackComplete;
+          setIsGeneratingAudio(false);
+          setMemberTurnState('awaiting-unhold');
+          await logCallEvent('ai_response_complete', { step_number: nextMemberStep.step_number });
         } catch (error) {
           // Graceful degradation: allow continuing even if member speech fails
           const message = error instanceof Error ? error.message : 'Member speech unavailable';
@@ -516,7 +539,6 @@ export function CallSimulator({
       setMemberTurnState('idle');
     } finally {
       isSubmittingTurnRef.current = false;
-      setIsGeneratingAudio(false);
     }
   }, [
     isOnHold,
@@ -775,7 +797,7 @@ export function CallSimulator({
                 <CardHeader className="border-b border-border/70 pb-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1">
-                      <CardTitle className="truncate">{scenario.title}</CardTitle>
+                      <CardTitle>{scenario.title}</CardTitle>
                       <CardDescription className="mt-1 line-clamp-2">
                         {scenario.description || scenario.title}
                       </CardDescription>
@@ -851,10 +873,10 @@ export function CallSimulator({
                     disabled={locked}
                     aria-label={
                       locked
-                        ? `${scenario.scenario_title} is completed`
+                        ? `${scenario.title} is completed`
                         : scenario.can_retake
-                          ? `Retake ${scenario.scenario_title}`
-                          : `Start ${scenario.scenario_title}`
+                          ? `Retake ${scenario.title}`
+                          : `Start ${scenario.title}`
                     }
                   >
                     {locked ? (
@@ -1275,7 +1297,7 @@ export function CallSimulator({
                       ) : (
                         <div className="h-3 w-3 rounded-full border border-current" />
                       )}
-                      <span className="flex-1 truncate">
+                      <span className="min-w-0 flex-1">
                         {normalizeActor(step.actor) === 'csr' ? 'Your Turn' : 'Member AI'}
                       </span>
                     </div>
@@ -1516,7 +1538,11 @@ export function CallSimulator({
             <Button
               type="button"
               variant="outline"
-              onClick={() => window.open(sessionResult.audio_url, '_blank')}
+              onClick={() => {
+                if (sessionResult.audio_url) {
+                  window.open(sessionResult.audio_url, '_blank');
+                }
+              }}
             >
               <Download className="h-4 w-4" />
               Download Recording
