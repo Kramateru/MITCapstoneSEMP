@@ -85,9 +85,9 @@ export function DashboardLayout({
   } as const;
   const contentWidthClass = dashboardSettings.boxedLayout ? 'max-w-[1380px] 2xl:max-w-[1460px]' : 'max-w-none';
   const contentOuterSpacingClass = dashboardSettings.boxedLayout
-    ? 'px-2 py-2 sm:px-3 sm:py-2.5 lg:px-3 lg:py-2.5 xl:px-4 xl:py-3'
-    : 'px-2 py-2 sm:px-3 sm:py-2.5 lg:px-3 lg:py-2.5 xl:px-4 xl:py-3';
-  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-2.5 sm:p-3 lg:p-4 xl:p-4' : 'p-2.5 sm:p-3 lg:p-4 xl:p-4';
+    ? 'px-2 py-1.5 sm:px-3 sm:py-2 lg:px-3 lg:py-2 xl:px-4 xl:py-2'
+    : 'px-2 py-1.5 sm:px-3 sm:py-2 lg:px-3 lg:py-2 xl:px-4 xl:py-2';
+  const contentInnerSpacingClass = dashboardSettings.boxedLayout ? 'p-2 sm:p-2.5 lg:p-3 xl:p-3' : 'p-2 sm:p-2.5 lg:p-3 xl:p-3';
 
   let desktopSidebarStateClass = 'lg:translate-x-0 lg:relative';
   if (isTopNavigation) {
@@ -362,7 +362,7 @@ export function DashboardLayout({
 
   if (isLoading) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-background text-foreground">
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground px-4 py-6">
         <div className="text-sm text-muted-foreground">Loading dashboard...</div>
       </div>
     );
@@ -370,14 +370,14 @@ export function DashboardLayout({
 
   if (!user || user.user_role !== resolvedUserRole) {
     return (
-      <div className="flex min-h-[100dvh] items-center justify-center bg-background text-foreground">
+      <div className="flex min-h-screen items-center justify-center bg-background text-foreground px-4 py-6">
         <div className="text-sm text-muted-foreground">Redirecting to your workspace...</div>
       </div>
     );
   }
 
   return (
-    <div className="relative flex min-h-[100dvh] overflow-x-hidden bg-background text-foreground">
+    <div className="relative flex min-h-0 overflow-x-hidden bg-background text-foreground">
       <a href="#workspace-main-content" className="skip-to-content">
         Skip to main content
       </a>
@@ -412,10 +412,10 @@ export function DashboardLayout({
         }}
       >
         <div className="h-full flex flex-col">
-          <div className="border-b border-sidebar-border px-3.5 py-3.5 sm:px-4 sm:py-4 lg:px-4 lg:py-5">
-            <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:flex lg:justify-center' : 'space-y-3'}`}>
-              <div className={`flex ${isMinifiedSidebar ? 'justify-center' : 'items-center'} gap-3`}>
-                <div className="relative h-[4.25rem] w-[4.25rem] shrink-0 overflow-hidden rounded-full border border-white/14 bg-white/10 shadow-[0_18px_32px_-24px_rgba(15,23,42,0.95)]">
+          <div className="border-b border-sidebar-border px-3 py-3 sm:px-3.5 sm:py-3.5 lg:px-3.5 lg:py-4">
+            <div className={`min-w-0 ${isMinifiedSidebar ? 'lg:flex lg:justify-center' : 'space-y-2.5'}`}>
+              <div className={`flex ${isMinifiedSidebar ? 'justify-center' : 'items-center'} gap-2.5`}>
+                <div className="relative h-[3.75rem] w-[3.75rem] shrink-0 overflow-hidden rounded-full border border-white/14 bg-white/10 shadow-[0_18px_32px_-24px_rgba(15,23,42,0.95)]">
                   <Image
                     src="/spvlogo.png"
                     alt="St. Peter Velle Technical Training Center logo"
@@ -425,27 +425,27 @@ export function DashboardLayout({
                     className="scale-[1.04] rounded-full object-cover"
                   />
                 </div>
-                <div className={`min-w-0 space-y-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                  <p className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/58">
+                <div className={`min-w-0 space-y-0.5 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
+                  <p className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/58">
                     {systemNameLines[0]}
                   </p>
-                  <h2 className="text-balance text-[1.08rem] font-semibold leading-5 tracking-normal text-white">
+                  <h2 className="text-balance text-[0.95rem] font-semibold leading-5 tracking-normal text-white">
                     {systemNameLines[1]}
                   </h2>
                 </div>
               </div>
               {!isMinifiedSidebar ? (
-                <div className="rounded-xl border border-white/8 bg-white/[0.05] px-3 py-2.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-                  <div className="flex items-start justify-between gap-3">
+                <div className="rounded-xl border border-white/8 bg-white/[0.05] px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="flex items-start justify-between gap-2.5">
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/55">
+                      <p className="text-[0.72rem] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/55">
                         {ROLE_LABEL_MAP[resolvedUserRole]}
                       </p>
-                      <p className="mt-1 text-sm leading-6 text-sidebar-foreground/68">
+                      <p className="mt-1 text-sm leading-5 text-sidebar-foreground/68">
                         {roleWorkspaceHintMap[resolvedUserRole]}
                       </p>
                     </div>
-                    <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2.5 py-1 text-sm font-semibold text-sidebar-foreground/70">
+                    <div className="shrink-0 rounded-full border border-white/10 bg-white/8 px-2 py-0.5 text-[0.72rem] font-semibold text-sidebar-foreground/70">
                       {resolvedSidebarItems.length} Links
                     </div>
                   </div>
@@ -455,10 +455,10 @@ export function DashboardLayout({
           </div>
 
           {/* Navigation Items */}
-          <nav className="flex-1 overflow-y-auto px-3 py-4 sm:px-3.5 sm:py-4" aria-label={`${resolvedUserRole} workspace navigation`}>
+          <nav className="flex-1 overflow-y-auto px-2.5 py-3 sm:px-3 sm:py-3.5" aria-label={`${resolvedUserRole} workspace navigation`}>
             {/* Navigation search removed */}
             {groupedSidebarItems.map((group) => (
-              <div key={group.section} className="space-y-2.5 pb-5 last:pb-0">
+              <div key={group.section} className="space-y-2 pb-3.5 last:pb-0">
                 {!isMinifiedSidebar ? (
                   <div className="flex items-center gap-2 px-2.5">
                     <div className="text-sm font-semibold uppercase tracking-normal text-sidebar-foreground/54">
@@ -476,7 +476,7 @@ export function DashboardLayout({
                     title={isMinifiedSidebar ? item.label : undefined}
                     aria-label={isMinifiedSidebar ? item.label : undefined}
                     aria-current={isActivePath(item.href) ? 'page' : undefined}
-                    className={`group relative flex items-center gap-3 rounded-2xl border px-3 py-2.5 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-3' : ''} ${
+                    className={`group relative flex items-center gap-2.5 rounded-2xl border px-2.5 py-2 transition-[background-color,color,transform,box-shadow,border-color] duration-200 hover:-translate-y-px ${isMinifiedSidebar ? 'lg:justify-center lg:px-2.5' : ''} ${
                       isActivePath(item.href)
                         ? 'border-white/12 bg-white/11 text-white shadow-[0_18px_34px_-24px_rgba(0,0,0,0.55)] ring-1 ring-white/10'
                         : 'border-transparent text-sidebar-foreground/82 hover:border-white/8 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
@@ -486,7 +486,7 @@ export function DashboardLayout({
                       <span className="absolute left-1 top-1/2 h-7 w-1 -translate-y-1/2 rounded-full bg-white/80" />
                     ) : null}
                     <span
-                      className={`inline-flex size-10 shrink-0 items-center justify-center rounded-xl border transition ${
+                      className={`inline-flex size-9 shrink-0 items-center justify-center rounded-xl border transition ${
                         isActivePath(item.href)
                           ? 'border-white/12 bg-white/10 text-white'
                           : 'border-white/6 bg-white/[0.04] text-sidebar-foreground/80 group-hover:border-white/10 group-hover:bg-white/[0.08] group-hover:text-sidebar-accent-foreground'
@@ -495,10 +495,10 @@ export function DashboardLayout({
                       {item.icon}
                     </span>
                     <div className={`min-w-0 flex-1 ${isMinifiedSidebar ? 'lg:hidden' : ''}`}>
-                      <div className="line-clamp-2 text-[0.95rem] font-medium leading-5 text-pretty">{item.label}</div>
+                      <div className="line-clamp-2 text-[0.9rem] font-medium leading-5 text-pretty">{item.label}</div>
                     </div>
                     {item.badge && !isMinifiedSidebar ? (
-                      <Badge variant="danger" className="min-w-6 justify-center px-2.5 py-1 text-[0.7rem]">
+                      <Badge variant="danger" className="min-w-5 justify-center px-2 py-0.5 text-[0.68rem]">
                         {item.badge}
                       </Badge>
                     ) : null}
@@ -519,7 +519,7 @@ export function DashboardLayout({
         {/* Top Navigation Bar */}
         <header
           role="banner"
-          className={`workspace-topbar flex flex-col gap-2 border-b border-border/80 px-3 py-2.5 shadow-sm sm:px-3.5 sm:py-3.5 lg:flex-row lg:items-center lg:justify-between lg:px-4 xl:px-5 ${
+          className={`workspace-topbar flex flex-col gap-2 border-b border-border/80 px-2.5 py-2 shadow-sm sm:px-3 sm:py-2.5 lg:flex-row lg:items-center lg:justify-between lg:px-3.5 xl:px-4 ${
             dashboardSettings.fixedHeader ? 'sticky top-0 z-30' : ''
           }`}
         >
@@ -542,14 +542,14 @@ export function DashboardLayout({
 
             <div className="min-w-0 space-y-1.5">
               <div className="min-w-0 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full border border-primary/12 bg-primary/6 px-2.5 py-1 text-sm font-semibold uppercase tracking-normal text-primary">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="rounded-full border border-primary/12 bg-primary/6 px-2 py-0.5 text-[0.72rem] font-semibold uppercase tracking-normal text-primary">
                     {ROLE_LABEL_MAP[resolvedUserRole]}
                   </span>
-                  <span className="rounded-full border border-border/70 bg-background px-2.5 py-1 text-sm font-semibold uppercase tracking-normal text-muted-foreground">
+                  <span className="rounded-full border border-border/70 bg-background px-2 py-0.5 text-[0.72rem] font-semibold uppercase tracking-normal text-muted-foreground">
                     {currentPageSection}
                   </span>
-                  <Badge variant="info" className="text-sm">
+                  <Badge variant="info" className="px-2 py-0.5 text-[0.72rem]">
                     Live Workspace
                   </Badge>
                 </div>
@@ -571,10 +571,10 @@ export function DashboardLayout({
                     </div>
                   ))}
                 </div>
-                <h1 className="line-clamp-2 text-balance text-[1.18rem] font-bold tracking-normal text-foreground sm:text-[1.38rem] lg:text-[1.62rem] xl:text-[1.82rem]">
+                <h1 className="line-clamp-2 text-balance text-[1.05rem] font-bold tracking-normal text-foreground sm:text-[1.2rem] lg:text-[1.38rem] xl:text-[1.5rem]">
                   {currentPageLabel}
                 </h1>
-                <p className="hidden max-w-3xl text-sm leading-6 text-muted-foreground sm:block">
+                <p className="hidden max-w-3xl text-sm leading-5 text-muted-foreground sm:block">
                   {roleDescriptionMap[resolvedUserRole]}
                 </p>
                 <p className="text-sm leading-5 text-muted-foreground/85 sm:hidden">
@@ -610,7 +610,7 @@ export function DashboardLayout({
                           key={`top-${item.href}`}
                           href={item.href}
                           aria-current={isActivePath(item.href) ? 'page' : undefined}
-                          className={`inline-flex min-h-10 items-center gap-2 rounded-full border px-3 py-2 text-[0.9rem] font-medium transition-[background-color,color,border-color,box-shadow] ${
+                          className={`inline-flex min-h-9 items-center gap-2 rounded-full border px-2.5 py-1.5 text-[0.84rem] font-medium transition-[background-color,color,border-color,box-shadow] ${
                             isActivePath(item.href)
                               ? 'border-primary/16 bg-primary text-primary-foreground shadow-[0_14px_28px_-20px_rgba(29,86,216,0.45)]'
                               : 'border-border/80 bg-background text-muted-foreground hover:border-primary/18 hover:bg-secondary hover:text-foreground'

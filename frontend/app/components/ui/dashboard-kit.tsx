@@ -72,9 +72,9 @@ export function DashboardHero({
   className?: string;
 }) {
   return (
-    <section className={cn("dashboard-hero p-3 sm:p-4 lg:p-5 xl:p-6", className)}>
-      <div className="relative z-10 flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-        <div className="space-y-2.5 reading-width">
+    <section className={cn("dashboard-hero p-3 sm:p-4 lg:p-4 xl:p-5", className)}>
+      <div className="relative z-10 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div className="space-y-2 reading-width">
           {eyebrow ? <span className="dashboard-kicker">{eyebrow}</span> : null}
           <div className="space-y-1.5">
             <h2 className="text-balance text-2xl font-bold tracking-normal text-foreground sm:text-3xl xl:text-[2.45rem]">
@@ -154,14 +154,14 @@ export function SectionPanel({
     <Card className={cn("overflow-visible", className)}>
       <CardHeader className="border-b border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(249,251,253,0.84))]">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <CardTitle>{title}</CardTitle>
             {description ? <CardDescription>{description}</CardDescription> : null}
           </div>
           {action ? <div className="w-full shrink-0 lg:w-auto lg:max-w-[20rem]">{action}</div> : null}
         </div>
       </CardHeader>
-      <CardContent className={cn("pt-4 sm:pt-5", contentClassName)}>{children}</CardContent>
+      <CardContent className={cn("pt-3 sm:pt-4", contentClassName)}>{children}</CardContent>
     </Card>
   );
 }

@@ -449,8 +449,8 @@
     max-width: 100%;
     display: grid;
     align-content: start;
-    gap: clamp(0.45rem, 0.35rem + 0.4vw, 0.85rem);
-    padding: clamp(0.6rem, 0.45rem + 0.45vw, 1rem) 0 clamp(0.7rem, 0.5rem + 0.7vw, 1.2rem);
+    gap: clamp(0.7rem, 0.55rem + 0.25vw, 0.95rem);
+    padding: clamp(0.5rem, 0.35rem + 0.4vw, 0.8rem) 0 clamp(0.75rem, 0.5rem + 0.45vw, 1rem);
   }
 
   .dashboard-page > * {
@@ -485,6 +485,14 @@
     text-wrap: balance;
   }
 
+  .dashboard-page :where(.min-h-screen, .min-h-\[100dvh\], .min-h-\[100svh\], .min-h-\[100vh\], .min-h-\[60vh\], .min-h-\[260px\], .min-h-\[280px\], .min-h-\[320px\], .min-h-\[420px\], .min-h-\[600px\]) {
+    min-height: min(18rem, 45vh) !important;
+  }
+
+  .dashboard-page :where(.h-screen, .h-\[100dvh\], .h-\[100svh\], .h-\[100vh\]) {
+    height: auto !important;
+  }
+
   .dashboard-page :where([class*="tracking-"]),
   [data-slot="dialog-content"] :where([class*="tracking-"]),
   [data-slot="alert-dialog-content"] :where([class*="tracking-"]),
@@ -496,7 +504,7 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: clamp(0.45rem, 0.35rem + 0.35vw, 0.8rem);
+    gap: clamp(0.65rem, 0.5rem + 0.25vw, 0.9rem);
     min-width: 0;
     overflow: visible;
     height: auto;
