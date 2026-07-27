@@ -273,7 +273,7 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
   if (loading) {
     return (
       <Card>
-        <CardContent className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+        <CardContent className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
           <LazyIcon name="Loader2" className="mr-2 size-4 animate-spin" />
           Loading profile...
         </CardContent>

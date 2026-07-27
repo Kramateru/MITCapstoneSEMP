@@ -20,7 +20,7 @@ export default function TraineeProgressPage() {
           }}
         />
       ) : (
-        <div className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+        <div className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
           Loading progress analytics...
         </div>
       )}

@@ -161,7 +161,7 @@ function SectionEmpty({ message }: { message: string }) {
 function TableEmpty({ colSpan, message }: { colSpan: number; message: string }) {
   return (
     <TableRow>
-      <TableCell colSpan={colSpan} className="py-10 text-center text-sm text-muted-foreground">
+      <TableCell colSpan={colSpan} className="py-5 text-center text-sm text-muted-foreground">
         {message}
       </TableCell>
     </TableRow>
@@ -608,7 +608,7 @@ export function AdminLearningReportWorkspace() {
 
       {loading ? (
         <Card>
-          <CardContent className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+          <CardContent className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
             Loading admin reports...
           </CardContent>

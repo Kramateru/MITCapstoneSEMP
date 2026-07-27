@@ -68,7 +68,7 @@ function AlertDialogContent({
       <AlertDialogPrimitive.Content
         data-slot="alert-dialog-content"
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 flex max-h-[calc(100dvh-0.8rem)] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-5 overflow-y-auto overscroll-contain rounded-[1.35rem] border border-slate-200/85 bg-white p-4 text-[0.96rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] [scrollbar-gutter:stable_both-edges] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-6 sm:text-base lg:p-8 xl:p-9 [&_button]:text-sm [&_[data-slot=button]]:min-h-11 sm:[&_button]:text-base [&_p]:text-pretty",
+          "fixed top-[50%] left-[50%] z-50 flex max-h-[calc(100dvh-0.8rem)] min-h-0 translate-x-[-50%] translate-y-[-50%] flex-col gap-4 overflow-y-auto overscroll-contain rounded-[1.35rem] border border-slate-200/85 bg-white p-4 text-[0.96rem] leading-7 shadow-[0_36px_120px_-44px_rgba(15,23,42,0.42)] [scrollbar-gutter:stable_both-edges] outline-hidden duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 sm:p-5 sm:text-base lg:p-6 xl:p-6 [&_button]:text-sm [&_[data-slot=button]]:min-h-11 sm:[&_button]:text-base [&_p]:text-pretty",
           className,
           alertDialogSizeClasses[size],
         )}
@@ -92,7 +92,7 @@ function AlertDialogHeader({
     <div
       data-slot="alert-dialog-header"
       className={cn(
-        "sticky top-0 z-10 flex shrink-0 flex-col gap-3 border-b border-slate-200/80 bg-white/96 pb-6 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90",
+        "sticky top-0 z-10 flex shrink-0 flex-col gap-2.5 border-b border-slate-200/80 bg-white/96 pb-4 text-left backdrop-blur supports-[backdrop-filter]:bg-white/90",
         className,
       )}
       {...props}
@@ -108,7 +108,7 @@ function AlertDialogFooter({
     <div
       data-slot="alert-dialog-footer"
       className={cn(
-        "dialog-safe-area-footer-padding sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-4 backdrop-blur supports-[backdrop-filter]:bg-white/90 [&>*]:w-full sm:flex-row sm:justify-end sm:pt-6 sm:[&>*]:w-auto",
+        "dialog-safe-area-footer-padding sticky bottom-0 z-10 mt-auto flex shrink-0 flex-col-reverse gap-3 border-t border-slate-200/80 bg-white/96 pt-3 backdrop-blur supports-[backdrop-filter]:bg-white/90 [&>*]:w-full sm:flex-row sm:justify-end sm:pt-4 sm:[&>*]:w-auto",
         className,
       )}
       {...props}

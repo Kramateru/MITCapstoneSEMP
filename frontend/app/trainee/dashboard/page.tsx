@@ -288,7 +288,7 @@ export default function TraineeDashboard() {
 
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
-      <div className="space-y-5 lg:space-y-6">
+      <div className="space-y-4 lg:space-y-4">
         <DashboardHero
           eyebrow="Learning Overview"
           title={`Welcome${user?.user_name ? `, ${user.user_name}` : ''}`}
@@ -432,7 +432,7 @@ export default function TraineeDashboard() {
           </SectionPanel>
         ) : null}
 
-        <div className={mustChangePassword ? 'pointer-events-none opacity-60' : 'space-y-5 lg:space-y-6'}>
+        <div className={mustChangePassword ? 'pointer-events-none opacity-60' : 'space-y-4 lg:space-y-4'}>
           {stats ? (
             <div className="dashboard-metrics-grid">
               <MetricCard
@@ -474,7 +474,7 @@ export default function TraineeDashboard() {
           ) : null}
 
           <div className="dashboard-balanced-grid">
-            <div className="space-y-5 lg:space-y-6">
+            <div className="space-y-4 lg:space-y-4">
               <SectionPanel
                 title="Assigned learning"
                 description="Continue only the items your trainer has assigned and keep your progress moving."
@@ -615,7 +615,7 @@ export default function TraineeDashboard() {
               </SectionPanel>
             </div>
 
-            <div className="space-y-5 lg:space-y-6">
+            <div className="space-y-4 lg:space-y-4">
               <SectionPanel
                 title="Coaching snapshot"
                 description="Stay on top of the feedback items that still need your attention."

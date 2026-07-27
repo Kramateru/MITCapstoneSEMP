@@ -13,7 +13,7 @@ function TraineeCallSimulationFallback() {
   return (
     <DashboardLayout sidebarItems={traineeSidebarItems} userRole="trainee">
       <Card>
-        <CardContent className="flex items-center justify-center gap-3 p-8">
+        <CardContent className="flex items-center justify-center gap-3 p-4">
           <Loader2 className="h-5 w-5 animate-spin" />
           <span>Loading call scenarios...</span>
         </CardContent>

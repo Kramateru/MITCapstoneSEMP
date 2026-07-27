@@ -328,7 +328,7 @@ export default function AdminAuditTrailPage() {
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div className="flex flex-col gap-4 rounded-xl border border-border/80 bg-white/92 p-5 shadow-[0_24px_60px_-42px_rgba(15,23,42,0.28)] lg:flex-row lg:items-center lg:justify-between lg:gap-6">
           <div className="min-w-0 flex-1">
             <div className="inline-flex items-center gap-2 rounded-full border border-primary/12 bg-primary/6 px-3 py-1 text-xs font-semibold uppercase tracking-normal text-primary">
@@ -512,7 +512,7 @@ export default function AdminAuditTrailPage() {
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">
+                    <td colSpan={9} className="px-4 py-5 text-center text-muted-foreground">
                       <span className="inline-flex items-center gap-2"><Loader2 className="size-4 animate-spin" /> Loading audit logs...</span>
                     </td>
                   </tr>
@@ -538,7 +538,7 @@ export default function AdminAuditTrailPage() {
                   </tr>
                 )) : (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-muted-foreground">No audit logs match the current filters.</td>
+                    <td colSpan={9} className="px-4 py-5 text-center text-muted-foreground">No audit logs match the current filters.</td>
                   </tr>
                 )}
               </tbody>

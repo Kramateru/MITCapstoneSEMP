@@ -71,7 +71,7 @@ export default function CertificatePreview({
   return (
     <div className="space-y-5">
       <Card className="overflow-hidden border-4 border-amber-200 bg-[linear-gradient(145deg,#fffbeb_0%,#fff7ed_52%,#eff6ff_100%)] shadow-[0_24px_70px_rgba(148,163,184,0.18)]">
-        <CardContent className="p-6 md:p-8">
+        <CardContent className="p-5 md:p-5">
           <div className="space-y-6">
             <div className="flex flex-col items-center gap-4 text-center md:flex-row md:items-center md:justify-center md:text-left">
               <img

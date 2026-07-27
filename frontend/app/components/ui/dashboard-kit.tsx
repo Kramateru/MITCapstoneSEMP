@@ -72,11 +72,11 @@ export function DashboardHero({
   className?: string;
 }) {
   return (
-    <section className={cn("dashboard-hero p-3 sm:p-4 lg:p-4 xl:p-5", className)}>
+    <section className={cn("dashboard-hero p-2.5 sm:p-3 lg:p-3 xl:p-4", className)}>
       <div className="relative z-10 flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
-        <div className="space-y-2 reading-width">
+        <div className="space-y-1.5 reading-width">
           {eyebrow ? <span className="dashboard-kicker">{eyebrow}</span> : null}
-          <div className="space-y-1.5">
+          <div className="space-y-1">
             <h2 className="text-balance text-2xl font-bold tracking-normal text-foreground sm:text-3xl xl:text-[2.45rem]">
               {title}
             </h2>
@@ -91,7 +91,7 @@ export function DashboardHero({
           </div>
         ) : null}
       </div>
-      {children ? <div className="relative z-10 mt-4">{children}</div> : null}
+      {children ? <div className="relative z-10 mt-3">{children}</div> : null}
     </section>
   );
 }
@@ -115,8 +115,8 @@ export function MetricCard({
 
   return (
     <Card className={cn("metric-card border-border/75 bg-gradient-to-br p-0", toneStyle.surface, className)}>
-      <CardContent className="flex flex-col gap-3 p-3 sm:p-4 md:flex-row md:items-start md:justify-between">
-        <div className="min-w-0 space-y-1.5">
+      <CardContent className="flex flex-col gap-2 p-2.5 sm:p-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0 space-y-1">
           <p className="text-xs font-bold uppercase tracking-normal text-muted-foreground">
             {label}
           </p>
@@ -126,7 +126,7 @@ export function MetricCard({
           {hint ? <p className="max-w-[30ch] text-xs leading-5 text-muted-foreground">{hint}</p> : null}
         </div>
         {icon ? (
-          <div className={cn("self-start rounded-2xl p-2.5 shadow-sm ring-1 md:self-auto", toneStyle.icon, toneStyle.ring)}>
+          <div className={cn("self-start rounded-2xl p-2 shadow-sm ring-1 md:self-auto", toneStyle.icon, toneStyle.ring)}>
             {icon}
           </div>
         ) : null}
@@ -152,16 +152,16 @@ export function SectionPanel({
 }) {
   return (
     <Card className={cn("overflow-visible", className)}>
-      <CardHeader className="border-b border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(249,251,253,0.84))]">
+      <CardHeader className="border-b border-border/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(249,251,253,0.84))] py-3 sm:py-3">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             <CardTitle>{title}</CardTitle>
             {description ? <CardDescription>{description}</CardDescription> : null}
           </div>
           {action ? <div className="w-full shrink-0 lg:w-auto lg:max-w-[20rem]">{action}</div> : null}
         </div>
       </CardHeader>
-      <CardContent className={cn("pt-3 sm:pt-4", contentClassName)}>{children}</CardContent>
+      <CardContent className={cn("pt-2.5 sm:pt-3", contentClassName)}>{children}</CardContent>
     </Card>
   );
 }
@@ -189,18 +189,18 @@ export function ActionCard({
     <Link
       href={href}
       className={cn(
-        "group data-card block w-full p-3 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-4",
+        "group data-card block w-full p-2.5 transition-[transform,border-color,box-shadow,background-color] duration-200 hover:-translate-y-0.5 hover:border-primary/20 hover:shadow-[0_20px_40px_-30px_rgba(15,23,42,0.28)] sm:p-3",
         className,
       )}
     >
-      <div className="flex flex-col gap-2.5 sm:flex-row sm:items-start sm:justify-between">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-2.5">
           {icon ? (
-            <div className={cn("mt-0.5 rounded-2xl p-2.5 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
+            <div className={cn("mt-0.5 rounded-2xl p-2 shadow-sm ring-1", toneStyle.icon, toneStyle.ring)}>
               {icon}
             </div>
           ) : null}
-          <div className="min-w-0 space-y-1">
+          <div className="min-w-0 space-y-0.5">
             <h3 className="text-base font-semibold leading-6 text-foreground text-balance">{title}</h3>
             <p className="text-sm leading-5 text-muted-foreground">{description}</p>
           </div>
@@ -223,8 +223,8 @@ export function EmptyStatePanel({
   className?: string;
 }) {
   return (
-    <div className={cn("empty-state-panel grid place-items-center px-4 py-6 text-center sm:px-5", className)}>
-      <div className="space-y-1.5 reading-width">
+    <div className={cn("empty-state-panel grid place-items-center px-3 py-4 text-center sm:px-4", className)}>
+      <div className="space-y-1 reading-width">
         <p className="text-sm font-semibold text-foreground">{title}</p>
         <p className="mx-auto max-w-2xl text-xs leading-5 text-muted-foreground">{description}</p>
       </div>
@@ -246,9 +246,9 @@ export function SoftStat({
   const toneStyle = toneStyles[tone];
 
   return (
-    <div className={cn("soft-panel px-3 py-3", className)}>
+    <div className={cn("soft-panel px-2.5 py-2", className)}>
       <p className="text-[0.65rem] font-bold uppercase tracking-normal text-muted-foreground">{label}</p>
-      <p className={cn("mt-1.5 break-words text-base font-bold tracking-normal sm:text-lg", toneStyle.accentText)}>
+      <p className={cn("mt-0.5 break-words text-base font-bold tracking-normal sm:text-lg", toneStyle.accentText)}>
         {value}
       </p>
     </div>

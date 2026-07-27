@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -88,10 +89,23 @@ def resolve_database_url() -> str:
         )
 
     normalized = database_url.strip().lower()
-    if "postgresql" not in normalized:
+    if not (
+        normalized.startswith("postgresql://")
+        or normalized.startswith("postgres://")
+        or normalized.startswith("postgresql+psycopg://")
+        or normalized.startswith("postgresql+psycopg2://")
+    ):
         raise RuntimeError(
             "DATABASE_URL must be a PostgreSQL/Supabase connection string. "
             "Other database engines are no longer supported."
+        )
+
+    parsed = urlparse(database_url)
+    hostname = (parsed.hostname or "").lower()
+    if "supabase" not in hostname:
+        raise RuntimeError(
+            "DATABASE_URL must point to a Supabase-hosted Postgres or Supabase pooler endpoint. "
+            "Direct non-Supabase PostgreSQL connections are no longer supported."
         )
 
     return database_url

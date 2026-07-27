@@ -142,11 +142,14 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
   const captureModeRef = useRef<CaptureMode>(null);
   const captureFormatRef = useRef<CaptureFormat>(MP3_CAPTURE_FORMAT);
   const captureStartedAtRef = useRef<number | null>(null);
-  const pausedRef = useRef(false);
-
   const [isCapturing, setIsCapturing] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isCapturing) {
+      onLevel?.(0);
+    }
+  }, [isCapturing, onLevel]);
 
   const cleanup = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
@@ -219,9 +222,6 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
       chunksRef.current = [];
       mediaChunksRef.current = [];
       recordedSamplesRef.current = 0;
-      pausedRef.current = false;
-      setIsPaused(false);
-
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -281,9 +281,6 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
         monitorGain.gain.value = 0;
 
         processor.onaudioprocess = (event) => {
-          if (pausedRef.current) {
-            return;
-          }
           const input = event.inputBuffer.getChannelData(0);
           chunksRef.current.push(new Float32Array(input));
           recordedSamplesRef.current += input.length;
@@ -338,26 +335,6 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
     }
   }, []);
 
-  const setCapturePaused = useCallback((paused: boolean) => {
-    pausedRef.current = paused;
-    setIsPaused(paused);
-
-    const recorder = mediaRecorderRef.current;
-    if (!recorder) {
-      return;
-    }
-
-    try {
-      if (paused && recorder.state === 'recording') {
-        recorder.pause();
-      } else if (!paused && recorder.state === 'paused') {
-        recorder.resume();
-      }
-    } catch {
-      // Browsers vary on pause/resume support for audio-only streams.
-    }
-  }, []);
-
   const setMicrophoneMuted = useCallback((muted: boolean) => {
     const audioContext = audioContextRef.current;
     const microphoneGain = microphoneGainRef.current;
@@ -394,9 +371,7 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
 
           await cleanup();
           mediaChunksRef.current = [];
-          pausedRef.current = false;
           setIsCapturing(false);
-          setIsPaused(false);
 
           resolve({
             blob,
@@ -420,9 +395,7 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
       chunksRef.current = [];
       mediaChunksRef.current = [];
       recordedSamplesRef.current = 0;
-      pausedRef.current = false;
       setIsCapturing(false);
-      setIsPaused(false);
 
       return {
         blob,
@@ -435,9 +408,7 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
       chunksRef.current = [];
       mediaChunksRef.current = [];
       recordedSamplesRef.current = 0;
-      pausedRef.current = false;
       setIsCapturing(false);
-      setIsPaused(false);
 
       const message = encodeError instanceof Error
         ? encodeError.message
@@ -451,9 +422,7 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
     chunksRef.current = [];
     mediaChunksRef.current = [];
     recordedSamplesRef.current = 0;
-    pausedRef.current = false;
     setIsCapturing(false);
-    setIsPaused(false);
     await cleanup();
   }, [cleanup]);
 
@@ -468,10 +437,8 @@ export function useWavCallRecorder(options?: { onLevel?: (level: number) => void
     stopCapture,
     discardCapture,
     registerPlaybackElement,
-    setCapturePaused,
     setMicrophoneMuted,
     isCapturing,
-    isPaused,
     error,
   };
 }

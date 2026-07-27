@@ -44,8 +44,8 @@ export default function SpeechRecorder() {
   };
 
   return (
-    <div className="mx-auto max-w-4xl rounded-3xl border border-border bg-card p-8 shadow-xl">
-      <div className="mb-8">
+    <div className="mx-auto max-w-4xl rounded-3xl border border-border bg-card p-5 shadow-xl">
+      <div className="mb-4">
         <h2 className="text-3xl font-bold text-foreground">Speech Assessment</h2>
         <p className="mt-2 text-muted-foreground">
           Authenticated upload workflow with instant feedback against a gold-standard script.

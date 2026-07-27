@@ -1367,7 +1367,7 @@ export default function TrainerMicrolearningStudio() {
   const assignmentRowEstimate = (selectedBatch?.users_count || 0) * readyAssignmentModules.length;
 
   if (isAuthLoading || loading) {
-    return <div className="flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />Loading microlearning studio...</div>;
+    return <div className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground"><Loader2 className="mr-2 size-4 animate-spin" />Loading microlearning studio...</div>;
   }
 
   return (

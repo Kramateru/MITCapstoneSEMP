@@ -96,6 +96,13 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
   }, []);
 
   const startRecording = useCallback(async () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      return;
+    }
+    if (typeof MediaRecorder === 'undefined') {
+      throw new Error('This browser does not support audio recording.');
+    }
+
     try {
       setError(null);
       setLastResult(null);
@@ -215,6 +222,29 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
     [cleanupGraph, cleanupStream, lastResult],
   );
 
+  const discardRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      recorder.onerror = null;
+      if (recorder.state !== 'inactive') {
+        try {
+          recorder.stop();
+        } catch {
+          // Best effort cleanup only.
+        }
+      }
+    }
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    startedAtRef.current = 0;
+    setIsRecording(false);
+    setIsProcessing(false);
+    cleanupGraph();
+    cleanupStream();
+  }, [cleanupGraph, cleanupStream]);
+
   const getAnalyser = useCallback(() => analyserRef.current, []);
 
   useEffect(() => {
@@ -230,6 +260,7 @@ export function useSpeechToText(options: UseSpeechToTextOptions = {}) {
   return {
     startRecording,
     stopRecording,
+    discardRecording,
     isRecording,
     isProcessing,
     audioLevel,

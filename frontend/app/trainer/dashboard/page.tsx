@@ -415,7 +415,7 @@ export default function TrainerDashboardPage() {
 
   return (
     <DashboardLayout sidebarItems={sidebarItems} userRole="trainer">
-      <div className="space-y-5 lg:space-y-6">
+      <div className="space-y-4 lg:space-y-4">
         <DashboardHero
           eyebrow="Training Operations"
           title="Trainer Dashboard"

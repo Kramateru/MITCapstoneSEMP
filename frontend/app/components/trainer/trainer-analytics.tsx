@@ -486,7 +486,7 @@ export default function TrainerAnalytics() {
 
       {loading ? (
         <Card>
-          <CardContent className="flex min-h-[320px] items-center justify-center text-sm text-muted-foreground">
+          <CardContent className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
             Loading trainer learning analytics...
           </CardContent>

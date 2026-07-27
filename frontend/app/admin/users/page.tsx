@@ -189,7 +189,7 @@ export default function AdminUsersPage() {
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">User Management</h1>
@@ -299,7 +299,7 @@ export default function AdminUsersPage() {
               </div>
 
               {loading ? (
-                <div className="flex min-h-[280px] items-center justify-center text-sm text-muted-foreground">
+                <div className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
                   <Loader2 className="mr-2 size-4 animate-spin" />
                   Loading users...
                 </div>
@@ -376,7 +376,7 @@ export default function AdminUsersPage() {
                   </div>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-dashed px-4 py-12 text-center text-sm text-muted-foreground">
+                <div className="rounded-2xl border border-dashed px-4 py-5 text-center text-sm text-muted-foreground">
                   No users match the current filters.
                 </div>
               )}

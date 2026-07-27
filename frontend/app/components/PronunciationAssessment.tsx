@@ -52,7 +52,7 @@ export default function PronunciationAssessment() {
   };
 
   return (
-    <div className="space-y-6 rounded-3xl border border-border bg-card p-8 shadow-xl">
+    <div className="space-y-4 rounded-3xl border border-border bg-card p-5 shadow-xl">
       <div>
         <h2 className="text-3xl font-bold text-foreground">Pronunciation Assessment</h2>
         <p className="mt-2 text-muted-foreground">

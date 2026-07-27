@@ -285,7 +285,7 @@ export default function AdminDashboardPage() {
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
-      <div className="space-y-5 lg:space-y-6">
+      <div className="space-y-4 lg:space-y-4">
         <DashboardHero
           eyebrow="System Overview"
           title="Administration Dashboard"

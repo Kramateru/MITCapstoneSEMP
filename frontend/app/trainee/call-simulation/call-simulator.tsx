@@ -62,6 +62,8 @@ interface SessionData {
   assignment_id?: string | null;
   scenario_title: string;
   scenario_description?: string | null;
+  member_profile?: Record<string, unknown> | null;
+  cxone_metadata?: Record<string, unknown> | null;
   current_step: number;
   passing_score: number;
   attempt_number?: number | null;
@@ -107,17 +109,23 @@ interface DialerFeedbackReport {
 
 interface ScenarioCard {
   id: string;
+  assigned_at?: string | null;
+  assigned_by_id?: string | null;
+  assigned_by_name?: string | null;
   title: string;
   description?: string | null;
   difficulty?: string | null;
   estimated_duration?: number | null;
   expected_duration_seconds?: number | null;
+  steps_count?: number | null;
   passing_score: number;
   attempt_count: number;
   latest_score: number;
   latest_status?: string | null;
   competent: boolean;
   can_retake?: boolean | null;
+  launch_blocked?: boolean | null;
+  launch_block_reason?: string | null;
   assignment_batch_name?: string | null;
   assignment_wave_number?: number | null;
 }
@@ -132,20 +140,6 @@ type MemberTurnState = 'idle' | 'speaking' | 'awaiting-unhold';
  * Helper Functions
  */
 
-function authHeaders() {
-  const token = typeof window !== 'undefined' ? sessionStorage.getItem('token') : null;
-  return token ? { Authorization: `Bearer ${token}` } : undefined;
-}
-
-async function parseJsonResponse<T>(response: Response, fallbackMessage: string): Promise<T> {
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const detail = payload && typeof payload === 'object' && 'detail' in payload ? String(payload.detail) : '';
-    throw new Error(detail || fallbackMessage);
-  }
-  return payload as T;
-}
-
 function formatDuration(totalSeconds?: number | null) {
   const safeSeconds = Math.max(0, Math.round(Number(totalSeconds || 0)));
   const minutes = Math.floor(safeSeconds / 60);
@@ -153,11 +147,36 @@ function formatDuration(totalSeconds?: number | null) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+function formatAssignedDate(value?: string | null) {
+  if (!value) return 'Not listed';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Not listed';
+  return parsed.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
 function normalizeActor(actor?: string | null) {
   const normalized = String(actor || '').trim().toLowerCase();
   if (normalized.includes('csr') || normalized.includes('trainee')) return 'csr';
   if (normalized.includes('member') || normalized.includes('customer')) return 'member';
   return normalized || 'system';
+}
+
+function resolveCallerName(sessionData?: SessionData | null) {
+  const memberProfile = sessionData?.member_profile || {};
+  const cxoneMetadata = sessionData?.cxone_metadata || {};
+  const candidates = [
+    memberProfile['name'],
+    memberProfile['member_name'],
+    memberProfile['caller_name'],
+    cxoneMetadata['member_name'],
+    cxoneMetadata['caller_name'],
+  ];
+  const resolved = candidates.find((value) => String(value || '').trim());
+  return String(resolved || 'Member AI').trim();
 }
 
 /**
@@ -188,6 +207,7 @@ export function CallSimulator({
   const [audioLevel, setAudioLevel] = useState(0);
   const [lastTranscript, setLastTranscript] = useState('');
   const [activePlaybackLabel, setActivePlaybackLabel] = useState('');
+  const [showTranscript, setShowTranscript] = useState(false);
 
   // State: UI and loading
   const [isLoading, setIsLoading] = useState(true);
@@ -217,8 +237,10 @@ export function CallSimulator({
     startCapture,
     stopCapture,
     discardCapture,
+    registerPlaybackElement,
     setMicrophoneMuted,
     isCapturing: hookIsCapturing,
+    error: recorderError,
   } = useWavCallRecorder({
     onLevel: setAudioLevel,
   });
@@ -226,6 +248,7 @@ export function CallSimulator({
   const {
     startRecording,
     stopRecording,
+    discardRecording,
     isRecording: isCsrRecording,
     audioLevel: speechAudioLevel,
   } = useSpeechToText({
@@ -233,6 +256,53 @@ export function CallSimulator({
   });
 
   const recordingAudioLevel = isCsrRecording ? speechAudioLevel : audioLevel;
+
+  const playRecordedAudio = useCallback(
+    async (audioUrl: string | null | undefined, label: string) => {
+      const resolvedUrl = String(audioUrl || '').trim();
+      if (!resolvedUrl) {
+        throw new Error(`${label} audio is missing for this scenario.`);
+      }
+
+      const audio = document.createElement('audio');
+      audio.crossOrigin = 'anonymous';
+      audio.preload = 'auto';
+      audio.src = resolvedUrl;
+      registerPlaybackElement(audio);
+      setActivePlaybackLabel(label);
+
+      try {
+        const playbackComplete = new Promise<void>((resolve, reject) => {
+          const cleanup = () => {
+            audio.onended = null;
+            audio.onerror = null;
+            audio.onabort = null;
+          };
+          audio.onended = () => {
+            cleanup();
+            resolve();
+          };
+          audio.onerror = () => {
+            cleanup();
+            reject(new Error(`${label} audio could not be loaded from Supabase.`));
+          };
+          audio.onabort = () => {
+            cleanup();
+            reject(new Error(`${label} playback was interrupted.`));
+          };
+        });
+        audio.load();
+        await audio.play();
+        await playbackComplete;
+      } finally {
+        setActivePlaybackLabel('');
+        audio.pause();
+        audio.removeAttribute('src');
+        audio.load();
+      }
+    },
+    [registerPlaybackElement],
+  );
 
   /**
    * Log call event to Supabase audit table
@@ -242,17 +312,19 @@ export function CallSimulator({
       eventType: string,
       metadata?: Record<string, unknown>,
       stepNumber?: number,
+      sessionIdOverride?: string,
     ) => {
-      if (!sessionData?.session_id) return;
+      const targetSessionId = sessionIdOverride || sessionData?.session_id;
+      if (!targetSessionId) return;
 
       try {
-        await apiFetch<unknown>(`/api/call-simulation/session/${sessionData.session_id}/event`, {
+        await apiFetch<unknown>(`/api/call-simulation/session/${targetSessionId}/events`, {
           method: 'POST',
           body: JSON.stringify({
             event_type: eventType,
             event_label: eventType,
             step_number: stepNumber || null,
-            metadata_json: metadata || {},
+            metadata: metadata || {},
           }),
         });
       } catch (error) {
@@ -291,13 +363,36 @@ export function CallSimulator({
       setIsStartingSession(true);
       setOperationError('');
       try {
-        const payload = await apiFetch<SessionData>('/api/call-simulation/start', {
-          method: 'POST',
-          body: JSON.stringify({ scenario_id: scenario.id }),
-        });
-        setSessionData(payload);
-        await logCallEvent('accept_call');
-        setScreen('incoming');
+      const payload = await apiFetch<SessionData>('/api/call-simulation/start', {
+        method: 'POST',
+        body: JSON.stringify({ scenario_id: scenario.id }),
+      });
+      const orderedPayloadSteps = [...(payload.steps || [])].sort(
+        (left, right) => left.step_number - right.step_number,
+      );
+      const resolvedStepIndex = orderedPayloadSteps.findIndex(
+        (step) => step.step_number === payload.current_step,
+      );
+      const firstCsrIndex = orderedPayloadSteps.findIndex(
+        (step) => normalizeActor(step.actor) === 'csr',
+      );
+      setSessionData(payload);
+      setCurrentStepIndex(resolvedStepIndex >= 0 ? resolvedStepIndex : Math.max(firstCsrIndex, 0));
+      setCallTimer(0);
+      setLastTranscript('');
+      setShowTranscript(false);
+      completedCsrStepsRef.current = new Set();
+      await logCallEvent(
+        'accept_call',
+        {
+          scenario_id: scenario.id,
+          assignment_id: payload.assignment_id || null,
+          attempt_number: payload.attempt_number || 1,
+        },
+        undefined,
+        payload.session_id,
+      );
+      setScreen('incoming');
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to start session';
         setOperationError(message);
@@ -317,6 +412,10 @@ export function CallSimulator({
       const locked = scenario.competent;
       if (locked) {
         toast.info('This scenario is already completed.');
+        return;
+      }
+      if (scenario.launch_blocked) {
+        toast.warning(scenario.launch_block_reason || 'This scenario is not ready to launch.');
         return;
       }
       setSelectedScenario(scenario);
@@ -361,9 +460,32 @@ export function CallSimulator({
             countdownRef.current = null;
           }
           setScreen('active');
-          // Start final session capture and begin the first CSR turn if applicable
-          void startCapture();
-          void startCurrentCsrRecording();
+          void (async () => {
+            try {
+              setOperationError('');
+              setCallTimer(0);
+              await startCapture();
+              await logCallEvent('recording_started', {
+                capture: 'full_call_mixed_mp3',
+              });
+              await playRecordedAudio(sessionData.ringer_audio_url, 'Ringer');
+              await logCallEvent('ringer_played', {
+                audio_url: sessionData.ringer_audio_url,
+              });
+              await logCallEvent('start_simulation', {
+                scenario_id: selectedScenarioId,
+                first_step: orderedSteps[currentStepIndex]?.step_number || null,
+              });
+              await startCurrentCsrRecording();
+            } catch (error) {
+              const message = error instanceof Error ? error.message : 'Unable to start the call audio.';
+              setOperationError(message);
+              toast.error(message);
+              await logCallEvent('start_simulation_failed', { error: message });
+              await discardCapture();
+              setScreen('incoming');
+            }
+          })();
           return 0;
         }
         return prev - 1;
@@ -372,7 +494,17 @@ export function CallSimulator({
 
     setScreen('countdown');
     await logCallEvent('start_countdown');
-  }, [logCallEvent, sessionData?.session_id, startCapture, startCurrentCsrRecording]);
+  }, [
+    discardCapture,
+    logCallEvent,
+    currentStepIndex,
+    orderedSteps,
+    playRecordedAudio,
+    selectedScenarioId,
+    sessionData,
+    startCapture,
+    startCurrentCsrRecording,
+  ]);
 
   /**
    * Handle hold/unhold toggle with enhanced error recovery (Phase 3)
@@ -381,9 +513,22 @@ export function CallSimulator({
     if (isSubmittingTurnRef.current) return;
 
     const currentStep = orderedSteps[currentStepIndex];
+    const csrSteps = orderedSteps.filter((step) => normalizeActor(step.actor) === 'csr');
+    const allCsrTurnsComplete =
+      csrSteps.length > 0 &&
+      csrSteps.every((step) => completedCsrStepsRef.current.has(step.step_number));
 
     // Unhold: Resume CSR recording
     if (isOnHold) {
+      if (memberTurnState === 'speaking' || isGeneratingAudio) {
+        toast.info('Member AI is still speaking. Resume after the notification cue.');
+        return;
+      }
+      if (allCsrTurnsComplete) {
+        setIsOnHold(false);
+        toast.success('All CSR turns are complete. End the call to save results.');
+        return;
+      }
       setIsOnHold(false);
       setMemberTurnState('idle');
       setMicrophoneMuted(false);
@@ -394,7 +539,12 @@ export function CallSimulator({
 
     // Hold: Pause recording and trigger AI speech
     if (!isCsrRecording) {
-      toast.info('Recording is not active. Please wait for your turn.');
+      if (allCsrTurnsComplete) {
+        toast.success('All CSR turns are complete. End the call to save results.');
+        return;
+      }
+      await startCurrentCsrRecording();
+      toast.info('Microphone is ready. Press Hold after your response.');
       return;
     }
 
@@ -421,15 +571,16 @@ export function CallSimulator({
       }
 
       // Mark step as completed if evaluation passed
+      const nextCsrIndex = orderedSteps.findIndex(
+        (step, idx) => idx > currentStepIndex && normalizeActor(step.actor) === 'csr',
+      );
       if (!recordingResult?.requires_repeat) {
         completedCsrStepsRef.current.add(currentStep.step_number);
 
-        const nextCsrIndex = orderedSteps.findIndex(
-          (step, idx) => idx > currentStepIndex && normalizeActor(step.actor) === 'csr',
-        );
-
         if (nextCsrIndex >= 0) {
           setCurrentStepIndex(nextCsrIndex);
+        } else {
+          setCurrentStepIndex(Math.min(currentStepIndex + 1, Math.max(orderedSteps.length - 1, 0)));
         }
       }
 
@@ -452,58 +603,43 @@ export function CallSimulator({
       setIsGeneratingAudio(true);
       setMemberTurnState('speaking');
 
-      // Trigger member speech synthesis and playback
-      const nextMemberIndex = orderedSteps.findIndex(
-        (step, idx) => idx > currentStepIndex && normalizeActor(step.actor) === 'member',
+      const memberStepsToPlay = orderedSteps.filter(
+        (step, idx) =>
+          idx > currentStepIndex &&
+          normalizeActor(step.actor) === 'member' &&
+          (nextCsrIndex < 0 || idx < nextCsrIndex),
       );
 
-      if (nextMemberIndex >= 0) {
-        const nextMemberStep = orderedSteps[nextMemberIndex];
+      if (memberStepsToPlay.length > 0) {
         try {
-          const payload = await apiFetch<{ audio_url: string }>(
-            `/api/call-simulation/session/${sessionData?.session_id}/member-speech`,
-            {
-              method: 'POST',
-              body: JSON.stringify({
-                step_number: nextMemberStep.step_number,
-                script: nextMemberStep.script,
-              }),
-            },
-          );
+          for (const nextMemberStep of memberStepsToPlay) {
+            const payload = await apiFetch<{ audio_url: string }>(
+              `/api/call-simulation/session/${sessionData?.session_id}/member-speech`,
+              {
+                method: 'POST',
+                body: JSON.stringify({
+                  step_number: nextMemberStep.step_number,
+                  script: nextMemberStep.script,
+                }),
+              },
+            );
 
-          await logCallEvent('member_speech_played', {
-            step_number: nextMemberStep.step_number,
-            audio_url: payload.audio_url,
-            script_preview: (nextMemberStep.script || '').slice(0, 240),
-          });
+            await logCallEvent('member_speech_played', {
+              step_number: nextMemberStep.step_number,
+              audio_url: payload.audio_url,
+              script_preview: (nextMemberStep.script || '').slice(0, 240),
+            });
 
-          const audio = new Audio(payload.audio_url);
-          audio.preload = 'auto';
-          const playbackComplete = new Promise<void>((resolve, reject) => {
-            const cleanup = () => {
-              audio.onended = null;
-              audio.onerror = null;
-              audio.onabort = null;
-            };
-            audio.onended = () => {
-              cleanup();
-              resolve();
-            };
-            audio.onerror = () => {
-              cleanup();
-              reject(new Error('Member speech audio could not be loaded from Supabase.'));
-            };
-            audio.onabort = () => {
-              cleanup();
-              reject(new Error('Member speech playback was interrupted.'));
-            };
-          });
-          audio.load();
-          await audio.play();
-          await playbackComplete;
+            await playRecordedAudio(payload.audio_url, 'Member AI');
+          }
+          if (sessionData?.hold_audio_url) {
+            await playRecordedAudio(sessionData.hold_audio_url, 'Notification');
+          }
           setIsGeneratingAudio(false);
           setMemberTurnState('awaiting-unhold');
-          await logCallEvent('ai_response_complete', { step_number: nextMemberStep.step_number });
+          await logCallEvent('ai_response_complete', {
+            played_steps: memberStepsToPlay.map((step) => step.step_number),
+          });
         } catch (error) {
           // Graceful degradation: allow continuing even if member speech fails
           const message = error instanceof Error ? error.message : 'Member speech unavailable';
@@ -513,7 +649,7 @@ export function CallSimulator({
           setIsGeneratingAudio(false);
           setMemberTurnState('awaiting-unhold');
           await logCallEvent('member_speech_failed', {
-            step_number: nextMemberStep.step_number,
+            step_numbers: memberStepsToPlay.map((step) => step.step_number),
             error: message,
           });
         }
@@ -521,6 +657,7 @@ export function CallSimulator({
         // No more member steps, ready to end call
         setIsGeneratingAudio(false);
         setMemberTurnState('idle');
+        setIsOnHold(false);
         toast.success('All CSR turns complete. End the call when ready.');
       }
     } catch (error) {
@@ -543,10 +680,13 @@ export function CallSimulator({
   }, [
     isOnHold,
     isCsrRecording,
+    isGeneratingAudio,
+    memberTurnState,
     currentStepIndex,
     lastTranscript,
     logCallEvent,
     orderedSteps,
+    playRecordedAudio,
     sessionData,
     setMicrophoneMuted,
     startCurrentCsrRecording,
@@ -569,31 +709,47 @@ export function CallSimulator({
     setOperationError('');
 
     try {
+      const activeStep = orderedSteps[currentStepIndex];
+      if (isCsrRecording && activeStep && normalizeActor(activeStep.actor) === 'csr') {
+        const recordingResult = await stopRecording({
+          stepNumber: activeStep.step_number,
+          liveTranscript: lastTranscript,
+        });
+        if (recordingResult?.transcript) {
+          setLastTranscript(recordingResult.transcript);
+        }
+      }
+
       // Stop recording and preserve the final session capture
       pendingRecordingRef.current = await stopCapture();
+      if (!pendingRecordingRef.current) {
+        throw new Error('The full-call MP3 recording was not available to upload.');
+      }
+      await logCallEvent('recording_stopped', {
+        duration_seconds: pendingRecordingRef.current.durationSeconds,
+        mime_type: pendingRecordingRef.current.mimeType,
+      });
 
       // Upload final recording
-      if (pendingRecordingRef.current) {
-        setIsUploadingCall(true);
-        const formData = new FormData();
-        formData.append(
-          'audio_duration_seconds',
-          pendingRecordingRef.current.durationSeconds.toFixed(2),
-        );
-        formData.append('file', pendingRecordingRef.current.blob, 'mockcall.mp3');
+      setIsUploadingCall(true);
+      const formData = new FormData();
+      formData.append(
+        'audio_duration_seconds',
+        pendingRecordingRef.current.durationSeconds.toFixed(2),
+      );
+      formData.append('file', pendingRecordingRef.current.blob, 'mockcall.mp3');
 
-        await apiFetch<void>(
-          `/api/call-simulation/session/${sessionData.session_id}/recording`,
-          {
-            method: 'POST',
-            body: formData,
-          },
-        );
+      await apiFetch<void>(
+        `/api/call-simulation/session/${sessionData.session_id}/recording`,
+        {
+          method: 'POST',
+          body: formData,
+        },
+      );
 
-        pendingRecordingRef.current = null;
-        finalRecordingUploadedRef.current = true;
-        setIsUploadingCall(false);
-      }
+      pendingRecordingRef.current = null;
+      finalRecordingUploadedRef.current = true;
+      setIsUploadingCall(false);
 
       // Complete session and generate results
       await logCallEvent('end_call');
@@ -603,6 +759,11 @@ export function CallSimulator({
       );
 
       setSessionResult(result);
+      await logCallEvent('score_generated', {
+        score: result.weighted_score,
+        passed: result.pass_fail,
+        status: result.status,
+      });
       await logCallEvent('transcript_generated', {
         transcript_entries: result.transcript_log?.length || 0,
       });
@@ -625,7 +786,7 @@ export function CallSimulator({
           provider: feedbackPayload.report.provider,
           model: feedbackPayload.report.model,
         });
-      } catch (error) {
+      } catch {
         toast.warning('AI evaluation timed out, but recording was saved.');
       }
 
@@ -637,9 +798,22 @@ export function CallSimulator({
       toast.error(message);
       setScreen('active');
     } finally {
+      setIsUploadingCall(false);
       setIsEndingCall(false);
     }
-  }, [isEndingCall, sessionData, stopCapture, logCallEvent, selectedScenario, fetchScenarios]);
+  }, [
+    currentStepIndex,
+    fetchScenarios,
+    isCsrRecording,
+    isEndingCall,
+    lastTranscript,
+    logCallEvent,
+    orderedSteps,
+    selectedScenario,
+    sessionData,
+    stopCapture,
+    stopRecording,
+  ]);
 
   /**
    * Handle try again (reset)
@@ -668,6 +842,7 @@ export function CallSimulator({
       }
 
       // Stop any active recording
+      discardRecording();
       await discardCapture();
 
       // Discard current session on backend
@@ -701,6 +876,7 @@ export function CallSimulator({
       setSessionData(null);
       setSessionResult(null);
       setFeedbackReport(null);
+      setShowTranscript(false);
       setCurrentStepIndex(0);
       completedCsrStepsRef.current = new Set();
       setMemberTurnState('idle');
@@ -708,23 +884,26 @@ export function CallSimulator({
       setCallTimer(0);
       setCountdownValue(5);
       setLastTranscript('');
+      setActivePlaybackLabel('');
       setOperationError('');
 
-      await logCallEvent('try_again_completed', {
-        scenario_id: selectedScenarioId,
-        new_screen: selectedScenario ? 'preaccept' : 'assigned',
-      });
-
-      // Return to appropriate screen
       if (selectedScenario) {
-        setScreen('preaccept');
+        await logCallEvent('try_again_completed', {
+          scenario_id: selectedScenarioId,
+          new_screen: 'incoming',
+        });
+        await startScenarioSession(selectedScenario);
       } else {
+        await logCallEvent('try_again_completed', {
+          scenario_id: selectedScenarioId,
+          new_screen: 'assigned',
+        });
         setScreen('assigned');
         // Refresh scenarios list
         void fetchScenarios();
       }
 
-      toast.success('Attempt reset. Ready for new try.');
+      toast.success('Attempt reset. Accept the incoming call again when ready.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to reset attempt';
       setOperationError(message);
@@ -742,7 +921,9 @@ export function CallSimulator({
     selectedScenarioId,
     screen,
     discardCapture,
+    discardRecording,
     fetchScenarios,
+    startScenarioSession,
   ]);
 
   /**
@@ -845,13 +1026,27 @@ export function CallSimulator({
                     </div>
                     <div className="rounded-lg border bg-background p-3">
                       <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Pass Score
+                        Assigned
                       </div>
                       <div className="mt-1 text-sm font-semibold">
-                        {scenario.passing_score.toFixed(0)}%
+                        {formatAssignedDate(scenario.assigned_at)}
                       </div>
                     </div>
                   </div>
+
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>Status: {locked ? 'Completed' : scenario.can_retake ? 'Retake available' : 'Assigned'}</span>
+                    <span aria-hidden="true">/</span>
+                    <span>{scenario.steps_count || 0} steps</span>
+                    <span aria-hidden="true">/</span>
+                    <span>Pass: {scenario.passing_score.toFixed(0)}%</span>
+                  </div>
+
+                  {scenario.launch_blocked && scenario.launch_block_reason && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                      {scenario.launch_block_reason}
+                    </div>
+                  )}
 
                   {/* Latest Score if Available */}
                   {scenario.attempt_count > 0 && (
@@ -869,19 +1064,24 @@ export function CallSimulator({
                     className="w-full"
                     variant={locked ? 'secondary' : 'default'}
                     onClick={() => handleScenarioSelect(scenario)}
-                    disabled={locked}
+                    disabled={locked || Boolean(scenario.launch_blocked)}
                     aria-label={
                       locked
                         ? `${scenario.title} is completed`
                         : scenario.can_retake
                           ? `Retake ${scenario.title}`
-                          : `Start ${scenario.title}`
+                          : `Accept call for ${scenario.title}`
                     }
                   >
                     {locked ? (
                       <>
                         <CheckCircle2 className="h-4 w-4" />
                         Completed
+                      </>
+                    ) : scenario.launch_blocked ? (
+                      <>
+                        <AlertTriangle className="h-4 w-4" />
+                        Not Ready
                       </>
                     ) : scenario.can_retake ? (
                       <>
@@ -891,7 +1091,7 @@ export function CallSimulator({
                     ) : (
                       <>
                         <PhoneIncoming className="h-4 w-4" />
-                        Start
+                        Accept Call
                       </>
                     )}
                   </Button>
@@ -902,7 +1102,7 @@ export function CallSimulator({
         </div>
       ) : (
         <Card>
-          <CardContent className="p-8 text-center">
+          <CardContent className="p-5 text-center">
             <Phone className="mx-auto h-8 w-8 text-muted-foreground" />
             <p className="mt-3 text-sm text-muted-foreground">
               No call scenarios assigned to your workspace yet.
@@ -924,7 +1124,7 @@ export function CallSimulator({
         onClick={() => setScreen('assigned')}
         className="mb-2"
       >
-        ← Back to Scenarios
+        Back to Scenarios
       </Button>
 
       <Card>
@@ -958,6 +1158,32 @@ export function CallSimulator({
               </div>
               <div className="mt-2 text-sm font-semibold">
                 {selectedScenario?.passing_score.toFixed(0)}%
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Duration
+              </div>
+              <div className="mt-2 text-sm font-semibold">
+                {selectedScenario?.expected_duration_seconds
+                  ? `${Math.ceil(selectedScenario.expected_duration_seconds / 60)}m`
+                  : 'Variable'}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Assigned
+              </div>
+              <div className="mt-2 text-sm font-semibold">
+                {formatAssignedDate(selectedScenario?.assigned_at)}
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Trainer
+              </div>
+              <div className="mt-2 text-sm font-semibold">
+                {selectedScenario?.assigned_by_name || 'Trainer assigned'}
               </div>
             </div>
           </div>
@@ -1011,17 +1237,21 @@ export function CallSimulator({
    * Render: Incoming Call Screen
    */
   const renderIncoming = () => (
-    <div className="flex min-h-[600px] flex-col items-center justify-center space-y-6">
+    <div className="flex min-h-[220px] flex-col items-center justify-center space-y-4">
       <div className="space-y-4 text-center">
         <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
           Incoming Call
         </div>
+        <div className="text-base font-semibold text-foreground">
+          Caller: {resolveCallerName(sessionData)}
+        </div>
         <h2 className="text-3xl font-bold sm:text-4xl">
           {selectedScenario?.title || 'Call Scenario'}
         </h2>
-        <p className="text-base text-muted-foreground sm:text-lg">
-          {selectedScenario?.assignment_batch_name || 'Assigned scenario'}
-        </p>
+        <div className="space-y-1 text-base text-muted-foreground sm:text-lg">
+          <p>{selectedScenario?.assignment_batch_name || 'Assigned scenario'}</p>
+          <p>Trainer: {selectedScenario?.assigned_by_name || 'Trainer assigned'}</p>
+        </div>
       </div>
 
       {/* Animated Call Indicator */}
@@ -1059,10 +1289,10 @@ export function CallSimulator({
               setScreen('preaccept');
               setSessionData(null);
             }}
-            aria-label="Decline incoming call"
+            aria-label="Cancel incoming call"
           >
             <PhoneOff className="h-4 w-4 sm:h-5 sm:w-5" />
-            <span className="ml-2">Decline</span>
+            <span className="ml-2">Cancel</span>
           </Button>
         </div>
       </div>
@@ -1073,7 +1303,7 @@ export function CallSimulator({
    * Render: Countdown Screen
    */
   const renderCountdown = () => (
-    <div className="flex min-h-[600px] flex-col items-center justify-center space-y-6">
+    <div className="flex min-h-[220px] flex-col items-center justify-center space-y-4">
       <div className="space-y-4 text-center">
         <h2 className="text-xl font-semibold text-muted-foreground">Call Starting In</h2>
         <div className="text-9xl font-bold tabular-nums">{countdownValue}</div>
@@ -1086,12 +1316,12 @@ export function CallSimulator({
    * Render: Active Call Screen - REDESIGNED FOR SIMPLICITY
    */
   const renderActiveCall = () => {
-    const currentStep = sessionData?.steps[currentStepIndex];
-    const totalSteps = sessionData?.steps.length || 0;
+    const currentStep = orderedSteps[currentStepIndex];
+    const totalSteps = orderedSteps.length || 0;
     const progressPercent = totalSteps > 0 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
 
     return (
-      <div className="space-y-4 pb-24">
+      <div className="space-y-4">
         {/* Top Status Bar */}
         <Card className="sticky top-0 z-10">
           <CardContent className="flex flex-col gap-4 p-4 md:flex-row md:items-center md:justify-between">
@@ -1163,10 +1393,10 @@ export function CallSimulator({
 
             <CardContent className="space-y-6 pt-4">
               {/* Error Alert */}
-              {operationError && (
+              {(operationError || recorderError) && (
                 <div className="flex gap-3 rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
                   <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{operationError}</span>
+                  <span>{operationError || recorderError}</span>
                 </div>
               )}
 
@@ -1276,7 +1506,7 @@ export function CallSimulator({
 
               {/* Queue Items */}
               <div className="max-h-64 space-y-2 overflow-y-auto">
-                {sessionData?.steps.map((step, idx) => (
+                {orderedSteps.map((step, idx) => (
                   <div
                     key={idx}
                     className={cn(
@@ -1308,8 +1538,8 @@ export function CallSimulator({
         </div>
 
         {/* Bottom Action Bar - ALWAYS VISIBLE */}
-        <div className="fixed bottom-0 left-0 right-0 border-t border-border bg-background p-4 shadow-lg">
-          <div className="mx-auto max-w-7xl">
+        <div className="sticky bottom-3 z-20 rounded-lg border border-border bg-background p-3 shadow-lg">
+          <div>
             <div className="grid gap-3 sm:grid-cols-3">
               {/* Hold/Unhold Button */}
               <Button
@@ -1317,18 +1547,17 @@ export function CallSimulator({
                 variant="secondary"
                 size="lg"
                 onClick={() => void handleHoldToggle()}
-                disabled={isSubmittingTurnRef.current}
                 className="h-14"
               >
                 {isOnHold ? (
                   <>
                     <PlayCircle className="h-4 w-4 sm:h-5 sm:w-5" />
-                    <span className="hidden sm:inline ml-2">Unhold</span>
+                    <span className="ml-2">Unhold</span>
                   </>
                 ) : (
                   <>
                     <PauseCircle className="h-4 w-4 sm:h-5 sm:w-5" />
-                    <span className="hidden sm:inline ml-2">Hold</span>
+                    <span className="ml-2">Hold</span>
                   </>
                 )}
               </Button>
@@ -1343,7 +1572,7 @@ export function CallSimulator({
                 aria-label="Try this turn again"
               >
                 <RotateCcw className="h-4 w-4 sm:h-5 sm:w-5" />
-                <span className="hidden sm:inline ml-2">Try Again</span>
+                <span className="ml-2">Try Again</span>
               </Button>
 
               {/* End Call Button - Phase 6: Mobile responsive */}
@@ -1361,7 +1590,7 @@ export function CallSimulator({
                 ) : (
                   <PhoneOff className="h-4 w-4 sm:h-5 sm:w-5" />
                 )}
-                <span className="hidden sm:inline ml-2">{isEndingCall ? 'Ending' : 'End Call'}</span>
+                <span className="ml-2">{isEndingCall ? 'Ending' : 'End Call'}</span>
               </Button>
             </div>
           </div>
@@ -1374,14 +1603,16 @@ export function CallSimulator({
    * Render: Processing Screen
    */
   const renderProcessing = () => (
-    <div className="flex min-h-[600px] flex-col items-center justify-center space-y-6">
+    <div className="flex min-h-[180px] flex-col items-center justify-center space-y-4">
       <div className="rounded-full bg-primary/10 p-6">
         <Loader2 className="h-12 w-12 animate-spin text-primary" />
       </div>
       <div className="space-y-2 text-center">
         <h2 className="text-2xl font-bold">Generating Results</h2>
         <p className="text-sm text-muted-foreground">
-          Saving recording, transcript, and KPI evaluation...
+          {isUploadingCall
+            ? 'Uploading the full-call MP3 to Supabase Storage...'
+            : 'Saving transcript, KPI scores, and Gemini evaluation...'}
         </p>
       </div>
     </div>
@@ -1408,7 +1639,7 @@ export function CallSimulator({
           'border-2',
           passed ? 'border-emerald-200 bg-emerald-50' : 'border-rose-200 bg-rose-50',
         )}>
-          <CardContent className="space-y-6 p-8 pt-6 text-center">
+          <CardContent className="space-y-4 p-5 pt-5 text-center">
             <div>
               <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                 Your Score
@@ -1426,7 +1657,7 @@ export function CallSimulator({
                 <>
                   <CheckCircle2 className="h-6 w-6 text-emerald-700" />
                   <span className="text-lg font-bold text-emerald-700">
-                    PASSED (≥ {passingScore}%)
+                    PASSED (&gt;= {passingScore}%)
                   </span>
                 </>
               ) : (
@@ -1531,6 +1762,35 @@ export function CallSimulator({
           </Card>
         )}
 
+        {showTranscript && (
+          <Card>
+            <CardHeader className="border-b border-border/70 pb-4">
+              <CardTitle className="text-xl">Transcript</CardTitle>
+              <CardDescription>Saved conversation log with speaker turns and timestamps</CardDescription>
+            </CardHeader>
+            <CardContent className="max-h-96 space-y-3 overflow-y-auto pt-4">
+              {(sessionResult?.transcript_log || []).length > 0 ? (
+                sessionResult?.transcript_log?.map((entry, idx) => {
+                  const startSeconds = Number(entry['timeline_start_seconds'] ?? 0);
+                  const speaker = String(entry['speaker_label'] || entry['actor'] || 'Speaker');
+                  const text = String(entry['transcript'] || entry['text'] || '').trim();
+                  return (
+                    <div key={idx} className="grid gap-2 rounded-lg border bg-background p-3 sm:grid-cols-[72px_96px_1fr]">
+                      <div className="text-sm font-semibold tabular-nums text-muted-foreground">
+                        {formatDuration(startSeconds)}
+                      </div>
+                      <div className="text-sm font-semibold">{speaker}</div>
+                      <p className="text-sm leading-6 text-muted-foreground">{text || 'No transcript text captured.'}</p>
+                    </div>
+                  );
+                })
+              ) : (
+                <p className="text-sm text-muted-foreground">No transcript entries were returned for this session.</p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         {/* Action Buttons */}
         <div className="flex flex-col gap-3 sm:flex-row">
           {sessionResult?.audio_url && (
@@ -1551,13 +1811,10 @@ export function CallSimulator({
           <Button
             type="button"
             variant="outline"
-            onClick={() => {
-              // TODO: Link to transcript viewer
-              toast.info('Transcript viewer coming soon');
-            }}
+            onClick={() => setShowTranscript((current) => !current)}
           >
             <Eye className="h-4 w-4" />
-            View Transcript
+            {showTranscript ? 'Hide Transcript' : 'View Transcript'}
           </Button>
 
           {!passed && (
@@ -1584,6 +1841,7 @@ export function CallSimulator({
               setSessionData(null);
               setSessionResult(null);
               setFeedbackReport(null);
+              setShowTranscript(false);
             }}
           >
             Back to Scenarios
@@ -1594,17 +1852,28 @@ export function CallSimulator({
   };
 
   /**
-   * Initialize timer on component mount
+   * Run the call timer only during active simulations.
    */
   useEffect(() => {
+    if (screen !== 'active') {
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      return;
+    }
+
     timerRef.current = window.setInterval(() => {
       setCallTimer((prev) => prev + 1);
     }, 1000);
 
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
-  }, []);
+  }, [screen]);
 
   /**
    * Fetch scenarios on mount
@@ -1619,9 +1888,10 @@ export function CallSimulator({
   useEffect(() => {
     return () => {
       if (countdownRef.current) window.clearInterval(countdownRef.current);
+      discardRecording();
       void discardCapture();
     };
-  }, [discardCapture]);
+  }, [discardCapture, discardRecording]);
 
   /**
    * Main render
@@ -1632,7 +1902,6 @@ export function CallSimulator({
       {screen === 'preaccept' && renderPreAccept()}
       {screen === 'incoming' && renderIncoming()}
       {screen === 'countdown' && renderCountdown()}
-      {/* eslint-disable-next-line react-hooks/refs */}
       {screen === 'active' && renderActiveCall()}
       {screen === 'processing' && renderProcessing()}
       {screen === 'result' && renderResult()}

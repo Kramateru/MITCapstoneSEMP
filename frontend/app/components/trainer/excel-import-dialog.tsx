@@ -158,7 +158,7 @@ export default function ExcelImportDialog({ onImport }: ExcelImportDialogProps) 
 
           {/* File Upload Section */}
           <div className="space-y-4">
-            <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-8 text-center">
+            <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-5 text-center">
               <input
                 type="file"
                 id="excel-upload"

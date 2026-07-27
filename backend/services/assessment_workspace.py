@@ -18,7 +18,7 @@ from decimal import Decimal
 from typing import Any, Iterable, Sequence
 
 from fastapi import HTTPException
-from sqlalchemy import bindparam, inspect, text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -904,28 +904,19 @@ def _ensure_assignment_workspace_schema(db: Session) -> None:
     dialect_name = getattr(getattr(db, "bind", None), "dialect", None)
     dialect_name = str(getattr(dialect_name, "name", "") or "").lower()
 
-    if dialect_name == "sqlite":
-        inspector = inspect(db.bind)
-        column_names = {
-            str(column.get("name") or "")
-            for column in inspector.get_columns("training_assessment_assignments")
-        }
-        if "target_scope" not in column_names:
-            db.execute(text("alter table training_assessment_assignments add column target_scope text"))
-        if "wave_number" not in column_names:
-            db.execute(text("alter table training_assessment_assignments add column wave_number integer"))
-        blank_target_predicate = "target_scope is null or trim(target_scope) = ''"
-    else:
-        db.execute(
-            text(
-                """
-                alter table training_assessment_assignments
-                    add column if not exists target_scope text,
-                    add column if not exists wave_number integer
-                """
-            )
+    if dialect_name and dialect_name != "postgresql":
+        raise RuntimeError("Assessment workspaces require the Supabase PostgreSQL database.")
+
+    db.execute(
+        text(
+            """
+            alter table training_assessment_assignments
+                add column if not exists target_scope text,
+                add column if not exists wave_number integer
+            """
         )
-        blank_target_predicate = "target_scope is null or btrim(target_scope) = ''"
+    )
+    blank_target_predicate = "target_scope is null or btrim(target_scope) = ''"
 
     db.execute(
         text(

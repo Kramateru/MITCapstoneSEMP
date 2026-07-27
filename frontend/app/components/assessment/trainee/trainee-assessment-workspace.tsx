@@ -372,7 +372,7 @@ export function TraineeAssessmentWorkspace() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[420px] items-center justify-center text-sm text-muted-foreground">
+      <div className="flex min-h-[160px] items-center justify-center text-sm text-muted-foreground">
         <Loader2 className="mr-2 size-4 animate-spin" />
         Loading assigned assessments...
       </div>
@@ -597,7 +597,7 @@ export function TraineeAssessmentWorkspace() {
       ) : null}
 
       {sessionLoading ? (
-        <div id="trainee-assessment-player" className="flex min-h-[240px] items-center justify-center rounded-3xl border border-slate-200 bg-white text-sm text-slate-600">
+        <div id="trainee-assessment-player" className="flex min-h-[160px] items-center justify-center rounded-3xl border border-slate-200 bg-white text-sm text-slate-600">
           <Loader2 className="mr-2 size-4 animate-spin" />
           Loading selected assessment...
         </div>

@@ -7,7 +7,7 @@ import { SettingsWorkspace } from '@/app/components/shared/settings-panel';
 export default function AdminSettingsPage() {
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
-      <div className="space-y-6">
+      <div className="space-y-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight text-foreground">Settings</h1>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
@@ -15,7 +15,7 @@ export default function AdminSettingsPage() {
           </p>
         </div>
 
-        <div className="space-y-6">
+        <div className="space-y-4">
           <div>
             <h2 className="mb-4 text-xl font-semibold text-foreground">System Preferences</h2>
             <SettingsWorkspace userRole="admin" showTitle={false} />

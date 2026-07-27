@@ -534,6 +534,7 @@ class SupabaseClient:
         filename: str,
         scenario_id: Optional[str] = None,
         content_type: Optional[str] = None,
+        upsert: bool = False,
     ) -> Optional[str]:
         """Upload trainer-managed Call Simulation audio assets such as member turns and call tones."""
         if not self.is_available:
@@ -551,6 +552,7 @@ class SupabaseClient:
             path=path,
             file_data=file_data,
             content_type=content_type or "audio/mpeg",
+            upsert=upsert,
         )
         if public_url:
             logger.info(f"Call Simulation asset uploaded: {path}")

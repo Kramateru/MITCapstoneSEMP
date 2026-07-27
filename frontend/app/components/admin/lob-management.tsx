@@ -450,7 +450,7 @@ export default function LOBManagement() {
                       <TableRow>
                         <TableCell
                           colSpan={6}
-                          className="py-10 text-center text-sm text-muted-foreground"
+                          className="py-5 text-center text-sm text-muted-foreground"
                         >
                           No active LOB records found.
                         </TableCell>

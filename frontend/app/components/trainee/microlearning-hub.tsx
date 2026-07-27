@@ -3429,7 +3429,7 @@ export default function MicrolearningHub() {
 
     if (!activeStandardExercise || !standardExercises.length) {
       return (
-        <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
+        <div className="rounded-lg border border-dashed p-5 text-center text-sm text-slate-500">
           No assessment questions are available for this module yet.
         </div>
       );
@@ -3779,7 +3779,7 @@ export default function MicrolearningHub() {
           </CardHeader>
           <CardContent>
             {isLoadingAssignments ? (
-              <div className="rounded-lg border border-dashed p-8 text-center text-sm text-slate-500">
+              <div className="rounded-lg border border-dashed p-5 text-center text-sm text-slate-500">
                 Loading your modules...
               </div>
             ) : (

@@ -745,7 +745,7 @@ export default function TrainerCoachingHub({
                 ))}
 
                 {!isLoading && !filteredCategories.length && (
-                  <div className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                  <div className="rounded-2xl border border-dashed p-5 text-center text-sm text-muted-foreground">
                     No finished mock calls are available for the selected filters yet.
                   </div>
                 )}
@@ -974,7 +974,7 @@ export default function TrainerCoachingHub({
                   </button>
                 ))}
                 {!isLoading && !filteredLogs.length && (
-                  <div className="rounded-2xl border border-dashed p-8 text-center text-sm text-muted-foreground">
+                  <div className="rounded-2xl border border-dashed p-5 text-center text-sm text-muted-foreground">
                     No coaching logs match the current filters.
                   </div>
                 )}

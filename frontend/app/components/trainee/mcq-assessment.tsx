@@ -787,7 +787,7 @@ export default function MCQAssessment({ category, onComplete }: MCQAssessmentPro
         <div className="space-y-6">
           {isLoadingAssessment ? (
             <Card>
-              <CardContent className="flex min-h-[280px] items-center justify-center text-sm text-muted-foreground">
+              <CardContent className="flex min-h-[132px] items-center justify-center text-sm text-muted-foreground">
                 <Loader2 className="mr-2 size-4 animate-spin" />
                 Loading assessment details...
               </CardContent>

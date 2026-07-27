@@ -176,8 +176,8 @@ export default function AdminCoachingPage() {
 
   return (
     <DashboardLayout sidebarItems={adminSidebarItems} userRole="admin">
-      <div className="space-y-6">
-        <section className="rounded-[2rem] border border-border bg-card/95 p-6 shadow-sm sm:p-8">
+      <div className="space-y-4">
+        <section className="rounded-[2rem] border border-border bg-card/95 p-5 shadow-sm sm:p-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-3">
               <div className="inline-flex rounded-full border border-primary/12 bg-primary/6 px-3 py-1 text-sm font-semibold uppercase tracking-normal text-primary">
@@ -288,7 +288,7 @@ export default function AdminCoachingPage() {
           </div>
 
           {isLoading ? (
-            <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
+            <div className="flex items-center justify-center py-5 text-sm text-muted-foreground">
               <LazyIcon name="Loader2" className="mr-2 size-4 animate-spin" />
               Loading coaching records...
             </div>
@@ -328,7 +328,7 @@ export default function AdminCoachingPage() {
               ))}
             </div>
           ) : (
-            <div className="rounded-2xl border border-dashed border-border p-8 text-sm leading-6 text-muted-foreground">
+            <div className="rounded-2xl border border-dashed border-border p-5 text-sm leading-6 text-muted-foreground">
               No coaching logs are stored in the database yet.
             </div>
           )}

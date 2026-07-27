@@ -294,6 +294,32 @@ interface MemberSpeechAssetResponse {
   detail?: string;
 }
 
+interface ScenarioSpeechGenerationItem {
+  step_number: number;
+  script_turn_id?: string | null;
+  actor: string;
+  speaker_label?: string | null;
+  text?: string | null;
+  status: 'generated' | 'reused' | 'failed' | 'skipped';
+  audio_url?: string | null;
+  error?: string | null;
+  reason?: string | null;
+  attempts?: number;
+  audio_asset?: CallSimulationAudioAssetRecord | null;
+}
+
+interface ScenarioSpeechGenerationResponse {
+  scenario_id: string;
+  speech_ready: boolean;
+  total: number;
+  generated: number;
+  reused: number;
+  skipped: number;
+  failed: number;
+  items: ScenarioSpeechGenerationItem[];
+  detail?: string;
+}
+
 interface ScenarioKpiMetricPayload {
   metricName: string;
   weightPercentage: number;
@@ -1017,6 +1043,14 @@ export default function TrainerSimFloorPage() {
   const [generatingSpeechRowIndex, setGeneratingSpeechRowIndex] = useState<number | null>(null);
   const [isGeneratingAllMemberSpeech, setIsGeneratingAllMemberSpeech] = useState(false);
   const [memberSpeechGenerationProgress, setMemberSpeechGenerationProgress] = useState<{ current: number; total: number } | null>(null);
+  const [memberSpeechGenerationSummary, setMemberSpeechGenerationSummary] = useState<ScenarioSpeechGenerationResponse | null>(null);
+  // Ringer and Hold audio generation
+  const [ringerSpeechText, setRingerSpeechText] = useState('');
+  const [holdSpeechText, setHoldSpeechText] = useState('');
+  const [generatingRingerSpeech, setGeneratingRingerSpeech] = useState(false);
+  const [generatingHoldSpeech, setGeneratingHoldSpeech] = useState(false);
+  const [showRingerSpeechDialog, setShowRingerSpeechDialog] = useState(false);
+  const [showHoldSpeechDialog, setShowHoldSpeechDialog] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sessionAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -1630,6 +1664,21 @@ export default function TrainerSimFloorPage() {
           },
     );
     const refreshedGroupedRows = buildScenarioGroups(scenarioRows).filter((group) => group.csr_variants.length > 0);
+    
+    // Validate that all Member rows with scripts have stored audio
+    const groupsMissingMemberAudio = refreshedGroupedRows
+      .filter((group) => 
+        group.member_rows.some((row) => row.script.trim() && !isSupabaseManagedScenarioAudioUrl(row.audio_url))
+      )
+      .map((group) => group.scenario_key);
+    if (groupsMissingMemberAudio.length > 0) {
+      toast.error(
+        `All Member rows with scripts must have generated or uploaded audio stored in Supabase. Generate speech for Scenario Group${groupsMissingMemberAudio.length === 1 ? '' : 's'} ${groupsMissingMemberAudio.join(', ')} before saving.`,
+      );
+      return;
+    }
+    
+    // Also check that at least one Member row has stored audio if there are any Member rows with content
     const groupsMissingStoredMemberAudio = refreshedGroupedRows
       .filter(
         (group) =>
@@ -2544,7 +2593,97 @@ export default function TrainerSimFloorPage() {
     return nextRows;
   }, [isSupabaseManagedScenarioAudioUrl, requestMemberSpeechAsset, upsertScenarioAudioAsset]);
 
-  const handleGenerateAllMemberSpeech = useCallback(async () => {
+  const handleGeneratePersistedScenarioSpeech = useCallback(async (options?: { retryFailedOnly?: boolean }) => {
+    if (!editingScenarioId) {
+      return false;
+    }
+
+    const currentMemberRows = scenarioForm.rows.filter((row) => !isCsrActor(row.actor_name));
+    const currentMemberRowsWithScriptCount = currentMemberRows.filter((row) => row.script.trim()).length;
+    const currentMemberAudioReadyCount = currentMemberRows.filter(
+      (row) => row.script.trim() && isSupabaseManagedScenarioAudioUrl(row.audio_url),
+    ).length;
+    const regenerateAll = !options?.retryFailedOnly
+      && currentMemberRowsWithScriptCount > 0
+      && currentMemberAudioReadyCount >= currentMemberRowsWithScriptCount;
+
+    setIsGeneratingAllMemberSpeech(true);
+    setGeneratingSpeechRowIndex(null);
+    setMemberSpeechGenerationSummary(null);
+    setMemberSpeechGenerationProgress({ current: 0, total: currentMemberRowsWithScriptCount || 1 });
+
+    try {
+      const response = await authedFetch(`/api/call-simulation/scenarios/${encodeURIComponent(editingScenarioId)}/speech`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          require_supabase: true,
+          regenerate_all: regenerateAll,
+          retry_failed_only: Boolean(options?.retryFailedOnly),
+          max_attempts: 3,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as ScenarioSpeechGenerationResponse | null;
+      if (!response.ok || !payload) {
+        throw new Error(payload?.detail || 'Unable to generate scenario speech.');
+      }
+
+      setMemberSpeechGenerationSummary(payload);
+      setMemberSpeechGenerationProgress({ current: payload.generated + payload.reused + payload.failed, total: payload.total || 1 });
+
+      const audioByStepNumber = new Map<number, string>();
+      payload.items.forEach((item) => {
+        if ((item.status === 'generated' || item.status === 'reused') && item.audio_url) {
+          audioByStepNumber.set(Number(item.step_number), item.audio_url);
+        }
+        if (item.audio_asset) {
+          upsertScenarioAudioAsset(item.audio_asset);
+        }
+      });
+
+      setScenarioForm((previous) => ({
+        ...previous,
+        rows: previous.rows.map((row, rowIndex) => {
+          if (isCsrActor(row.actor_name)) {
+            return row;
+          }
+          const stepNumber = getMemberStepNumberForRowIndex(previous.rows, rowIndex);
+          const audioUrl = stepNumber ? audioByStepNumber.get(stepNumber) : null;
+          return audioUrl ? { ...row, audio_url: audioUrl } : row;
+        }),
+      }));
+
+      void fetchScenarioAudioAssets(editingScenarioId);
+
+      if (payload.failed > 0) {
+        toast.error(
+          `Scenario speech finished with ${payload.failed} failed dialogue${payload.failed === 1 ? '' : 's'}. ${payload.generated} generated, ${payload.reused} reused.`,
+        );
+      } else if (payload.generated > 0) {
+        toast.success(`Scenario speech ready: ${payload.generated} generated, ${payload.reused} reused.`);
+      } else {
+        toast.success(`Scenario speech already ready: ${payload.reused} reused.`);
+      }
+      return true;
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to generate scenario speech.');
+      return true;
+    } finally {
+      setGeneratingSpeechRowIndex(null);
+      setIsGeneratingAllMemberSpeech(false);
+      setMemberSpeechGenerationProgress(null);
+    }
+  }, [authedFetch, editingScenarioId, fetchScenarioAudioAssets, isSupabaseManagedScenarioAudioUrl, scenarioForm.rows, upsertScenarioAudioAsset]);
+
+  const handleGenerateAllMemberSpeech = useCallback(async (options?: { retryFailedOnly?: boolean }) => {
+    if (editingScenarioId) {
+      const handled = await handleGeneratePersistedScenarioSpeech(options);
+      if (handled) {
+        return;
+      }
+    }
+
     const memberRowsToGenerate = scenarioForm.rows
       .map((row, index) => ({ row, index }))
       .filter(({ row }) => !isCsrActor(row.actor_name) && row.script.trim());
@@ -2620,7 +2759,123 @@ export default function TrainerSimFloorPage() {
       setIsGeneratingAllMemberSpeech(false);
       setMemberSpeechGenerationProgress(null);
     }
-  }, [requestMemberSpeechAsset, scenarioForm.rows, upsertScenarioAudioAsset]);
+  }, [editingScenarioId, handleGeneratePersistedScenarioSpeech, requestMemberSpeechAsset, scenarioForm.rows, upsertScenarioAudioAsset]);
+
+  // Handler for generating ringer audio from text
+  const handleGenerateRingerSpeech = useCallback(async () => {
+    if (!ringerSpeechText.trim()) {
+      toast.error('Enter the ringer speech text before generating audio.');
+      return;
+    }
+
+    setGeneratingRingerSpeech(true);
+    try {
+      const params = new URLSearchParams({
+        text: ringerSpeechText.trim(),
+        persist: 'true',
+        require_supabase: 'true',
+        asset_kind: 'ringer',
+      });
+
+      const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
+        method: 'POST',
+      });
+      const payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+      if (!response.ok || !payload) {
+        throw new Error(payload?.detail || 'Unable to generate ringer speech');
+      }
+
+      if (!payload.audio_url) {
+        throw new Error('Ringer speech generation did not return playable audio.');
+      }
+
+      // Update ringer audio settings
+      setCallToneSettings((previous) => ({
+        ...previous,
+        ringer_audio_url: payload.audio_url || '',
+      }));
+
+      // Update shared audio asset if provided
+      if (payload.audio_asset) {
+        setSharedAudioAssets((previous) => ({
+          ...previous,
+          ringer: payload.audio_asset || null,
+        }));
+      } else {
+        await fetchSharedAudioAssets().catch(() => undefined);
+      }
+
+      // Save the ringer audio settings
+      await handleSaveCallTone('ringer');
+      
+      toast.success('Ringer speech generated and saved successfully.');
+      setShowRingerSpeechDialog(false);
+      setRingerSpeechText('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to generate ringer speech.');
+    } finally {
+      setGeneratingRingerSpeech(false);
+    }
+  }, [ringerSpeechText, authedFetch, handleSaveCallTone, fetchSharedAudioAssets]);
+
+  // Handler for generating hold audio from text
+  const handleGenerateHoldSpeech = useCallback(async () => {
+    if (!holdSpeechText.trim()) {
+      toast.error('Enter the hold speech text before generating audio.');
+      return;
+    }
+
+    setGeneratingHoldSpeech(true);
+    try {
+      const params = new URLSearchParams({
+        text: holdSpeechText.trim(),
+        persist: 'true',
+        require_supabase: 'true',
+        asset_kind: 'hold',
+      });
+
+      const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
+        method: 'POST',
+      });
+      const payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+      if (!response.ok || !payload) {
+        throw new Error(payload?.detail || 'Unable to generate hold speech');
+      }
+
+      if (!payload.audio_url) {
+        throw new Error('Hold speech generation did not return playable audio.');
+      }
+
+      // Update hold audio settings
+      setCallToneSettings((previous) => ({
+        ...previous,
+        hold_audio_url: payload.audio_url || '',
+      }));
+
+      // Update shared audio asset if provided
+      if (payload.audio_asset) {
+        setSharedAudioAssets((previous) => ({
+          ...previous,
+          hold: payload.audio_asset || null,
+        }));
+      } else {
+        await fetchSharedAudioAssets().catch(() => undefined);
+      }
+
+      // Save the hold audio settings
+      await handleSaveCallTone('hold');
+      
+      toast.success('Hold speech generated and saved successfully.');
+      setShowHoldSpeechDialog(false);
+      setHoldSpeechText('');
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : 'Unable to generate hold speech.');
+    } finally {
+      setGeneratingHoldSpeech(false);
+    }
+  }, [holdSpeechText, authedFetch, handleSaveCallTone, fetchSharedAudioAssets]);
 
   const handleBulkFileSelected = useCallback((event: ChangeEvent<HTMLInputElement>) => {
     const selectedFile = event.target.files?.[0];
@@ -2933,20 +3188,32 @@ export default function TrainerSimFloorPage() {
                       Plays when the trainee starts a scenario and receives the incoming mock call.
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleUploadCallToneAsset('ringer')}
-                    disabled={uploadingAudioTarget === 'ringer'}
-                  >
-                    <Upload className="mr-2 h-4 w-4" />
-                    {uploadingAudioTarget === 'ringer'
-                      ? 'Uploading...'
-                      : callToneSettings.ringer_audio_url.trim()
-                        ? 'Replace Audio'
-                        : 'Upload Audio'}
-                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowRingerSpeechDialog(true)}
+                      disabled={uploadingAudioTarget === 'ringer' || generatingRingerSpeech}
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${generatingRingerSpeech ? 'animate-spin' : ''}`} />
+                      {generatingRingerSpeech ? 'Generating...' : 'Generate Speech'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleUploadCallToneAsset('ringer')}
+                      disabled={uploadingAudioTarget === 'ringer'}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploadingAudioTarget === 'ringer'
+                        ? 'Uploading...'
+                        : callToneSettings.ringer_audio_url.trim()
+                          ? 'Replace Audio'
+                          : 'Upload Audio'}
+                    </Button>
+                  </div>
                 </div>
                 <div className="mt-4 space-y-2">
                   <Label>Ringer Audio URL</Label>
@@ -3011,20 +3278,32 @@ export default function TrainerSimFloorPage() {
                       Plays whenever the trainee places the caller on hold before the Member response continues.
                     </p>
                   </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleUploadCallToneAsset('hold')}
-                    disabled={uploadingAudioTarget === 'hold'}
-                  >
-                    <Upload className="mr-2 h-4 w-4" />
-                    {uploadingAudioTarget === 'hold'
-                      ? 'Uploading...'
-                      : callToneSettings.hold_audio_url.trim()
-                        ? 'Replace Audio'
-                        : 'Upload Audio'}
-                  </Button>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowHoldSpeechDialog(true)}
+                      disabled={uploadingAudioTarget === 'hold' || generatingHoldSpeech}
+                    >
+                      <RefreshCw className={`mr-2 h-4 w-4 ${generatingHoldSpeech ? 'animate-spin' : ''}`} />
+                      {generatingHoldSpeech ? 'Generating...' : 'Generate Speech'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleUploadCallToneAsset('hold')}
+                      disabled={uploadingAudioTarget === 'hold'}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploadingAudioTarget === 'hold'
+                        ? 'Uploading...'
+                        : callToneSettings.hold_audio_url.trim()
+                          ? 'Replace Audio'
+                          : 'Upload Audio'}
+                    </Button>
+                  </div>
                 </div>
                 <div className="mt-4 space-y-2">
                   <Label>Hold Audio URL</Label>
@@ -3175,7 +3454,7 @@ export default function TrainerSimFloorPage() {
               </CardHeader>
               <CardContent>
                 {scenarios.length === 0 ? (
-                  <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+                  <div className="rounded-lg border border-dashed p-5 text-center text-muted-foreground">
                     No call modules are mapped to this batch yet.
                   </div>
                 ) : (
@@ -3289,7 +3568,7 @@ export default function TrainerSimFloorPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+                  <div className="rounded-lg border border-dashed p-5 text-center text-muted-foreground">
                     No KPI configuration exists for this batch yet.
                   </div>
                 )}
@@ -3307,7 +3586,7 @@ export default function TrainerSimFloorPage() {
           </CardHeader>
           <CardContent>
             {libraryScenarios.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+              <div className="rounded-lg border border-dashed p-5 text-center text-muted-foreground">
                 No saved call modules have been created yet.
               </div>
             ) : (
@@ -3400,7 +3679,7 @@ export default function TrainerSimFloorPage() {
           </CardHeader>
           <CardContent>
             {interactions.length === 0 ? (
-              <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground">
+              <div className="rounded-lg border border-dashed p-5 text-center text-muted-foreground">
                 No completed sessions are available for this batch yet.
               </div>
             ) : (
@@ -3509,6 +3788,7 @@ export default function TrainerSimFloorPage() {
             setGeneratingSpeechRowIndex(null);
             setIsGeneratingAllMemberSpeech(false);
             setMemberSpeechGenerationProgress(null);
+            setMemberSpeechGenerationSummary(null);
           }
         }}
       >
@@ -3540,7 +3820,9 @@ export default function TrainerSimFloorPage() {
                     <RefreshCw className={`mr-2 h-4 w-4 ${isGeneratingAllMemberSpeech ? 'animate-spin' : ''}`} />
                     {isGeneratingAllMemberSpeech
                       ? `Generating ${memberSpeechGenerationProgress?.current ?? 0}/${memberSpeechGenerationProgress?.total ?? memberRowsWithScriptCount}`
-                      : 'Generate Speech'}
+                      : editingScenarioId && memberRowsWithScriptCount > 0 && memberAudioReadyCount >= memberRowsWithScriptCount
+                        ? 'Regenerate Speech'
+                        : 'Generate Speech'}
                   </Button>
                 </div>
                 <div className="mb-4 rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
@@ -3555,6 +3837,45 @@ export default function TrainerSimFloorPage() {
                       {memberAudioReadyCount}/{memberRowsWithScriptCount || memberRows.length || 0} ready
                     </Badge>
                   </div>
+                  {memberSpeechGenerationSummary ? (
+                    <div className="mt-3 rounded-xl border border-cyan-200/70 bg-white/82 p-3 text-xs text-cyan-950">
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="font-medium">
+                          Speech {memberSpeechGenerationSummary.speech_ready ? 'ready' : 'needs attention'}:
+                          {' '}
+                          {memberSpeechGenerationSummary.generated} generated,
+                          {' '}
+                          {memberSpeechGenerationSummary.reused} reused,
+                          {' '}
+                          {memberSpeechGenerationSummary.failed} failed
+                        </div>
+                        {memberSpeechGenerationSummary.failed > 0 ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleGenerateAllMemberSpeech({ retryFailedOnly: true })}
+                            disabled={isGeneratingAllMemberSpeech}
+                          >
+                            <RefreshCw className="mr-2 h-4 w-4" />
+                            Retry Failed
+                          </Button>
+                        ) : null}
+                      </div>
+                      {memberSpeechGenerationSummary.failed > 0 ? (
+                        <div className="mt-2 space-y-1">
+                          {memberSpeechGenerationSummary.items
+                            .filter((item) => item.status === 'failed')
+                            .slice(0, 4)
+                            .map((item) => (
+                              <div key={`${item.step_number}-${item.script_turn_id || item.actor}`} className="text-cyan-900/85">
+                                Step {item.step_number} {item.speaker_label || item.actor}: {item.error || item.reason || 'Unable to generate speech.'}
+                              </div>
+                            ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
                 <div className="space-y-4">
                   <div className="space-y-2">
@@ -4845,6 +5166,80 @@ export default function TrainerSimFloorPage() {
             >
               <Trash2 className="mr-2 h-4 w-4" />
               {saving ? 'Deleting...' : 'Delete Scenario'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ringer Speech Generation Dialog */}
+      <Dialog open={showRingerSpeechDialog} onOpenChange={setShowRingerSpeechDialog}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Generate Ringer Audio</DialogTitle>
+            <DialogDescription>
+              Enter the text for the ringer tone that plays when the trainee starts a call scenario.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="ringer-speech-text">Ringer Speech Text</Label>
+              <Textarea
+                id="ringer-speech-text"
+                value={ringerSpeechText}
+                onChange={(e) => setRingerSpeechText(e.target.value)}
+                placeholder="e.g., Thank you for calling. Please hold while we connect you to the next available representative."
+                rows={4}
+                disabled={generatingRingerSpeech}
+              />
+              <p className="text-xs text-slate-500">
+                This text will be converted to AI speech and saved to Supabase for all trainees.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowRingerSpeechDialog(false)} disabled={generatingRingerSpeech}>
+              Cancel
+            </Button>
+            <Button onClick={handleGenerateRingerSpeech} disabled={generatingRingerSpeech || !ringerSpeechText.trim()}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${generatingRingerSpeech ? 'animate-spin' : ''}`} />
+              {generatingRingerSpeech ? 'Generating...' : 'Generate & Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Hold Speech Generation Dialog */}
+      <Dialog open={showHoldSpeechDialog} onOpenChange={setShowHoldSpeechDialog}>
+        <DialogContent size="sm">
+          <DialogHeader>
+            <DialogTitle>Generate Hold Audio</DialogTitle>
+            <DialogDescription>
+              Enter the text for the hold music/message that plays when the trainee places a call on hold.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="hold-speech-text">Hold Speech Text</Label>
+              <Textarea
+                id="hold-speech-text"
+                value={holdSpeechText}
+                onChange={(e) => setHoldSpeechText(e.target.value)}
+                placeholder="e.g., Thank you for holding. Your call is very important to us. We'll be with you shortly."
+                rows={4}
+                disabled={generatingHoldSpeech}
+              />
+              <p className="text-xs text-slate-500">
+                This text will be converted to AI speech and saved to Supabase for all trainees.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowHoldSpeechDialog(false)} disabled={generatingHoldSpeech}>
+              Cancel
+            </Button>
+            <Button onClick={handleGenerateHoldSpeech} disabled={generatingHoldSpeech || !holdSpeechText.trim()}>
+              <RefreshCw className={`mr-2 h-4 w-4 ${generatingHoldSpeech ? 'animate-spin' : ''}`} />
+              {generatingHoldSpeech ? 'Generating...' : 'Generate & Save'}
             </Button>
           </DialogFooter>
         </DialogContent>
