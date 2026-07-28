@@ -116,9 +116,23 @@ class TTSService:
                 self.openai_client = None
         self.enable_local_tts = _default_local_tts_enabled()
         if not self.enable_local_tts:
-            logger.info(
-                "Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini, Azure, and OpenAI audio are unavailable."
-            )
+            # If no cloud TTS providers are available (e.g., Gemini auth failure)
+            # enable local Windows fallback automatically for local development so
+            # trainers can still generate and persist audio for call simulation.
+            if (
+                os.name == "nt"
+                and not self.gemini_tts.is_available()
+                and not self._azure_tts_available()
+                and not self._openai_tts_available()
+            ):
+                logger.info(
+                    "No cloud TTS providers available; enabling local Windows TTS fallback for persistence."
+                )
+                self.enable_local_tts = True
+            else:
+                logger.info(
+                    "Local server-side TTS fallback is disabled. Browser fallback will be used when Gemini, Azure, and OpenAI audio are unavailable."
+                )
 
     def is_available(self) -> bool:
         return (

@@ -117,6 +117,15 @@ class MicrolearningExerciseSubmission(BaseModel):
     status: Optional[str] = None
     answered_at: Optional[datetime] = None
     timer_expired: Optional[bool] = None
+    audio_url: Optional[str] = None
+    response_duration: Optional[float] = None
+    transcription: Optional[str] = None
+    transcription_confidence: Optional[float] = None
+    overall_score: Optional[float] = None
+    accuracy_percentage: Optional[float] = None
+    provider: Optional[str] = None
+    provider_metadata: Optional[dict[str, Any]] = None
+    assessment_data: Optional[dict[str, Any]] = None
 
 
 class MicrolearningFlashcardSessionUpdate(BaseModel):
@@ -635,6 +644,8 @@ async def assess_practice_audio(
     reference_text: Optional[str] = Form(None),
     response_duration: Optional[float] = Form(None),
     volume_level: Optional[float] = Form(None),
+    module_id: Optional[str] = Form(None),
+    trainer_id: Optional[str] = Form(None),
     current_user: Any = Depends(verify_trainee),
     db: Session = Depends(),
 ):
@@ -658,6 +669,27 @@ async def assess_practice_audio(
             detail="Provide either a scenario_id or a reference_text for assessment",
         )
 
+    # Optionally upload the audio to Supabase microlearning storage when module/trainer context is provided
+    audio_public_url = None
+    try:
+        if module_id and trainer_id:
+            try:
+                supabase = get_supabase_client()
+                if supabase and supabase.is_available:
+                    uploaded = supabase.upload_microlearning_audio(
+                        file_data=file_bytes,
+                        module_id=module_id,
+                        trainer_id=trainer_id,
+                        filename=(file.filename or "practice-attempt.webm"),
+                        content_type=(file.content_type or "audio/webm"),
+                    )
+                    audio_public_url = uploaded or None
+            except Exception:
+                audio_public_url = None
+
+    except Exception:
+        audio_public_url = None
+
     assessment = assess_audio_submission(
         audio_bytes=file_bytes,
         filename=file.filename or "practice-attempt.webm",
@@ -667,6 +699,10 @@ async def assess_practice_audio(
         response_duration=response_duration,
         user_dialect=current_user.language_dialect,
     )
+
+    # Attach audio_public_url to assessment payload when available
+    if audio_public_url:
+        assessment["audio_url"] = audio_public_url
 
     if not scenario:
         return assessment
@@ -688,7 +724,7 @@ async def assess_practice_audio(
     practice_session = PracticeSession(
         user_id=current_user.id,
         scenario_id=scenario.id,
-        audio_file_url=None,
+        audio_file_url=audio_public_url,
         transcription=assessment.get("transcription"),
         transcription_confidence=assessment.get("transcription_confidence"),
         accuracy_score=assessment.get("scores", {}).get("phonetic_accuracy"),
@@ -1578,13 +1614,44 @@ async def submit_microlearning_exercise(
             next_start_at=resolved_answer_deadline,
         )
     else:
-        attempt = evaluate_exercise_submission(
-            exercise,
-            response_text=payload.response_text,
-            selected_option=payload.selected_option,
-            input_mode=payload.input_mode,
-            revealed_side=payload.revealed_side,
-        )
+        if (
+            payload.assessment_data
+            and str(exercise.get("type") or "").strip().lower() == "keyword_response"
+        ):
+            attempt = _build_microlearning_audio_attempt(
+                exercise,
+                assessment=payload.assessment_data,
+                response_text=payload.response_text,
+                input_mode=payload.input_mode,
+                audio_url=payload.audio_url,
+                response_duration=payload.response_duration,
+            )
+        else:
+            attempt = evaluate_exercise_submission(
+                exercise,
+                response_text=payload.response_text,
+                selected_option=payload.selected_option,
+                input_mode=payload.input_mode,
+                revealed_side=payload.revealed_side,
+            )
+            if payload.assessment_data:
+                attempt["assessment_data"] = payload.assessment_data
+                attempt["audio_url"] = payload.audio_url
+                attempt["response_duration"] = payload.response_duration
+                attempt["transcription"] = payload.assessment_data.get("transcription")
+                attempt["transcription_confidence"] = payload.assessment_data.get("transcription_confidence")
+                attempt["provider"] = payload.assessment_data.get("provider")
+                attempt["provider_metadata"] = payload.assessment_data.get("provider_metadata")
+                if payload.assessment_data.get("matched_keywords") is not None:
+                    attempt["matched_keywords"] = payload.assessment_data.get("matched_keywords")
+                if payload.assessment_data.get("missing_keywords") is not None:
+                    attempt["missing_keywords"] = payload.assessment_data.get("missing_keywords")
+                if payload.assessment_data.get("overall_score") is not None:
+                    attempt["accuracy_percentage"] = float(payload.assessment_data.get("accuracy_percentage") or 0.0)
+                    points_possible = attempt.get("points_possible") or 0.0
+                    points_earned = round((float(payload.assessment_data.get("overall_score") or 0.0) / 100.0) * points_possible, 2)
+                    attempt["points_earned"] = points_earned
+                    attempt["score"] = _normalized_percentage_from_points(points_earned, points_possible)
         responses = dict(assignment.responses or {})
         responses[exercise_id] = attempt
         assignment.responses = responses

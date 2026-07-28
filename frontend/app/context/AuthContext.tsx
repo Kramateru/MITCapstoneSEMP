@@ -9,7 +9,7 @@ import {
     getUnexpectedJsonResponseMessage,
     readHttpResponse,
 } from '@/app/utils/http-response'
-import { normalizeConnectivityError } from '@/app/utils/runtime-errors'
+import { createConnectivityError, isConnectivityError, normalizeConnectivityError } from '@/app/utils/runtime-errors'
 
 export interface User {
   user_id: string
@@ -620,7 +620,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })
 
       if (!response.ok) {
-        throw new Error(await getApiErrorMessage(response, 'Login failed'))
+        const apiMessage = await getApiErrorMessage(response, 'Login failed')
+        const lower = apiMessage ? apiMessage.toLowerCase() : ''
+        // Treat explicit Supabase auth connectivity errors as connectivity issues
+        if (lower.includes('supabase') && lower.includes('auth')) {
+          throw createConnectivityError(apiMessage)
+        }
+        throw new Error(apiMessage)
       }
 
       const payload = await parseAuthSuccessResponse(
@@ -651,7 +657,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return nextUser
     } catch (error) {
       const normalizedError = normalizeConnectivityError(error)
-      if (!isExpectedLoginError(normalizedError)) {
+      // Suppress console.error for expected connectivity issues (noisy when backend is down)
+      if (!isExpectedLoginError(normalizedError) && !isConnectivityError(normalizedError)) {
         console.error('Login error:', normalizedError)
       }
       throw normalizedError

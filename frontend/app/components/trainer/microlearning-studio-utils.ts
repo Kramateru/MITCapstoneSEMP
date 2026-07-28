@@ -1,4 +1,4 @@
-export type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio';
+export type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio' | 'reading';
 export type Difficulty = 'basic' | 'intermediate' | 'advanced';
 export type FeedbackCategory = 'pronunciation' | 'fluency' | 'grammar' | 'empathy' | 'clarity';
 export type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'certified';
@@ -183,6 +183,10 @@ export interface ModuleFormState {
     sample_answer?: string;
     required_keywords?: string;
   }>;
+  // Reading specific metadata
+  reading_prompt: string;
+  reading_passage: string;
+  reading_required_keywords: string;
   // Audio specific metadata
   audio_content_id: string;
   audio_storage_path: string;
@@ -242,6 +246,9 @@ export function emptyModuleForm(): ModuleFormState {
     infographic_questions: [],
     case_study_content: '',
     case_study_questions: [],
+    reading_prompt: '',
+    reading_passage: '',
+    reading_required_keywords: '',
     audio_content_id: '',
     audio_storage_path: '',
     audio_bucket_name: '',
@@ -390,6 +397,16 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
           sample_answer: q.sample_answer || '',
           required_keywords: splitToList(q.required_keywords || ''),
         })),
+      };
+    case 'reading':
+      return {
+        ...preserved,
+        reading_passage: form.reading_passage.trim() || undefined,
+        practice_prompt: form.reading_prompt.trim() || undefined,
+        analysis_prompt: form.reading_prompt.trim() || undefined,
+        required_keywords: splitToList(form.reading_required_keywords || ''),
+        sample_answer: form.reading_prompt.trim() || undefined,
+        enable_stt_reading: true,
       };
     case 'audio':
       return {
@@ -540,6 +557,13 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
           sample_answer: q.sample_answer || '',
           required_keywords: Array.isArray(q.required_keywords) ? q.required_keywords.join(', ') : '',
         })),
+      };
+    case 'reading':
+      return {
+        ...baseForm,
+        reading_prompt: content.practice_prompt || content.analysis_prompt || '',
+        reading_passage: content.reading_passage || content.content || '',
+        reading_required_keywords: Array.isArray(content.required_keywords) ? content.required_keywords.join(', ') : '',
       };
     case 'audio':
       return {

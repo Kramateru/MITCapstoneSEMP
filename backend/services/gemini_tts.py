@@ -14,9 +14,10 @@ from typing import Any, Optional
 # Lazy-load google.genai to avoid importing heavy SDK at process startup
 _genai = None
 _genai_types = None
+GEMINI_TTS_AVAILABLE = False
 
 def _ensure_genai():
-    global _genai, _genai_types
+    global _genai, _genai_types, GEMINI_TTS_AVAILABLE
     if _genai is not None or _genai_types is not None:
         return _genai, _genai_types
     try:
@@ -24,11 +25,18 @@ def _ensure_genai():
 
         _genai = importlib.import_module('google.genai')
         _genai_types = importlib.import_module('google.genai').types
+        GEMINI_TTS_AVAILABLE = True
         return _genai, _genai_types
     except Exception as exc:
-        logger.info('Gemini genai not available: %s', exc)
+        # Ensure a logger is available even if module-level logger wasn't defined earlier
+        try:
+            _logger = logging.getLogger(__name__)
+            _logger.info('Gemini genai not available: %s', exc)
+        except Exception:
+            pass
         _genai = None
         _genai_types = None
+        GEMINI_TTS_AVAILABLE = False
         return None, None
 
 from ..config_validation import normalize_env_value, resolve_gemini_api_key

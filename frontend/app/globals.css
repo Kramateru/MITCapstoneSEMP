@@ -449,8 +449,8 @@
     max-width: 100%;
     display: grid;
     align-content: start;
-    gap: clamp(0.55rem, 0.45rem + 0.2vw, 0.75rem);
-    padding: clamp(0.4rem, 0.3rem + 0.35vw, 0.65rem) 0 clamp(0.65rem, 0.45rem + 0.4vw, 0.9rem);
+    gap: clamp(0.45rem, 0.35rem + 0.2vw, 0.65rem);
+    padding: clamp(0.3rem, 0.2rem + 0.32vw, 0.55rem) 0 clamp(0.55rem, 0.35rem + 0.35vw, 0.8rem);
   }
 
   .dashboard-page > * {
@@ -622,6 +622,62 @@
 
   .dashboard-page .space-y-5 > :where(:not([hidden])) ~ :where(:not([hidden])) {
     margin-top: 0.75rem !important;
+  }
+
+  .dashboard-page .gap-4 {
+    gap: 0.75rem !important;
+  }
+
+  .dashboard-page .gap-3 {
+    gap: 0.625rem !important;
+  }
+
+  .dashboard-page .space-y-4 > :where(:not([hidden])) ~ :where(:not([hidden])) {
+    margin-top: 0.75rem !important;
+  }
+
+  .dashboard-page .space-y-3 > :where(:not([hidden])) ~ :where(:not([hidden])) {
+    margin-top: 0.625rem !important;
+  }
+
+  .dashboard-page .mt-4,
+  .dashboard-page .mb-4 {
+    margin-top: 0.75rem !important;
+    margin-bottom: 0.75rem !important;
+  }
+
+  .dashboard-page .mt-3,
+  .dashboard-page .mb-3 {
+    margin-top: 0.625rem !important;
+    margin-bottom: 0.625rem !important;
+  }
+
+  .dashboard-page .p-4 {
+    padding: 0.9rem !important;
+  }
+
+  .dashboard-page .py-4 {
+    padding-top: 0.9rem !important;
+    padding-bottom: 0.9rem !important;
+  }
+
+  .dashboard-page .px-4 {
+    padding-left: 0.9rem !important;
+    padding-right: 0.9rem !important;
+  }
+
+  .dashboard-page .p-3 {
+    padding: 0.75rem !important;
+  }
+
+  .dashboard-page .py-3 {
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+
+  .dashboard-page .px-3 {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
   }
 
   .dashboard-page .p-10 {
@@ -1638,73 +1694,73 @@
   .dashboard-page .sm\:gap-9,
   .dashboard-page .sm\:gap-8,
   .dashboard-page .sm\:gap-7 {
-    gap: 1rem !important;
+    gap: 0.9rem !important;
   }
 
   .dashboard-page .sm\:gap-6,
   .dashboard-page .sm\:gap-5 {
-    gap: 0.875rem !important;
+    gap: 0.8rem !important;
   }
 
   .dashboard-page .sm\:space-y-10 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .sm\:space-y-9 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .sm\:space-y-8 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .sm\:space-y-7 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 1rem !important;
+    margin-top: 0.95rem !important;
   }
 
   .dashboard-page .sm\:space-y-6 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .sm\:space-y-5 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 0.875rem !important;
+    margin-top: 0.85rem !important;
   }
 
   .dashboard-page .sm\:p-12,
   .dashboard-page .sm\:p-10,
   .dashboard-page .sm\:p-9 {
-    padding: 1.15rem !important;
+    padding: 1.1rem !important;
   }
 
   .dashboard-page .sm\:p-8,
   .dashboard-page .sm\:p-7,
   .dashboard-page .sm\:p-6,
   .dashboard-page .sm\:p-5 {
-    padding: 1.05rem !important;
+    padding: 0.95rem !important;
   }
 
   .dashboard-page .sm\:py-12,
   .dashboard-page .sm\:py-10,
   .dashboard-page .sm\:py-9 {
-    padding-top: 1.15rem !important;
-    padding-bottom: 1.15rem !important;
+    padding-top: 1.1rem !important;
+    padding-bottom: 1.1rem !important;
   }
 
   .dashboard-page .sm\:py-8,
   .dashboard-page .sm\:py-7,
   .dashboard-page .sm\:py-6 {
-    padding-top: 1.05rem !important;
-    padding-bottom: 1.05rem !important;
+    padding-top: 0.95rem !important;
+    padding-bottom: 0.95rem !important;
   }
 
   .dashboard-page .sm\:px-12,
   .dashboard-page .sm\:px-10,
   .dashboard-page .sm\:px-9 {
-    padding-left: 1.15rem !important;
-    padding-right: 1.15rem !important;
+    padding-left: 1.1rem !important;
+    padding-right: 1.1rem !important;
   }
 
   .dashboard-page .sm\:px-8,
   .dashboard-page .sm\:px-7,
   .dashboard-page .sm\:px-6 {
-    padding-left: 1.05rem !important;
-    padding-right: 1.05rem !important;
+    padding-left: 0.95rem !important;
+    padding-right: 0.95rem !important;
   }
 
   .dashboard-page .sm\:pt-6 {
-    padding-top: 0.9rem !important;
+    padding-top: 0.85rem !important;
   }
 
   .dashboard-page .sm\:pb-6 {
-    padding-bottom: 0.9rem !important;
+    padding-bottom: 0.85rem !important;
   }
 
   .dialog-safe-area-padding {
@@ -1722,7 +1778,7 @@
   .dashboard-page .md\:gap-9,
   .dashboard-page .md\:gap-8,
   .dashboard-page .md\:gap-7 {
-    gap: 1.1rem !important;
+    gap: 1rem !important;
   }
 
   .dashboard-page .md\:space-y-12 > :where(:not([hidden])) ~ :where(:not([hidden])),
@@ -1730,30 +1786,30 @@
   .dashboard-page .md\:space-y-9 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .md\:space-y-8 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .md\:space-y-7 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 1.1rem !important;
+    margin-top: 0.95rem !important;
   }
 
   .dashboard-page .md\:p-12,
   .dashboard-page .md\:p-10,
   .dashboard-page .md\:p-9,
   .dashboard-page .md\:p-8 {
-    padding: 1.2rem !important;
+    padding: 1.1rem !important;
   }
 
   .dashboard-page .md\:py-12,
   .dashboard-page .md\:py-10,
   .dashboard-page .md\:py-9,
   .dashboard-page .md\:py-8 {
-    padding-top: 1.2rem !important;
-    padding-bottom: 1.2rem !important;
+    padding-top: 1.1rem !important;
+    padding-bottom: 1.1rem !important;
   }
 
   .dashboard-page .md\:px-12,
   .dashboard-page .md\:px-10,
   .dashboard-page .md\:px-9,
   .dashboard-page .md\:px-8 {
-    padding-left: 1.2rem !important;
-    padding-right: 1.2rem !important;
+    padding-left: 1.1rem !important;
+    padding-right: 1.1rem !important;
   }
 }
 
@@ -1763,12 +1819,12 @@
   .dashboard-page .lg\:gap-9,
   .dashboard-page .lg\:gap-8,
   .dashboard-page .lg\:gap-7 {
-    gap: 1.15rem !important;
+    gap: 1rem !important;
   }
 
   .dashboard-page .lg\:gap-6,
   .dashboard-page .lg\:gap-5 {
-    gap: 1rem !important;
+    gap: 0.9rem !important;
   }
 
   .dashboard-page .lg\:space-y-12 > :where(:not([hidden])) ~ :where(:not([hidden])),
@@ -1776,61 +1832,61 @@
   .dashboard-page .lg\:space-y-9 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .lg\:space-y-8 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .lg\:space-y-7 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 1.15rem !important;
+    margin-top: 1rem !important;
   }
 
   .dashboard-page .lg\:space-y-6 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .lg\:space-y-5 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 1rem !important;
+    margin-top: 0.9rem !important;
   }
 
   .dashboard-page .lg\:p-12,
   .dashboard-page .lg\:p-10,
   .dashboard-page .lg\:p-9 {
-    padding: 1.25rem !important;
+    padding: 1.15rem !important;
   }
 
   .dashboard-page .lg\:p-8,
   .dashboard-page .lg\:p-7,
   .dashboard-page .lg\:p-6,
   .dashboard-page .lg\:p-5 {
-    padding: 1.15rem !important;
+    padding: 1rem !important;
   }
 
   .dashboard-page .lg\:py-12,
   .dashboard-page .lg\:py-10,
   .dashboard-page .lg\:py-9 {
-    padding-top: 1.25rem !important;
-    padding-bottom: 1.25rem !important;
+    padding-top: 1.15rem !important;
+    padding-bottom: 1.15rem !important;
   }
 
   .dashboard-page .lg\:py-8,
   .dashboard-page .lg\:py-7,
   .dashboard-page .lg\:py-6 {
-    padding-top: 1.15rem !important;
-    padding-bottom: 1.15rem !important;
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
   }
 
   .dashboard-page .lg\:px-12,
   .dashboard-page .lg\:px-10,
   .dashboard-page .lg\:px-9 {
-    padding-left: 1.25rem !important;
-    padding-right: 1.25rem !important;
+    padding-left: 1.15rem !important;
+    padding-right: 1.15rem !important;
   }
 
   .dashboard-page .lg\:px-8,
   .dashboard-page .lg\:px-7,
   .dashboard-page .lg\:px-6 {
-    padding-left: 1.15rem !important;
-    padding-right: 1.15rem !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
   }
 
   .dashboard-page .lg\:pt-6 {
-    padding-top: 1rem !important;
+    padding-top: 0.9rem !important;
   }
 
   .dashboard-page .lg\:pb-6 {
-    padding-bottom: 1rem !important;
+    padding-bottom: 0.9rem !important;
   }
 
   .analytics-page-header {
@@ -1856,7 +1912,7 @@
   .dashboard-page .xl\:gap-10,
   .dashboard-page .xl\:gap-9,
   .dashboard-page .xl\:gap-8 {
-    gap: 1.25rem !important;
+    gap: 1.1rem !important;
   }
 
   .dashboard-page .xl\:space-y-16 > :where(:not([hidden])) ~ :where(:not([hidden])),
@@ -1865,7 +1921,7 @@
   .dashboard-page .xl\:space-y-10 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .xl\:space-y-9 > :where(:not([hidden])) ~ :where(:not([hidden])),
   .dashboard-page .xl\:space-y-8 > :where(:not([hidden])) ~ :where(:not([hidden])) {
-    margin-top: 1.25rem !important;
+    margin-top: 1rem !important;
   }
 
   .dashboard-page .xl\:p-16,
@@ -1874,7 +1930,7 @@
   .dashboard-page .xl\:p-10,
   .dashboard-page .xl\:p-9,
   .dashboard-page .xl\:p-8 {
-    padding: 1.3rem !important;
+    padding: 1.2rem !important;
   }
 
   .dashboard-page .xl\:py-16,

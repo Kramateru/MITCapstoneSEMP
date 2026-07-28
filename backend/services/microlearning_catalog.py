@@ -23,6 +23,7 @@ SUPPORTED_MICROLEARNING_TYPES = {
     "infographic",
     "case_study",
     "audio",
+    "reading",
 }
 
 DEFAULT_FLASHCARD_PREVIEW_SECONDS = 30
@@ -614,6 +615,29 @@ def build_type_specific_exercises(
                 ],
                 "sample_answer": content.get("sample_answer") or transcript or None,
                 "enable_stt": content.get("enable_stt_audio", True),
+            }
+        )
+        return exercises
+
+    if normalized_type == "reading":
+        reading_prompt = (
+            content.get("practice_prompt")
+            or content.get("analysis_prompt")
+            or f"Read the passage aloud and respond to the prompt for {focus}."
+        )
+        exercises.append(
+            {
+                "id": str(uuid.uuid4()),
+                "title": "Reading Response",
+                "type": "keyword_response",
+                "prompt": reading_prompt,
+                "required_keywords": list(content.get("required_keywords") or []),
+                "tips": [
+                    "Read the passage aloud with calm pacing.",
+                    "Use the required phrases and finish the response clearly.",
+                ],
+                "sample_answer": content.get("sample_answer") or content.get("reading_passage") or None,
+                "enable_stt": content.get("enable_stt_reading", True),
             }
         )
         return exercises

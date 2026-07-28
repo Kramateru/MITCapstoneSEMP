@@ -108,7 +108,7 @@ from ..services.live_updates import live_update_manager
 from ..services.notifications import notify_call_simulation_completion
 from ..services.speech_assessment import assess_audio_submission, normalize_text, tokenize_text
 from ..services.supabase_auth_service import filter_to_supabase_active_users
-from ..services.tts_service import text_to_speech, text_to_speech_for_persistence
+from ..services.tts_service import get_tts_service, text_to_speech, text_to_speech_for_persistence
 from ..services.audit import create_audit_log
 from ..supabase_client import get_supabase_client
 
@@ -2461,6 +2461,12 @@ async def _generate_call_simulation_step_speech_asset(
         max_attempts=max_attempts,
     )
     upload_bytes = synthesis["audio_bytes"]
+    get_tts_service().save_audio_locally(
+        upload_bytes,
+        scenario_id=scenario.id,
+        step_number=step_number,
+        asset_kind="member-step",
+    )
     filename = _stable_call_simulation_speech_filename(
         step=step,
         text_value=text_value,
@@ -4839,6 +4845,12 @@ async def _replace_scenario_steps(
                     multi_speaker_config=speaker_configs
                 )
                 if audio_bytes:
+                    get_tts_service().save_audio_locally(
+                        audio_bytes,
+                        scenario_id=scenario.id,
+                        step_number=0,
+                        asset_kind="conversation-audio",
+                    )
                     supabase_client = get_supabase_client()
                     conversation_audio_url = supabase_client.upload_call_simulation_asset(
                         file_data=audio_bytes,
@@ -4879,6 +4891,12 @@ async def _replace_scenario_steps(
                             upload_bytes = None
 
                     if upload_bytes:
+                        get_tts_service().save_audio_locally(
+                            upload_bytes,
+                            scenario_id=scenario.id,
+                            step_number=index,
+                            asset_kind="step-prompt",
+                        )
                         supabase_client = get_supabase_client()
                         step_audio_url = supabase_client.upload_call_simulation_asset(
                             file_data=upload_bytes,
@@ -7909,7 +7927,12 @@ async def synthesize_member_speech(
             raise HTTPException(status_code=400, detail="Unsupported Call Simulation audio asset type")
         supabase = get_supabase_client()
         if not supabase.is_available:
-            raise HTTPException(status_code=503, detail=strict_persistence_message)
+            if require_supabase:
+                raise HTTPException(status_code=503, detail=strict_persistence_message)
+            supabase = None
+            storage_warning = (
+                "Supabase storage is unavailable. Generated speech will be returned as inline audio for draft playback."
+            )
 
         normalized_replace_audio_url = _normalize_optional_url(replace_audio_url)
         scenario_segment = "draft"
@@ -8050,17 +8073,21 @@ async def synthesize_member_speech(
         prefix = f"step-{int(step_number):02d}_" if normalized_asset_kind == "member-step" and step_number else ""
         filename = f"{prefix}{timestamp}_{safe_leaf[:48]}.{audio_extension}"
 
-        uploaded_audio_url = supabase.upload_call_simulation_asset(
-            file_data=upload_bytes,
-            trainer_id=resolved_asset_owner_id,
-            scenario_id=scenario_segment,
-            asset_kind=normalized_asset_kind,
-            filename=filename,
-            content_type=audio_content_type,
-        )
+        uploaded_audio_url: Optional[str] = None
+        if supabase is not None:
+            uploaded_audio_url = supabase.upload_call_simulation_asset(
+                file_data=upload_bytes,
+                trainer_id=resolved_asset_owner_id,
+                scenario_id=scenario_segment,
+                asset_kind=normalized_asset_kind,
+                filename=filename,
+                content_type=audio_content_type,
+            )
+
         if uploaded_audio_url:
             if require_supabase and not _is_supabase_storage_public_url(uploaded_audio_url):
-                supabase.delete_by_public_url(uploaded_audio_url)
+                if supabase is not None:
+                    supabase.delete_by_public_url(uploaded_audio_url)
                 raise HTTPException(status_code=503, detail=strict_persistence_message)
             audio_url = uploaded_audio_url
             storage_mode = "supabase"
@@ -8212,7 +8239,7 @@ async def synthesize_member_speech(
                             delete_storage=True,
                         )
                         db.commit()
-        else:
+        elif require_supabase:
             logger.warning(
                 "Call Simulation TTS asset upload failed and persisted audio requires Supabase. "
                 "trainer_id=%s scenario_segment=%s asset_kind=%s",

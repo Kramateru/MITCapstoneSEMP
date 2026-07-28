@@ -106,9 +106,36 @@ export function isRecoverableRuntimeAssetError(error: unknown) {
 }
 
 export function createConnectivityError(cause?: unknown) {
-  const error = new TypeError(CONNECTIVITY_ERROR_MESSAGE) as TypeError & { cause?: unknown }
-  error.cause = cause
+  const error = new Error(CONNECTIVITY_ERROR_MESSAGE) as Error & { cause?: unknown }
+  error.name = 'ConnectivityError'
+  try {
+    error.cause = cause
+  } catch {
+    // Some environments may not allow adding properties; ignore if so.
+  }
+  // Remove stack to avoid noisy error overlays in the browser for expected connectivity problems
+  try {
+    // Some environments have read-only stack; guard against failures
+    ;(error as any).stack = ''
+  } catch {
+    // ignore
+  }
   return error
+}
+
+// Suppress global unhandledrejection console noise for known connectivity errors.
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('unhandledrejection', (ev) => {
+    try {
+      const reason = (ev as PromiseRejectionEvent).reason
+      const messages = collectErrorMessages(reason)
+      if (messages.some((m) => m === CONNECTIVITY_ERROR_MESSAGE) || isConnectivityError(reason)) {
+        ev.preventDefault()
+      }
+    } catch {
+      // ignore
+    }
+  })
 }
 
 export function normalizeConnectivityError(error: unknown) {

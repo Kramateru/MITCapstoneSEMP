@@ -2331,6 +2331,58 @@ def serialize_assignment_detail(
     }
 
 
+def _build_microlearning_audio_attempt(
+    exercise: dict[str, Any],
+    *,
+    assessment: dict[str, Any],
+    response_text: Optional[str] = None,
+    input_mode: Optional[str] = None,
+    audio_url: Optional[str] = None,
+    response_duration: Optional[float] = None,
+) -> dict[str, Any]:
+    normalized_response = str(
+        response_text or assessment.get("transcription") or assessment.get("text") or ""
+    ).strip()
+    points_possible = _exercise_point_value(exercise)
+    overall_score = float(assessment.get("overall_score") or 0.0)
+    points_earned = round((overall_score / 100.0) * points_possible, 2)
+    feedback = str(assessment.get("feedback") or "Speech assessment completed.")
+    if not feedback and isinstance(assessment.get("coaching_tips"), list):
+        feedback = str((assessment.get("coaching_tips") or ["Speech assessment completed."])[0])
+
+    return {
+        "id": exercise.get("id") or _slug(exercise.get("title") or "exercise"),
+        "response_text": normalized_response,
+        "selected_option": None,
+        "correct_answer": exercise.get("sample_answer") or exercise.get("prompt"),
+        "input_mode": input_mode or "speech",
+        "transcription": assessment.get("transcription"),
+        "transcription_confidence": assessment.get("transcription_confidence"),
+        "provider": assessment.get("provider"),
+        "provider_metadata": assessment.get("provider_metadata"),
+        "overall_score": overall_score,
+        "accuracy_percentage": float(assessment.get("accuracy_percentage") or 0.0),
+        "scores": assessment.get("scores"),
+        "overall_scores": assessment.get("overall_scores"),
+        "matched_keywords": assessment.get("matched_keywords"),
+        "missing_keywords": assessment.get("missing_keywords"),
+        "detected_errors": assessment.get("detected_errors"),
+        "detected_disfluencies": assessment.get("detected_disfluencies"),
+        "coaching_tips": assessment.get("coaching_tips"),
+        "assessment_data": assessment.get("assessment_data") or assessment,
+        "audio_url": audio_url,
+        "response_duration": response_duration,
+        "score": _normalized_percentage_from_points(points_earned, points_possible),
+        "points_earned": points_earned,
+        "points_possible": points_possible,
+        "feedback": feedback,
+        "result_status": "completed" if normalized_response else "needs_review",
+        "status": "answered" if normalized_response else "unanswered",
+        "is_completed": bool(normalized_response),
+        "submitted_at": datetime.utcnow().isoformat(),
+    }
+
+
 def evaluate_exercise_submission(
     exercise: dict[str, Any],
     *,

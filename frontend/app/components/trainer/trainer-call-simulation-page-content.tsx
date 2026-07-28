@@ -2483,16 +2483,35 @@ export default function TrainerSimFloorPage() {
         const response = await authedFetch(`/api/call-simulation/tts?${params.toString()}`, {
           method: 'POST',
         });
-        payload = (await response.json().catch(() => null)) as MemberSpeechAssetResponse | null;
+
+        const responseText = await response.text().catch(() => '');
+        if (responseText) {
+          try {
+            payload = JSON.parse(responseText) as MemberSpeechAssetResponse;
+          } catch {
+            payload = null;
+          }
+        }
+
         if (!response.ok || !payload) {
-          throw new Error(payload?.detail || 'Unable to generate member speech');
+          const errorMessage =
+            payload?.detail
+            || payload?.warning
+            || responseText.trim()
+            || `${response.status} ${response.statusText}`
+            || 'Unable to generate member speech';
+          throw new Error(errorMessage);
         }
       } catch (error) {
         throw error instanceof Error ? error : new Error('Unable to generate member speech');
       }
 
       if (requireStoredAudio && !isSupabaseManagedScenarioAudioUrl(payload?.audio_url)) {
-        throw new Error('Member speech generation did not return a stored audio URL.');
+        throw new Error(
+          payload?.detail
+          || payload?.warning
+          || 'Member speech generation did not return a stored audio URL. Please ensure Supabase storage is available for persisted Scenario audio.',
+        );
       }
 
       return {

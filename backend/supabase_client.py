@@ -542,11 +542,16 @@ class SupabaseClient:
             return None
 
         scenario_segment = scenario_id or "draft"
+        trainer_segment = str(trainer_id or "trainer").strip() or "trainer"
         normalized_asset_kind = (asset_kind or "member-step").strip().lower()
+
         if normalized_asset_kind == "member-step":
-            path = f"call-simulation/audio/{scenario_segment}/{filename}"
+            path = f"call-simulation-assets/{trainer_segment}/scenarios/{scenario_segment}/{filename}"
+        elif normalized_asset_kind in {"ringer", "hold"}:
+            path = f"call-simulation-assets/{trainer_segment}/{normalized_asset_kind}/{filename}"
         else:
-            path = f"call-simulation/audio/{scenario_segment}/{normalized_asset_kind}/{filename}"
+            path = f"call-simulation-assets/{trainer_segment}/{scenario_segment}/{normalized_asset_kind}/{filename}"
+
         public_url = self._upload_bytes_to_bucket(
             bucket_name=self.call_simulation_asset_bucket_name,
             path=path,

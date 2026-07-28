@@ -23,6 +23,7 @@ const Download = (props: any) => <LazyIcon name="Download" {...props} />;
 const Eye = (props: any) => <LazyIcon name="Eye" {...props} />;
 const FileSpreadsheet = (props: any) => <LazyIcon name="FileSpreadsheet" {...props} />;
 const FileText = (props: any) => <LazyIcon name="FileText" {...props} />;
+const Printer = (props: any) => <LazyIcon name="Printer" {...props} />;
 const Loader2 = (props: any) => <LazyIcon name="Loader2" {...props} />;
 const RefreshCw = (props: any) => <LazyIcon name="RefreshCw" {...props} />;
 const Search = (props: any) => <LazyIcon name="Search" {...props} />;
@@ -319,6 +320,12 @@ export default function AdminAuditTrailPage() {
     }
   };
 
+  const printAuditTrail = useCallback(() => {
+    if (typeof window !== 'undefined') {
+      window.print();
+    }
+  }, []);
+
   const moduleChart = summary?.activity_by_module || [];
   const roleChart = summary?.activity_by_role || [];
   const trendChart = summary?.activity_trend.map((item) => ({
@@ -356,6 +363,10 @@ export default function AdminAuditTrailPage() {
             <Button type="button" variant="outline" onClick={() => void exportLogs('pdf')} disabled={Boolean(exporting)}>
               {exporting === 'pdf' ? <Loader2 className="size-4 animate-spin" /> : <FileText className="size-4" />}
               PDF
+            </Button>
+            <Button type="button" variant="outline" onClick={printAuditTrail}>
+              <Printer className="size-4" />
+              Print
             </Button>
           </div>
         </div>
@@ -569,9 +580,19 @@ export default function AdminAuditTrailPage() {
                     ['User', selectedLog.user_name || 'System'],
                     ['Email', selectedLog.user_email || 'Unavailable'],
                     ['Role', labelize(selectedLog.role)],
+                    ['Action', labelize(selectedLog.action_type)],
+                    ['Description', selectedLog.description || 'No description'],
                     ['Timestamp', formatDate(selectedLog.timestamp)],
                     ['Module', selectedLog.module_name || 'System'],
                     ['Entity', `${selectedLog.entity_type || 'Record'}${selectedLog.entity_id ? ` / ${selectedLog.entity_id}` : ''}`],
+                    ['Status', labelize(selectedLog.status)],
+                    ['Severity', labelize(selectedLog.severity)],
+                    ['Batch', selectedLog.batch_id || 'Unavailable'],
+                    ['Trainee', selectedLog.trainee_id || 'Unavailable'],
+                    ['Trainer', selectedLog.trainer_id || 'Unavailable'],
+                    ['Session', selectedLog.session_id || 'Unavailable'],
+                    ['HTTP Method', selectedLog.http_method || 'Unavailable'],
+                    ['HTTP Status', selectedLog.http_status?.toString() || 'Unavailable'],
                     ['IP Address', selectedLog.ip_address || 'Unavailable'],
                     ['Device', selectedLog.device_type || 'Unavailable'],
                     ['Endpoint', selectedLog.endpoint || 'Unavailable'],
@@ -584,8 +605,18 @@ export default function AdminAuditTrailPage() {
                   ))}
                 </div>
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="mb-2 text-sm font-semibold text-foreground">Changed Fields</h4>
+                      <p className="text-sm text-muted-foreground">Fields changed by this audit event.</p>
+                    </div>
+                    <Button type="button" variant="outline" onClick={printAuditTrail}>
+                      <Printer className="size-4" />
+                      Print
+                    </Button>
+                  </div>
                   <div>
-                    <h4 className="mb-2 text-sm font-semibold text-foreground">Changed Fields</h4>
+                    <div className="mb-2 text-sm font-semibold text-foreground">Changed Fields</div>
                     <div className="flex flex-wrap gap-2">
                       {selectedLog.changed_fields?.length ? selectedLog.changed_fields.map((field) => (
                         <Badge key={field} variant="info">{labelize(field)}</Badge>
@@ -601,7 +632,7 @@ export default function AdminAuditTrailPage() {
                     <JsonBlock value={selectedLog.new_data} />
                   </div>
                   <div>
-                    <h4 className="mb-2 text-sm font-semibold text-foreground">Metadata</h4>
+                    <h4 className="mb-2 text-sm font-semibold text-foreground">Metadata & Notes</h4>
                     <JsonBlock value={{ ...selectedLog.metadata, browser_info: selectedLog.browser_info }} />
                   </div>
                 </div>

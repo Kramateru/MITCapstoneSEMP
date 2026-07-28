@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 interface UseAudioCaptureOptions {
   scenarioId?: string;
   referenceText?: string;
+  moduleId?: string;
+  trainerId?: string;
   onResult?: (result: AssessmentResult) => void;
 }
 
@@ -69,6 +71,8 @@ export interface AssessmentResult {
   scenario_id?: string;
   scenario_title?: string;
   attempt_number?: number;
+  response_duration?: number;
+  audio_url?: string;
   error?: string;
 }
 
@@ -96,6 +100,7 @@ export const useAudioCapture = (options: UseAudioCaptureOptions = {}) => {
   const [bytesRecorded, setBytesRecorded] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
   const [lastResult, setLastResult] = useState<AssessmentResult | null>(null);
+  const [lastDuration, setLastDuration] = useState<number | null>(null);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -185,6 +190,10 @@ export const useAudioCapture = (options: UseAudioCaptureOptions = {}) => {
         ? (performance.now() - recordingStartedAtRef.current) / 1000
         : undefined;
 
+    if (durationSeconds !== undefined) {
+      setLastDuration(durationSeconds);
+    }
+
     const extension = blob.type.includes('mp4')
       ? 'm4a'
       : blob.type.includes('webm')
@@ -197,6 +206,13 @@ export const useAudioCapture = (options: UseAudioCaptureOptions = {}) => {
     }
     if (referenceText) {
       formData.append('reference_text', referenceText);
+    }
+    // include optional microlearning context so backend can store audio in the microlearning bucket
+    if (optionsRef.current?.moduleId) {
+      formData.append('module_id', optionsRef.current.moduleId);
+    }
+    if (optionsRef.current?.trainerId) {
+      formData.append('trainer_id', optionsRef.current.trainerId);
     }
     if (durationSeconds) {
       formData.append('response_duration', durationSeconds.toFixed(2));
@@ -370,5 +386,6 @@ export const useAudioCapture = (options: UseAudioCaptureOptions = {}) => {
     bytesRecorded,
     audioLevel,
     lastResult,
+    lastDuration,
   };
 };

@@ -312,31 +312,39 @@ function validateModuleForm(
     }
   }
 
-  if (form.module_type === 'case_study' || form.module_type === 'audio') {
+  if (form.module_type === 'case_study' || form.module_type === 'audio' || form.module_type === 'reading') {
     if (form.module_type === 'case_study' && !form.case_study_content.trim()) {
       return 'Case study scenario content is required.';
     }
+    if (form.module_type === 'reading' && !form.reading_passage.trim()) {
+      return 'Reading passage content is required.';
+    }
+    if (form.module_type === 'reading' && !form.reading_prompt.trim()) {
+      return 'Reading prompt is required.';
+    }
     const allowAudioDraftWithoutQuestions =
       form.module_type === 'audio' && options?.allowAudioDraftWithoutQuestions;
-    if (!form.case_study_questions.length && !allowAudioDraftWithoutQuestions) {
+    if (form.module_type !== 'reading' && !form.case_study_questions.length && !allowAudioDraftWithoutQuestions) {
       return form.module_type === 'audio'
         ? 'Add at least one audio listening question.'
         : 'Add at least one case study question.';
     }
 
-    for (const [index, question] of form.case_study_questions.entries()) {
-      if (!question.question.trim()) {
-        return `${form.module_type === 'audio' ? 'Audio' : 'Case study'} question ${index + 1} needs a prompt.`;
-      }
-      if (question.type === 'multiple_choice') {
-        if (!hasTwoValidOptions(question.options)) {
-          return `${form.module_type === 'audio' ? 'Audio' : 'Case study'} question ${index + 1} needs at least two non-empty choices.`;
+    if (form.module_type !== 'reading') {
+      for (const [index, question] of form.case_study_questions.entries()) {
+        if (!question.question.trim()) {
+          return `${form.module_type === 'audio' ? 'Audio' : 'Case study'} question ${index + 1} needs a prompt.`;
         }
-        if (!question.correct_option?.trim()) {
-          return `Select the correct answer for ${form.module_type === 'audio' ? 'audio' : 'case study'} question ${index + 1}.`;
+        if (question.type === 'multiple_choice') {
+          if (!hasTwoValidOptions(question.options)) {
+            return `${form.module_type === 'audio' ? 'Audio' : 'Case study'} question ${index + 1} needs at least two non-empty choices.`;
+          }
+          if (!question.correct_option?.trim()) {
+            return `Select the correct answer for ${form.module_type === 'audio' ? 'audio' : 'case study'} question ${index + 1}.`;
+          }
+        } else if (!question.sample_answer?.trim()) {
+          return `Provide the trainer sample answer for ${form.module_type === 'audio' ? 'audio' : 'case study'} question ${index + 1}.`;
         }
-      } else if (!question.sample_answer?.trim()) {
-        return `Provide the trainer sample answer for ${form.module_type === 'audio' ? 'audio' : 'case study'} question ${index + 1}.`;
       }
     }
   }
@@ -1256,7 +1264,7 @@ export default function TrainerMicrolearningStudio() {
   }
 
 
-  const needsMediaAsset = ['video', 'infographic', 'case_study'].includes(moduleForm.module_type);
+  const needsMediaAsset = ['video', 'infographic', 'case_study', 'reading'].includes(moduleForm.module_type);
   const mediaAssetLabel =
     moduleForm.module_type === 'video'
       ? 'Video or YouTube Link'
@@ -1264,7 +1272,9 @@ export default function TrainerMicrolearningStudio() {
         ? 'Infographic / Image Upload'
         : moduleForm.module_type === 'case_study'
           ? 'Audio Upload'
-          : 'Supporting Asset';
+          : moduleForm.module_type === 'reading'
+            ? 'Reading Passage Asset'
+            : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
       ? 'Upload a trainer video to Supabase storage or paste a YouTube link trainees should review before the practice prompt.'
@@ -1272,7 +1282,9 @@ export default function TrainerMicrolearningStudio() {
         ? 'Upload the infographic or image trainees should review.'
         : moduleForm.module_type === 'case_study'
           ? 'Upload the audio file trainees should analyze with the transcript.'
-          : 'Upload a supporting media asset.';
+          : moduleForm.module_type === 'reading'
+            ? 'Attach a reading passage or reference asset if you want to enrich the assessment.'
+            : 'Upload a supporting media asset.';
   const mediaAssetAccept =
     moduleForm.module_type === 'video'
       ? 'video/*'
@@ -1280,7 +1292,9 @@ export default function TrainerMicrolearningStudio() {
         ? 'image/*'
         : moduleForm.module_type === 'case_study'
           ? TRAINER_AUDIO_FILE_ACCEPT
-          : undefined;
+          : moduleForm.module_type === 'reading'
+            ? undefined
+            : undefined;
   const authoredItemCount =
     moduleForm.module_type === 'video'
       ? moduleForm.video_questions.length
@@ -1290,7 +1304,9 @@ export default function TrainerMicrolearningStudio() {
           ? moduleForm.flashcards.length
           : moduleForm.module_type === 'infographic'
             ? moduleForm.infographic_questions.length
-            : moduleForm.case_study_questions.length;
+            : moduleForm.module_type === 'reading'
+              ? 1
+              : moduleForm.case_study_questions.length;
   const authoredItemLabel =
     moduleForm.module_type === 'video'
       ? 'video questions'
@@ -1302,7 +1318,9 @@ export default function TrainerMicrolearningStudio() {
             ? 'assessment items'
             : moduleForm.module_type === 'audio'
               ? 'audio questions'
-              : 'analysis questions';
+              : moduleForm.module_type === 'reading'
+                ? 'reading prompts'
+                : 'analysis questions';
   const selectedTopicName =
     categories.find((category) => category.id === moduleForm.topic_category_id)?.name || 'No topic selected';
   const trainerVideoPreviewUrl = moduleForm.module_type === 'video' ? moduleForm.content_url.trim() : '';
@@ -1822,6 +1840,7 @@ export default function TrainerMicrolearningStudio() {
                             <SelectItem value="flashcard">Flashcard</SelectItem>
                             <SelectItem value="infographic">Infographic</SelectItem>
                             <SelectItem value="audio">Audio Lesson</SelectItem>
+                            <SelectItem value="reading">Reading Assessment</SelectItem>
                             {moduleForm.module_type === 'case_study' ? (
                               <SelectItem value="case_study">Legacy Case Study</SelectItem>
                             ) : null}
@@ -2478,6 +2497,50 @@ export default function TrainerMicrolearningStudio() {
                     <Plus className="size-4 mr-2" />
                     Add Question
                   </Button>
+                </div>
+              </div>
+            )}
+
+            {moduleForm.module_type === 'reading' && (
+              <div className="rounded-2xl border p-5 space-y-4">
+                <div>
+                  <div className="font-medium">Reading Assessment</div>
+                  <div className="text-sm text-muted-foreground">
+                    Provide a passage trainees should read, the prompt they should answer, and optional required phrases that should be rewarded in the speech response.
+                  </div>
+                </div>
+
+                <div className="grid gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="reading-passage">Reading Passage</Label>
+                    <Textarea
+                      id="reading-passage"
+                      rows={10}
+                      value={moduleForm.reading_passage}
+                      onChange={(e) => setModuleForm(current => ({ ...current, reading_passage: e.target.value }))}
+                      placeholder="Paste the passage, scenario, script excerpt, or story trainees should read before responding."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reading-prompt">Prompt / Task</Label>
+                    <Textarea
+                      id="reading-prompt"
+                      rows={4}
+                      value={moduleForm.reading_prompt}
+                      onChange={(e) => setModuleForm(current => ({ ...current, reading_prompt: e.target.value }))}
+                      placeholder="Describe what trainees should say or explain after reading the passage."
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="reading-required-keywords">Optional Required Keywords</Label>
+                    <Textarea
+                      id="reading-required-keywords"
+                      rows={3}
+                      value={moduleForm.reading_required_keywords}
+                      onChange={(e) => setModuleForm(current => ({ ...current, reading_required_keywords: e.target.value }))}
+                      placeholder="Comma or new-line separated phrases for the speech evaluation tracker."
+                    />
+                  </div>
                 </div>
               </div>
             )}

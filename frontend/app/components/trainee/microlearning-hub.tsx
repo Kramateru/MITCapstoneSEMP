@@ -24,6 +24,7 @@ import { useAuth } from '@/app/context/AuthContext';
 import { openTraineeMicrolearningLiveUpdates } from '@/app/lib/microlearning/client';
 import { BROWSER_TTS_UNSUPPORTED_MESSAGE, browserTtsService } from '@/app/lib/tts/ttsService';
 
+import InlinePronunciationRecorder from '@/app/components/InlinePronunciationRecorder';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
@@ -34,7 +35,7 @@ import { Textarea } from '../ui/textarea';
 
 type FeedbackCategory = 'pronunciation' | 'fluency' | 'grammar' | 'empathy' | 'clarity';
 type ModuleDifficulty = 'basic' | 'intermediate' | 'advanced';
-type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio';
+type ModuleType = 'video' | 'quiz' | 'flashcard' | 'infographic' | 'case_study' | 'audio' | 'reading';
 type MediaRequirement = 'video' | 'audio' | 'none';
 type AssignmentStatus = 'assigned' | 'in_progress' | 'completed' | 'certified';
 type FlashcardSide = 'front' | 'back';
@@ -2111,6 +2112,7 @@ export default function MicrolearningHub() {
   const [queueFilter, setQueueFilter] = useState<ModuleQueueFilter>('all');
   const [assignmentDetail, setAssignmentDetail] = useState<AssignmentDetailResponse | null>(null);
   const [exerciseResponses, setExerciseResponses] = useState<Record<string, ExerciseResponseState>>({});
+  const [exerciseAssessments, setExerciseAssessments] = useState<Record<string, any>>({});
   const [activeExerciseIndexes, setActiveExerciseIndexes] = useState<Record<string, number>>({});
   const [isLoadingAssignments, setIsLoadingAssignments] = useState(true);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
@@ -2722,6 +2724,10 @@ export default function MicrolearningHub() {
                 ? assignmentDetail.flashcard_session.answer_deadline_at
                 : null,
             timer_expired: options.timerExpired || false,
+            // inline pronunciation assessment produced by the recorder (if any)
+            assessment_data: exerciseAssessments[exercise.id] || null,
+            audio_url: exerciseAssessments[exercise.id]?.audio_url || null,
+            response_duration: exerciseAssessments[exercise.id]?.response_duration || null,
           }),
         },
       );
@@ -3225,6 +3231,27 @@ export default function MicrolearningHub() {
       );
     }
 
+    if (moduleType === 'reading') {
+      const readingPassage = content.reading_passage || content.content || '';
+      const readingPrompt = content.practice_prompt || content.analysis_prompt || '';
+      return (
+        <div className="rounded-xl border bg-white p-4">
+          <p className="text-sm font-medium text-slate-700">Reading Assessment</p>
+          <p className="mt-2 text-sm text-slate-600">
+            {readingPrompt || 'Read the passage carefully, then answer the prompt below with the same calm, clear delivery style used in the rest of the program.'}
+          </p>
+          {readingPassage ? (
+            <div className="mt-4 whitespace-pre-wrap rounded-lg border bg-slate-50 p-4 text-sm leading-6 text-slate-700">
+              {readingPassage}
+            </div>
+          ) : null}
+          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+            Review the passage first, then use the activity panel below to answer the prompt and submit your response.
+          </div>
+        </div>
+      );
+    }
+
     if (moduleType === 'audio') {
       return (
         <div className="rounded-xl border bg-white p-4">
@@ -3538,24 +3565,44 @@ export default function MicrolearningHub() {
               />
               <div className="flex flex-wrap gap-2">
                 {speechEnabled ? (
-                  <Button
-                    type="button"
-                    variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
-                    onClick={() => handleSpeechCapture(exercise.id)}
-                    disabled={inputDisabled}
-                  >
-                    {activeSpeechExerciseId === exercise.id ? (
-                      <>
-                        <Square className="mr-2 size-4" />
-                        Stop Speech Capture
-                      </>
-                    ) : (
-                      <>
-                        <Mic className="mr-2 size-4" />
-                        Start Speech-to-Text
-                      </>
-                    )}
-                  </Button>
+                  <div className="flex flex-wrap gap-2 items-center">
+                    <Button
+                      type="button"
+                      variant={activeSpeechExerciseId === exercise.id ? 'destructive' : 'outline'}
+                      onClick={() => handleSpeechCapture(exercise.id)}
+                      disabled={inputDisabled}
+                    >
+                      {activeSpeechExerciseId === exercise.id ? (
+                        <>
+                          <Square className="mr-2 size-4" />
+                          Stop Speech Capture
+                        </>
+                      ) : (
+                        <>
+                          <Mic className="mr-2 size-4" />
+                          Start Speech-to-Text
+                        </>
+                      )}
+                    </Button>
+                    <div className="w-full md:w-auto">
+                      {/* Inline recorder: records audio, calls /api/trainee/asr/assess, returns assessment result */}
+                      <InlinePronunciationRecorder
+                        moduleId={moduleDetail?.id}
+                        trainerId={moduleDetail?.id}
+                        referenceText={exercise.sample_answer || exercise.prompt || ''}
+                        onResult={(assessment) => {
+                          // update draft text and stash assessment data for submission
+                          updateExerciseResponse(exercise.id, {
+                            responseText: (assessment.transcription || assessment.text || '').toString(),
+                            inputMode: 'speech',
+                          });
+                          // store assessment in a map so it is included when submitting
+                          setExerciseAssessments((current) => ({ ...current, [exercise.id]: assessment }));
+                        }}
+                        disabled={inputDisabled}
+                      />
+                    </div>
+                  </div>
                 ) : null}
                 {!isReadOnly ? (
                   <Button
