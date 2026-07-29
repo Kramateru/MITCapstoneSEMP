@@ -1,0 +1,18 @@
+▲ Next.js 16.1.6 (webpack)
+- Environments: .env.local
+- Experiments (use with caution):
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 31.1s
+  Running TypeScript ...
+  Collecting page data using 11 workers ...
+
+> Build error occurred
+Error: ENOENT: no such file or directory, open 'C:\Users\Mark Ureta\Documents\MIT CAPSTONE\SYSTEM\SYSTEM - Speech Enabled BPO Platform\frontend\.next\server\pages-manifest.json'
+    at ignore-listed frames {
+  errno: -4058,
+  code: 'ENOENT',
+  syscall: 'open',
+  path: 'C:\\Users\\Mark Ureta\\Documents\\MIT CAPSTONE\\SYSTEM\\SYSTEM - Speech Enabled BPO Platform\\frontend\\.next\\server\\pages-manifest.json'
+}

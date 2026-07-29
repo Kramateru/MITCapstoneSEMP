@@ -18,15 +18,17 @@ import {
 import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, type SVGProps, useEffect, useMemo, useState } from 'react';
 
 interface SidebarItem {
   label: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   href: string;
   badge?: number;
   section?: string;
 }
+
+const UserRound = (props: SVGProps<SVGSVGElement>) => <LazyIcon name="UserRound" {...props} />;
 
 const ROLE_LABEL_MAP = {
   trainee: 'Trainee Workspace',
