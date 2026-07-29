@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { useToast } from '../hooks/use-toast';
+import { useToast } from '../../hooks/use-toast';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
 
@@ -34,7 +34,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
   const [results, setResults] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  const recordingTimerRef = useRef<NodeJS.Timeout>();
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
