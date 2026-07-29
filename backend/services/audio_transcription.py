@@ -6,6 +6,7 @@ Supports multiple providers: Google Speech-to-Text, OpenAI Whisper, and local Vo
 from __future__ import annotations
 
 import base64
+import asyncio
 import io
 import logging
 import os
@@ -139,6 +140,42 @@ class SpeechToTextService:
         if self.vosk_model and self.vosk_recognizer:
             providers.append("vosk")
         return providers
+
+    async def transcribe_from_url(
+        self,
+        audio_url: str,
+        language_code: str = "en-US",
+        provider: Optional[str] = None,
+        mime_type: str = "audio/webm",
+    ) -> str:
+        """Fetch an audio asset by URL and return its transcript text."""
+        audio_bytes = await asyncio.to_thread(self._read_audio_url, audio_url)
+        result = await asyncio.to_thread(
+            self.transcribe,
+            audio_bytes=audio_bytes,
+            language_code=language_code,
+            provider=provider,
+            mime_type=mime_type,
+        )
+
+        if not result or not result.text:
+            raise RuntimeError("Transcription failed")
+
+        return result.text
+
+    def _read_audio_url(self, audio_url: str) -> bytes:
+        normalized_url = normalize_env_value(audio_url)
+        if not normalized_url:
+            raise RuntimeError("Audio URL is empty")
+
+        if normalized_url.startswith(("http://", "https://")):
+            import requests
+
+            response = requests.get(normalized_url, timeout=30)
+            response.raise_for_status()
+            return response.content
+
+        raise RuntimeError("Unsupported audio URL")
 
     def transcribe(
         self,
@@ -373,3 +410,8 @@ class SpeechToTextService:
 
 # Global instance for easy access
 speech_to_text_service = SpeechToTextService()
+
+
+def get_transcription_service() -> SpeechToTextService:
+    """Return the shared speech-to-text service instance."""
+    return speech_to_text_service

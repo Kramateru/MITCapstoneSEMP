@@ -6,8 +6,9 @@ Enables trainees to read passages aloud and receive AI-powered pronunciation fee
 from datetime import datetime
 from sqlalchemy import (
     Column, String, Integer, Text, DateTime, ForeignKey, 
-    Numeric, CheckConstraint, Index, UniqueConstraint, JSON, JSONB
+    Numeric, CheckConstraint, Index, UniqueConstraint, JSON
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 import uuid
