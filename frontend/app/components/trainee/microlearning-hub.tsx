@@ -2614,8 +2614,9 @@ export default function MicrolearningHub() {
         inputMode: 'speech',
       });
     };
-    recognition.onerror = (event) => {
-      const errorCode = (event.error || '').toLowerCase();
+    recognition.onerror = function() {
+      const event = arguments[0] as any;
+      const errorCode = (event?.error || '').toLowerCase();
       
       // Only show errors for serious issues, not recoverable ones
       const fatalErrors = ['not-allowed', 'service-not-allowed', 'audio-capture', 'network-error'];
