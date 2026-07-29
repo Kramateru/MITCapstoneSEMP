@@ -297,6 +297,7 @@ from backend.routes import (
     call_simulation_routes,
     call_simulation_recordings,
     audit_routes,
+    reading_assessment_routes,
 )
 from backend.database import Base, engine, SessionLocal
 from backend.services.audit import should_audit_request, write_request_audit_log
@@ -2113,6 +2114,7 @@ app.include_router(call_simulation_routes.router)
 app.include_router(call_simulation_recordings.router)
 app.include_router(assessment_redesign_routes.router)
 app.include_router(audit_routes.router)
+app.include_router(reading_assessment_routes.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))

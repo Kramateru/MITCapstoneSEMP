@@ -2614,12 +2614,28 @@ export default function MicrolearningHub() {
         inputMode: 'speech',
       });
     };
-    recognition.onerror = () => {
+    recognition.onerror = (event) => {
+      const errorCode = (event.error || '').toLowerCase();
+      
+      // Only show errors for serious issues, not recoverable ones
+      const fatalErrors = ['not-allowed', 'service-not-allowed', 'audio-capture', 'network-error'];
+      const shouldShowError = fatalErrors.includes(errorCode);
+      
       if (recognitionRef.current === recognition) {
         recognitionRef.current = null;
       }
-      setActiveSpeechExerciseId((current) => (current === exerciseId ? '' : current));
-      toast.error('Speech capture stopped unexpectedly. You can try again or keep typing.');
+      
+      if (shouldShowError) {
+        setActiveSpeechExerciseId((current) => (current === exerciseId ? '' : current));
+        const errorMessages: Record<string, string> = {
+          'not-allowed': 'Microphone permission denied. Please enable microphone access in your browser settings.',
+          'service-not-allowed': 'Speech recognition service is not available. Please try again or type your response.',
+          'audio-capture': 'Microphone is not available. Please check your device settings.',
+          'network-error': 'Network connection lost. Please try again or type your response.',
+        };
+        toast.error(errorMessages[errorCode] || 'Speech capture encountered an error. You can try again or keep typing.');
+      }
+      // For non-fatal errors like "no-speech", continue listening silently
     };
     recognition.onend = () => {
       if (recognitionRef.current === recognition) {
