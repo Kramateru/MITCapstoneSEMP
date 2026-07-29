@@ -3,7 +3,6 @@
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 
@@ -138,11 +137,28 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       return;
     }
 
+    const getErrorMessage = async (response: Response) => {
+      try {
+        const data = await response.json();
+        return data?.detail || data?.message || 'Failed to process assessment';
+      } catch {
+        return response.statusText || 'Failed to process assessment';
+      }
+    };
+
     setLoading(true);
     try {
       // Step 1: Start attempt
-      const startResponse = await axios.post(`/api/trainee/reading/attempts/${moduleId}/start`);
-      const newAttemptId = startResponse.data.attempt_id;
+      const startResponse = await fetch(`/api/trainee/reading/attempts/${moduleId}/start`, {
+        method: 'POST',
+      });
+
+      if (!startResponse.ok) {
+        throw new Error(await getErrorMessage(startResponse));
+      }
+
+      const startData = await startResponse.json();
+      const newAttemptId = startData.attempt_id;
       setAttemptId(newAttemptId);
 
       // Step 2: Upload audio
@@ -150,20 +166,26 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       const formData = new FormData();
       formData.append('file', audioBlob, 'reading-attempt.webm');
 
-      const uploadResponse = await axios.post(
-        `/api/trainee/reading/attempts/${newAttemptId}/upload-audio`,
-        formData,
-        {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        },
-      );
+      const uploadResponse = await fetch(`/api/trainee/reading/attempts/${newAttemptId}/upload-audio`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(await getErrorMessage(uploadResponse));
+      }
 
       // Step 3: Process assessment
       setStage('processing');
-      const processResponse = await axios.post(`/api/trainee/reading/attempts/${newAttemptId}/process`);
-      const processData = processResponse.data;
+      const processResponse = await fetch(`/api/trainee/reading/attempts/${newAttemptId}/process`, {
+        method: 'POST',
+      });
+
+      if (!processResponse.ok) {
+        throw new Error(await getErrorMessage(processResponse));
+      }
+
+      const processData = await processResponse.json();
 
       setResults(processData);
       setStage('complete');
@@ -180,7 +202,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       console.error('Assessment submission error:', error);
       toast({
         title: 'Error',
-        description: error.response?.data?.detail || 'Failed to process assessment',
+        description: error?.message || 'Failed to process assessment',
         variant: 'destructive',
       });
       setStage('review');
