@@ -139,7 +139,7 @@ export function CreateReadingModule() {
       console.error('Failed to create reading module:', error);
       toast({
         title: 'Error',
-        description: error.response?.data?.detail || 'Failed to create reading module',
+        description: error?.message || 'Failed to create reading module',
         variant: 'destructive',
       });
     } finally {
