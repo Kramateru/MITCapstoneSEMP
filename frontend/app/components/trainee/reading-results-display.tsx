@@ -1,6 +1,5 @@
 'use client';
 
-import axios from 'axios';
 import { useEffect, useState } from 'react';
 import { useToast } from '../hooks/use-toast';
 import { Button } from '../ui/button';
@@ -31,13 +30,17 @@ export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisp
   useEffect(() => {
     const fetchResults = async () => {
       try {
-        const response = await axios.get(`/api/trainee/reading/attempts/${attemptId}`);
-        setResults(response.data);
-        setWordAnalysis(response.data.word_analysis || []);
+        const response = await fetch(`/api/trainee/reading/attempts/${attemptId}`);
+        if (!response.ok) {
+          throw new Error(`Fetch failed: ${response.status}`);
+        }
+        const data = await response.json();
+        setResults(data);
+        setWordAnalysis(data.word_analysis || []);
         setError(null);
       } catch (err: any) {
         console.error('Failed to fetch results:', err);
-        setError(err.response?.data?.detail || 'Failed to load results');
+        setError(err?.message || 'Failed to load results');
         toast({
           title: 'Error',
           description: 'Could not load assessment results',

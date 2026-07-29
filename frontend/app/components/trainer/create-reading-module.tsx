@@ -1,6 +1,5 @@
 'use client';
 
-import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import React, { useState } from 'react';
 import { useToast } from '../hooks/use-toast';
@@ -107,15 +106,24 @@ export function CreateReadingModule() {
 
     setLoading(true);
     try {
-      const response = await axios.post('/api/trainee/reading/modules', {
-        title: formData.title,
-        description: formData.description,
-        reading_content: formData.readingContent,
-        passing_score: formData.passingScore,
-        instructions: formData.instructions,
-        max_attempts: formData.maxAttempts,
-        difficulty: formData.difficulty,
+      const response = await fetch('/api/trainee/reading/modules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: formData.title,
+          description: formData.description,
+          reading_content: formData.readingContent,
+          passing_score: formData.passingScore,
+          instructions: formData.instructions,
+          max_attempts: formData.maxAttempts,
+          difficulty: formData.difficulty,
+        }),
       });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail || `Request failed with status ${response.status}`);
+      }
 
       toast({
         title: 'Success',
