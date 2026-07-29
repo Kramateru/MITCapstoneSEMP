@@ -255,7 +255,7 @@ interface SpeechRecognitionLike {
   interimResults: boolean;
   lang: string;
   onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: (() => void) | null;
+  onerror: ((event: any) => void) | null;
   onend: (() => void) | null;
   start: () => void;
   stop: () => void;
@@ -2597,7 +2597,7 @@ export default function MicrolearningHub() {
 
     recognitionRef.current?.stop();
 
-    const recognition = new RecognitionCtor();
+    const recognition = new RecognitionCtor() as SpeechRecognitionLike;
     speechSeedTextRef.current = (exerciseResponses[exerciseId]?.responseText || '').trim();
 
     recognition.continuous = true;
@@ -2614,8 +2614,7 @@ export default function MicrolearningHub() {
         inputMode: 'speech',
       });
     };
-    recognition.onerror = function() {
-      const event = arguments[0] as any;
+    recognition.onerror = ((event: any) => {
       const errorCode = (event?.error || '').toLowerCase();
       
       // Only show errors for serious issues, not recoverable ones
@@ -2637,7 +2636,7 @@ export default function MicrolearningHub() {
         toast.error(errorMessages[errorCode] || 'Speech capture encountered an error. You can try again or keep typing.');
       }
       // For non-fatal errors like "no-speech", continue listening silently
-    };
+    }) as any;
     recognition.onend = () => {
       if (recognitionRef.current === recognition) {
         recognitionRef.current = null;
