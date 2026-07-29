@@ -3473,6 +3473,7 @@ export default function MicrolearningHub() {
     const inputDisabled = isExerciseLocked || isReadOnly;
     const keywordCoverage = getKeywordCoverage(response.responseText, exercise.required_keywords);
     const speechEnabled = exercise.enable_stt || false;
+    const moduleDetail = assignmentDetail?.module;
     const progressValue = standardExercises.length
       ? ((activeStandardExerciseIndex + 1) / standardExercises.length) * 100
       : 0;
