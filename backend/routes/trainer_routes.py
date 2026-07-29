@@ -708,7 +708,7 @@ def _upload_microlearning_asset(
             filename=sanitized,
             file_data=file_bytes,
             content_type=content_type or "audio/mpeg",
-            allow_local_fallback=False,
+            allow_local_fallback=True,
         )
     else:
         storage_path = f"{normalized_storage_folder}/{trainer_id}/{module_storage_segment}/{sanitized}"
@@ -719,7 +719,7 @@ def _upload_microlearning_asset(
             file_data=file_bytes,
             content_type=content_type or "application/octet-stream",
             folder=storage_folder,
-            allow_local_fallback=False,
+            allow_local_fallback=True,
         )
     if not asset_url:
         raise HTTPException(
