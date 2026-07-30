@@ -14,12 +14,25 @@ from ..models import User, MicrolearningModule, MicrolearningAssignment
 from ..models_reading import ReadingAttempt, ReadingWordAnalysis, ReadingModuleConfig
 from ..auth_utils import get_current_user
 from ..services.reading_assessment import ReadingPronunciationAnalyzer, PronunciationScore
-from ..services.audio_transcription import get_transcription_service
+from ..services import audio_transcription
 from ..supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trainee/reading", tags=["reading-assessment"])
+
+
+def get_transcription_service():
+    """Resolve the shared transcription service without requiring a fragile named import."""
+    service_factory = getattr(audio_transcription, "get_transcription_service", None)
+    if callable(service_factory):
+        return service_factory()
+
+    service = getattr(audio_transcription, "speech_to_text_service", None)
+    if service is not None:
+        return service
+
+    raise RuntimeError("Audio transcription service is unavailable.")
 
 
 @router.post("/modules")
