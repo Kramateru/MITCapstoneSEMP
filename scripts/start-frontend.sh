@@ -7,14 +7,16 @@ set -euo pipefail
 FRONTEND_DIR="$(cd "$(dirname "$0")/../frontend" && pwd)"
 cd "$FRONTEND_DIR"
 
+DEFAULT_PRODUCTION_BACKEND_URL="https://speech-bpo-backend.onrender.com"
+
 # Inherit BACKEND_URL from env or default.
 if [ -z "${NEXT_PUBLIC_BACKEND_URL:-}" ]; then
     if [ -n "${BACKEND_URL:-}" ]; then
         export NEXT_PUBLIC_BACKEND_URL="$BACKEND_URL"
     elif [ -n "${RENDER:-}" ]; then
-        export NEXT_PUBLIC_BACKEND_URL=""
+        export NEXT_PUBLIC_BACKEND_URL="$DEFAULT_PRODUCTION_BACKEND_URL"
     else
-        export NEXT_PUBLIC_BACKEND_URL="http://127.0.0.1:8000"
+        export NEXT_PUBLIC_BACKEND_URL="$DEFAULT_PRODUCTION_BACKEND_URL"
     fi
 fi
 export SUPABASE_URL="${SUPABASE_URL:-${NEXT_PUBLIC_SUPABASE_URL:-${VITE_SUPABASE_URL:-${REACT_APP_SUPABASE_URL:-}}}}"

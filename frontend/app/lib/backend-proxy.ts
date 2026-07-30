@@ -3,6 +3,9 @@ import 'server-only'
 import { getConfigValue } from '@/app/lib/assessment/env'
 
 const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000'
+const DEFAULT_PRODUCTION_BACKEND_URLS = [
+  'https://speech-bpo-backend.onrender.com',
+]
 const DEFAULT_LOOPBACK_BACKEND_URLS = [
   'http://127.0.0.1:8000',
   'http://localhost:8000',
@@ -139,6 +142,12 @@ function getBackendBaseUrlCandidates() {
 
   for (const key of BACKEND_URL_CONFIG_KEYS) {
     pushBaseUrl(candidates, seen, getConfigValue([key], ''))
+  }
+
+  if (process.env.NODE_ENV === 'production') {
+    for (const fallbackUrl of DEFAULT_PRODUCTION_BACKEND_URLS) {
+      pushBaseUrl(candidates, seen, fallbackUrl)
+    }
   }
 
   if (candidates.length === 0) {
