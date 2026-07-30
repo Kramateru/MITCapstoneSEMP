@@ -8,6 +8,11 @@ const DEFAULT_LOOPBACK_BACKEND_URLS = [
   'http://localhost:8000',
   'http://127.0.0.1:8001',
   'http://localhost:8001',
+  // IPv6 loopback variants and common wildcard bind address
+  'http://[::1]:8000',
+  'http://[::1]:8001',
+  'http://0.0.0.0:8000',
+  'http://0.0.0.0:8001',
 ]
 const DEFAULT_BACKEND_UNAVAILABLE_MESSAGE =
   'Unable to reach the backend service. Start the backend server and try again.'
@@ -248,7 +253,15 @@ async function fetchAcrossBackendCandidates(
     }
   }
 
-  throw lastError instanceof Error ? lastError : new Error(DEFAULT_BACKEND_UNAVAILABLE_MESSAGE)
+  // Attach the attempted candidates to the thrown error to help diagnostics
+  const err = lastError instanceof Error ? lastError : new Error(DEFAULT_BACKEND_UNAVAILABLE_MESSAGE)
+  try {
+    // @ts-ignore - attach debug info
+    ;(err as any).attemptedCandidates = candidates
+  } catch {
+    // ignore
+  }
+  throw err
 }
 
 export async function fetchBackendPath(
@@ -324,7 +337,12 @@ export async function proxyRequestToBackend(
       headers: buildResponseHeaders(backendResponse),
     })
   } catch (error) {
-    console.error('Backend proxy request failed:', error)
-    return buildBackendUnavailableResponse(options.unavailableMessage)
+    // Include attempted candidate URLs when returning the error to aid debugging.
+    const attempted = (error && (error as any).attemptedCandidates) || getBackendBaseUrlCandidates()
+    console.error('Backend proxy request failed:', error, { attempted })
+    const message = options.unavailableMessage
+      ? `${options.unavailableMessage} (tried: ${attempted.join(', ')})`
+      : `${DEFAULT_BACKEND_UNAVAILABLE_MESSAGE} (tried: ${attempted.join(', ')})`
+    return buildBackendUnavailableResponse(message)
   }
 }

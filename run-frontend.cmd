@@ -200,14 +200,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$baseUrl = '%~1'.TrimEnd('/');" ^
   "$healthUrl = $baseUrl + '/health';" ^
   "$deadline = (Get-Date).AddSeconds(60);" ^
+  "$lastStatus = '';" ^
+  "$lastDetail = '';" ^
   "while ((Get-Date) -lt $deadline) {" ^
   "  try {" ^
   "    $response = Invoke-WebRequest -UseBasicParsing -Uri $healthUrl -TimeoutSec 5;" ^
-  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 600) { exit 0 }" ^
-  "  } catch { if ($_.Exception.Response) { exit 0 } }" ^
+  "    $lastStatus = [string]$response.StatusCode;" ^
+  "    $lastDetail = [string]$response.Content;" ^
+  "    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) { exit 0 }" ^
+  "  } catch {" ^
+  "    if ($_.Exception.Response) {" ^
+  "      $lastStatus = [string][int]$_.Exception.Response.StatusCode;" ^
+  "      $lastDetail = [string]$_.ErrorDetails.Message;" ^
+  "      if (-not $lastDetail) { try { $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream()); $lastDetail = $reader.ReadToEnd() } catch { $lastDetail = $_.Exception.Message } }" ^
+  "    } else { $lastDetail = $_.Exception.Message }" ^
+  "  }" ^
   "  Start-Sleep -Milliseconds 750;" ^
   "}" ^
   "Write-Host 'Backend health check timed out.';" ^
+  "if ($lastStatus) { Write-Host ('Last backend health status: ' + $lastStatus) }" ^
+  "if ($lastDetail) { $summary = ($lastDetail -replace '\s+', ' '); Write-Host ('Last backend health detail: ' + $summary.Substring(0, [Math]::Min(500, $summary.Length))) }" ^
   "exit 1"
 if errorlevel 1 (
   echo Backend did not become reachable at %~1/health.

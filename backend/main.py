@@ -402,20 +402,34 @@ async def health():
     """Basic health endpoint used by platforms (non-fatal).
 
     Returns `status: ok` when environment validation passed and the
-    startup database probe succeeded, otherwise `degraded` with details.
+    runtime database probe succeeds, otherwise `degraded` with details.
     Includes diagnostics about keys and URLs to help debug validation failures.
     """
     validation_error = getattr(app.state, "validation_error", None)
     diagnostics = _collect_validation_diagnostics()
     strict_mode = str(os.getenv("STRICT_ENV_VALIDATION", "0")).strip() in {"1", "true", "yes", "on"}
-    status = "ok" if validation_error is None and STARTUP_DATABASE_REACHABLE else "degraded"
-    return {
-        "status": status,
-        "strict_mode": strict_mode,
-        "validation_error": validation_error,
-        "database_reachable": STARTUP_DATABASE_REACHABLE,
-        "diagnostics": diagnostics,
-    }
+
+    database_error = None
+    database_reachable = False
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        database_reachable = True
+    except Exception as exc:
+        database_error = _summarize_startup_exception(exc)
+
+    is_healthy = validation_error is None and database_reachable
+    return JSONResponse(
+        status_code=200 if is_healthy else 503,
+        content={
+            "status": "ok" if is_healthy else "degraded",
+            "strict_mode": strict_mode,
+            "validation_error": validation_error,
+            "database_reachable": database_reachable,
+            "database_error": database_error,
+            "diagnostics": diagnostics,
+        },
+    )
 
 @app.exception_handler(OperationalError)
 async def handle_database_operational_error(request: Request, exc: OperationalError):
