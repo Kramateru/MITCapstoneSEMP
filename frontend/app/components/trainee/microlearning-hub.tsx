@@ -2844,9 +2844,17 @@ export default function MicrolearningHub() {
   const audioLessonCount = assignments.filter((assignment) => assignment.module_type === 'audio').length;
   const assignedCount = assignments.length;
   const isFlashcardModule = assignmentDetail?.module.module_type === 'flashcard';
+  const activeModuleContentData = assignmentDetail?.module.content_data || {};
   const isReadingPronunciationModule = Boolean(
     assignmentDetail?.module.module_type === 'reading'
     || assignmentDetail?.exercises.some((exercise) => exercise.type === 'speech_reading')
+    || activeModuleContentData.reading_rich_content
+    || activeModuleContentData.reading_passage
+    || activeModuleContentData.reading_content
+    || activeModuleContentData.enable_stt_reading
+    || activeModuleContentData.reading_config
+    || activeModuleContentData.ai_configuration?.voice_assessment_enabled
+    || /\b(reading|pronunciation)\b/i.test(activeAssignment?.title || '')
   );
   const flashcardSession = assignmentDetail?.flashcard_session || null;
   const flashcardExercises = isFlashcardModule
@@ -3458,6 +3466,10 @@ export default function MicrolearningHub() {
   }
 
   function renderStandardExerciseFlow() {
+    if (isReadingPronunciationModule) {
+      return null;
+    }
+
     if (shouldShowModuleResultSummary) {
       return renderAssignmentResultSummary();
     }

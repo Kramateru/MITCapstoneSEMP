@@ -777,22 +777,9 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     <div className="w-full space-y-4">
       <Card>
         <CardHeader>
-          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-            <div>
-              <CardTitle>{reading.readingTitle || reading.title}</CardTitle>
-              <CardDescription>{reading.description || 'Reading passage'}</CardDescription>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">{getMicStatusCopy(micStatus)}</Badge>
-            </div>
-          </div>
+          <CardTitle>{reading.readingTitle || reading.title}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="rounded-xl border bg-slate-50 p-4">
-            <p className="text-xs uppercase tracking-wide text-slate-500">Microphone Status</p>
-            <p className="mt-2 text-lg font-semibold text-slate-900">{getMicStatusCopy(micStatus)}</p>
-          </div>
-
           {micStatus === 'missing' || micStatus === 'unsupported' ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-800">
               {micStatus === 'missing'
@@ -801,9 +788,14 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             </div>
           ) : micStatus === 'permission_needed' ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-              Microphone permission is required. Your browser will ask for access when you start your response.
+              Microphone permission is required. Your browser will ask for access when you click Start Response.
             </div>
           ) : null}
+
+          <div className="flex items-center justify-between rounded-xl border bg-slate-50 px-4 py-3 text-sm">
+            <span className="font-medium text-slate-700">Microphone</span>
+            <span className="text-slate-600">{getMicStatusCopy(micStatus)}</span>
+          </div>
 
           <div className="rounded-xl border bg-white p-5 text-lg leading-8 text-slate-800">
             {richPassageHtml ? (
@@ -817,8 +809,8 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
           </div>
 
           {(stage === 'recording' || stage === 'paused' || stage === 'review') ? (
-            <Card className="border-slate-200">
-              <CardContent className="space-y-4 pt-6">
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-3">
                   <Metric label="Recording Status" value={stage === 'recording' ? 'Recording' : stage === 'paused' ? 'Paused' : 'Ready to Submit'} />
                   <Metric label="Elapsed" value={formatTime(recordingTime)} />
@@ -838,8 +830,8 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
                     })}
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ) : null}
 
           {audioUrl && stage === 'review' ? (
