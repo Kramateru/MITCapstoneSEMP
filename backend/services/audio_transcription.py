@@ -415,3 +415,11 @@ speech_to_text_service = SpeechToTextService()
 def get_transcription_service() -> SpeechToTextService:
     """Return the shared speech-to-text service instance."""
     return speech_to_text_service
+
+
+__all__ = [
+    "SpeechToTextService",
+    "TranscriptionResult",
+    "speech_to_text_service",
+    "get_transcription_service",
+]

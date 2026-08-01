@@ -297,8 +297,12 @@ from backend.routes import (
     call_simulation_routes,
     call_simulation_recordings,
     audit_routes,
-    reading_assessment_routes,
 )
+try:
+    from backend.routes import reading_assessment_routes
+except Exception as exc:
+    reading_assessment_routes = None
+    logger.exception("Reading assessment routes are disabled because they failed to import: %s", exc)
 from backend.database import Base, engine, SessionLocal
 from backend.services.audit import should_audit_request, write_request_audit_log
 from backend.services.sample_data_cleanup import cleanup_legacy_sample_dataset
@@ -2128,7 +2132,8 @@ app.include_router(call_simulation_routes.router)
 app.include_router(call_simulation_recordings.router)
 app.include_router(assessment_redesign_routes.router)
 app.include_router(audit_routes.router)
-app.include_router(reading_assessment_routes.router)
+if reading_assessment_routes is not None:
+    app.include_router(reading_assessment_routes.router)
 
 # Azure Speech Configuration
 SPEECH_KEY = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
