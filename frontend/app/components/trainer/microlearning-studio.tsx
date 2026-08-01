@@ -36,6 +36,7 @@ import {
     emptyModuleForm,
     formatLabel,
     getReadingPassageStats,
+    getModuleFormType,
     MicrolearningModule,
     ModuleFormState,
     moduleToForm,
@@ -1371,17 +1372,21 @@ export default function TrainerMicrolearningStudio() {
     () => modules.filter((module) => selectedModuleIds.includes(module.id)),
     [modules, selectedModuleIds],
   );
+  const isModuleAssignable = useCallback(
+    (module: MicrolearningModule) => getModuleFormType(module) === 'reading' || module.media_ready !== false,
+    [],
+  );
   const readyAssignmentModules = useMemo(
-    () => selectedAssignmentModules.filter((module) => module.media_ready !== false),
-    [selectedAssignmentModules],
+    () => selectedAssignmentModules.filter(isModuleAssignable),
+    [isModuleAssignable, selectedAssignmentModules],
   );
   const invalidSelectedAssignmentModules = useMemo(
-    () => selectedAssignmentModules.filter((module) => module.media_ready === false),
-    [selectedAssignmentModules],
+    () => selectedAssignmentModules.filter((module) => !isModuleAssignable(module)),
+    [isModuleAssignable, selectedAssignmentModules],
   );
   const assignableModuleCount = useMemo(
-    () => modules.filter((module) => module.media_ready !== false).length,
-    [modules],
+    () => modules.filter(isModuleAssignable).length,
+    [isModuleAssignable, modules],
   );
   const audioModuleCount = useMemo(
     () => modules.filter((module) => module.module_type === 'audio').length,
@@ -1503,15 +1508,20 @@ export default function TrainerMicrolearningStudio() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedModules.map((module) => (
+                {sortedModules.map((module) => {
+                  const moduleFormType = getModuleFormType(module);
+                  const isReadingModule = moduleFormType === 'reading';
+                  const mediaReady = isReadingModule || module.media_ready !== false;
+
+                  return (
                   <TableRow key={module.id}>
                     <TableCell>
                       <div className="font-medium">{module.title}</div>
                       <div className="mt-1 flex flex-wrap gap-2">
                         <Badge className={CATEGORY_STYLES[module.category]}>{formatLabel(module.category)}</Badge>
-                        <Badge variant="outline">{formatLabel(module.module_type)}</Badge>
-                        <Badge variant="outline" className={module.media_ready === false ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
-                          {module.media_ready === false ? 'Needs media' : 'Ready to assign'}
+                        <Badge variant="outline">{formatLabel(moduleFormType)}</Badge>
+                        <Badge variant="outline" className={!mediaReady ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-emerald-200 bg-emerald-50 text-emerald-700'}>
+                          {!mediaReady ? 'Needs media' : 'Ready to assign'}
                         </Badge>
                       </div>
                     </TableCell>
@@ -1532,12 +1542,13 @@ export default function TrainerMicrolearningStudio() {
                       <Button variant="ghost" size="sm" onClick={() => void removeItem(module.id, module.title)}>
                         <Trash2 className="size-4 text-rose-600" />
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => openAssignmentCenter([module.id])} disabled={module.media_ready === false}>
+                      <Button variant="outline" size="sm" onClick={() => openAssignmentCenter([module.id])} disabled={!mediaReady}>
                         Assign to Batch
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           ) : (
@@ -1633,7 +1644,8 @@ export default function TrainerMicrolearningStudio() {
               <div className="max-h-[440px] space-y-3 overflow-y-auto rounded-2xl border p-3">
                 {sortedModules.length ? sortedModules.map((module) => {
                   const isSelected = selectedModuleIds.includes(module.id);
-                  const isAssignable = module.media_ready !== false;
+                  const moduleFormType = getModuleFormType(module);
+                  const isAssignable = isModuleAssignable(module);
 
                   return (
                     <label
@@ -1663,7 +1675,7 @@ export default function TrainerMicrolearningStudio() {
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="font-medium">{module.title}</div>
                           <Badge className={CATEGORY_STYLES[module.category]}>{formatLabel(module.category)}</Badge>
-                          <Badge variant="outline">{formatLabel(module.module_type)}</Badge>
+                          <Badge variant="outline">{formatLabel(moduleFormType)}</Badge>
                           <Badge variant="outline">{module.passing_score}% passing</Badge>
                           <Badge variant="outline" className={isAssignable ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
                             {isAssignable ? 'Ready' : 'Blocked'}
@@ -1676,7 +1688,7 @@ export default function TrainerMicrolearningStudio() {
                         {module.description ? (
                           <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{module.description}</p>
                         ) : null}
-                        {module.media_status ? (
+                        {module.media_status && moduleFormType !== 'reading' ? (
                           <p className={`mt-2 text-xs ${isAssignable ? 'text-muted-foreground' : 'text-amber-700'}`}>{module.media_status}</p>
                         ) : null}
                       </div>
@@ -1694,7 +1706,7 @@ export default function TrainerMicrolearningStudio() {
                   <div className="text-sm font-medium text-foreground">Selected Topic Summary</div>
                   {invalidSelectedAssignmentModules.length ? (
                     <p className="mt-2 text-xs text-amber-700">
-                      Remove blocked topics before saving delivery. Only modules with working uploaded media can be assigned.
+                      Remove blocked topics before saving delivery. Video, infographic, and case study modules need working uploaded media.
                     </p>
                   ) : null}
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -1702,7 +1714,7 @@ export default function TrainerMicrolearningStudio() {
                       <Badge
                         key={module.id}
                         variant="outline"
-                        className={module.media_ready === false ? 'border-amber-200 bg-amber-50 text-amber-700' : undefined}
+                        className={!isModuleAssignable(module) ? 'border-amber-200 bg-amber-50 text-amber-700' : undefined}
                       >
                         {module.title}
                       </Badge>
@@ -2595,161 +2607,6 @@ export default function TrainerMicrolearningStudio() {
                     </div>
                   </div>
 
-                  <details className="rounded-xl border bg-slate-50 p-4">
-                    <summary className="cursor-pointer text-sm font-medium">Optional reading settings</summary>
-                    <div className="mt-4 grid gap-4">
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label htmlFor="reading-title">Reading Title</Label>
-                          <Input
-                            id="reading-title"
-                            value={moduleForm.reading_title}
-                            onChange={(e) => setModuleForm(current => ({ ...current, reading_title: e.target.value }))}
-                            placeholder="Ex. Claims Verification Script"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="reading-category">Reading Category</Label>
-                          <Input
-                            id="reading-category"
-                            value={moduleForm.reading_category}
-                            onChange={(e) => setModuleForm(current => ({ ...current, reading_category: e.target.value }))}
-                            placeholder="Ex. Telephone Script"
-                          />
-                        </div>
-                      </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="reading-instructions">Instructions</Label>
-                    <Textarea
-                      id="reading-instructions"
-                      rows={3}
-                      value={moduleForm.reading_instructions}
-                      onChange={(e) => setModuleForm(current => ({ ...current, reading_instructions: e.target.value }))}
-                      placeholder="Read the passage aloud clearly and naturally."
-                    />
-                  </div>
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="reading-language">Language</Label>
-                      <Input
-                        id="reading-language"
-                        value={moduleForm.reading_language}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_language: e.target.value }))}
-                        placeholder="en-US"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="reading-max-attempts">Maximum Attempts</Label>
-                      <Input
-                        id="reading-max-attempts"
-                        type="number"
-                        min={0}
-                        max={10}
-                        value={moduleForm.reading_max_attempts}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_max_attempts: Number(e.target.value || 0) }))}
-                      />
-                      <div className="text-xs text-muted-foreground">Use 0 for unlimited attempts.</div>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="reading-time-limit">Time Limit Seconds</Label>
-                      <Input
-                        id="reading-time-limit"
-                        type="number"
-                        min={0}
-                        value={moduleForm.reading_time_limit_seconds}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_time_limit_seconds: Number(e.target.value || 0) }))}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Reading Time</Label>
-                      <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
-                        {readingPassageStats.estimatedMinutes} minute(s)
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-slate-50 p-4">
-                    <div className="font-medium">Score Thresholds</div>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-                      {[
-                        ['Minimum Pronunciation', 'reading_min_pronunciation_score'],
-                        ['Minimum Accuracy', 'reading_min_accuracy_score'],
-                        ['Minimum Completeness', 'reading_min_completeness_score'],
-                        ['Minimum Fluency', 'reading_min_fluency_score'],
-                      ].map(([label, key]) => (
-                        <div className="space-y-2" key={key}>
-                          <Label>{label}</Label>
-                          <Input
-                            type="number"
-                            min={0}
-                            max={100}
-                            value={Number(moduleForm[key as keyof ModuleFormState] || 0)}
-                            onChange={(e) => setModuleForm(current => ({
-                              ...current,
-                              [key]: Number(e.target.value || 0),
-                            }))}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-slate-50 p-4">
-                    <div className="font-medium">Recording Controls</div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      {[
-                        ['Allow Replay', 'reading_allow_replay'],
-                        ['Allow Pause', 'reading_allow_pause'],
-                        ['Auto Submit', 'reading_auto_submit'],
-                        ['Manual Review', 'reading_manual_review_required'],
-                      ].map(([label, key]) => (
-                        <label key={key} className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm">
-                          <span>{label}</span>
-                          <input
-                            type="checkbox"
-                            className="size-4"
-                            checked={Boolean(moduleForm[key as keyof ModuleFormState])}
-                            onChange={(e) => setModuleForm(current => ({
-                              ...current,
-                              [key]: e.target.checked,
-                            }))}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-xl border bg-slate-50 p-4">
-                    <div className="font-medium">AI Analysis</div>
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {[
-                        ['Pronunciation', 'reading_ai_pronunciation'],
-                        ['Fluency', 'reading_ai_fluency'],
-                        ['Accuracy', 'reading_ai_accuracy'],
-                        ['Completeness', 'reading_ai_completeness'],
-                        ['Confidence', 'reading_ai_confidence'],
-                        ['Word Analysis', 'reading_ai_word_analysis'],
-                        ['Mispronounced Words', 'reading_ai_mispronounced_words'],
-                        ['Sound Analysis', 'reading_ai_sound_analysis'],
-                        ['Suggestions', 'reading_ai_suggestions'],
-                      ].map(([label, key]) => (
-                        <label key={key} className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm">
-                          <span>{label}</span>
-                          <input
-                            type="checkbox"
-                            className="size-4"
-                            checked={Boolean(moduleForm[key as keyof ModuleFormState])}
-                            onChange={(e) => setModuleForm(current => ({
-                              ...current,
-                              [key]: e.target.checked,
-                            }))}
-                          />
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                    </div>
-                  </details>
                 </div>
               </div>
             )}

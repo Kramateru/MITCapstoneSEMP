@@ -2543,7 +2543,11 @@ export default function MicrolearningHub() {
       await apiRequest(`/api/trainee/microlearning-assignments/${activeAssignmentId}/start`, {
         method: 'POST',
       });
-      toast.success('Module started. Review the lesson, then complete every assigned assessment.');
+      toast.success(
+        assignmentDetail?.module.module_type === 'reading'
+          ? 'Reading module started. Read the passage aloud when you are ready to record.'
+          : 'Module started. Review the lesson, then complete every assigned assessment.'
+      );
       await loadAssignments({ preferredAssignmentId: activeAssignmentId });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to start this module.';
@@ -2840,6 +2844,10 @@ export default function MicrolearningHub() {
   const audioLessonCount = assignments.filter((assignment) => assignment.module_type === 'audio').length;
   const assignedCount = assignments.length;
   const isFlashcardModule = assignmentDetail?.module.module_type === 'flashcard';
+  const isReadingPronunciationModule = Boolean(
+    assignmentDetail?.module.module_type === 'reading'
+    || assignmentDetail?.exercises.some((exercise) => exercise.type === 'speech_reading')
+  );
   const flashcardSession = assignmentDetail?.flashcard_session || null;
   const flashcardExercises = isFlashcardModule
     ? assignmentDetail?.exercises.filter((exercise) => exercise.type === 'flashcard_recall') || []
@@ -2867,7 +2875,7 @@ export default function MicrolearningHub() {
       inputMode: 'typed' as const,
       revealedSide: '' as const,
     };
-  const standardExercises = !isFlashcardModule
+  const standardExercises = !isFlashcardModule && !isReadingPronunciationModule
     ? assignmentDetail?.exercises.filter((exercise) => exercise.type !== 'flashcard_recall') || []
     : [];
   const activeStandardExerciseIndex = activeAssignmentId
@@ -3248,14 +3256,6 @@ export default function MicrolearningHub() {
           <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
             Review the infographic first, then use the activity panel below to answer each assigned question one at a time.
           </div>
-        </div>
-      );
-    }
-
-    if (moduleType === 'reading') {
-      return (
-        <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
-          Open the pronunciation reader below when you are ready to record.
         </div>
       );
     }
@@ -3899,7 +3899,9 @@ export default function MicrolearningHub() {
           <CardHeader>
             <CardTitle>{activeAssignment?.title || 'Module Detail'}</CardTitle>
             <CardDescription>
-              {activeAssignment?.skill_focus || 'Open a module to review the lesson, complete the exercises, and save your answers.'}
+              {isReadingPronunciationModule
+                ? 'Read the passage aloud, record your response, then submit it for pronunciation analysis.'
+                : activeAssignment?.skill_focus || 'Open a module to review the lesson, complete the exercises, and save your answers.'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -3909,6 +3911,21 @@ export default function MicrolearningHub() {
               </div>
             ) : (
               <div className="space-y-6">
+                {isReadingPronunciationModule && !moduleStarted ? (
+                  <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-sm text-sky-800">
+                        Start this reading module to open the passage and record your spoken response.
+                      </div>
+                      <Button type="button" onClick={() => void handleStartAssignment()} disabled={startingAssignment}>
+                        {startingAssignment ? 'Starting...' : 'Start Module'}
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {!isReadingPronunciationModule ? (
+                  <>
                 <div className="grid gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-4 md:grid-cols-3">
                   <div className="rounded-lg bg-white px-4 py-3">
                     <div className="text-xs uppercase tracking-[0.16em] text-sky-700">Step 1</div>
@@ -4046,7 +4063,9 @@ export default function MicrolearningHub() {
                   {moduleStarted && activeAssignment.can_retake ? (
                     <div className="mt-4 flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="text-sm text-amber-800">
-                        Your score is below the required passing mark. Retake the full module to reshuffle the questions and try again.
+                        {isReadingPronunciationModule
+                          ? 'Your score is below the required passing mark. Retake the reading response and try again.'
+                          : 'Your score is below the required passing mark. Retake the full module to reshuffle the questions and try again.'}
                       </div>
                       <Button type="button" variant="outline" onClick={() => void handleRetakeAssignment()} disabled={startingAssignment}>
                         {startingAssignment ? 'Preparing Retake...' : 'Retake Module'}
@@ -4079,8 +4098,10 @@ export default function MicrolearningHub() {
                     </div>
                   ) : null}
                 </div>
+                  </>
+                ) : null}
 
-                {moduleStarted ? renderModuleContent() : null}
+                  {moduleStarted && !isReadingPronunciationModule ? renderModuleContent() : null}
 
                 {moduleStarted ? (
                   isFlashcardModule ? (
@@ -4113,7 +4134,7 @@ export default function MicrolearningHub() {
                       />
                       {shouldShowModuleResultSummary ? renderAssignmentResultSummary() : null}
                     </div>
-                  ) : assignmentDetail.module.module_type === 'reading' ? (
+                  ) : isReadingPronunciationModule ? (
                     <TraineeReadingAssessment
                       moduleId={assignmentDetail.module.id}
                       reading={{

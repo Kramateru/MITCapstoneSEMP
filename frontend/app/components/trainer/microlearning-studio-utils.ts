@@ -566,16 +566,55 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
   }
 }
 
+export function getModuleFormType(module: MicrolearningModule, content: Record<string, any> = module.content_data || {}): ModuleType {
+  const declaredType = module.module_type || 'video';
+  const questions = Array.isArray(content.questions) ? content.questions : [];
+  const hasReadingPassage = Boolean(
+    content.reading_rich_content ||
+    content.reading_passage ||
+    content.reading_content ||
+    content.reading_title ||
+    content.enable_stt_reading ||
+    content.reading_config ||
+    content.ai_configuration?.voice_assessment_enabled,
+  );
+  const titleOrDescription = `${module.title || ''} ${module.description || ''}`.toLowerCase();
+  const looksLikeReadingAssessment = /\b(reading|pronunciation)\b/.test(titleOrDescription);
+
+  if (declaredType === 'reading') {
+    return 'reading';
+  }
+
+  if (
+    hasReadingPassage &&
+    looksLikeReadingAssessment &&
+    (declaredType !== 'quiz' || questions.length === 0)
+  ) {
+    return 'reading';
+  }
+
+  if (
+    declaredType === 'case_study' &&
+    looksLikeReadingAssessment &&
+    Boolean(content.content || hasReadingPassage)
+  ) {
+    return 'reading';
+  }
+
+  return declaredType;
+}
+
 export function moduleToForm(module: MicrolearningModule): ModuleFormState {
   const form = emptyModuleForm();
   const content = module.content_data || {};
+  const moduleType = getModuleFormType(module, content);
 
   const baseForm = {
     ...form,
     title: module.title || '',
     description: module.description || '',
     feedback_category: module.category || 'clarity',
-    module_type: module.module_type || 'video',
+    module_type: moduleType,
     duration_minutes: module.duration_minutes || 5,
     passing_score: module.passing_score || 80,
     skill_focus: module.skill_focus || '',
@@ -606,7 +645,7 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
     audio_summary_text: content.summary_text || content.audio_summary || content.summary || '',
   };
 
-  switch (module.module_type) {
+  switch (moduleType) {
     case 'video':
       const savedVideoQuestions =
         content.video_timestamp_questions ||
