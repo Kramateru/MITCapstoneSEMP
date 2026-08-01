@@ -630,7 +630,7 @@ def build_type_specific_exercises(
             {
                 "id": str(uuid.uuid4()),
                 "title": "Pronunciation Reading",
-                "type": "keyword_response",
+                "type": "speech_reading",
                 "prompt": "Read the assigned passage aloud.",
                 "required_keywords": [],
                 "tips": [

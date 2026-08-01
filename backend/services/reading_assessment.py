@@ -80,11 +80,13 @@ class ReadingPronunciationAnalyzer:
         "P": re.compile(r"p", re.IGNORECASE),
         "SH": re.compile(r"sh", re.IGNORECASE),
         "CH": re.compile(r"ch", re.IGNORECASE),
+        "J": re.compile(r"j|g(?=[ei])|dge", re.IGNORECASE),
         "S": re.compile(r"s", re.IGNORECASE),
         "Z": re.compile(r"z", re.IGNORECASE),
         "ST cluster": re.compile(r"st", re.IGNORECASE),
         "Ending consonant": re.compile(r"[bcdfghjklmnpqrstvwxyz]$", re.IGNORECASE),
     }
+    FILLER_WORDS = {"um", "uh", "ah", "er", "erm", "hmm"}
 
     def analyze_pronunciation(
         self,
@@ -107,12 +109,19 @@ class ReadingPronunciationAnalyzer:
         )
 
         alignment = self._align_words(expected_words, spoken_words, word_confidences)
+        speech_timing = self._extract_speech_timing(provider_words or [])
         score = self._calculate_score(
             alignment,
             expected_text=expected_text,
             audio_transcript=audio_transcript,
-            duration_seconds=duration_seconds,
+            duration_seconds=duration_seconds or speech_timing.get("duration_seconds"),
         )
+        if speech_timing:
+            for item in alignment:
+                item.phoneme_data = {
+                    **item.phoneme_data,
+                    "speech_timing_available": True,
+                } if item.phoneme_data else item.phoneme_data
         return alignment, score
 
     def _tokenize_and_normalize(self, text: str) -> list[str]:
@@ -137,6 +146,38 @@ class ReadingPronunciationAnalyzer:
             word: sum(values) / len(values)
             for word, values in confidences.items()
             if values
+        }
+
+    def _extract_speech_timing(self, provider_words: list[dict[str, Any]]) -> dict[str, Any]:
+        timed_words = []
+        for item in provider_words:
+            try:
+                start = float(item.get("start"))
+                end = float(item.get("end"))
+            except (TypeError, ValueError):
+                continue
+            if end >= start:
+                timed_words.append({"start": start, "end": end, "word": item.get("word")})
+        if not timed_words:
+            return {}
+
+        timed_words.sort(key=lambda item: item["start"])
+        pauses = []
+        previous_end = timed_words[0]["end"]
+        for item in timed_words[1:]:
+            gap = item["start"] - previous_end
+            if gap >= 0.75:
+                pauses.append({
+                    "start": round(previous_end, 2),
+                    "end": round(item["start"], 2),
+                    "duration": round(gap, 2),
+                })
+            previous_end = max(previous_end, item["end"])
+
+        return {
+            "duration_seconds": round(max(item["end"] for item in timed_words), 2),
+            "long_pauses": pauses,
+            "long_pause_count": len(pauses),
         }
 
     def _align_words(
@@ -318,6 +359,11 @@ class ReadingPronunciationAnalyzer:
             return "SH"
         if "ch" in expected and "ch" not in spoken_value:
             return "CH"
+        if (
+            (expected.startswith("j") or re.search(r"g(?=[ei])|dge", expected, re.IGNORECASE))
+            and not re.search(r"j|g(?=[ei])|dge", spoken_value, re.IGNORECASE)
+        ):
+            return "J"
         if "st" in expected and "st" not in spoken_value:
             return "ST cluster"
         if expected.endswith(tuple("bcdfghjklmnpqrstvwxyz")) and not spoken_value.endswith(expected[-1]):
@@ -457,10 +503,13 @@ class ReadingPronunciationAnalyzer:
         omitted = []
         inserted = []
         repeated = []
+        fillers = []
         sound_counts: Counter[str] = Counter()
         sound_totals: Counter[str] = Counter()
 
         for item in alignment:
+            if (item.spoken_word or "").lower() in self.FILLER_WORDS:
+                fillers.append(item.spoken_word)
             for sound, pattern in self.SOUND_PATTERNS.items():
                 if item.expected_word and pattern.search(item.expected_word):
                     sound_totals[sound] += 1
@@ -499,6 +548,8 @@ class ReadingPronunciationAnalyzer:
             "omitted_words": omitted,
             "inserted_words": inserted,
             "repeated_words": repeated,
+            "filler_words": fillers,
+            "filler_count": len(fillers),
             "most_common_mistakes": [
                 {"word": word, "count": count}
                 for word, count in Counter(item["expected"] for item in mispronounced).most_common(10)
@@ -535,6 +586,10 @@ class ReadingPronunciationAnalyzer:
             suggestions.append(f"Slow down and include the {score.omitted_words} skipped word(s).")
         if score.repeated_words:
             suggestions.append("Reduce repeated words by pausing briefly at punctuation marks.")
+        if common_issues.get("filler_count"):
+            suggestions.append("Reduce filler words by taking a silent breath before continuing.")
+        if common_issues.get("long_pause_count"):
+            suggestions.append("Shorten long pauses so the reading sounds more confident and continuous.")
         top_words = [item["expected"] for item in common_issues.get("mispronounced_words", [])[:4]]
         if top_words:
             suggestions.append(f"Practice these words: {', '.join(top_words)}.")

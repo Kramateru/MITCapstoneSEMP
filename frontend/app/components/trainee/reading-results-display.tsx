@@ -1,18 +1,25 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useAuth } from '@/app/context/AuthContext';
 import { useToast } from '../../hooks/use-toast';
+import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Progress } from '../ui/progress';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
+
+type WordStatus = 'correct' | 'mispronounced' | 'omitted' | 'extra' | 'repeated' | 'uncertain';
 
 interface WordAnalysis {
   word_index: number;
   expected_word: string;
-  spoken_word?: string;
-  status: 'correct' | 'mispronounced' | 'omitted' | 'extra' | 'uncertain';
-  confidence?: number;
-  feedback?: string;
+  spoken_word?: string | null;
+  status: WordStatus;
+  confidence?: number | null;
+  phoneme_data?: Record<string, any>;
+  feedback?: string | null;
 }
 
 interface ReadingResultsDisplayProps {
@@ -20,7 +27,37 @@ interface ReadingResultsDisplayProps {
   onClose?: () => void;
 }
 
+function percent(value: unknown) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? Math.round(numeric) : 0;
+}
+
+function statusClass(status: WordStatus) {
+  switch (status) {
+    case 'correct':
+      return 'border-emerald-300 bg-emerald-100 text-emerald-900';
+    case 'mispronounced':
+    case 'uncertain':
+      return 'border-rose-300 bg-rose-100 text-rose-900';
+    case 'omitted':
+      return 'border-amber-300 bg-amber-100 text-amber-900';
+    case 'extra':
+    case 'repeated':
+      return 'border-sky-300 bg-sky-100 text-sky-900';
+    default:
+      return 'border-slate-200 bg-slate-100 text-slate-700';
+  }
+}
+
+function formatTime(seconds?: number | null) {
+  const total = Math.max(0, Math.round(Number(seconds || 0)));
+  const minutes = Math.floor(total / 60);
+  const remainingSeconds = total % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+}
+
 export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisplayProps) {
+  const { token } = useAuth();
   const { toast } = useToast();
   const [results, setResults] = useState<any>(null);
   const [wordAnalysis, setWordAnalysis] = useState<WordAnalysis[]>([]);
@@ -28,18 +65,24 @@ export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisp
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fetchResults = async () => {
+    let isMounted = true;
+
+    async function fetchResults() {
       try {
-        const response = await fetch(`/api/trainee/reading/attempts/${attemptId}`);
+        const response = await fetch(`/api/trainee/reading/attempts/${attemptId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         if (!response.ok) {
-          throw new Error(`Fetch failed: ${response.status}`);
+          const body = await response.json().catch(() => null);
+          throw new Error(body?.detail || `Fetch failed: ${response.status}`);
         }
         const data = await response.json();
+        if (!isMounted) return;
         setResults(data);
-        setWordAnalysis(data.word_analysis || []);
+        setWordAnalysis(Array.isArray(data.word_analysis) ? data.word_analysis : []);
         setError(null);
       } catch (err: any) {
-        console.error('Failed to fetch results:', err);
+        if (!isMounted) return;
         setError(err?.message || 'Failed to load results');
         toast({
           title: 'Error',
@@ -47,20 +90,31 @@ export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisp
           variant: 'destructive',
         });
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
-    };
+    }
 
-    fetchResults();
-  }, [attemptId, toast]);
+    void fetchResults();
+    return () => {
+      isMounted = false;
+    };
+  }, [attemptId, toast, token]);
+
+  const commonIssues = results?.common_issues || {};
+  const soundRows = useMemo(
+    () => (Array.isArray(commonIssues.sound_analysis) ? commonIssues.sound_analysis : []),
+    [commonIssues.sound_analysis],
+  );
 
   if (loading) {
     return (
       <Card>
-        <CardContent className="flex items-center justify-center h-64">
+        <CardContent className="flex h-64 items-center justify-center">
           <div className="text-center">
-            <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
-            <p className="text-gray-600">Loading results...</p>
+            <div className="mx-auto mb-4 size-12 animate-spin rounded-full border-4 border-sky-200 border-t-sky-600" />
+            <p className="text-slate-600">Loading results...</p>
           </div>
         </CardContent>
       </Card>
@@ -69,85 +123,47 @@ export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisp
 
   if (error || !results) {
     return (
-      <Card className="border-red-300">
-        <CardContent className="flex items-center justify-center h-64">
-          <div className="text-center">
-            <p className="text-red-600 font-semibold">{error || 'Failed to load results'}</p>
-          </div>
+      <Card className="border-rose-300">
+        <CardContent className="flex h-64 items-center justify-center">
+          <p className="font-semibold text-rose-700">{error || 'Failed to load results'}</p>
         </CardContent>
       </Card>
     );
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'correct':
-        return 'bg-green-100 text-green-900';
-      case 'mispronounced':
-        return 'bg-orange-100 text-orange-900';
-      case 'omitted':
-        return 'bg-red-100 text-red-900';
-      case 'extra':
-        return 'bg-blue-100 text-blue-900';
-      case 'uncertain':
-        return 'bg-yellow-100 text-yellow-900';
-      default:
-        return 'bg-gray-100 text-gray-900';
-    }
-  };
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'correct':
-        return '✓';
-      case 'mispronounced':
-        return '✗';
-      case 'omitted':
-        return '⊘';
-      case 'extra':
-        return '⊕';
-      case 'uncertain':
-        return '?';
-      default:
-        return '◆';
-    }
-  };
-
-  const passed = results.passed;
-  const score = Math.round(results.score);
+  const passed = Boolean(results.passed);
+  const score = percent(results.overall_score ?? results.score);
 
   return (
-    <div className="w-full max-w-5xl mx-auto space-y-4">
-      {/* Score Card */}
-      <Card className={passed ? 'border-green-300 bg-green-50' : 'border-orange-300 bg-orange-50'}>
+    <div className="mx-auto w-full max-w-5xl space-y-4">
+      <Card className={passed ? 'border-emerald-300 bg-emerald-50' : 'border-amber-300 bg-amber-50'}>
         <CardHeader>
-          <CardTitle className={passed ? 'text-green-700' : 'text-orange-700'}>
-            {passed ? '✓ Assessment Passed' : '✗ Assessment Needs Improvement'}
-          </CardTitle>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <CardTitle>{passed ? 'Assessment Passed' : 'Assessment Needs Improvement'}</CardTitle>
+              <CardDescription>Attempt {results.attempt_number || 1}</CardDescription>
+            </div>
+            <Badge className={passed ? 'bg-emerald-600' : 'bg-amber-600'}>
+              {score}% overall
+            </Badge>
+          </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-3 gap-6">
-            <div className="text-center">
-              <div className={`text-5xl font-bold ${passed ? 'text-green-600' : 'text-orange-600'}`}>
-                {score}%
-              </div>
-              <div className="text-sm text-gray-600 mt-2">Your Score</div>
-            </div>
-            <div className="text-center border-l border-gray-300">
-              <div className="text-5xl font-bold text-blue-600">{results.passing_score}%</div>
-              <div className="text-sm text-gray-600 mt-2">Passing Required</div>
-            </div>
-            <div className="text-center border-l border-gray-300">
-              <div className="text-5xl font-bold text-purple-600">
-                {results.attempt_number}
-              </div>
-              <div className="text-sm text-gray-600 mt-2">Attempt Number</div>
-            </div>
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            {[
+              ['Pronunciation', results.pronunciation_score],
+              ['Accuracy', results.accuracy],
+              ['Fluency', results.fluency],
+              ['Completeness', results.completeness],
+              ['Confidence', results.confidence],
+              ['Required', results.passing_score],
+            ].map(([label, value]) => (
+              <Metric key={String(label)} label={String(label)} value={`${percent(value)}%`} />
+            ))}
           </div>
         </CardContent>
       </Card>
 
-      {/* Statistics Tabs */}
       <Tabs defaultValue="statistics" className="w-full">
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="statistics">Statistics</TabsTrigger>
@@ -155,180 +171,156 @@ export function ReadingResultsDisplay({ attemptId, onClose }: ReadingResultsDisp
           <TabsTrigger value="feedback">Feedback</TabsTrigger>
         </TabsList>
 
-        {/* Statistics Tab */}
         <TabsContent value="statistics">
           <Card>
             <CardHeader>
               <CardTitle>Assessment Statistics</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                <div className="text-center p-4 bg-gray-50 rounded-lg">
-                  <div className="text-3xl font-bold text-gray-800">{results.word_count}</div>
-                  <div className="text-sm text-gray-600 mt-1">Total Words</div>
-                </div>
-                <div className="text-center p-4 bg-green-50 rounded-lg">
-                  <div className="text-3xl font-bold text-green-600">{results.correct_words}</div>
-                  <div className="text-sm text-gray-600 mt-1">Correct</div>
-                </div>
-                <div className="text-center p-4 bg-orange-50 rounded-lg">
-                  <div className="text-3xl font-bold text-orange-600">{results.mispronounced_words}</div>
-                  <div className="text-sm text-gray-600 mt-1">Mispronounced</div>
-                </div>
-                <div className="text-center p-4 bg-red-50 rounded-lg">
-                  <div className="text-3xl font-bold text-red-600">{results.omitted_words}</div>
-                  <div className="text-sm text-gray-600 mt-1">Omitted</div>
-                </div>
-                <div className="text-center p-4 bg-blue-50 rounded-lg">
-                  <div className="text-3xl font-bold text-blue-600">{results.extra_words}</div>
-                  <div className="text-sm text-gray-600 mt-1">Extra</div>
-                </div>
+            <CardContent className="space-y-5">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                <Metric label="Total Words" value={results.word_count || 0} />
+                <Metric label="Correct" value={results.correct_words || 0} />
+                <Metric label="Mispronounced" value={results.mispronounced_words || 0} />
+                <Metric label="Skipped" value={results.omitted_words || 0} />
+                <Metric label="Repeated" value={results.repeated_words || 0} />
+                <Metric label="Inserted" value={results.extra_words || 0} />
+                <Metric label="WPM" value={percent(results.words_per_minute)} />
+                <Metric label="Duration" value={formatTime(results.duration_seconds)} />
+                <Metric label="Fillers" value={commonIssues.filler_count || 0} />
+                <Metric label="Long Pauses" value={commonIssues.long_pause_count || 0} />
               </div>
 
-              {results.audio_url && (
-                <div className="border-t pt-4">
-                  <h3 className="font-semibold mb-3">Recording Playback</h3>
-                  <audio controls className="w-full">
-                    <source src={results.audio_url} type="audio/webm" />
-                    Your browser does not support the audio element.
-                  </audio>
+              {soundRows.length ? (
+                <div className="grid gap-3 md:grid-cols-2">
+                  {soundRows.slice(0, 8).map((item: any) => (
+                    <div key={item.sound} className="rounded-lg border bg-white p-3">
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium">{item.sound}</span>
+                        <span>{percent(item.accuracy)}%</span>
+                      </div>
+                      <Progress value={percent(item.accuracy)} className="mt-2" />
+                    </div>
+                  ))}
                 </div>
-              )}
+              ) : null}
 
-              {results.transcript && (
+              {results.audio_url ? (
                 <div className="border-t pt-4">
-                  <h3 className="font-semibold mb-2">Transcript</h3>
-                  <div className="bg-gray-50 p-3 rounded text-sm text-gray-700 max-h-40 overflow-y-auto">
-                    {results.transcript}
-                  </div>
+                  <h3 className="mb-3 font-semibold">Recording Playback</h3>
+                  <audio controls className="w-full" src={results.audio_url} />
                 </div>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Word Analysis Tab */}
         <TabsContent value="word-analysis">
           <Card>
             <CardHeader>
               <CardTitle>Word-by-Word Analysis</CardTitle>
-              <CardDescription>
-                View how each word was pronounced compared to the expected text
-              </CardDescription>
+              <CardDescription>Expected words compared with recognized speech.</CardDescription>
             </CardHeader>
-            <CardContent>
-              <div className="flex flex-wrap gap-2 mb-6">
-                {wordAnalysis.map((word, idx) => (
-                  <div
-                    key={idx}
-                    className={`px-3 py-2 rounded-lg font-medium text-sm ${getStatusColor(word.status)} flex items-center gap-1`}
+            <CardContent className="space-y-5">
+              <div className="flex flex-wrap gap-2 text-sm leading-7">
+                {wordAnalysis.map((word, index) => (
+                  <span
+                    key={`${word.word_index}-${index}`}
+                    className={`rounded-md border px-2 py-1 ${statusClass(word.status)}`}
                     title={word.feedback || word.status}
                   >
-                    <span className="font-bold">{getStatusIcon(word.status)}</span>
-                    <span>{word.spoken_word || word.expected_word}</span>
-                    {word.confidence !== undefined && (
-                      <span className="text-xs opacity-70">({Math.round(word.confidence * 100)}%)</span>
-                    )}
-                  </div>
+                    {word.expected_word || word.spoken_word || '-'}
+                  </span>
                 ))}
               </div>
 
-              <div className="space-y-3 text-sm">
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-green-100 border border-green-400 rounded"></div>
-                  <span>
-                    <strong>Correct:</strong> Word pronounced correctly
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-orange-100 border border-orange-400 rounded"></div>
-                  <span>
-                    <strong>Mispronounced:</strong> Word recognized but pronounced incorrectly
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-red-100 border border-red-400 rounded"></div>
-                  <span>
-                    <strong>Omitted:</strong> Word was skipped
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-blue-100 border border-blue-400 rounded"></div>
-                  <span>
-                    <strong>Extra:</strong> Word was added that wasn't in the original text
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 bg-yellow-100 border border-yellow-400 rounded"></div>
-                  <span>
-                    <strong>Uncertain:</strong> Word recognition had low confidence
-                  </span>
-                </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Expected</TableHead>
+                      <TableHead>Recognized</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Confidence</TableHead>
+                      <TableHead>Sound Issue</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {wordAnalysis.slice(0, 120).map((word, index) => (
+                      <TableRow key={`${word.word_index}-row-${index}`}>
+                        <TableCell>{word.expected_word || '-'}</TableCell>
+                        <TableCell>{word.spoken_word || '-'}</TableCell>
+                        <TableCell>{word.status}</TableCell>
+                        <TableCell>{word.confidence !== null && word.confidence !== undefined ? `${percent(word.confidence * 100)}%` : '-'}</TableCell>
+                        <TableCell>{word.phoneme_data?.sound || '-'}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </div>
             </CardContent>
           </Card>
         </TabsContent>
 
-        {/* Feedback Tab */}
         <TabsContent value="feedback">
-          <div className="space-y-4">
-            {/* Strengths */}
-            {results.strengths && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <span className="text-2xl">💪</span> Your Strengths
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-gray-700 whitespace-pre-wrap">{results.strengths}</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Improvement Areas */}
-            {results.improvement_areas && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <span className="text-2xl">🎯</span> Areas for Improvement
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-gray-700 whitespace-pre-wrap">{results.improvement_areas}</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* Common Issues */}
-            {results.common_issues && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg flex items-center gap-2">
-                    <span className="text-2xl">⚠️</span> Most Common Issues
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-gray-700 whitespace-pre-wrap">{results.common_issues}</p>
-                </CardContent>
-              </Card>
-            )}
+          <div className="grid gap-4 xl:grid-cols-2">
+            <FeedbackCard title="Strengths" value={results.strengths} />
+            <FeedbackCard title="Areas for Improvement" value={results.improvement_areas} />
+            <FeedbackCard title="Recommended Practice" value={results.recommendations} />
+            <Card>
+              <CardHeader>
+                <CardTitle>Common Issues</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm text-slate-700">
+                {(commonIssues.most_common_mistakes || []).slice(0, 8).map((item: any) => (
+                  <div key={item.word} className="flex justify-between rounded-lg border bg-white px-3 py-2">
+                    <span>{item.word}</span>
+                    <span>{item.count}</span>
+                  </div>
+                ))}
+                {!commonIssues.most_common_mistakes?.length ? (
+                  <p className="text-slate-500">No recurring word issues were detected.</p>
+                ) : null}
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
       </Tabs>
 
-      {/* Action Buttons */}
       <div className="flex gap-3">
-        {onClose && (
+        {onClose ? (
           <Button onClick={onClose} variant="outline" className="flex-1">
-            ← Close
+            Close
           </Button>
-        )}
+        ) : null}
         <Button onClick={() => window.print()} variant="outline" className="flex-1">
-          📄 Print Results
+          Print Results
         </Button>
       </div>
     </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function FeedbackCard({ title, value }: { title: string; value?: string | null }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="whitespace-pre-wrap text-sm leading-6 text-slate-700">
+          {value || 'No feedback available yet.'}
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 

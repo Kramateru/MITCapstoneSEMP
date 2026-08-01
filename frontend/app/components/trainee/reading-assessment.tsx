@@ -264,6 +264,11 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
   );
   const spokenProgress = Math.min(passageWords.length, liveWords.length);
   const progressValue = passageWords.length ? (spokenProgress / passageWords.length) * 100 : 0;
+  const maxAttempts = Number(reading.maxAttempts ?? 3);
+  const completedAttemptCount = attemptHistory.filter((attempt) =>
+    ['passed', 'failed', 'completed'].includes(String(attempt.status || '').toLowerCase()),
+  ).length;
+  const attemptLimitReached = maxAttempts > 0 && completedAttemptCount >= maxAttempts;
   const currentSentence = useMemo(() => {
     if (!passageSentences.length) {
       return reading.readingContent;
@@ -554,12 +559,16 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     }
   }
 
-  function restartRecording() {
+  function restartRecording(options?: { newAttempt?: boolean }) {
     setAudioBlob(null);
     setAudioUrl('');
     setLiveTranscript('');
     setRecordingTime(0);
     setResults(null);
+    if (options?.newAttempt) {
+      setAttemptId('');
+      setAttemptNumber(null);
+    }
     void startRecording();
   }
 
@@ -771,9 +780,13 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
           <Button variant="outline" onClick={() => router.back()} className="flex-1">
             Back to Module
           </Button>
-          <Button onClick={restartRecording} className="flex-1">
+          <Button
+            onClick={() => restartRecording({ newAttempt: true })}
+            className="flex-1"
+            disabled={attemptLimitReached}
+          >
             <RotateCcw className="mr-2 size-4" />
-            Try Again
+            {attemptLimitReached ? 'Attempt Limit Reached' : 'Try Again'}
           </Button>
         </div>
       </div>
@@ -923,10 +936,10 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
               <Button
                 onClick={() => void startRecording()}
                 className="flex-1"
-                disabled={micStatus === 'checking' || micStatus === 'missing' || micStatus === 'unsupported'}
+                disabled={attemptLimitReached || micStatus === 'checking' || micStatus === 'missing' || micStatus === 'unsupported'}
               >
                 <Mic className="mr-2 size-4" />
-                Start Reading
+                {attemptLimitReached ? 'Attempt Limit Reached' : 'Start Reading'}
               </Button>
             ) : null}
             {stage === 'recording' ? (
@@ -957,7 +970,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             ) : null}
             {stage === 'review' ? (
               <>
-                <Button variant="outline" onClick={restartRecording} className="flex-1" disabled={submitting}>
+                <Button variant="outline" onClick={() => restartRecording()} className="flex-1" disabled={submitting}>
                   <RotateCcw className="mr-2 size-4" />
                   Restart
                 </Button>

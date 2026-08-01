@@ -93,6 +93,24 @@ def _reading_stats(value: str) -> dict[str, Any]:
     }
 
 
+def _reading_config_difficulty(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"basic", "beginner"}:
+        return "beginner"
+    if normalized == "advanced":
+        return "advanced"
+    return "intermediate"
+
+
+def _module_difficulty_value(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"beginner", "basic"}:
+        return "basic"
+    if normalized == "advanced":
+        return "advanced"
+    return "intermediate"
+
+
 def _reading_content_from_module(module: MicrolearningModule, config: Optional[ReadingModuleConfig] = None) -> str:
     if config and config.reading_content:
         return config.reading_content
@@ -266,6 +284,7 @@ async def create_reading_module(
     instructions = str(_payload_value(payload, "instructions", default="")).strip() or "Read the passage aloud clearly and naturally."
     max_attempts = int(_payload_value(payload, "max_attempts", "maxAttempts", default=3))
     difficulty = str(_payload_value(payload, "difficulty", default="intermediate")).strip().lower() or "intermediate"
+    config_difficulty = _reading_config_difficulty(difficulty)
     language = str(_payload_value(payload, "language", default="en-US")).strip() or "en-US"
     reading_category = str(_payload_value(payload, "reading_category", "readingCategory", default="BPO pronunciation")).strip()
     estimated_time_payload = _payload_value(payload, "estimated_reading_time", "estimatedReadingTime", "duration_minutes")
@@ -293,7 +312,19 @@ async def create_reading_module(
         "minimum_completeness_score": float(_payload_value(payload, "minimum_completeness", "minimumCompleteness", "minimum_completeness_score", default=0) or 0),
         "minimum_fluency_score": float(_payload_value(payload, "minimum_fluency", "minimumFluency", "minimum_fluency_score", default=0) or 0),
     }
-    ai_configuration = dict(_payload_value(payload, "ai_configuration", "aiConfiguration", default={}) or {})
+    ai_configuration = {
+        "voice_assessment_enabled": True,
+        "pronunciation": True,
+        "fluency": True,
+        "accuracy": True,
+        "completeness": True,
+        "confidence": True,
+        "word_analysis": True,
+        "mispronounced_words": True,
+        "sound_analysis": True,
+        "suggestions": True,
+        **dict(_payload_value(payload, "ai_configuration", "aiConfiguration", default={}) or {}),
+    }
     
     # Create module
     module = MicrolearningModule(
@@ -303,6 +334,7 @@ async def create_reading_module(
         category="pronunciation",
         passing_score=passing_score,
         duration_minutes=estimated_time,
+        difficulty=_module_difficulty_value(difficulty),
         content_data={
             "reading_title": reading_title,
             "reading_category": reading_category,
@@ -319,13 +351,13 @@ async def create_reading_module(
             "reading_config": reading_config,
             "ai_configuration": ai_configuration,
             "max_attempts": reading_config["max_attempts"],
-            "difficulty": difficulty,
+            "difficulty": config_difficulty,
         },
         created_by=user.id,
         exercises=[{
             "id": "reading-pronunciation",
             "title": "Pronunciation Reading",
-            "type": "keyword_response",
+            "type": "speech_reading",
             "prompt": "Read the assigned passage aloud.",
             "sample_answer": reading_content,
             "required_keywords": [],
@@ -362,7 +394,7 @@ async def create_reading_module(
         language=language,
         description=description,
         ai_configuration=ai_configuration,
-        difficulty=difficulty,
+        difficulty=config_difficulty,
     )
     
     db.add(config)
@@ -580,6 +612,10 @@ async def process_reading_assessment(
         
         # Generate feedback
         common_issues = analyzer.extract_common_issues(alignment)
+        speech_timing = analyzer._extract_speech_timing(transcription_result.words or [])
+        if speech_timing:
+            common_issues["long_pauses"] = speech_timing.get("long_pauses", [])
+            common_issues["long_pause_count"] = speech_timing.get("long_pause_count", 0)
         attempt.most_common_issues = common_issues
         attempt.strengths = analyzer.generate_strengths_feedback(alignment, score)
         attempt.improvement_areas = analyzer.generate_improvement_feedback(
@@ -602,6 +638,7 @@ async def process_reading_assessment(
             "provider": transcription_result.provider,
             "provider_confidence": transcription_result.confidence,
             "provider_words": transcription_result.words or [],
+            "speech_timing": speech_timing,
             "common_issues": common_issues,
             "ai_configuration": settings.get("ai_configuration"),
         }

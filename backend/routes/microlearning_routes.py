@@ -30,6 +30,7 @@ from ..models import (
     Batch,
     CertificateRecord,
 )
+from ..models_reading import ReadingModuleConfig
 from ..schemas import SuccessResponse
 from ..supabase_client import get_supabase_client
 from ..services.audio_transcription import speech_to_text_service
@@ -59,6 +60,176 @@ MICROLEARNING_AUDIO_CONTENT_TYPES = {
     "audio/m4a": "audio/mp4",
     "audio/ogg": "audio/ogg",
 }
+
+
+def _strip_reading_markup(value: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", value or "", flags=re.IGNORECASE)
+    text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _reading_passage_stats(value: str) -> dict[str, Any]:
+    words = re.findall(r"\b[\w']+\b", value or "")
+    sentences = [item.strip() for item in re.split(r"[.!?]+(?:\s|$)", value or "") if item.strip()]
+    paragraphs = [item.strip() for item in re.split(r"\n{2,}", value or "") if item.strip()]
+    average_words_per_sentence = (len(words) / len(sentences)) if sentences else 0
+    if len(words) < 120 or average_words_per_sentence <= 12:
+        reading_level = "Basic"
+    elif average_words_per_sentence <= 20:
+        reading_level = "Intermediate"
+    else:
+        reading_level = "Advanced"
+    return {
+        "word_count": len(words),
+        "sentence_count": len(sentences),
+        "paragraph_count": max(len(paragraphs), 1 if value else 0),
+        "reading_level": reading_level,
+        "estimated_reading_time_minutes": max(1, int((len(words) + 129) // 130)) if words else 1,
+    }
+
+
+def _reading_config_difficulty(value: Optional[str]) -> str:
+    normalized = str(getattr(value, "value", value) or "").strip().lower()
+    if normalized in {"basic", "beginner"}:
+        return "beginner"
+    if normalized == "advanced":
+        return "advanced"
+    return "intermediate"
+
+
+def _clamp_score(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = default
+    return max(0.0, min(100.0, numeric))
+
+
+def _default_reading_exercises(content_data: dict[str, Any]) -> list[dict[str, Any]]:
+    passage = (
+        content_data.get("reading_passage")
+        or content_data.get("reading_content")
+        or content_data.get("content")
+        or ""
+    )
+    return [{
+        "id": "reading-pronunciation",
+        "title": "Pronunciation Reading",
+        "type": "speech_reading",
+        "prompt": "Read the assigned passage aloud.",
+        "sample_answer": passage,
+        "required_keywords": [],
+        "enable_stt": True,
+        "point_value": 10,
+    }]
+
+
+def _sync_reading_module_config(db: Session, module: MicrolearningModule) -> None:
+    if str(getattr(module, "type", "") or "").strip().lower() != "reading":
+        return
+
+    content_data = dict(module.content_data or {})
+    reading_config = dict(content_data.get("reading_config") or {})
+    ai_configuration = dict(content_data.get("ai_configuration") or reading_config.get("ai_configuration") or {})
+    rich_content = str(
+        content_data.get("reading_rich_content")
+        or content_data.get("reading_markup")
+        or content_data.get("reading_passage")
+        or content_data.get("reading_content")
+        or content_data.get("content")
+        or ""
+    )
+    reading_content = _strip_reading_markup(rich_content)
+    if not reading_content:
+        return
+
+    stats = _reading_passage_stats(reading_content)
+    content_data.update({
+        "reading_title": content_data.get("reading_title") or module.title,
+        "reading_content": reading_content,
+        "reading_passage": reading_content,
+        "reading_rich_content": rich_content.strip() or reading_content,
+        "word_count": stats["word_count"],
+        "sentence_count": stats["sentence_count"],
+        "paragraph_count": stats["paragraph_count"],
+        "reading_level": stats["reading_level"],
+        "estimated_reading_time_minutes": int(
+            content_data.get("estimated_reading_time_minutes")
+            or module.duration_minutes
+            or stats["estimated_reading_time_minutes"]
+        ),
+        "language": content_data.get("language") or module.audio_language or "en-US",
+        "reading_config": {
+            "max_attempts": max(0, min(10, int(reading_config.get("max_attempts", content_data.get("max_attempts", 3)) or 0))),
+            "time_limit_seconds": reading_config.get("time_limit_seconds"),
+            "allow_replay": reading_config.get("allow_replay", True) is not False,
+            "allow_pause": reading_config.get("allow_pause", True) is not False,
+            "auto_submit": bool(reading_config.get("auto_submit", False)),
+            "manual_review_required": bool(reading_config.get("manual_review_required", False)),
+            "minimum_pronunciation_score": _clamp_score(reading_config.get("minimum_pronunciation_score")),
+            "minimum_accuracy_score": _clamp_score(reading_config.get("minimum_accuracy_score")),
+            "minimum_completeness_score": _clamp_score(reading_config.get("minimum_completeness_score")),
+            "minimum_fluency_score": _clamp_score(reading_config.get("minimum_fluency_score")),
+        },
+        "ai_configuration": {
+            "voice_assessment_enabled": ai_configuration.get("voice_assessment_enabled", True) is not False,
+            "pronunciation": ai_configuration.get("pronunciation", True) is not False,
+            "fluency": ai_configuration.get("fluency", True) is not False,
+            "accuracy": ai_configuration.get("accuracy", True) is not False,
+            "completeness": ai_configuration.get("completeness", True) is not False,
+            "confidence": ai_configuration.get("confidence", True) is not False,
+            "word_analysis": ai_configuration.get("word_analysis", True) is not False,
+            "mispronounced_words": ai_configuration.get("mispronounced_words", True) is not False,
+            "sound_analysis": ai_configuration.get("sound_analysis", True) is not False,
+            "suggestions": ai_configuration.get("suggestions", True) is not False,
+        },
+        "enable_stt_reading": True,
+    })
+    module.content_data = content_data
+
+    if not module.exercises:
+        module.exercises = _default_reading_exercises(content_data)
+    else:
+        normalized_exercises = []
+        for exercise in module.exercises or []:
+            normalized_exercise = dict(exercise or {})
+            normalized_exercise["type"] = "speech_reading"
+            normalized_exercise["prompt"] = "Read the assigned passage aloud."
+            normalized_exercise["required_keywords"] = []
+            normalized_exercise["enable_stt"] = True
+            normalized_exercises.append(normalized_exercise)
+        module.exercises = normalized_exercises
+
+    config = db.query(ReadingModuleConfig).filter_by(module_id=module.id).first()
+    if not config:
+        config = ReadingModuleConfig(module_id=module.id, reading_content=reading_content, word_count=stats["word_count"])
+        db.add(config)
+
+    normalized_config = content_data["reading_config"]
+    config.reading_title = content_data.get("reading_title") or module.title
+    config.reading_category = content_data.get("reading_category") or "BPO Communication"
+    config.reading_content = reading_content
+    config.word_count = stats["word_count"]
+    config.sentence_count = stats["sentence_count"]
+    config.paragraph_count = stats["paragraph_count"]
+    config.reading_level = stats["reading_level"]
+    config.estimated_reading_time_minutes = content_data.get("estimated_reading_time_minutes")
+    config.language = content_data.get("language") or "en-US"
+    config.description = module.description
+    config.instructions = content_data.get("instructions") or "Read the passage aloud clearly and naturally."
+    config.max_attempts = normalized_config["max_attempts"]
+    config.time_limit_seconds = normalized_config["time_limit_seconds"]
+    config.allow_replay = 1 if normalized_config["allow_replay"] else 0
+    config.allow_pause = 1 if normalized_config["allow_pause"] else 0
+    config.auto_submit = 1 if normalized_config["auto_submit"] else 0
+    config.manual_review_required = 1 if normalized_config["manual_review_required"] else 0
+    config.minimum_pronunciation_score = normalized_config["minimum_pronunciation_score"]
+    config.minimum_accuracy_score = normalized_config["minimum_accuracy_score"]
+    config.minimum_completeness_score = normalized_config["minimum_completeness_score"]
+    config.minimum_fluency_score = normalized_config["minimum_fluency_score"]
+    config.ai_configuration = content_data["ai_configuration"]
+    config.difficulty = _reading_config_difficulty(getattr(module, "difficulty", None))
 
 
 def _sanitize_asset_name(filename: str) -> str:
@@ -560,6 +731,7 @@ class ModuleCreateRequest(BaseModel):
     title: str
     description: Optional[str]
     category: str  # Video, Quiz, Flashcard, Infographic, Case Study, Audio
+    module_type: Optional[str] = None
     duration_minutes: int
     passing_score: int
     skill_focus: Optional[str]
@@ -577,6 +749,7 @@ class ModuleUpdateRequest(BaseModel):
     title: Optional[str]
     description: Optional[str]
     category: Optional[str]  # Video, Quiz, Flashcard, Infographic, Case Study, Audio
+    module_type: Optional[str] = None
     duration_minutes: Optional[int]
     passing_score: Optional[int]
     skill_focus: Optional[str]
@@ -619,13 +792,14 @@ async def create_module(
 ):
     current_user = await auth_utils.get_current_user(authorization, db)
     require_trainer(current_user)
+    resolved_module_type = (payload.module_type or payload.category or "video").strip().lower()
 
     module = MicrolearningModule(
         id=str(uuid4()),
         title=payload.title,
         description=payload.description,
         category=payload.category,  # This will be Video, Quiz, etc.
-        type=payload.category,  # Keep type for backward compatibility
+        type=resolved_module_type,  # Keep type for backward compatibility
         duration_minutes=payload.duration_minutes,
         passing_score=payload.passing_score,
         skill_focus=payload.skill_focus,
@@ -641,6 +815,8 @@ async def create_module(
         audio_language=payload.audio_language or "en-US",
     )
     db.add(module)
+    db.flush()
+    _sync_reading_module_config(db, module)
     db.commit()
     db.refresh(module)
 
@@ -719,7 +895,8 @@ async def update_module(module_id: str, payload: ModuleUpdateRequest, authorizat
         module.description = payload.description
     if payload.category is not None:
         module.category = payload.category
-        module.type = payload.category
+    if payload.module_type is not None:
+        module.type = payload.module_type.strip().lower()
     if payload.duration_minutes is not None:
         module.duration_minutes = payload.duration_minutes
     if payload.passing_score is not None:
@@ -761,6 +938,7 @@ async def update_module(module_id: str, payload: ModuleUpdateRequest, authorizat
         duration_seconds=module.audio_duration_seconds,
         language_code=module.audio_language,
     )
+    _sync_reading_module_config(db, module)
 
     module.updated_at = datetime.utcnow()
     db.commit()

@@ -313,6 +313,36 @@ CREATE POLICY view_pronunciation_issues ON reading_pronunciation_issue
     )
   );
 
+-- Enable RLS on reading_module_config
+ALTER TABLE reading_module_config ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS trainer_manage_reading_module_config ON reading_module_config;
+CREATE POLICY trainer_manage_reading_module_config ON reading_module_config
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1 FROM microlearning_module m
+      WHERE m.id = reading_module_config.module_id
+        AND m.created_by = auth.uid()::text
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM microlearning_module m
+      WHERE m.id = reading_module_config.module_id
+        AND m.created_by = auth.uid()::text
+    )
+  );
+
+DROP POLICY IF EXISTS trainee_read_assigned_reading_module_config ON reading_module_config;
+CREATE POLICY trainee_read_assigned_reading_module_config ON reading_module_config
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM microlearning_assignment a
+      WHERE a.module_id = reading_module_config.module_id
+        AND a.trainee_id = auth.uid()::text
+    )
+  );
+
 -- Comments for documentation
 COMMENT ON
 TABLE reading_attempt IS 'Stores each trainee reading assessment attempt with scoring and feedback';

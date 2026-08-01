@@ -110,7 +110,7 @@ interface ExerciseAttempt {
 interface AssignmentExercise {
   id: string;
   title: string;
-  type: 'multiple_choice' | 'keyword_response' | 'timestamp_question' | 'flashcard_recall';
+  type: 'multiple_choice' | 'keyword_response' | 'timestamp_question' | 'flashcard_recall' | 'speech_reading';
   prompt: string;
   options?: string[];
   required_keywords?: string[];
@@ -4149,7 +4149,7 @@ export default function MicrolearningHub() {
                           assignmentDetail.module.content_data.reading_markup ||
                           undefined,
                         maxAttempts:
-                          Number(assignmentDetail.module.content_data.reading_config?.max_attempts || assignmentDetail.module.content_data.max_attempts || 3),
+                          Number(assignmentDetail.module.content_data.reading_config?.max_attempts ?? assignmentDetail.module.content_data.max_attempts ?? 3),
                         timeLimitSeconds:
                           assignmentDetail.module.content_data.reading_config?.time_limit_seconds || null,
                         allowReplay:

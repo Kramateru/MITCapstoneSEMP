@@ -51,6 +51,7 @@ from ..models import (
     User,
     UserRole,
 )
+from ..models_reading import ReadingModuleConfig
 from ..services.certificate_awards import sync_trainee_completion_certificates
 from ..services.trainer_learning_analytics import build_trainer_learning_insights
 from ..services.live_updates import live_update_manager
@@ -111,6 +112,182 @@ def _normalize_header(header: str) -> str:
 
 def _normalize_text_value(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _strip_reading_markup(value: str) -> str:
+    text = re.sub(r"<br\s*/?>", "\n", value or "", flags=re.IGNORECASE)
+    text = re.sub(r"</p\s*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _reading_passage_stats(value: str) -> dict[str, Any]:
+    words = re.findall(r"\b[\w']+\b", value or "")
+    sentences = [item.strip() for item in re.split(r"[.!?]+(?:\s|$)", value or "") if item.strip()]
+    paragraphs = [item.strip() for item in re.split(r"\n{2,}", value or "") if item.strip()]
+    average_words_per_sentence = (len(words) / len(sentences)) if sentences else 0
+    if len(words) < 120 or average_words_per_sentence <= 12:
+        reading_level = "Basic"
+    elif average_words_per_sentence <= 20:
+        reading_level = "Intermediate"
+    else:
+        reading_level = "Advanced"
+    return {
+        "word_count": len(words),
+        "sentence_count": len(sentences),
+        "paragraph_count": max(len(paragraphs), 1 if value else 0),
+        "reading_level": reading_level,
+        "estimated_reading_time_minutes": max(1, int((len(words) + 129) // 130)) if words else 1,
+    }
+
+
+def _reading_config_difficulty(value: Any) -> str:
+    normalized = str(getattr(value, "value", value) or "").strip().lower()
+    if normalized in {"basic", "beginner"}:
+        return "beginner"
+    if normalized == "advanced":
+        return "advanced"
+    return "intermediate"
+
+
+def _clamp_score(value: Any, default: float = 0.0) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        numeric = default
+    return max(0.0, min(100.0, numeric))
+
+
+def _default_reading_exercises(content_data: dict[str, Any]) -> list[dict[str, Any]]:
+    passage = (
+        content_data.get("reading_passage")
+        or content_data.get("reading_content")
+        or content_data.get("content")
+        or ""
+    )
+    return [{
+        "id": "reading-pronunciation",
+        "title": "Pronunciation Reading",
+        "type": "speech_reading",
+        "prompt": "Read the assigned passage aloud.",
+        "required_keywords": [],
+        "tips": [
+            "Read the full passage aloud with calm pacing.",
+            "Pause at punctuation and complete ending consonants.",
+        ],
+        "sample_answer": passage or None,
+        "enable_stt": True,
+        "point_value": 10,
+    }]
+
+
+def _sync_reading_module_config(db: Session, module: MicrolearningModule) -> None:
+    if normalize_module_type(getattr(module, "type", None)) != "reading":
+        return
+
+    content_data = dict(module.content_data or {})
+    reading_config = dict(content_data.get("reading_config") or {})
+    ai_configuration = dict(content_data.get("ai_configuration") or reading_config.get("ai_configuration") or {})
+    rich_content = _normalize_text_value(
+        content_data.get("reading_rich_content")
+        or content_data.get("reading_markup")
+        or content_data.get("reading_passage")
+        or content_data.get("reading_content")
+        or content_data.get("content")
+    )
+    reading_content = _strip_reading_markup(rich_content)
+    if not reading_content:
+        raise HTTPException(status_code=400, detail="Reading passage is required.")
+
+    stats = _reading_passage_stats(reading_content)
+    normalized_config = {
+        "max_attempts": max(0, min(10, int(reading_config.get("max_attempts", content_data.get("max_attempts", 3)) or 0))),
+        "time_limit_seconds": reading_config.get("time_limit_seconds"),
+        "allow_replay": reading_config.get("allow_replay", True) is not False,
+        "allow_pause": reading_config.get("allow_pause", True) is not False,
+        "auto_submit": bool(reading_config.get("auto_submit", False)),
+        "manual_review_required": bool(reading_config.get("manual_review_required", False)),
+        "minimum_pronunciation_score": _clamp_score(reading_config.get("minimum_pronunciation_score")),
+        "minimum_accuracy_score": _clamp_score(reading_config.get("minimum_accuracy_score")),
+        "minimum_completeness_score": _clamp_score(reading_config.get("minimum_completeness_score")),
+        "minimum_fluency_score": _clamp_score(reading_config.get("minimum_fluency_score")),
+    }
+    normalized_ai_configuration = {
+        "voice_assessment_enabled": ai_configuration.get("voice_assessment_enabled", True) is not False,
+        "pronunciation": ai_configuration.get("pronunciation", True) is not False,
+        "fluency": ai_configuration.get("fluency", True) is not False,
+        "accuracy": ai_configuration.get("accuracy", True) is not False,
+        "completeness": ai_configuration.get("completeness", True) is not False,
+        "confidence": ai_configuration.get("confidence", True) is not False,
+        "word_analysis": ai_configuration.get("word_analysis", True) is not False,
+        "mispronounced_words": ai_configuration.get("mispronounced_words", True) is not False,
+        "sound_analysis": ai_configuration.get("sound_analysis", True) is not False,
+        "suggestions": ai_configuration.get("suggestions", True) is not False,
+    }
+
+    content_data.update({
+        "reading_title": content_data.get("reading_title") or module.title,
+        "reading_category": content_data.get("reading_category") or "BPO Communication",
+        "reading_content": reading_content,
+        "reading_passage": reading_content,
+        "reading_rich_content": rich_content or reading_content,
+        "word_count": stats["word_count"],
+        "sentence_count": stats["sentence_count"],
+        "paragraph_count": stats["paragraph_count"],
+        "reading_level": stats["reading_level"],
+        "estimated_reading_time_minutes": int(
+            content_data.get("estimated_reading_time_minutes")
+            or module.duration_minutes
+            or stats["estimated_reading_time_minutes"]
+        ),
+        "language": content_data.get("language") or module.audio_language or "en-US",
+        "reading_config": normalized_config,
+        "ai_configuration": normalized_ai_configuration,
+        "enable_stt_reading": True,
+    })
+    module.content_data = content_data
+
+    if not module.exercises:
+        module.exercises = _default_reading_exercises(content_data)
+    else:
+        normalized_exercises = []
+        for exercise in module.exercises or []:
+            normalized_exercise = dict(exercise or {})
+            normalized_exercise["type"] = "speech_reading"
+            normalized_exercise["prompt"] = "Read the assigned passage aloud."
+            normalized_exercise["required_keywords"] = []
+            normalized_exercise["enable_stt"] = True
+            normalized_exercises.append(normalized_exercise)
+        module.exercises = normalized_exercises
+
+    config = db.query(ReadingModuleConfig).filter_by(module_id=module.id).first()
+    if not config:
+        config = ReadingModuleConfig(module_id=module.id, reading_content=reading_content, word_count=stats["word_count"])
+        db.add(config)
+
+    config.reading_title = content_data.get("reading_title") or module.title
+    config.reading_category = content_data.get("reading_category") or "BPO Communication"
+    config.reading_content = reading_content
+    config.word_count = stats["word_count"]
+    config.sentence_count = stats["sentence_count"]
+    config.paragraph_count = stats["paragraph_count"]
+    config.reading_level = stats["reading_level"]
+    config.estimated_reading_time_minutes = content_data.get("estimated_reading_time_minutes")
+    config.language = content_data.get("language") or "en-US"
+    config.description = module.description
+    config.instructions = content_data.get("instructions") or "Read the passage aloud clearly and naturally."
+    config.max_attempts = normalized_config["max_attempts"]
+    config.time_limit_seconds = normalized_config["time_limit_seconds"]
+    config.allow_replay = 1 if normalized_config["allow_replay"] else 0
+    config.allow_pause = 1 if normalized_config["allow_pause"] else 0
+    config.auto_submit = 1 if normalized_config["auto_submit"] else 0
+    config.manual_review_required = 1 if normalized_config["manual_review_required"] else 0
+    config.minimum_pronunciation_score = normalized_config["minimum_pronunciation_score"]
+    config.minimum_accuracy_score = normalized_config["minimum_accuracy_score"]
+    config.minimum_completeness_score = normalized_config["minimum_completeness_score"]
+    config.minimum_fluency_score = normalized_config["minimum_fluency_score"]
+    config.ai_configuration = normalized_ai_configuration
+    config.difficulty = _reading_config_difficulty(getattr(module, "difficulty", None))
 
 
 def _sync_trainee_to_supabase_or_raise(
@@ -2334,6 +2511,8 @@ async def create_microlearning_module(
     if topic_category:
         module.topic_category = topic_category
     db.add(module)
+    db.flush()
+    _sync_reading_module_config(db, module)
     db.commit()
     db.refresh(module)
     if topic_category:
@@ -2478,6 +2657,7 @@ async def update_microlearning_module(
                 skill_focus=next_skill_focus,
             )
             exercises_regenerated = True
+    _sync_reading_module_config(db, module)
 
     if cleanup_asset_record_id:
         (

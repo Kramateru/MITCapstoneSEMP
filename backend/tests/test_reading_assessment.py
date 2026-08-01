@@ -150,6 +150,19 @@ class TestReadingPronunciationAnalyzer(unittest.TestCase):
         # Should identify most common mistakes
         self.assertIn('mispronounced_words', common_issues)
         self.assertGreater(len(common_issues.get('mispronounced_words', [])), 0)
+
+    def test_sound_and_filler_analysis(self):
+        """Test BPO sound buckets and filler tracking."""
+        expected = "Just thank the customer"
+        spoken = "um yust tank the customer"
+
+        alignment, score = self.analyzer.analyze_pronunciation(expected, spoken)
+        common_issues = self.analyzer.extract_common_issues(alignment)
+        sound_names = {item["sound"] for item in common_issues.get("sound_analysis", [])}
+
+        self.assertIn("J", sound_names)
+        self.assertIn("TH", sound_names)
+        self.assertEqual(common_issues.get("filler_count"), 1)
     
     def test_strengths_feedback_excellent(self):
         """Test feedback generation for excellent score."""
