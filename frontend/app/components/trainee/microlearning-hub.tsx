@@ -25,6 +25,7 @@ import { openTraineeMicrolearningLiveUpdates } from '@/app/lib/microlearning/cli
 import { BROWSER_TTS_UNSUPPORTED_MESSAGE, browserTtsService } from '@/app/lib/tts/ttsService';
 
 import InlinePronunciationRecorder from '@/app/components/InlinePronunciationRecorder';
+import TraineeReadingAssessment from '@/app/components/trainee/reading-assessment';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
@@ -525,6 +526,10 @@ function getFirstContentText(content: Record<string, any>, keys: string[]) {
 
 function getQuizReadingContent(content: Record<string, any>) {
   return getFirstContentText(content, ['reading_passage', 'reading_content', 'story_content', 'scenario_text']);
+}
+
+function tokenizeText(value: string) {
+  return (value || '').match(/\b[\w']+\b/g) || [];
 }
 
 function getQuizReadingGateKey(assignment?: AssignmentSummary | null) {
@@ -3248,22 +3253,9 @@ export default function MicrolearningHub() {
     }
 
     if (moduleType === 'reading') {
-      const readingPassage = content.reading_passage || content.content || '';
-      const readingPrompt = content.practice_prompt || content.analysis_prompt || '';
       return (
-        <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm font-medium text-slate-700">Reading Assessment</p>
-          <p className="mt-2 text-sm text-slate-600">
-            {readingPrompt || 'Read the passage carefully, then answer the prompt below with the same calm, clear delivery style used in the rest of the program.'}
-          </p>
-          {readingPassage ? (
-            <div className="mt-4 whitespace-pre-wrap rounded-lg border bg-slate-50 p-4 text-sm leading-6 text-slate-700">
-              {readingPassage}
-            </div>
-          ) : null}
-          <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-            Review the passage first, then use the activity panel below to answer the prompt and submit your response.
-          </div>
+        <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+          Open the pronunciation reader below when you are ready to record.
         </div>
       );
     }
@@ -4121,6 +4113,48 @@ export default function MicrolearningHub() {
                       />
                       {shouldShowModuleResultSummary ? renderAssignmentResultSummary() : null}
                     </div>
+                  ) : assignmentDetail.module.module_type === 'reading' ? (
+                    <TraineeReadingAssessment
+                      moduleId={assignmentDetail.module.id}
+                      reading={{
+                        title: activeAssignment.title,
+                        readingTitle:
+                          assignmentDetail.module.content_data.reading_title || activeAssignment.title,
+                        category: assignmentDetail.module.content_data.reading_category || activeAssignment.topic_category_name || 'BPO Reading',
+                        difficulty: activeAssignment.difficulty || undefined,
+                        language: assignmentDetail.module.content_data.language || 'en-US',
+                        description: activeAssignment.description || undefined,
+                        instructions:
+                          assignmentDetail.module.content_data.instructions ||
+                          'Read the passage aloud clearly and naturally.',
+                        passingScore: activeAssignment.passing_score || assignmentDetail.module.passing_score,
+                        wordCount:
+                          Number(assignmentDetail.module.content_data.word_count || 0) ||
+                          tokenizeText(assignmentDetail.module.content_data.reading_passage || assignmentDetail.module.content_data.reading_content || assignmentDetail.module.content_data.content || '').length,
+                        estimatedReadingTime:
+                          Number(assignmentDetail.module.content_data.estimated_reading_time_minutes || activeAssignment.duration_minutes || 0) || undefined,
+                        readingContent:
+                          assignmentDetail.module.content_data.reading_passage ||
+                          assignmentDetail.module.content_data.reading_content ||
+                          assignmentDetail.module.content_data.content ||
+                          '',
+                        readingRichContent:
+                          assignmentDetail.module.content_data.reading_rich_content ||
+                          assignmentDetail.module.content_data.reading_markup ||
+                          undefined,
+                        maxAttempts:
+                          Number(assignmentDetail.module.content_data.reading_config?.max_attempts || assignmentDetail.module.content_data.max_attempts || 3),
+                        timeLimitSeconds:
+                          assignmentDetail.module.content_data.reading_config?.time_limit_seconds || null,
+                        allowReplay:
+                          assignmentDetail.module.content_data.reading_config?.allow_replay !== false,
+                        allowPause:
+                          assignmentDetail.module.content_data.reading_config?.allow_pause !== false,
+                        autoSubmit:
+                          Boolean(assignmentDetail.module.content_data.reading_config?.auto_submit),
+                      }}
+                      onComplete={() => void loadAssignments({ preferredAssignmentId: activeAssignmentId })}
+                    />
                   ) : renderStandardExerciseFlow()
                 ) : null}
               </div>

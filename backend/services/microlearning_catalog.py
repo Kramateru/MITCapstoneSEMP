@@ -620,23 +620,24 @@ def build_type_specific_exercises(
         return exercises
 
     if normalized_type == "reading":
-        reading_prompt = (
-            content.get("practice_prompt")
-            or content.get("analysis_prompt")
-            or f"Read the passage aloud and respond to the prompt for {focus}."
+        reading_passage = (
+            content.get("reading_passage")
+            or content.get("reading_content")
+            or content.get("content")
+            or ""
         )
         exercises.append(
             {
                 "id": str(uuid.uuid4()),
-                "title": "Reading Response",
+                "title": "Pronunciation Reading",
                 "type": "keyword_response",
-                "prompt": reading_prompt,
-                "required_keywords": list(content.get("required_keywords") or []),
+                "prompt": "Read the assigned passage aloud.",
+                "required_keywords": [],
                 "tips": [
-                    "Read the passage aloud with calm pacing.",
-                    "Use the required phrases and finish the response clearly.",
+                    "Read the full passage aloud with calm pacing.",
+                    "Pause at punctuation and complete ending consonants.",
                 ],
-                "sample_answer": content.get("sample_answer") or content.get("reading_passage") or None,
+                "sample_answer": reading_passage or None,
                 "enable_stt": content.get("enable_stt_reading", True),
             }
         )

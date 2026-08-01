@@ -10,10 +10,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
 import uuid
 
-Base = declarative_base()
+from .database import Base
 
 
 class ReadingAttempt(Base):
@@ -41,16 +40,26 @@ class ReadingAttempt(Base):
     mispronounced_words = Column(Integer, default=0)
     omitted_words = Column(Integer, default=0)
     extra_words = Column(Integer, default=0)
+    repeated_words = Column(Integer, default=0)
     
     # Scoring
+    overall_score = Column(Numeric(5, 2), default=0)
     pronunciation_score = Column(Numeric(5, 2), default=0)  # 0-100 percentage
+    accuracy_score = Column(Numeric(5, 2), default=0)
+    fluency_score = Column(Numeric(5, 2), default=0)
+    completeness_score = Column(Numeric(5, 2), default=0)
+    confidence_score = Column(Numeric(5, 2), default=0)
+    words_per_minute = Column(Numeric(8, 2), default=0)
     passing_score = Column(Numeric(5, 2), nullable=False)  # Trainer's passing requirement
     status = Column(String(50), default='in_progress')  # in_progress, processing, completed, passed, failed, error
     
     # Feedback
     strengths = Column(Text)  # AI-generated strengths summary
     improvement_areas = Column(Text)  # AI-generated improvement suggestions
+    recommendations = Column(Text)
     most_common_issues = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)  # Common pronunciation errors
+    score_breakdown = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
+    analysis_json = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     
     # Timestamps
     started_at = Column(DateTime, default=datetime.utcnow)
@@ -104,7 +113,7 @@ class ReadingWordAnalysis(Base):
     __table_args__ = (
         Index("idx_reading_word_analysis_attempt", "attempt_id"),
         Index("idx_reading_word_analysis_status", "status"),
-        CheckConstraint("status IN ('correct', 'mispronounced', 'omitted', 'extra', 'uncertain')", name="ck_word_status"),
+        CheckConstraint("status IN ('correct', 'mispronounced', 'omitted', 'extra', 'repeated', 'uncertain')", name="ck_word_status"),
     )
 
 
@@ -149,9 +158,13 @@ class ReadingModuleConfig(Base):
     module_id = Column(String(36), ForeignKey("microlearning_module.id"), nullable=False, unique=True, index=True)
     
     # Reading passage
+    reading_title = Column(String(255))
+    reading_category = Column(String(100))
     reading_content = Column(Text, nullable=False)
     word_count = Column(Integer, nullable=False)
     estimated_reading_time_minutes = Column(Integer)
+    language = Column(String(50), default='en-US')
+    description = Column(Text)
     
     # Instructions
     instructions = Column(Text)
@@ -159,9 +172,18 @@ class ReadingModuleConfig(Base):
     # Assessment settings
     max_attempts = Column(Integer, default=3)
     time_limit_seconds = Column(Integer)  # Optional: max recording time
+    allow_replay = Column(Integer, default=1)
+    allow_pause = Column(Integer, default=1)
+    auto_submit = Column(Integer, default=0)
+    manual_review_required = Column(Integer, default=0)
     
     # Pronunciation settings
     pronunciation_standard = Column(String(50), default='en-US')  # Language/accent standard
+    minimum_pronunciation_score = Column(Numeric(5, 2), default=0)
+    minimum_accuracy_score = Column(Numeric(5, 2), default=0)
+    minimum_completeness_score = Column(Numeric(5, 2), default=0)
+    minimum_fluency_score = Column(Numeric(5, 2), default=0)
+    ai_configuration = Column(JSONB().with_variant(JSON, "sqlite"), default=dict)
     
     # Difficulty
     difficulty = Column(String(50), default='intermediate')  # beginner, intermediate, advanced

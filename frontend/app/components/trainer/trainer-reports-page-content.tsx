@@ -104,6 +104,79 @@ function SectionEmpty({ message }: { message: string }) {
   )
 }
 
+type ReadingPronunciationTraineeRow = {
+  trainee_id: string
+  trainee_name?: string | null
+  attempts: number
+  passed: number
+  pass_rate: number
+  average_score: number
+  average_pronunciation: number
+  average_fluency: number
+  average_confidence: number
+  latest_completed_at?: string | null
+}
+
+type ReadingPronunciationReport = {
+  summary: {
+    attempt_count: number
+    completed_attempt_count: number
+    passed_count: number
+    failed_count: number
+    pass_rate: number
+    average_score: number
+    average_pronunciation: number
+    average_fluency: number
+    average_confidence: number
+    trainee_count: number
+  }
+  top_performing_trainees: ReadingPronunciationTraineeRow[]
+  needs_improvement: ReadingPronunciationTraineeRow[]
+  most_difficult_words: Array<{
+    word: string
+    issue_count: number
+    mispronounced: number
+    skipped: number
+    average_confidence: number
+    examples?: Array<{ recognized?: string | null; status?: string | null; sound_issue?: string | null }>
+  }>
+  most_difficult_sounds: Array<{
+    sound: string
+    issue_count: number
+  }>
+  attempts: Array<{
+    id: string
+    module_title?: string | null
+    trainee_name?: string | null
+    attempt_number: number
+    passed: boolean
+    status: string
+    overall_score: number
+    pronunciation_score: number
+    accuracy: number
+    fluency: number
+    completeness: number
+    confidence: number
+    correct_words: number
+    required_correct_words: number
+    total_words: number
+    mispronounced_words: number
+    omitted_words: number
+    repeated_words: number
+    words_per_minute: number
+    duration_seconds: number
+    completed_at?: string | null
+  }>
+}
+
+function buildReadingReportUrl(filters: TrainerLearningFilterState) {
+  const params = new URLSearchParams()
+  if (filters.moduleId) params.set('module_id', filters.moduleId)
+  if (filters.traineeId) params.set('trainee_id', filters.traineeId)
+  const query = params.toString()
+  return `/api/trainee/reading/trainer/report${query ? `?${query}` : ''}`
+}
+
 function SummaryCard({
   title,
   value,
@@ -145,6 +218,7 @@ export default function ReportsPage() {
   const [filters, setFilters] = useState<TrainerLearningFilterState>(EMPTY_TRAINER_LEARNING_FILTERS)
   const [activeTab, setActiveTab] = useState('overview')
   const [data, setData] = useState<TrainerLearningInsightsResponse | null>(null)
+  const [readingReport, setReadingReport] = useState<ReadingPronunciationReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [downloadingPdf, setDownloadingPdf] = useState(false)
@@ -155,6 +229,7 @@ export default function ReportsPage() {
 
   const requestUrl = useMemo(() => buildTrainerLearningInsightsUrl(filters), [filters])
   const pdfUrl = useMemo(() => buildTrainerLearningInsightsPdfUrl(filters), [filters])
+  const readingReportUrl = useMemo(() => buildReadingReportUrl(filters), [filters])
 
   const loadReports = useCallback(
     async (mode: 'initial' | 'refresh' | 'auto' = 'initial') => {
@@ -167,8 +242,13 @@ export default function ReportsPage() {
       setError(null)
 
       try {
-        const payload = await apiFetchCached<TrainerLearningInsightsResponse>(requestUrl, { method: 'GET' }, 10_000)
+        const [payload, readingPayload] = await Promise.all([
+          apiFetchCached<TrainerLearningInsightsResponse>(requestUrl, { method: 'GET' }, 10_000),
+          apiFetchCached<ReadingPronunciationReport>(readingReportUrl, { method: 'GET' }, 10_000)
+            .catch(() => null),
+        ])
         setData(payload)
+        setReadingReport(readingPayload)
         setLastSyncedAt(new Date().toISOString())
       } catch (loadError) {
         setError(getErrorMessage(loadError))
@@ -177,7 +257,7 @@ export default function ReportsPage() {
         setRefreshing(false)
       }
     },
-    [requestUrl],
+    [readingReportUrl, requestUrl],
   )
 
   useEffect(() => {
@@ -249,6 +329,7 @@ export default function ReportsPage() {
       || (summary?.assigned_call_simulation_records || 0) > 0
       || (summary?.published_coaching_logs || 0) > 0,
   )
+  const hasReadingData = Boolean((readingReport?.summary.completed_attempt_count || 0) > 0)
   const scopeLabel = data?.scope.label || 'Trainer scope'
 
   const batchRows = useMemo(() => data?.batch_comparison || [], [data?.batch_comparison])
@@ -372,6 +453,17 @@ export default function ReportsPage() {
         ],
       },
       {
+        value: 'reading',
+        title: 'Reading Pronunciation',
+        description: 'Pronunciation reading attempts, difficult words, difficult sounds, and trainee improvement signals.',
+        icon: Mic,
+        metrics: [
+          { label: 'Attempts', value: formatCount(readingReport?.summary.completed_attempt_count) },
+          { label: 'Avg Pronunciation', value: formatPercent(readingReport?.summary.average_pronunciation) },
+          { label: 'Pass Rate', value: formatPercent(readingReport?.summary.pass_rate) },
+        ],
+      },
+      {
         value: 'results',
         title: 'Results & Coaching',
         description: 'Assessment breakdowns, Call Simulation outcomes, coaching status, and detailed saved activity rows.',
@@ -399,6 +491,9 @@ export default function ReportsPage() {
       traineeRows.length,
       weakestAreas.length,
       weakestModules.length,
+      readingReport?.summary.average_pronunciation,
+      readingReport?.summary.completed_attempt_count,
+      readingReport?.summary.pass_rate,
     ],
   )
 
@@ -514,7 +609,7 @@ export default function ReportsPage() {
               Loading trainer reports...
             </CardContent>
           </Card>
-        ) : !hasTrainerData ? (
+        ) : !hasTrainerData && !hasReadingData ? (
           <Card className="border-dashed shadow-sm">
             <CardHeader>
               <CardTitle>No trainer-scoped report data yet</CardTitle>
@@ -615,6 +710,7 @@ export default function ReportsPage() {
                 <TabsTrigger value="batches" className="rounded-xl">Batch Report</TabsTrigger>
                 <TabsTrigger value="trainees" className="rounded-xl">Trainee Report</TabsTrigger>
                 <TabsTrigger value="learning" className="rounded-xl">Modules & Categories</TabsTrigger>
+                <TabsTrigger value="reading" className="rounded-xl">Reading Pronunciation</TabsTrigger>
                 <TabsTrigger value="results" className="rounded-xl">Results & Coaching</TabsTrigger>
               </TabsList>
 
@@ -1175,6 +1271,197 @@ export default function ReportsPage() {
                     </CardContent>
                   </Card>
                 </div>
+              </TabsContent>
+
+              <TabsContent value="reading" className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  <SummaryCard
+                    title="Reading Attempts"
+                    value={formatCount(readingReport?.summary.completed_attempt_count)}
+                    helper={`${formatCount(readingReport?.summary.trainee_count)} trainee(s) with submitted readings`}
+                    icon={Mic}
+                  />
+                  <SummaryCard
+                    title="Reading Pass Rate"
+                    value={formatPercent(readingReport?.summary.pass_rate)}
+                    helper={`${formatCount(readingReport?.summary.passed_count)} passed | ${formatCount(readingReport?.summary.failed_count)} failed`}
+                    icon={CheckCircle2}
+                  />
+                  <SummaryCard
+                    title="Avg Pronunciation"
+                    value={formatPercent(readingReport?.summary.average_pronunciation)}
+                    helper="Pronunciation accuracy across completed reading attempts"
+                    icon={Gauge}
+                  />
+                  <SummaryCard
+                    title="Avg Fluency"
+                    value={formatPercent(readingReport?.summary.average_fluency)}
+                    helper="Pacing and disruption score from spoken readings"
+                    icon={Activity}
+                  />
+                  <SummaryCard
+                    title="Avg Confidence"
+                    value={formatPercent(readingReport?.summary.average_confidence)}
+                    helper="Speech recognition confidence across recordings"
+                    icon={Target}
+                  />
+                </div>
+
+                <div className="grid gap-6 xl:grid-cols-2">
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Most Difficult Sounds</CardTitle>
+                      <CardDescription>
+                        Aggregated sound and phoneme patterns from submitted reading attempts.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {readingReport?.most_difficult_sounds.length ? (
+                        readingReport.most_difficult_sounds.slice(0, 10).map((row) => (
+                          <div key={row.sound} className="rounded-2xl border p-4">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="font-semibold text-slate-950">{row.sound}</div>
+                              <Badge variant="outline">{formatCount(row.issue_count)} issue(s)</Badge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="Sound-level reading issues will appear after trainees submit pronunciation readings." />
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Most Difficult Words</CardTitle>
+                      <CardDescription>
+                        Words most often mispronounced, skipped, or marked uncertain.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {readingReport?.most_difficult_words.length ? (
+                        readingReport.most_difficult_words.slice(0, 10).map((row) => (
+                          <div key={row.word} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{row.word}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {formatCount(row.mispronounced)} mispronounced | {formatCount(row.skipped)} skipped
+                                </div>
+                              </div>
+                              <Badge variant="outline">{formatPercent(row.average_confidence)}</Badge>
+                            </div>
+                            {row.examples?.[0] ? (
+                              <div className="mt-3 text-sm text-slate-600">
+                                Recognized as {row.examples[0].recognized || 'not spoken'} | {row.examples[0].sound_issue || row.examples[0].status || 'word issue'}
+                              </div>
+                            ) : null}
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="Difficult word analytics will appear after word-level reading analysis is saved." />
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <div className="grid gap-6 xl:grid-cols-2">
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Top Performing Trainees</CardTitle>
+                      <CardDescription>
+                        Highest average reading pronunciation scores in the selected scope.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {readingReport?.top_performing_trainees.length ? (
+                        readingReport.top_performing_trainees.slice(0, 8).map((row) => (
+                          <div key={row.trainee_id} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{row.trainee_name || 'Trainee'}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {formatCount(row.attempts)} attempt(s) | {formatPercent(row.pass_rate)} pass rate
+                                </div>
+                              </div>
+                              <Badge variant="outline">{formatPercent(row.average_score)}</Badge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="Top performer rankings will appear after reading attempts are completed." />
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="border-slate-200 shadow-sm">
+                    <CardHeader>
+                      <CardTitle>Needs Improvement</CardTitle>
+                      <CardDescription>
+                        Trainees with failed readings, lower pronunciation scores, or repeated attempts.
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {readingReport?.needs_improvement.length ? (
+                        readingReport.needs_improvement.slice(0, 8).map((row) => (
+                          <div key={row.trainee_id} className="rounded-2xl border p-4">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="font-semibold text-slate-950">{row.trainee_name || 'Trainee'}</div>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  Pronunciation {formatPercent(row.average_pronunciation)} | Fluency {formatPercent(row.average_fluency)}
+                                </div>
+                              </div>
+                              <Badge variant="outline" className="border-amber-300 text-amber-700">
+                                {formatPercent(row.pass_rate)}
+                              </Badge>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <SectionEmpty message="No reading trainees are currently flagged for improvement." />
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Recent Reading Attempts</CardTitle>
+                    <CardDescription>
+                      Saved pronunciation readings with pass/fail, required correct words, speed, and time consumed.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    {readingReport?.attempts.length ? (
+                      readingReport.attempts.slice(0, 12).map((row) => (
+                        <div key={row.id} className="rounded-2xl border p-4">
+                          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                              <div className="font-semibold text-slate-950">{row.module_title || 'Reading module'}</div>
+                              <div className="mt-1 text-sm text-slate-500">
+                                {row.trainee_name || 'Trainee'} | Attempt {formatCount(row.attempt_number)} | {formatDateTime(row.completed_at)}
+                              </div>
+                            </div>
+                            <Badge variant={row.passed ? 'default' : 'outline'}>
+                              {row.passed ? 'Passed' : 'Failed'}
+                            </Badge>
+                          </div>
+                          <div className="mt-4 grid gap-2 text-sm text-slate-600 md:grid-cols-3 xl:grid-cols-6">
+                            <div>Overall: {formatPercent(row.overall_score)}</div>
+                            <div>Pronunciation: {formatPercent(row.pronunciation_score)}</div>
+                            <div>Accuracy: {formatPercent(row.accuracy)}</div>
+                            <div>Fluency: {formatPercent(row.fluency)}</div>
+                            <div>Correct: {formatCount(row.correct_words)}/{formatCount(row.required_correct_words)}</div>
+                            <div>WPM: {formatMetricValue(row.words_per_minute, 'wpm')}</div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <SectionEmpty message="No reading pronunciation attempts have been submitted yet." />
+                    )}
+                  </CardContent>
+                </Card>
               </TabsContent>
 
               <TabsContent value="results" className="space-y-6">

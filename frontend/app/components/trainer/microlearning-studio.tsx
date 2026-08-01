@@ -5,6 +5,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 const Loader2 = (props: any) => <LazyIcon name="Loader2" {...props} />;
+const Bold = (props: any) => <LazyIcon name="Bold" {...props} />;
+const Heading2 = (props: any) => <LazyIcon name="Heading2" {...props} />;
+const Italic = (props: any) => <LazyIcon name="Italic" {...props} />;
+const List = (props: any) => <LazyIcon name="List" {...props} />;
 const Pencil = (props: any) => <LazyIcon name="Pencil" {...props} />;
 const Plus = (props: any) => <LazyIcon name="Plus" {...props} />;
 const RefreshCw = (props: any) => <LazyIcon name="RefreshCw" {...props} />;
@@ -28,6 +32,7 @@ import { deleteModuleAndDependencies } from '@/app/lib/microlearning/client';
 import {
     buildContentData,
     CATEGORY_STYLES,
+    countReadingWords,
     emptyModuleForm,
     formatLabel,
     MicrolearningModule,
@@ -36,6 +41,7 @@ import {
     NONE_VALUE,
     splitToList,
     STATUS_STYLES,
+    stripReadingMarkup,
     TopicCategory,
     TrainerReportOverview
 } from './microlearning-studio-utils';
@@ -316,11 +322,8 @@ function validateModuleForm(
     if (form.module_type === 'case_study' && !form.case_study_content.trim()) {
       return 'Case study scenario content is required.';
     }
-    if (form.module_type === 'reading' && !form.reading_passage.trim()) {
+    if (form.module_type === 'reading' && !stripReadingMarkup(form.reading_passage).trim()) {
       return 'Reading passage content is required.';
-    }
-    if (form.module_type === 'reading' && !form.reading_prompt.trim()) {
-      return 'Reading prompt is required.';
     }
     const allowAudioDraftWithoutQuestions =
       form.module_type === 'audio' && options?.allowAudioDraftWithoutQuestions;
@@ -402,6 +405,7 @@ export default function TrainerMicrolearningStudio() {
   const categorySectionRef = useRef<HTMLDivElement | null>(null);
   const librarySectionRef = useRef<HTMLDivElement | null>(null);
   const reportingSectionRef = useRef<HTMLDivElement | null>(null);
+  const readingPassageRef = useRef<HTMLTextAreaElement | null>(null);
 
   const authedFetch = useCallback(
     async (url: string, init: RequestInit = {}) => {
@@ -504,6 +508,21 @@ export default function TrainerMicrolearningStudio() {
     },
     [logout, refreshToken, token],
   );
+
+  const insertReadingMarkup = useCallback((before: string, after = '', placeholder = 'text') => {
+    const field = readingPassageRef.current;
+    const currentValue = moduleForm.reading_passage;
+    const selectionStart = field?.selectionStart ?? currentValue.length;
+    const selectionEnd = field?.selectionEnd ?? currentValue.length;
+    const selectedText = currentValue.slice(selectionStart, selectionEnd) || placeholder;
+    const nextValue = `${currentValue.slice(0, selectionStart)}${before}${selectedText}${after}${currentValue.slice(selectionEnd)}`;
+    setModuleForm(current => ({ ...current, reading_passage: nextValue }));
+    window.setTimeout(() => {
+      field?.focus();
+      const cursor = selectionStart + before.length + selectedText.length + after.length;
+      field?.setSelectionRange(cursor, cursor);
+    }, 0);
+  }, [moduleForm.reading_passage]);
 
   const loadData = useCallback(async () => {
     if (isAuthLoading) {
@@ -1264,7 +1283,7 @@ export default function TrainerMicrolearningStudio() {
   }
 
 
-  const needsMediaAsset = ['video', 'infographic', 'case_study', 'reading'].includes(moduleForm.module_type);
+  const needsMediaAsset = ['video', 'infographic', 'case_study'].includes(moduleForm.module_type);
   const mediaAssetLabel =
     moduleForm.module_type === 'video'
       ? 'Video or YouTube Link'
@@ -1272,9 +1291,7 @@ export default function TrainerMicrolearningStudio() {
         ? 'Infographic / Image Upload'
         : moduleForm.module_type === 'case_study'
           ? 'Audio Upload'
-          : moduleForm.module_type === 'reading'
-            ? 'Reading Passage Asset'
-            : 'Supporting Asset';
+          : 'Supporting Asset';
   const mediaAssetDescription =
     moduleForm.module_type === 'video'
       ? 'Upload a trainer video to Supabase storage or paste a YouTube link trainees should review before the practice prompt.'
@@ -1282,9 +1299,7 @@ export default function TrainerMicrolearningStudio() {
         ? 'Upload the infographic or image trainees should review.'
         : moduleForm.module_type === 'case_study'
           ? 'Upload the audio file trainees should analyze with the transcript.'
-          : moduleForm.module_type === 'reading'
-            ? 'Attach a reading passage or reference asset if you want to enrich the assessment.'
-            : 'Upload a supporting media asset.';
+          : 'Upload a supporting media asset.';
   const mediaAssetAccept =
     moduleForm.module_type === 'video'
       ? 'video/*'
@@ -1292,9 +1307,7 @@ export default function TrainerMicrolearningStudio() {
         ? 'image/*'
         : moduleForm.module_type === 'case_study'
           ? TRAINER_AUDIO_FILE_ACCEPT
-          : moduleForm.module_type === 'reading'
-            ? undefined
-            : undefined;
+          : undefined;
   const authoredItemCount =
     moduleForm.module_type === 'video'
       ? moduleForm.video_questions.length
@@ -1305,7 +1318,7 @@ export default function TrainerMicrolearningStudio() {
           : moduleForm.module_type === 'infographic'
             ? moduleForm.infographic_questions.length
             : moduleForm.module_type === 'reading'
-              ? 1
+              ? (stripReadingMarkup(moduleForm.reading_passage).trim() ? 1 : 0)
               : moduleForm.case_study_questions.length;
   const authoredItemLabel =
     moduleForm.module_type === 'video'
@@ -1319,7 +1332,7 @@ export default function TrainerMicrolearningStudio() {
             : moduleForm.module_type === 'audio'
               ? 'audio questions'
               : moduleForm.module_type === 'reading'
-                ? 'reading prompts'
+                ? 'reading passage'
                 : 'analysis questions';
   const selectedTopicName =
     categories.find((category) => category.id === moduleForm.topic_category_id)?.name || 'No topic selected';
@@ -2504,42 +2517,200 @@ export default function TrainerMicrolearningStudio() {
             {moduleForm.module_type === 'reading' && (
               <div className="rounded-2xl border p-5 space-y-4">
                 <div>
-                  <div className="font-medium">Reading Assessment</div>
+                  <div className="font-medium">Pronunciation Reading Assessment</div>
                   <div className="text-sm text-muted-foreground">
-                    Provide a passage trainees should read, the prompt they should answer, and optional required phrases that should be rewarded in the speech response.
+                    Provide one reading passage. Trainees will read it aloud through their microphone and receive pronunciation scoring.
                   </div>
                 </div>
 
                 <div className="grid gap-4">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="reading-title">Reading Title</Label>
+                      <Input
+                        id="reading-title"
+                        value={moduleForm.reading_title}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_title: e.target.value }))}
+                        placeholder="Ex. Claims Verification Script"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="reading-category">Reading Category</Label>
+                      <Input
+                        id="reading-category"
+                        value={moduleForm.reading_category}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_category: e.target.value }))}
+                        placeholder="Ex. Telephone Script"
+                      />
+                    </div>
+                  </div>
                   <div className="space-y-2">
-                    <Label htmlFor="reading-passage">Reading Passage</Label>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <Label htmlFor="reading-passage">Reading Passage</Label>
+                      <div className="flex flex-wrap gap-1">
+                        <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<h2>', '</h2>', 'Heading')}>
+                          <Heading2 className="size-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<strong>', '</strong>', 'bold text')}>
+                          <Bold className="size-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<em>', '</em>', 'italic text')}>
+                          <Italic className="size-4" />
+                        </Button>
+                        <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<ul>\n<li>', '</li>\n</ul>', 'list item')}>
+                          <List className="size-4" />
+                        </Button>
+                      </div>
+                    </div>
                     <Textarea
+                      ref={readingPassageRef}
                       id="reading-passage"
                       rows={10}
                       value={moduleForm.reading_passage}
                       onChange={(e) => setModuleForm(current => ({ ...current, reading_passage: e.target.value }))}
-                      placeholder="Paste the passage, scenario, script excerpt, or story trainees should read before responding."
+                      placeholder="Paste the story, article, dialogue, call center script, or BPO scenario trainees should read aloud."
+                      className="text-base leading-7"
                     />
+                    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                      <span>
+                        {countReadingWords(moduleForm.reading_passage)} words
+                      </span>
+                      <span>
+                        Est. {Math.max(1, Math.ceil(countReadingWords(moduleForm.reading_passage) / 130))} min
+                      </span>
+                      <span>
+                        Pass target: {Math.ceil((countReadingWords(moduleForm.reading_passage) * moduleForm.passing_score) / 100)} correct words
+                      </span>
+                    </div>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="reading-prompt">Prompt / Task</Label>
+                    <Label htmlFor="reading-instructions">Instructions</Label>
                     <Textarea
-                      id="reading-prompt"
-                      rows={4}
-                      value={moduleForm.reading_prompt}
-                      onChange={(e) => setModuleForm(current => ({ ...current, reading_prompt: e.target.value }))}
-                      placeholder="Describe what trainees should say or explain after reading the passage."
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="reading-required-keywords">Optional Required Keywords</Label>
-                    <Textarea
-                      id="reading-required-keywords"
+                      id="reading-instructions"
                       rows={3}
-                      value={moduleForm.reading_required_keywords}
-                      onChange={(e) => setModuleForm(current => ({ ...current, reading_required_keywords: e.target.value }))}
-                      placeholder="Comma or new-line separated phrases for the speech evaluation tracker."
+                      value={moduleForm.reading_instructions}
+                      onChange={(e) => setModuleForm(current => ({ ...current, reading_instructions: e.target.value }))}
+                      placeholder="Read the passage aloud clearly and naturally."
                     />
+                  </div>
+                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="reading-language">Language</Label>
+                      <Input
+                        id="reading-language"
+                        value={moduleForm.reading_language}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_language: e.target.value }))}
+                        placeholder="en-US"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="reading-max-attempts">Maximum Attempts</Label>
+                      <Input
+                        id="reading-max-attempts"
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={moduleForm.reading_max_attempts}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_max_attempts: Number(e.target.value || 1) }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="reading-time-limit">Time Limit Seconds</Label>
+                      <Input
+                        id="reading-time-limit"
+                        type="number"
+                        min={0}
+                        value={moduleForm.reading_time_limit_seconds}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_time_limit_seconds: Number(e.target.value || 0) }))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Reading Time</Label>
+                      <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                        {Math.max(1, Math.ceil(countReadingWords(moduleForm.reading_passage) / 130))} minute(s)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-slate-50 p-4">
+                    <div className="font-medium">Score Thresholds</div>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ['Minimum Pronunciation', 'reading_min_pronunciation_score'],
+                        ['Minimum Accuracy', 'reading_min_accuracy_score'],
+                        ['Minimum Completeness', 'reading_min_completeness_score'],
+                        ['Minimum Fluency', 'reading_min_fluency_score'],
+                      ].map(([label, key]) => (
+                        <div className="space-y-2" key={key}>
+                          <Label>{label}</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={100}
+                            value={Number(moduleForm[key as keyof ModuleFormState] || 0)}
+                            onChange={(e) => setModuleForm(current => ({
+                              ...current,
+                              [key]: Number(e.target.value || 0),
+                            }))}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-slate-50 p-4">
+                    <div className="font-medium">Recording Controls</div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ['Allow Replay', 'reading_allow_replay'],
+                        ['Allow Pause', 'reading_allow_pause'],
+                        ['Auto Submit', 'reading_auto_submit'],
+                        ['Manual Review', 'reading_manual_review_required'],
+                      ].map(([label, key]) => (
+                        <label key={key} className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm">
+                          <span>{label}</span>
+                          <input
+                            type="checkbox"
+                            className="size-4"
+                            checked={Boolean(moduleForm[key as keyof ModuleFormState])}
+                            onChange={(e) => setModuleForm(current => ({
+                              ...current,
+                              [key]: e.target.checked,
+                            }))}
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border bg-slate-50 p-4">
+                    <div className="font-medium">AI Analysis</div>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {[
+                        ['Pronunciation', 'reading_ai_pronunciation'],
+                        ['Fluency', 'reading_ai_fluency'],
+                        ['Accuracy', 'reading_ai_accuracy'],
+                        ['Completeness', 'reading_ai_completeness'],
+                        ['Confidence', 'reading_ai_confidence'],
+                        ['Word Analysis', 'reading_ai_word_analysis'],
+                        ['Mispronounced Words', 'reading_ai_mispronounced_words'],
+                        ['Sound Analysis', 'reading_ai_sound_analysis'],
+                        ['Suggestions', 'reading_ai_suggestions'],
+                      ].map(([label, key]) => (
+                        <label key={key} className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm">
+                          <span>{label}</span>
+                          <input
+                            type="checkbox"
+                            className="size-4"
+                            checked={Boolean(moduleForm[key as keyof ModuleFormState])}
+                            onChange={(e) => setModuleForm(current => ({
+                              ...current,
+                              [key]: e.target.checked,
+                            }))}
+                          />
+                        </label>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>

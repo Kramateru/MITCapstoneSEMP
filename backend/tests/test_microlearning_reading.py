@@ -25,5 +25,6 @@ def test_reading_module_is_supported_and_generates_stt_exercise():
     exercise = exercises[0]
     assert exercise["type"] == "keyword_response"
     assert exercise["enable_stt"] is True
-    assert exercise["prompt"] == "Read the passage aloud and explain the next step."
-    assert exercise["required_keywords"] == ["concern", "next step"]
+    assert exercise["prompt"] == "Read the assigned passage aloud."
+    assert exercise["required_keywords"] == []
+    assert exercise["sample_answer"] == "Please acknowledge the concern and explain the next step."

@@ -184,9 +184,30 @@ export interface ModuleFormState {
     required_keywords?: string;
   }>;
   // Reading specific metadata
-  reading_prompt: string;
+  reading_title: string;
+  reading_category: string;
   reading_passage: string;
-  reading_required_keywords: string;
+  reading_instructions: string;
+  reading_language: string;
+  reading_max_attempts: number;
+  reading_time_limit_seconds: number;
+  reading_allow_replay: boolean;
+  reading_allow_pause: boolean;
+  reading_auto_submit: boolean;
+  reading_manual_review_required: boolean;
+  reading_min_pronunciation_score: number;
+  reading_min_accuracy_score: number;
+  reading_min_completeness_score: number;
+  reading_min_fluency_score: number;
+  reading_ai_pronunciation: boolean;
+  reading_ai_fluency: boolean;
+  reading_ai_accuracy: boolean;
+  reading_ai_completeness: boolean;
+  reading_ai_confidence: boolean;
+  reading_ai_word_analysis: boolean;
+  reading_ai_mispronounced_words: boolean;
+  reading_ai_sound_analysis: boolean;
+  reading_ai_suggestions: boolean;
   // Audio specific metadata
   audio_content_id: string;
   audio_storage_path: string;
@@ -246,9 +267,30 @@ export function emptyModuleForm(): ModuleFormState {
     infographic_questions: [],
     case_study_content: '',
     case_study_questions: [],
-    reading_prompt: '',
+    reading_title: '',
+    reading_category: 'BPO Communication',
     reading_passage: '',
-    reading_required_keywords: '',
+    reading_instructions: 'Read the passage aloud clearly and naturally. Pause at punctuation and complete ending consonants.',
+    reading_language: 'en-US',
+    reading_max_attempts: 3,
+    reading_time_limit_seconds: 0,
+    reading_allow_replay: true,
+    reading_allow_pause: true,
+    reading_auto_submit: false,
+    reading_manual_review_required: false,
+    reading_min_pronunciation_score: 0,
+    reading_min_accuracy_score: 0,
+    reading_min_completeness_score: 0,
+    reading_min_fluency_score: 0,
+    reading_ai_pronunciation: true,
+    reading_ai_fluency: true,
+    reading_ai_accuracy: true,
+    reading_ai_completeness: true,
+    reading_ai_confidence: true,
+    reading_ai_word_analysis: true,
+    reading_ai_mispronounced_words: true,
+    reading_ai_sound_analysis: true,
+    reading_ai_suggestions: true,
     audio_content_id: '',
     audio_storage_path: '',
     audio_bucket_name: '',
@@ -269,6 +311,25 @@ export function splitToList(value: string) {
     .split(/\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+export function stripReadingMarkup(value: string) {
+  return (value || '')
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\/\s*(p|div|h[1-6]|li)\s*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function countReadingWords(value: string) {
+  return (stripReadingMarkup(value).match(/\b[\w']+\b/g) || []).length;
 }
 
 function parseCaptionDataJson(value: string) {
@@ -399,13 +460,44 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
         })),
       };
     case 'reading':
+      const readingRichContent = form.reading_passage.trim();
+      const readingPlainContent = stripReadingMarkup(readingRichContent);
       return {
         ...preserved,
-        reading_passage: form.reading_passage.trim() || undefined,
-        practice_prompt: form.reading_prompt.trim() || undefined,
-        analysis_prompt: form.reading_prompt.trim() || undefined,
-        required_keywords: splitToList(form.reading_required_keywords || ''),
-        sample_answer: form.reading_prompt.trim() || undefined,
+        reading_title: form.reading_title.trim() || form.title.trim() || undefined,
+        reading_category: form.reading_category.trim() || undefined,
+        reading_rich_content: readingRichContent || undefined,
+        reading_passage: readingPlainContent || undefined,
+        reading_content: readingPlainContent || undefined,
+        content: readingPlainContent || undefined,
+        instructions: form.reading_instructions.trim() || undefined,
+        language: form.reading_language || 'en-US',
+        word_count: countReadingWords(readingRichContent),
+        estimated_reading_time_minutes: form.duration_minutes,
+        reading_config: {
+          max_attempts: form.reading_max_attempts,
+          time_limit_seconds: form.reading_time_limit_seconds > 0 ? form.reading_time_limit_seconds : null,
+          allow_replay: form.reading_allow_replay,
+          allow_pause: form.reading_allow_pause,
+          auto_submit: form.reading_auto_submit,
+          manual_review_required: form.reading_manual_review_required,
+          minimum_pronunciation_score: form.reading_min_pronunciation_score,
+          minimum_accuracy_score: form.reading_min_accuracy_score,
+          minimum_completeness_score: form.reading_min_completeness_score,
+          minimum_fluency_score: form.reading_min_fluency_score,
+        },
+        ai_configuration: {
+          voice_assessment_enabled: true,
+          pronunciation: form.reading_ai_pronunciation,
+          fluency: form.reading_ai_fluency,
+          accuracy: form.reading_ai_accuracy,
+          completeness: form.reading_ai_completeness,
+          confidence: form.reading_ai_confidence,
+          word_analysis: form.reading_ai_word_analysis,
+          mispronounced_words: form.reading_ai_mispronounced_words,
+          sound_analysis: form.reading_ai_sound_analysis,
+          suggestions: form.reading_ai_suggestions,
+        },
         enable_stt_reading: true,
       };
     case 'audio':
@@ -559,11 +651,34 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
         })),
       };
     case 'reading':
+      const readingConfig = content.reading_config || {};
+      const aiConfig = content.ai_configuration || {};
       return {
         ...baseForm,
-        reading_prompt: content.practice_prompt || content.analysis_prompt || '',
-        reading_passage: content.reading_passage || content.content || '',
-        reading_required_keywords: Array.isArray(content.required_keywords) ? content.required_keywords.join(', ') : '',
+        reading_title: content.reading_title || module.title || '',
+        reading_category: content.reading_category || '',
+        reading_passage: content.reading_rich_content || content.reading_passage || content.reading_content || content.content || '',
+        reading_instructions: content.instructions || form.reading_instructions,
+        reading_language: content.language || content.audio_language || 'en-US',
+        reading_max_attempts: Number(readingConfig.max_attempts || content.max_attempts || 3),
+        reading_time_limit_seconds: Number(readingConfig.time_limit_seconds || 0),
+        reading_allow_replay: readingConfig.allow_replay !== false,
+        reading_allow_pause: readingConfig.allow_pause !== false,
+        reading_auto_submit: Boolean(readingConfig.auto_submit),
+        reading_manual_review_required: Boolean(readingConfig.manual_review_required),
+        reading_min_pronunciation_score: Number(readingConfig.minimum_pronunciation_score || 0),
+        reading_min_accuracy_score: Number(readingConfig.minimum_accuracy_score || 0),
+        reading_min_completeness_score: Number(readingConfig.minimum_completeness_score || 0),
+        reading_min_fluency_score: Number(readingConfig.minimum_fluency_score || 0),
+        reading_ai_pronunciation: aiConfig.pronunciation !== false,
+        reading_ai_fluency: aiConfig.fluency !== false,
+        reading_ai_accuracy: aiConfig.accuracy !== false,
+        reading_ai_completeness: aiConfig.completeness !== false,
+        reading_ai_confidence: aiConfig.confidence !== false,
+        reading_ai_word_analysis: aiConfig.word_analysis !== false,
+        reading_ai_mispronounced_words: aiConfig.mispronounced_words !== false,
+        reading_ai_sound_analysis: aiConfig.sound_analysis !== false,
+        reading_ai_suggestions: aiConfig.suggestions !== false,
       };
     case 'audio':
       return {

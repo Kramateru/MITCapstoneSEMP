@@ -1,464 +1,858 @@
 'use client';
 
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { LazyIcon } from '@/app/components/ui/LazyIcon';
+import { useAuth } from '@/app/context/AuthContext';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Badge } from '../ui/badge';
+import { Button } from '../ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Progress } from '../ui/progress';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
+
+const Mic = (props: any) => <LazyIcon name="Mic" {...props} />;
+const Pause = (props: any) => <LazyIcon name="Pause" {...props} />;
+const Play = (props: any) => <LazyIcon name="Play" {...props} />;
+const RotateCcw = (props: any) => <LazyIcon name="RotateCcw" {...props} />;
+const Send = (props: any) => <LazyIcon name="Send" {...props} />;
+const Square = (props: any) => <LazyIcon name="Square" {...props} />;
 
 interface ReadingAssessmentProps {
   moduleId: string;
   reading: {
     title: string;
+    readingTitle?: string;
+    category?: string;
+    difficulty?: string;
+    language?: string;
+    description?: string;
     instructions?: string;
     passingScore: number;
     wordCount: number;
+    estimatedReadingTime?: number;
     readingContent: string;
+    readingRichContent?: string;
+    maxAttempts?: number;
+    timeLimitSeconds?: number | null;
+    allowReplay?: boolean;
+    allowPause?: boolean;
+    autoSubmit?: boolean;
   };
   onComplete?: (attemptId: string) => void;
 }
 
+type Stage = 'preparation' | 'recording' | 'paused' | 'review' | 'uploading' | 'processing' | 'complete';
+
+type WordStatus = 'unread' | 'current' | 'correct' | 'mispronounced' | 'omitted' | 'extra' | 'repeated' | 'uncertain';
+
+interface WordAnalysisRow {
+  word_index: number;
+  expected_word: string;
+  spoken_word?: string | null;
+  status: WordStatus;
+  confidence?: number | null;
+  phoneme_data?: Record<string, any>;
+  feedback?: string | null;
+}
+
+interface ReadingResult {
+  attempt_id: string;
+  status: string;
+  score: number;
+  overall_score?: number;
+  pronunciation_score?: number;
+  accuracy?: number;
+  fluency?: number;
+  completeness?: number;
+  confidence?: number;
+  passing_score: number;
+  passed: boolean;
+  word_count: number;
+  correct_words: number;
+  mispronounced_words: number;
+  omitted_words: number;
+  extra_words: number;
+  repeated_words?: number;
+  words_per_minute?: number;
+  duration_seconds?: number;
+  strengths?: string;
+  improvement_areas?: string;
+  recommendations?: string;
+  common_issues?: any;
+  score_breakdown?: Record<string, any>;
+  word_analysis?: WordAnalysisRow[];
+  transcript?: string;
+  audio_url?: string;
+}
+
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: ((event: any) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition?: new () => SpeechRecognitionLike;
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+  }
+}
+
+function tokenize(value: string) {
+  return (value || '').toLowerCase().match(/\b[\w']+\b/g) || [];
+}
+
+function formatTime(seconds: number) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function safePercent(value: unknown) {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? Math.round(numeric) : 0;
+}
+
+function getStatusClass(status: WordStatus) {
+  switch (status) {
+    case 'current':
+      return 'border-sky-300 bg-sky-100 text-sky-900';
+    case 'correct':
+      return 'border-emerald-300 bg-emerald-100 text-emerald-900';
+    case 'mispronounced':
+    case 'uncertain':
+      return 'border-rose-300 bg-rose-100 text-rose-900';
+    case 'omitted':
+      return 'border-amber-300 bg-amber-100 text-amber-900';
+    case 'extra':
+      return 'border-orange-300 bg-orange-100 text-orange-900';
+    case 'repeated':
+      return 'border-orange-300 bg-orange-100 text-orange-900';
+    default:
+      return 'border-slate-200 bg-slate-50 text-slate-600';
+  }
+}
+
+function collectSpeechTranscript(event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) {
+  const parts: string[] = [];
+  for (let index = 0; index < event.results.length; index += 1) {
+    const item = event.results[index]?.[0];
+    if (item?.transcript) {
+      parts.push(item.transcript);
+    }
+  }
+  return parts.join(' ').trim();
+}
+
+function sanitizeReadingMarkup(value: string) {
+  const allowedTags = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'ul', 'ol', 'li', 'h1', 'h2', 'h3']);
+  return (value || '')
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
+    .replace(/<\/?([a-z0-9]+)(?:\s[^>]*)?>/gi, (tag, rawName) => {
+      const name = String(rawName || '').toLowerCase();
+      if (!allowedTags.has(name)) {
+        return '';
+      }
+      return tag.startsWith('</') ? `</${name}>` : `<${name}>`;
+    });
+}
+
 export function TraineeReadingAssessment({ moduleId, reading, onComplete }: ReadingAssessmentProps) {
   const router = useRouter();
+  const { token } = useAuth();
   const { toast } = useToast();
 
-  const [stage, setStage] = useState<
-    'preparation' | 'recording' | 'review' | 'uploading' | 'processing' | 'complete'
-  >('preparation');
-  
+  const [stage, setStage] = useState<Stage>('preparation');
   const [recordingTime, setRecordingTime] = useState(0);
-  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string>('');
-  const [attemptId, setAttemptId] = useState<string>('');
-  const [results, setResults] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [audioUrl, setAudioUrl] = useState('');
+  const [attemptId, setAttemptId] = useState('');
+  const [attemptNumber, setAttemptNumber] = useState<number | null>(null);
+  const [results, setResults] = useState<ReadingResult | null>(null);
+  const [attemptHistory, setAttemptHistory] = useState<Array<{
+    id: string;
+    attempt_number: number;
+    status: string;
+    score?: number | null;
+    passed: boolean;
+    completed_at?: string | null;
+  }>>([]);
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [micLevel, setMicLevel] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
 
-  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const analyserFrameRef = useRef<number | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
+  const passageWords = useMemo(() => tokenize(reading.readingContent), [reading.readingContent]);
+  const richPassageHtml = useMemo(
+    () => sanitizeReadingMarkup(reading.readingRichContent || ''),
+    [reading.readingRichContent],
+  );
+  const liveWords = useMemo(() => tokenize(liveTranscript), [liveTranscript]);
+  const passageSentences = useMemo(
+    () => (reading.readingContent || '').split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean),
+    [reading.readingContent],
+  );
+  const spokenProgress = Math.min(passageWords.length, liveWords.length);
+  const progressValue = passageWords.length ? (spokenProgress / passageWords.length) * 100 : 0;
+  const currentSentence = useMemo(() => {
+    if (!passageSentences.length) {
+      return reading.readingContent;
+    }
+    let wordCursor = 0;
+    for (const sentence of passageSentences) {
+      const sentenceWordCount = tokenize(sentence).length;
+      if (spokenProgress <= wordCursor + sentenceWordCount) {
+        return sentence;
       }
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl);
+      wordCursor += sentenceWordCount;
+    }
+    return passageSentences[passageSentences.length - 1];
+  }, [passageSentences, reading.readingContent, spokenProgress]);
+
+  useEffect(() => () => cleanupRecording(), []);
+  useEffect(() => {
+    void loadAttemptHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moduleId, token]);
+  useEffect(() => {
+    if (!reading.timeLimitSeconds || stage !== 'recording') {
+      return;
+    }
+    if (recordingTime >= reading.timeLimitSeconds) {
+      stopRecording();
+      if (reading.autoSubmit) {
+        window.setTimeout(() => void handleSubmit(), 250);
+      }
+    }
+  }, [recordingTime, reading.autoSubmit, reading.timeLimitSeconds, stage]);
+
+  function authHeaders(): HeadersInit {
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
+
+  async function readError(response: Response) {
+    const data = await response.json().catch(() => null);
+    return data?.detail || data?.message || response.statusText || 'Request failed';
+  }
+
+  async function loadAttemptHistory() {
+    try {
+      const response = await fetch(`/api/trainee/reading/modules/${moduleId}/history`, {
+        headers: authHeaders(),
+      });
+      if (!response.ok) {
+        return;
+      }
+      const data = await response.json();
+      setAttemptHistory(Array.isArray(data.attempts) ? data.attempts : []);
+    } catch {
+      setAttemptHistory([]);
+    }
+  }
+
+  function cleanupRecording() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    if (analyserFrameRef.current) {
+      cancelAnimationFrame(analyserFrameRef.current);
+      analyserFrameRef.current = null;
+    }
+    recognitionRef.current?.stop();
+    recognitionRef.current = null;
+    mediaRecorderRef.current = null;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    audioContextRef.current?.close().catch(() => undefined);
+    audioContextRef.current = null;
+    analyserRef.current = null;
+  }
+
+  function startTimer() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+    }
+    timerRef.current = setInterval(() => setRecordingTime((current) => current + 1), 1000);
+  }
+
+  function startLiveRecognition() {
+    const RecognitionCtor = typeof window !== 'undefined'
+      ? window.SpeechRecognition || window.webkitSpeechRecognition
+      : undefined;
+    if (!RecognitionCtor) {
+      return;
+    }
+    const recognition = new RecognitionCtor();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = reading.language || 'en-US';
+    recognition.onresult = (event) => setLiveTranscript(collectSpeechTranscript(event));
+    recognition.onerror = () => undefined;
+    recognition.onend = () => {
+      if (recognitionRef.current === recognition && stage === 'recording') {
+        try {
+          recognition.start();
+        } catch {
+          recognitionRef.current = null;
+        }
       }
     };
-  }, [audioUrl]);
-
-  const startRecording = async () => {
+    recognitionRef.current = recognition;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      recognition.start();
+    } catch {
+      recognitionRef.current = null;
+    }
+  }
 
+  function startMicMeter(stream: MediaStream) {
+    const AudioContextCtor = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextCtor) {
+      return;
+    }
+    const audioContext = new AudioContextCtor();
+    const analyser = audioContext.createAnalyser();
+    analyser.fftSize = 256;
+    audioContext.createMediaStreamSource(stream).connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    audioContextRef.current = audioContext;
+    analyserRef.current = analyser;
+
+    const tick = () => {
+      analyser.getByteFrequencyData(data);
+      const average = data.reduce((sum, value) => sum + value, 0) / Math.max(1, data.length);
+      setMicLevel(Math.min(100, Math.round((average / 160) * 100)));
+      analyserFrameRef.current = requestAnimationFrame(tick);
+    };
+    tick();
+  }
+
+  async function ensureAttempt() {
+    if (attemptId) {
+      return attemptId;
+    }
+    const response = await fetch(`/api/trainee/reading/attempts/${moduleId}/start`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error(await readError(response));
+    }
+    const data = await response.json();
+    setAttemptId(data.attempt_id);
+    setAttemptNumber(data.attempt_number);
+    return data.attempt_id as string;
+  }
+
+  async function startRecording() {
+    try {
+      await ensureAttempt();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
+      const recorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
+      streamRef.current = stream;
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
-
       recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
         setAudioBlob(blob);
-        const url = URL.createObjectURL(blob);
-        setAudioUrl(url);
+        if (audioUrl) {
+          URL.revokeObjectURL(audioUrl);
+        }
+        setAudioUrl(URL.createObjectURL(blob));
+        cleanupRecording();
         setStage('review');
-
-        // Stop all tracks
-        stream.getTracks().forEach(track => track.stop());
       };
 
-      recorder.start();
+      recorder.start(1000);
       mediaRecorderRef.current = recorder;
-      setMediaRecorder(recorder);
-      setStage('recording');
+      setAudioBlob(null);
+      setAudioUrl('');
+      setLiveTranscript('');
       setRecordingTime(0);
-
-      // Start timer
-      recordingTimerRef.current = setInterval(() => {
-        setRecordingTime(prev => prev + 1);
-      }, 1000);
-
-      toast({
-        title: 'Recording Started',
-        description: 'Read the passage aloud clearly. Click "Stop Recording" when done.',
-      });
+      setStage('recording');
+      startTimer();
+      startMicMeter(stream);
+      startLiveRecognition();
     } catch (error: any) {
-      console.error('Microphone access error:', error);
-      const errorMsg = error.name === 'NotAllowedError'
-        ? 'Microphone access denied. Please grant permissions and try again.'
-        : error.name === 'NotFoundError'
-        ? 'No microphone found. Please connect a microphone.'
-        : 'Unable to access microphone.';
-
-      toast({
-        title: 'Microphone Error',
-        description: errorMsg,
-        variant: 'destructive',
-      });
+      const name = error?.name || '';
+      const message = name === 'NotAllowedError'
+        ? 'Microphone access was denied. Enable microphone permission and try again.'
+        : name === 'NotFoundError'
+          ? 'No microphone was found. Connect a microphone and try again.'
+          : error?.message || 'Unable to start the reading assessment.';
+      toast({ title: 'Microphone unavailable', description: message, variant: 'destructive' });
+      cleanupRecording();
+      setStage('preparation');
     }
-  };
+  }
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-      if (recordingTimerRef.current) {
-        clearInterval(recordingTimerRef.current);
-      }
-    }
-  };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const handleRerecord = () => {
-    setAudioBlob(null);
-    setAudioUrl('');
-    setRecordingTime(0);
-    startRecording();
-  };
-
-  const handleSubmit = async () => {
-    if (!audioBlob) {
-      toast({
-        title: 'Error',
-        description: 'No recording found',
-        variant: 'destructive',
-      });
+  function pauseRecording() {
+    if (!reading.allowPause || mediaRecorderRef.current?.state !== 'recording') {
       return;
     }
+    mediaRecorderRef.current.pause();
+    recognitionRef.current?.stop();
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setStage('paused');
+  }
 
-    const getErrorMessage = async (response: Response) => {
-      try {
-        const data = await response.json();
-        return data?.detail || data?.message || 'Failed to process assessment';
-      } catch {
-        return response.statusText || 'Failed to process assessment';
-      }
-    };
+  function resumeRecording() {
+    if (mediaRecorderRef.current?.state !== 'paused') {
+      return;
+    }
+    mediaRecorderRef.current.resume();
+    setStage('recording');
+    startTimer();
+    startLiveRecognition();
+  }
 
-    setLoading(true);
+  function stopRecording() {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  }
+
+  function restartRecording() {
+    setAudioBlob(null);
+    setAudioUrl('');
+    setLiveTranscript('');
+    setRecordingTime(0);
+    setResults(null);
+    void startRecording();
+  }
+
+  async function handleSubmit() {
+    if (!audioBlob) {
+      toast({ title: 'No recording', description: 'Record your reading before submitting.', variant: 'destructive' });
+      return;
+    }
+    const activeAttemptId = attemptId || await ensureAttempt();
+    setSubmitting(true);
     try {
-      // Step 1: Start attempt
-      const startResponse = await fetch(`/api/trainee/reading/attempts/${moduleId}/start`, {
-        method: 'POST',
-      });
-
-      if (!startResponse.ok) {
-        throw new Error(await getErrorMessage(startResponse));
-      }
-
-      const startData = await startResponse.json();
-      const newAttemptId = startData.attempt_id;
-      setAttemptId(newAttemptId);
-
-      // Step 2: Upload audio
       setStage('uploading');
       const formData = new FormData();
       formData.append('file', audioBlob, 'reading-attempt.webm');
-
-      const uploadResponse = await fetch(`/api/trainee/reading/attempts/${newAttemptId}/upload-audio`, {
+      const uploadResponse = await fetch(`/api/trainee/reading/attempts/${activeAttemptId}/upload-audio`, {
         method: 'POST',
+        headers: authHeaders(),
         body: formData,
       });
-
       if (!uploadResponse.ok) {
-        throw new Error(await getErrorMessage(uploadResponse));
+        throw new Error(await readError(uploadResponse));
       }
 
-      // Step 3: Process assessment
       setStage('processing');
-      const processResponse = await fetch(`/api/trainee/reading/attempts/${newAttemptId}/process`, {
+      const processResponse = await fetch(`/api/trainee/reading/attempts/${activeAttemptId}/process`, {
         method: 'POST',
+        headers: authHeaders(),
       });
-
       if (!processResponse.ok) {
-        throw new Error(await getErrorMessage(processResponse));
+        throw new Error(await readError(processResponse));
       }
-
       const processData = await processResponse.json();
 
-      setResults(processData);
-      setStage('complete');
-
-      toast({
-        title: 'Assessment Complete',
-        description: 'Your reading has been analyzed. Review your results below.',
+      const detailResponse = await fetch(`/api/trainee/reading/attempts/${activeAttemptId}`, {
+        headers: authHeaders(),
       });
-
-      if (onComplete) {
-        onComplete(newAttemptId);
-      }
+      const detailData = detailResponse.ok ? await detailResponse.json() : processData;
+      setResults({ ...processData, ...detailData });
+      setStage('complete');
+      void loadAttemptHistory();
+      onComplete?.(activeAttemptId);
+      toast({ title: 'Reading analyzed', description: 'Your pronunciation report is ready.' });
     } catch (error: any) {
-      console.error('Assessment submission error:', error);
       toast({
-        title: 'Error',
-        description: error?.message || 'Failed to process assessment',
+        title: 'Submission failed',
+        description: error?.message || 'Unable to analyze the recording.',
         variant: 'destructive',
       });
       setStage('review');
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
-  };
-
-  // Preparation stage
-  if (stage === 'preparation') {
-    return (
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle>{reading.title}</CardTitle>
-          <CardDescription>Reading & Pronunciation Assessment</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="bg-blue-50 p-4 rounded-lg">
-            <h3 className="font-semibold mb-2">Instructions</h3>
-            <p className="text-sm text-gray-700 whitespace-pre-wrap">{reading.instructions}</p>
-          </div>
-
-          <div className="grid grid-cols-3 gap-4">
-            <div className="text-center">
-              <div className="text-2xl font-bold text-blue-600">{reading.wordCount}</div>
-              <div className="text-sm text-gray-600">Words</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-green-600">{reading.passingScore}%</div>
-              <div className="text-sm text-gray-600">Passing Score</div>
-            </div>
-            <div className="text-center">
-              <div className="text-2xl font-bold text-purple-600">~{Math.ceil(reading.wordCount / 130)}</div>
-              <div className="text-sm text-gray-600">Min to Read</div>
-            </div>
-          </div>
-
-          <div className="bg-gray-50 p-4 rounded-lg max-h-60 overflow-y-auto">
-            <h3 className="font-semibold mb-3">Reading Passage</h3>
-            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-              {reading.readingContent}
-            </p>
-          </div>
-
-          <Button onClick={startRecording} size="lg" className="w-full">
-            🎤 Start Recording
-          </Button>
-        </CardContent>
-      </Card>
-    );
   }
 
-  // Recording stage
-  if (stage === 'recording') {
-    return (
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle>Recording in Progress</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-20 h-20 rounded-full bg-red-100 flex items-center justify-center animate-pulse">
-              <div className="w-16 h-16 rounded-full bg-red-500"></div>
-            </div>
-            <div className="text-4xl font-mono font-bold text-gray-800">
-              {formatTime(recordingTime)}
-            </div>
-            <p className="text-gray-600">Reading the passage aloud...</p>
-          </div>
-
-          <Button onClick={stopRecording} size="lg" className="w-full bg-red-600 hover:bg-red-700">
-            ⏹️ Stop Recording
-          </Button>
-        </CardContent>
-      </Card>
-    );
+  function liveWordStatus(index: number, word: string): WordStatus {
+    if (!liveWords.length || index >= liveWords.length) {
+      return index === liveWords.length ? 'current' : 'unread';
+    }
+    return liveWords[index] === word ? 'correct' : 'mispronounced';
   }
 
-  // Review stage
-  if (stage === 'review') {
-    return (
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle>Review Recording</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-gray-50 p-4 rounded-lg">
-            <p className="text-sm text-gray-600 mb-3">Duration: {formatTime(recordingTime)}</p>
-            {audioUrl && (
-              <audio controls className="w-full" controlsList="nodownload">
-                <source src={audioUrl} type="audio/webm" />
-                Your browser does not support the audio element.
-              </audio>
-            )}
-          </div>
+  const finalWordAnalysis = results?.word_analysis || [];
+  const displayWords = finalWordAnalysis.length
+    ? finalWordAnalysis.map((item) => ({
+      word: item.expected_word || item.spoken_word || '',
+      status: item.status,
+      feedback: item.feedback || '',
+    }))
+    : passageWords.map((word, index) => ({
+      word,
+      status: liveWordStatus(index, word),
+      feedback: '',
+    }));
 
-          <div className="flex gap-3">
-            <Button
-              onClick={handleRerecord}
-              variant="outline"
-              className="flex-1"
-              disabled={loading}
-            >
-              🔄 Re-record
-            </Button>
-            <Button
-              onClick={handleSubmit}
-              className="flex-1"
-              disabled={loading}
-            >
-              {loading ? 'Submitting...' : '✓ Submit for Analysis'}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // Uploading/Processing stages
-  if (stage === 'uploading' || stage === 'processing') {
-    return (
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <CardTitle>
-            {stage === 'uploading' ? 'Uploading Recording' : 'Analyzing Pronunciation'}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-            <p className="text-gray-600">
-              {stage === 'uploading'
-                ? 'Uploading your recording to our servers...'
-                : 'Analyzing your pronunciation and speech patterns...'}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  // Complete stage - show results
   if (stage === 'complete' && results) {
-    const passed = results.passed;
-    const score = Math.round(results.score);
+    const score = safePercent(results.overall_score ?? results.score);
+    const commonSounds = Array.isArray(results.common_issues?.sound_analysis)
+      ? results.common_issues.sound_analysis
+      : [];
+    const wordRows = results.word_analysis || [];
 
     return (
-      <div className="w-full max-w-4xl space-y-4">
-        {/* Main Result Card */}
-        <Card className={passed ? 'border-green-300' : 'border-orange-300'}>
+      <div className="w-full space-y-4">
+        <Card className={results.passed ? 'border-emerald-300' : 'border-amber-300'}>
           <CardHeader>
-            <CardTitle className={passed ? 'text-green-700' : 'text-orange-700'}>
-              {passed ? '✓ PASSED' : '✗ Needs Improvement'}
-            </CardTitle>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div>
+                <CardTitle>{results.passed ? 'Passed' : 'Needs Improvement'}</CardTitle>
+                <CardDescription>Pronunciation reading report for {reading.readingTitle || reading.title}</CardDescription>
+              </div>
+              <Badge className={results.passed ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-amber-200 bg-amber-50 text-amber-700'}>
+                Attempt {attemptNumber || results.score_breakdown?.attempt_number || 1}
+              </Badge>
+            </div>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="text-center">
-                <div className={`text-4xl font-bold ${passed ? 'text-green-600' : 'text-orange-600'}`}>
-                  {score}%
+          <CardContent className="space-y-5">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              {[
+                ['Overall', score],
+                ['Pronunciation', results.pronunciation_score],
+                ['Accuracy', results.accuracy],
+                ['Fluency', results.fluency],
+                ['Completeness', results.completeness],
+                ['Confidence', results.confidence],
+              ].map(([label, value]) => (
+                <div key={label as string} className="rounded-lg border bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+                  <p className="mt-2 text-2xl font-semibold text-slate-900">{safePercent(value)}%</p>
                 </div>
-                <div className="text-sm text-gray-600">Your Score</div>
-              </div>
-              <div className="text-center">
-                <div className="text-4xl font-bold text-blue-600">{results.passing_score}%</div>
-                <div className="text-sm text-gray-600">Required</div>
-              </div>
+              ))}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <Metric label="Words Correct" value={results.correct_words} />
+              <Metric label="Mispronounced" value={results.mispronounced_words} />
+              <Metric label="Skipped" value={results.omitted_words} />
+              <Metric label="Repeated" value={results.repeated_words || 0} />
+              <Metric label="Inserted" value={results.extra_words} />
+              <Metric label="WPM" value={safePercent(results.words_per_minute)} />
+              <Metric label="Duration" value={formatTime(Math.round(results.duration_seconds || recordingTime))} />
+              <Metric label="Required" value={`${results.passing_score}%`} />
             </div>
           </CardContent>
         </Card>
 
-        {/* Statistics */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Word Analysis</CardTitle>
+            <CardTitle>Passage Highlighting</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center p-3 bg-green-50 rounded">
-                <div className="text-2xl font-bold text-green-600">{results.correct_words}</div>
-                <div className="text-sm text-gray-600">Correct</div>
-              </div>
-              <div className="text-center p-3 bg-orange-50 rounded">
-                <div className="text-2xl font-bold text-orange-600">{results.mispronounced_words}</div>
-                <div className="text-sm text-gray-600">Mispronounced</div>
-              </div>
-              <div className="text-center p-3 bg-red-50 rounded">
-                <div className="text-2xl font-bold text-red-600">{results.omitted_words}</div>
-                <div className="text-sm text-gray-600">Omitted</div>
-              </div>
-              <div className="text-center p-3 bg-gray-50 rounded">
-                <div className="text-2xl font-bold text-gray-600">{results.extra_words}</div>
-                <div className="text-sm text-gray-600">Extra</div>
-              </div>
+            <div className="flex flex-wrap gap-2 text-sm leading-7">
+              {displayWords.map((item, index) => (
+                <span
+                  key={`${item.word}-${index}`}
+                  title={item.feedback}
+                  className={`rounded-md border px-2 py-1 ${getStatusClass(item.status)}`}
+                >
+                  {item.word}
+                </span>
+              ))}
             </div>
           </CardContent>
         </Card>
 
-        {/* Strengths */}
-        {results.strengths && (
+        <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Your Strengths</CardTitle>
+              <CardTitle>Sound Analysis</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap">{results.strengths}</p>
+            <CardContent className="space-y-3">
+              {commonSounds.length ? commonSounds.map((item: any) => (
+                <div key={item.sound} className="rounded-lg border p-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="font-medium">{item.sound}</span>
+                    <span>{safePercent(item.accuracy)}%</span>
+                  </div>
+                  <Progress value={safePercent(item.accuracy)} className="mt-2" />
+                </div>
+              )) : (
+                <p className="text-sm text-slate-500">No recurring sound issues were detected.</p>
+              )}
             </CardContent>
           </Card>
-        )}
 
-        {/* Areas for Improvement */}
-        {results.improvement_areas && (
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg">Areas for Improvement</CardTitle>
+              <CardTitle>Feedback</CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap">{results.improvement_areas}</p>
+            <CardContent className="space-y-4 text-sm leading-6 text-slate-700">
+              <FeedbackBlock title="Strengths" value={results.strengths} />
+              <FeedbackBlock title="Opportunities" value={results.improvement_areas} />
+              <FeedbackBlock title="Recommendations" value={results.recommendations} />
             </CardContent>
           </Card>
-        )}
+        </div>
 
-        {/* Common Issues */}
-        {results.common_issues && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">Most Common Issues</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-gray-700 whitespace-pre-wrap">{results.common_issues}</p>
-            </CardContent>
-          </Card>
-        )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Detailed Word Analysis</CardTitle>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Word</TableHead>
+                  <TableHead>Recognized</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Confidence</TableHead>
+                  <TableHead>Sound Issue</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {wordRows.slice(0, 120).map((word, index) => (
+                  <TableRow key={`${word.word_index}-${index}`}>
+                    <TableCell>{word.expected_word || '-'}</TableCell>
+                    <TableCell>{word.spoken_word || '-'}</TableCell>
+                    <TableCell>{word.status}</TableCell>
+                    <TableCell>{word.confidence !== null && word.confidence !== undefined ? `${safePercent(word.confidence * 100)}%` : '-'}</TableCell>
+                    <TableCell>{word.phoneme_data?.sound || '-'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
 
-        {/* Action Buttons */}
-        <div className="flex gap-3">
-          <Button onClick={() => router.back()} variant="outline" className="flex-1">
-            ← Back to Module
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Button variant="outline" onClick={() => router.back()} className="flex-1">
+            Back to Module
           </Button>
-          <Button
-            onClick={() => {
-              setStage('preparation');
-              setAudioBlob(null);
-              setAudioUrl('');
-              setRecordingTime(0);
-            }}
-            className="flex-1"
-          >
-            🔄 Try Again
+          <Button onClick={restartRecording} className="flex-1">
+            <RotateCcw className="mr-2 size-4" />
+            Try Again
           </Button>
         </div>
       </div>
     );
   }
 
-  return null;
+  return (
+    <div className="w-full space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div>
+              <CardTitle>{reading.readingTitle || reading.title}</CardTitle>
+              <CardDescription>{reading.description || 'AI-powered pronunciation reading assessment'}</CardDescription>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge variant="outline">{reading.category || 'Reading'}</Badge>
+              <Badge variant="outline">{reading.difficulty || 'Practice'}</Badge>
+              <Badge variant="outline">{reading.passingScore}% pass</Badge>
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric label="Words" value={reading.wordCount || passageWords.length} />
+            <Metric label="Estimated" value={`${reading.estimatedReadingTime || Math.max(1, Math.ceil(passageWords.length / 130))} min`} />
+            <Metric label="Attempts" value={reading.maxAttempts || 3} />
+            <Metric label="Time Limit" value={reading.timeLimitSeconds ? formatTime(reading.timeLimitSeconds) : 'None'} />
+          </div>
+
+          <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-slate-700">
+            {reading.instructions || 'Read the passage aloud clearly and naturally.'}
+          </div>
+
+          <div className="rounded-xl border bg-white p-5 text-lg leading-8 text-slate-800">
+            {richPassageHtml ? (
+              <div
+                className="space-y-3 [&_em]:italic [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:text-lg [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_strong]:font-semibold"
+                dangerouslySetInnerHTML={{ __html: richPassageHtml }}
+              />
+            ) : (
+              <div className="whitespace-pre-wrap">{reading.readingContent}</div>
+            )}
+          </div>
+
+          {(stage === 'recording' || stage === 'paused' || stage === 'review') ? (
+            <Card className="border-slate-200">
+              <CardContent className="space-y-4 pt-6">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Metric label="Elapsed" value={formatTime(recordingTime)} />
+                  <Metric label="Word Progress" value={`${spokenProgress}/${passageWords.length}`} />
+                  <Metric label="Mic Level" value={`${micLevel}%`} />
+                </div>
+                <Progress value={progressValue} />
+                <div className="rounded-lg border bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Current Sentence</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-700">{currentSentence || 'Start reading to track sentence progress.'}</p>
+                </div>
+                <div className="h-12 overflow-hidden rounded-lg border bg-slate-950 p-2">
+                  <div className="flex h-full items-end gap-1">
+                    {Array.from({ length: 48 }).map((_, index) => {
+                      const height = Math.max(8, Math.min(100, micLevel + ((index % 8) - 4) * 4));
+                      return (
+                        <div
+                          key={index}
+                          className="w-full rounded-t bg-emerald-400"
+                          style={{ height: `${height}%`, opacity: stage === 'recording' ? 0.9 : 0.35 }}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <div className="flex flex-wrap gap-2 text-sm leading-7">
+            {displayWords.map((item, index) => (
+              <span key={`${item.word}-${index}`} className={`rounded-md border px-2 py-1 ${getStatusClass(item.status)}`}>
+                {item.word}
+              </span>
+            ))}
+          </div>
+
+          {audioUrl && stage === 'review' ? (
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="mb-3 text-sm text-slate-600">Duration: {formatTime(recordingTime)}</p>
+              <audio controls className="w-full" src={audioUrl} />
+            </div>
+          ) : null}
+
+          {attemptHistory.length ? (
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <p className="text-sm font-medium text-slate-900">Attempt History</p>
+              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {attemptHistory.map((attempt) => (
+                  <div key={attempt.id} className="rounded-lg border bg-white p-3 text-sm">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-medium">Attempt {attempt.attempt_number}</span>
+                      <Badge variant={attempt.passed ? 'default' : 'outline'}>
+                        {attempt.passed ? 'Passed' : attempt.status}
+                      </Badge>
+                    </div>
+                    <div className="mt-2 text-slate-600">
+                      Score: {attempt.score !== null && attempt.score !== undefined ? `${Math.round(attempt.score)}%` : 'Pending'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {stage === 'uploading' || stage === 'processing' ? (
+            <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
+              {stage === 'uploading' ? 'Uploading your recording to Supabase Storage...' : 'Analyzing pronunciation, word alignment, fluency, and sound patterns...'}
+            </div>
+          ) : null}
+
+          <div className="flex flex-col gap-3 sm:flex-row">
+            {stage === 'preparation' ? (
+              <Button onClick={() => void startRecording()} className="flex-1">
+                <Mic className="mr-2 size-4" />
+                Start Reading
+              </Button>
+            ) : null}
+            {stage === 'recording' ? (
+              <>
+                {reading.allowPause !== false ? (
+                  <Button variant="outline" onClick={pauseRecording} className="flex-1">
+                    <Pause className="mr-2 size-4" />
+                    Pause
+                  </Button>
+                ) : null}
+                <Button onClick={stopRecording} className="flex-1" variant="destructive">
+                  <Square className="mr-2 size-4" />
+                  Stop
+                </Button>
+              </>
+            ) : null}
+            {stage === 'paused' ? (
+              <>
+                <Button onClick={resumeRecording} className="flex-1">
+                  <Play className="mr-2 size-4" />
+                  Resume
+                </Button>
+                <Button onClick={stopRecording} className="flex-1" variant="destructive">
+                  <Square className="mr-2 size-4" />
+                  Stop
+                </Button>
+              </>
+            ) : null}
+            {stage === 'review' ? (
+              <>
+                <Button variant="outline" onClick={restartRecording} className="flex-1" disabled={submitting}>
+                  <RotateCcw className="mr-2 size-4" />
+                  Restart
+                </Button>
+                <Button onClick={() => void handleSubmit()} className="flex-1" disabled={submitting}>
+                  <Send className="mr-2 size-4" />
+                  Submit
+                </Button>
+              </>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div className="rounded-lg border bg-white p-3">
+      <p className="text-xs uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-slate-900">{value}</p>
+    </div>
+  );
+}
+
+function FeedbackBlock({ title, value }: { title: string; value?: string }) {
+  if (!value) {
+    return null;
+  }
+  return (
+    <div>
+      <p className="font-medium text-slate-900">{title}</p>
+      <p className="mt-1">{value}</p>
+    </div>
+  );
 }
 
 export default TraineeReadingAssessment;
