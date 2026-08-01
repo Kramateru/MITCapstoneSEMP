@@ -219,28 +219,11 @@ export function CreateReadingModule() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4">
               <Field label="Module Title" required>
                 <Input value={formData.title} onChange={(e) => setField('title', e.target.value)} placeholder="Customer Service Pronunciation" />
               </Field>
-              <Field label="Reading Title">
-                <Input value={formData.readingTitle} onChange={(e) => setField('readingTitle', e.target.value)} placeholder="Claims Verification Script" />
-              </Field>
-              <Field label="Reading Category">
-                <Input value={formData.readingCategory} onChange={(e) => setField('readingCategory', e.target.value)} placeholder="Telephone Script" />
-              </Field>
-              <Field label="Language">
-                <Input value={formData.language} onChange={(e) => setField('language', e.target.value)} placeholder="en-US" />
-              </Field>
             </div>
-
-            <Field label="Description">
-              <Textarea value={formData.description} onChange={(e) => setField('description', e.target.value)} rows={2} />
-            </Field>
-
-            <Field label="Instructions">
-              <Textarea value={formData.instructions} onChange={(e) => setField('instructions', e.target.value)} rows={3} />
-            </Field>
 
             <div className="space-y-2">
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -280,57 +263,82 @@ export function CreateReadingModule() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              <NumberField label="Passing Score (%)" value={formData.passingScore} min={1} max={100} onChange={(value) => setField('passingScore', value)} />
-              <NumberField label="Maximum Attempts" value={formData.maxAttempts} min={0} max={10} onChange={(value) => setField('maxAttempts', value)} />
-              <NumberField label="Time Limit Seconds" value={formData.timeLimitSeconds} min={0} onChange={(value) => setField('timeLimitSeconds', value)} />
-              <Field label="Difficulty">
-                <select
-                  value={formData.difficulty}
-                  onChange={(e) => setField('difficulty', e.target.value as Difficulty)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-                >
-                  <option value="basic">Basic</option>
-                  <option value="intermediate">Intermediate</option>
-                  <option value="advanced">Advanced</option>
-                </select>
-              </Field>
-            </div>
+            <details className="rounded-xl border bg-slate-50 p-4">
+              <summary className="cursor-pointer text-sm font-medium">Optional reading settings</summary>
+              <div className="mt-4 space-y-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Reading Title">
+                    <Input value={formData.readingTitle} onChange={(e) => setField('readingTitle', e.target.value)} placeholder="Claims Verification Script" />
+                  </Field>
+                  <Field label="Reading Category">
+                    <Input value={formData.readingCategory} onChange={(e) => setField('readingCategory', e.target.value)} placeholder="Telephone Script" />
+                  </Field>
+                  <Field label="Language">
+                    <Input value={formData.language} onChange={(e) => setField('language', e.target.value)} placeholder="en-US" />
+                  </Field>
+                </div>
 
-            <Section title="Score Thresholds">
-              <NumberField label="Minimum Pronunciation" value={formData.minimumPronunciationScore} min={0} max={100} onChange={(value) => setField('minimumPronunciationScore', value)} />
-              <NumberField label="Minimum Accuracy" value={formData.minimumAccuracy} min={0} max={100} onChange={(value) => setField('minimumAccuracy', value)} />
-              <NumberField label="Minimum Completeness" value={formData.minimumCompleteness} min={0} max={100} onChange={(value) => setField('minimumCompleteness', value)} />
-              <NumberField label="Minimum Fluency" value={formData.minimumFluency} min={0} max={100} onChange={(value) => setField('minimumFluency', value)} />
-            </Section>
+                <Field label="Description">
+                  <Textarea value={formData.description} onChange={(e) => setField('description', e.target.value)} rows={2} />
+                </Field>
 
-            <Section title="Recording Controls">
-              <Toggle label="Allow Replay" checked={formData.allowReplay} onChange={(value) => setField('allowReplay', value)} />
-              <Toggle label="Allow Pause" checked={formData.allowPause} onChange={(value) => setField('allowPause', value)} />
-              <Toggle label="Auto Submit" checked={formData.autoSubmit} onChange={(value) => setField('autoSubmit', value)} />
-              <Toggle label="Manual Review" checked={formData.manualReviewRequired} onChange={(value) => setField('manualReviewRequired', value)} />
-            </Section>
+                <Field label="Instructions">
+                  <Textarea value={formData.instructions} onChange={(e) => setField('instructions', e.target.value)} rows={3} />
+                </Field>
 
-            <Section title="AI Analysis">
-              {[
-                ['Pronunciation', 'pronunciation'],
-                ['Fluency', 'fluency'],
-                ['Accuracy', 'accuracy'],
-                ['Completeness', 'completeness'],
-                ['Confidence', 'confidence'],
-                ['Word Analysis', 'word_analysis'],
-                ['Mispronounced Words', 'mispronounced_words'],
-                ['Sound Analysis', 'sound_analysis'],
-                ['Suggestions', 'suggestions'],
-              ].map(([label, key]) => (
-                <Toggle
-                  key={key}
-                  label={label}
-                  checked={Boolean(formData.ai[key])}
-                  onChange={(value) => setField('ai', { ...formData.ai, [key]: value })}
-                />
-              ))}
-            </Section>
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                  <NumberField label="Passing Score (%)" value={formData.passingScore} min={1} max={100} onChange={(value) => setField('passingScore', value)} />
+                  <NumberField label="Maximum Attempts" value={formData.maxAttempts} min={0} max={10} onChange={(value) => setField('maxAttempts', value)} />
+                  <NumberField label="Time Limit Seconds" value={formData.timeLimitSeconds} min={0} onChange={(value) => setField('timeLimitSeconds', value)} />
+                  <Field label="Difficulty">
+                    <select
+                      value={formData.difficulty}
+                      onChange={(e) => setField('difficulty', e.target.value as Difficulty)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      <option value="basic">Basic</option>
+                      <option value="intermediate">Intermediate</option>
+                      <option value="advanced">Advanced</option>
+                    </select>
+                  </Field>
+                </div>
+
+                <Section title="Score Thresholds">
+                  <NumberField label="Minimum Pronunciation" value={formData.minimumPronunciationScore} min={0} max={100} onChange={(value) => setField('minimumPronunciationScore', value)} />
+                  <NumberField label="Minimum Accuracy" value={formData.minimumAccuracy} min={0} max={100} onChange={(value) => setField('minimumAccuracy', value)} />
+                  <NumberField label="Minimum Completeness" value={formData.minimumCompleteness} min={0} max={100} onChange={(value) => setField('minimumCompleteness', value)} />
+                  <NumberField label="Minimum Fluency" value={formData.minimumFluency} min={0} max={100} onChange={(value) => setField('minimumFluency', value)} />
+                </Section>
+
+                <Section title="Recording Controls">
+                  <Toggle label="Allow Replay" checked={formData.allowReplay} onChange={(value) => setField('allowReplay', value)} />
+                  <Toggle label="Allow Pause" checked={formData.allowPause} onChange={(value) => setField('allowPause', value)} />
+                  <Toggle label="Auto Submit" checked={formData.autoSubmit} onChange={(value) => setField('autoSubmit', value)} />
+                  <Toggle label="Manual Review" checked={formData.manualReviewRequired} onChange={(value) => setField('manualReviewRequired', value)} />
+                </Section>
+
+                <Section title="AI Analysis">
+                  {[
+                    ['Pronunciation', 'pronunciation'],
+                    ['Fluency', 'fluency'],
+                    ['Accuracy', 'accuracy'],
+                    ['Completeness', 'completeness'],
+                    ['Confidence', 'confidence'],
+                    ['Word Analysis', 'word_analysis'],
+                    ['Mispronounced Words', 'mispronounced_words'],
+                    ['Sound Analysis', 'sound_analysis'],
+                    ['Suggestions', 'suggestions'],
+                  ].map(([label, key]) => (
+                    <Toggle
+                      key={key}
+                      label={label}
+                      checked={Boolean(formData.ai[key])}
+                      onChange={(value) => setField('ai', { ...formData.ai, [key]: value })}
+                    />
+                  ))}
+                </Section>
+              </div>
+            </details>
 
             <div className="flex flex-col gap-3 pt-2 sm:flex-row">
               <Button type="submit" disabled={loading} className="flex-1">

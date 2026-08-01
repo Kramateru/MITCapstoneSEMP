@@ -258,31 +258,11 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     [reading.readingRichContent],
   );
   const liveWords = useMemo(() => tokenize(liveTranscript), [liveTranscript]);
-  const passageSentences = useMemo(
-    () => (reading.readingContent || '').split(/(?<=[.!?])\s+/).map((item) => item.trim()).filter(Boolean),
-    [reading.readingContent],
-  );
-  const spokenProgress = Math.min(passageWords.length, liveWords.length);
-  const progressValue = passageWords.length ? (spokenProgress / passageWords.length) * 100 : 0;
   const maxAttempts = Number(reading.maxAttempts ?? 3);
   const completedAttemptCount = attemptHistory.filter((attempt) =>
     ['passed', 'failed', 'completed'].includes(String(attempt.status || '').toLowerCase()),
   ).length;
   const attemptLimitReached = maxAttempts > 0 && completedAttemptCount >= maxAttempts;
-  const currentSentence = useMemo(() => {
-    if (!passageSentences.length) {
-      return reading.readingContent;
-    }
-    let wordCursor = 0;
-    for (const sentence of passageSentences) {
-      const sentenceWordCount = tokenize(sentence).length;
-      if (spokenProgress <= wordCursor + sentenceWordCount) {
-        return sentence;
-      }
-      wordCursor += sentenceWordCount;
-    }
-    return passageSentences[passageSentences.length - 1];
-  }, [passageSentences, reading.readingContent, spokenProgress]);
 
   useEffect(() => () => cleanupRecording(), []);
   useEffect(() => {
@@ -520,7 +500,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
         setMicStatus('ready');
       }
       toast({
-        title: isMicrophoneError ? 'Microphone unavailable' : 'Unable to start reading',
+        title: isMicrophoneError ? 'Microphone unavailable' : 'Unable to start response',
         description: message,
         variant: 'destructive',
       });
@@ -574,7 +554,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
 
   async function handleSubmit() {
     if (!audioBlob) {
-      toast({ title: 'No recording', description: 'Record your reading before submitting.', variant: 'destructive' });
+      toast({ title: 'No recording', description: 'Record your response before submitting.', variant: 'destructive' });
       return;
     }
     const activeAttemptId = attemptId || await ensureAttempt();
@@ -610,7 +590,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       setStage('complete');
       void loadAttemptHistory();
       onComplete?.(activeAttemptId);
-      toast({ title: 'Reading analyzed', description: 'Your pronunciation report is ready.' });
+      toast({ title: 'Response analyzed', description: 'Your pronunciation report is ready.' });
     } catch (error: any) {
       toast({
         title: 'Submission failed',
@@ -800,29 +780,17 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
               <CardTitle>{reading.readingTitle || reading.title}</CardTitle>
-              <CardDescription>{reading.description || 'AI-powered pronunciation reading assessment'}</CardDescription>
+              <CardDescription>{reading.description || 'Reading passage'}</CardDescription>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Badge variant="outline">{reading.category || 'Reading'}</Badge>
-              <Badge variant="outline">{reading.difficulty || 'Practice'}</Badge>
-              <Badge variant="outline">{reading.passingScore}% pass</Badge>
+              <Badge variant="outline">{getMicStatusCopy(micStatus)}</Badge>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Metric label="Words" value={reading.wordCount || passageWords.length} />
-            <Metric label="Sentences" value={reading.sentenceCount || passageSentences.length} />
-            <Metric label="Paragraphs" value={reading.paragraphCount || Math.max(1, reading.readingContent.split(/\n{2,}/).filter(Boolean).length)} />
-            <Metric label="Reading Level" value={reading.readingLevel || 'Standard'} />
-            <Metric label="Estimated" value={`${reading.estimatedReadingTime || Math.max(1, Math.ceil(passageWords.length / 130))} min`} />
-            <Metric label="Attempts" value={reading.maxAttempts === 0 ? 'Unlimited' : reading.maxAttempts || 3} />
-            <Metric label="Time Limit" value={reading.timeLimitSeconds ? formatTime(reading.timeLimitSeconds) : 'None'} />
-            <Metric label="Microphone" value={getMicStatusCopy(micStatus)} />
-          </div>
-
-          <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-slate-700">
-            {reading.instructions || 'Read the passage aloud clearly and naturally.'}
+          <div className="rounded-xl border bg-slate-50 p-4">
+            <p className="text-xs uppercase tracking-wide text-slate-500">Microphone Status</p>
+            <p className="mt-2 text-lg font-semibold text-slate-900">{getMicStatusCopy(micStatus)}</p>
           </div>
 
           {micStatus === 'missing' || micStatus === 'unsupported' ? (
@@ -833,7 +801,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             </div>
           ) : micStatus === 'permission_needed' ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
-              Microphone permission is required. Your browser will ask for access when you start reading.
+              Microphone permission is required. Your browser will ask for access when you start your response.
             </div>
           ) : null}
 
@@ -852,14 +820,9 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             <Card className="border-slate-200">
               <CardContent className="space-y-4 pt-6">
                 <div className="grid gap-3 sm:grid-cols-3">
+                  <Metric label="Recording Status" value={stage === 'recording' ? 'Recording' : stage === 'paused' ? 'Paused' : 'Ready to Submit'} />
                   <Metric label="Elapsed" value={formatTime(recordingTime)} />
-                  <Metric label="Word Progress" value={`${spokenProgress}/${passageWords.length}`} />
                   <Metric label="Mic Level" value={`${micLevel}%`} />
-                </div>
-                <Progress value={progressValue} />
-                <div className="rounded-lg border bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Current Sentence</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-700">{currentSentence || 'Start reading to track sentence progress.'}</p>
                 </div>
                 <div className="h-12 overflow-hidden rounded-lg border bg-slate-950 p-2">
                   <div className="flex h-full items-end gap-1">
@@ -879,14 +842,6 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             </Card>
           ) : null}
 
-          <div className="flex flex-wrap gap-2 text-sm leading-7">
-            {displayWords.map((item, index) => (
-              <span key={`${item.word}-${index}`} className={`rounded-md border px-2 py-1 ${getStatusClass(item.status)}`}>
-                {item.word}
-              </span>
-            ))}
-          </div>
-
           {audioUrl && stage === 'review' ? (
             <div className="rounded-xl border bg-slate-50 p-4">
               <p className="mb-3 text-sm text-slate-600">Duration: {formatTime(recordingTime)}</p>
@@ -894,40 +849,9 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             </div>
           ) : null}
 
-          {attemptHistory.length ? (
-            <div className="rounded-xl border bg-slate-50 p-4">
-              <p className="text-sm font-medium text-slate-900">Attempt History</p>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                {attemptHistory.map((attempt) => (
-                  <div key={attempt.id} className="rounded-lg border bg-white p-3 text-sm">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-medium">Attempt {attempt.attempt_number}</span>
-                      <Badge variant={attempt.passed ? 'default' : 'outline'}>
-                        {attempt.passed ? 'Passed' : attempt.status}
-                      </Badge>
-                    </div>
-                    <div className="mt-2 text-slate-600">
-                      Score: {attempt.score !== null && attempt.score !== undefined ? `${Math.round(attempt.score)}%` : 'Pending'}
-                    </div>
-                    <div className="mt-2 grid gap-1 text-xs text-slate-500">
-                      <span>Accuracy: {safePercent(attempt.accuracy)}%</span>
-                      <span>Fluency: {safePercent(attempt.fluency)}%</span>
-                      <span>Confidence: {safePercent(attempt.confidence)}%</span>
-                      <span>WPM: {safePercent(attempt.words_per_minute)}</span>
-                      <span>Time: {formatTime(Math.round(attempt.duration_seconds || 0))}</span>
-                      {attempt.improvement !== null && attempt.improvement !== undefined ? (
-                        <span>Improvement: {attempt.improvement > 0 ? '+' : ''}{attempt.improvement.toFixed(1)}%</span>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
           {stage === 'uploading' || stage === 'processing' ? (
             <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
-              {stage === 'uploading' ? 'Uploading your recording to Supabase Storage...' : 'Analyzing pronunciation, word alignment, fluency, and sound patterns...'}
+              {stage === 'uploading' ? 'Uploading your response to Supabase Storage...' : 'Analyzing pronunciation, word alignment, fluency, and sound patterns...'}
             </div>
           ) : null}
 
@@ -939,7 +863,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
                 disabled={attemptLimitReached || micStatus === 'checking' || micStatus === 'missing' || micStatus === 'unsupported'}
               >
                 <Mic className="mr-2 size-4" />
-                {attemptLimitReached ? 'Attempt Limit Reached' : 'Start Reading'}
+                {attemptLimitReached ? 'Attempt Limit Reached' : 'Start Response'}
               </Button>
             ) : null}
             {stage === 'recording' ? (
@@ -972,11 +896,11 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
               <>
                 <Button variant="outline" onClick={() => restartRecording()} className="flex-1" disabled={submitting}>
                   <RotateCcw className="mr-2 size-4" />
-                  Restart
+                  Record Again
                 </Button>
                 <Button onClick={() => void handleSubmit()} className="flex-1" disabled={submitting}>
                   <Send className="mr-2 size-4" />
-                  Submit
+                  Submit Response
                 </Button>
               </>
             ) : null}

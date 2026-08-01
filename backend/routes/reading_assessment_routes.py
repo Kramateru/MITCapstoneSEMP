@@ -205,9 +205,13 @@ def _required_correct_words(total_words: int, passing_score: float) -> int:
 def _serialize_attempt_summary(attempt: ReadingAttempt) -> dict[str, Any]:
     trainee = getattr(attempt, "trainee", None)
     module = getattr(attempt, "module", None)
+    analysis_json = attempt.analysis_json or {}
     previous_attempt = None
     return {
         "id": attempt.id,
+        "session_id": analysis_json.get("session_id") or attempt.id,
+        "assignment_id": analysis_json.get("assignment_id"),
+        "batch_id": analysis_json.get("batch_id"),
         "module_id": attempt.module_id,
         "module_title": getattr(module, "title", None),
         "trainee_id": attempt.trainee_id,
@@ -234,6 +238,7 @@ def _serialize_attempt_summary(attempt: ReadingAttempt) -> dict[str, Any]:
         "repeated_words": int(attempt.repeated_words or 0),
         "words_per_minute": float(attempt.words_per_minute or 0),
         "duration_seconds": float(attempt.audio_duration_seconds or 0),
+        "audio_storage_path": attempt.audio_storage_path,
         "audio_url": attempt.audio_url,
         "completed_at": attempt.completed_at.isoformat() if attempt.completed_at else None,
         "created_at": attempt.created_at.isoformat() if attempt.created_at else None,
@@ -464,11 +469,24 @@ async def start_reading_attempt(
     )
     
     db.add(attempt)
+    db.flush()
+    attempt.analysis_json = {
+        "session_id": attempt.id,
+        "assignment_id": assignment.id,
+        "batch_id": assignment.batch_id,
+        "module_id": module_id,
+        "trainee_id": user.id,
+        "attempt_number": attempt.attempt_number,
+        "started_at": (attempt.started_at or datetime.utcnow()).isoformat(),
+    }
     db.commit()
     db.refresh(attempt)
     
     return {
         "attempt_id": attempt.id,
+        "session_id": attempt.id,
+        "assignment_id": assignment.id,
+        "batch_id": assignment.batch_id,
         "attempt_number": attempt.attempt_number,
         "reading_content": attempt.expected_text,
         "reading_title": settings["reading_title"],
@@ -508,15 +526,16 @@ async def upload_reading_audio(
     if file.filename and "." in file.filename:
         extension = "." + file.filename.rsplit(".", 1)[-1].lower()
     content_type = file.content_type or "audio/webm"
-    storage_path = f"reading/{attempt.module_id}/{user.id}/{attempt_id}/recording{extension}"
+    storage_filename = f"attempt-{attempt.attempt_number}{extension}"
+    storage_path = f"microlearning/reading-modules/{attempt.module_id}/{user.id}/{storage_filename}"
     
     audio_url = supabase.upload_microlearning_binary(
         module_id=user.id,
         trainer_id=attempt.module_id,
-        filename=f"{attempt_id}/recording{extension}",
+        filename=storage_filename,
         file_data=file_bytes,
         content_type=content_type,
-        folder="reading",
+        folder="reading-modules",
         allow_local_fallback=True,
     )
     
@@ -531,13 +550,15 @@ async def upload_reading_audio(
         **(attempt.analysis_json or {}),
         "uploaded_audio_bytes": len(file_bytes),
         "audio_content_type": content_type,
+        "audio_storage_path": storage_path,
+        "audio_storage_filename": storage_filename,
     }
     attempt.status = "processing"
     db.commit()
     
     logger.info(f"Uploaded audio for attempt {attempt_id}")
     
-    return {"audio_url": audio_url, "status": "processing"}
+    return {"audio_url": audio_url, "audio_storage_path": storage_path, "status": "processing"}
 
 
 @router.post("/attempts/{attempt_id}/process")
@@ -681,6 +702,9 @@ async def process_reading_assessment(
         
         return {
             "attempt_id": attempt.id,
+            "session_id": (attempt.analysis_json or {}).get("session_id") or attempt.id,
+            "assignment_id": (attempt.analysis_json or {}).get("assignment_id"),
+            "batch_id": (attempt.analysis_json or {}).get("batch_id"),
             "status": attempt.status,
             "score": float(attempt.overall_score or 0),
             "overall_score": float(attempt.overall_score or 0),
@@ -703,6 +727,8 @@ async def process_reading_assessment(
             "repeated_words": attempt.repeated_words,
             "words_per_minute": float(attempt.words_per_minute or 0),
             "duration_seconds": float(attempt.audio_duration_seconds or 0),
+            "audio_storage_path": attempt.audio_storage_path,
+            "audio_url": attempt.audio_url,
             "score_breakdown": attempt.score_breakdown,
             "common_issues": attempt.most_common_issues,
             "strengths": attempt.strengths,
@@ -738,6 +764,9 @@ async def get_reading_results(
     
     return {
         "id": attempt.id,
+        "session_id": (attempt.analysis_json or {}).get("session_id") or attempt.id,
+        "assignment_id": (attempt.analysis_json or {}).get("assignment_id"),
+        "batch_id": (attempt.analysis_json or {}).get("batch_id"),
         "attempt_number": attempt.attempt_number,
         "status": attempt.status,
         "score": float(attempt.pronunciation_score) if attempt.pronunciation_score else None,
@@ -758,6 +787,7 @@ async def get_reading_results(
         "words_per_minute": float(attempt.words_per_minute or 0),
         "duration_seconds": float(attempt.audio_duration_seconds or 0),
         "transcript": attempt.audio_transcript,
+        "audio_storage_path": attempt.audio_storage_path,
         "audio_url": attempt.audio_url,
         "strengths": attempt.strengths,
         "improvement_areas": attempt.improvement_areas,
@@ -1057,6 +1087,10 @@ def _sync_microlearning_assignment_from_attempt(
         "correct_answer": attempt.expected_text,
         "input_mode": "speech",
         "reading_attempt_id": attempt.id,
+        "session_id": (attempt.analysis_json or {}).get("session_id") or attempt.id,
+        "assignment_id": (attempt.analysis_json or {}).get("assignment_id"),
+        "batch_id": (attempt.analysis_json or {}).get("batch_id"),
+        "audio_storage_path": attempt.audio_storage_path,
         "audio_url": attempt.audio_url,
         "response_duration": float(attempt.audio_duration_seconds or 0),
         "overall_score": score.overall_score,

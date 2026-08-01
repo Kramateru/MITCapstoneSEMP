@@ -1808,7 +1808,8 @@ export default function TrainerMicrolearningStudio() {
                           placeholder="Ex. HEARD de-escalation practice"
                         />
                       </div>
-                      <div className="space-y-2">
+                      {moduleForm.module_type !== 'reading' ? (
+                        <div className="space-y-2">
                         <Label htmlFor="module-skill-focus">Skill Focus</Label>
                         <Input
                           id="module-skill-focus"
@@ -1816,9 +1817,11 @@ export default function TrainerMicrolearningStudio() {
                           onChange={(event) => setModuleForm((current) => ({ ...current, skill_focus: event.target.value }))}
                           placeholder="Ex. Empathy and calm issue resolution"
                         />
-                      </div>
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="mt-4 space-y-2">
+                    {moduleForm.module_type !== 'reading' ? (
+                      <div className="mt-4 space-y-2">
                       <Label htmlFor="module-description">Description</Label>
                       <Textarea
                         id="module-description"
@@ -1827,7 +1830,8 @@ export default function TrainerMicrolearningStudio() {
                         onChange={(event) => setModuleForm((current) => ({ ...current, description: event.target.value }))}
                         placeholder="Briefly explain what the trainee will learn and how success should look."
                       />
-                    </div>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
 
@@ -1865,48 +1869,56 @@ export default function TrainerMicrolearningStudio() {
                           </SelectContent>
                         </Select>
                       </div>
-                      <div className="space-y-2">
-                        <Label>Difficulty</Label>
-                        <Select value={moduleForm.difficulty} onValueChange={(value) => setModuleForm((current) => ({ ...current, difficulty: value as ModuleFormState['difficulty'] }))}>
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="basic">Basic</SelectItem>
-                            <SelectItem value="intermediate">Intermediate</SelectItem>
-                            <SelectItem value="advanced">Advanced</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="module-duration">Minutes</Label>
-                        <Input
-                          id="module-duration"
-                          type="number"
-                          min={1}
-                          value={moduleForm.duration_minutes}
-                          onChange={(event) => setModuleForm((current) => ({ ...current, duration_minutes: Number(event.target.value || 0) }))}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="module-passing-score">Passing Score</Label>
-                        <Input
-                          id="module-passing-score"
-                          type="number"
-                          min={0}
-                          max={100}
-                          value={moduleForm.passing_score}
-                          onChange={(event) => setModuleForm((current) => ({ ...current, passing_score: Number(event.target.value || 0) }))}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>Topic Category</Label>
-                        <Select value={moduleForm.topic_category_id || NONE_VALUE} onValueChange={(value) => setModuleForm((current) => ({ ...current, topic_category_id: value === NONE_VALUE ? '' : value }))}>
-                          <SelectTrigger><SelectValue placeholder="Optional topic" /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value={NONE_VALUE}>None</SelectItem>
-                            {categories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
-                          </SelectContent>
-                        </Select>
-                      </div>
+                      {moduleForm.module_type !== 'reading' ? (
+                        <>
+                          <div className="space-y-2">
+                            <Label>Difficulty</Label>
+                            <Select value={moduleForm.difficulty} onValueChange={(value) => setModuleForm((current) => ({ ...current, difficulty: value as ModuleFormState['difficulty'] }))}>
+                              <SelectTrigger><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="basic">Basic</SelectItem>
+                                <SelectItem value="intermediate">Intermediate</SelectItem>
+                                <SelectItem value="advanced">Advanced</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="module-duration">Minutes</Label>
+                            <Input
+                              id="module-duration"
+                              type="number"
+                              min={1}
+                              value={moduleForm.duration_minutes}
+                              onChange={(event) => setModuleForm((current) => ({ ...current, duration_minutes: Number(event.target.value || 0) }))}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="module-passing-score">Passing Score</Label>
+                            <Input
+                              id="module-passing-score"
+                              type="number"
+                              min={0}
+                              max={100}
+                              value={moduleForm.passing_score}
+                              onChange={(event) => setModuleForm((current) => ({ ...current, passing_score: Number(event.target.value || 0) }))}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Topic Category</Label>
+                            <Select value={moduleForm.topic_category_id || NONE_VALUE} onValueChange={(value) => setModuleForm((current) => ({ ...current, topic_category_id: value === NONE_VALUE ? '' : value }))}>
+                              <SelectTrigger><SelectValue placeholder="Optional topic" /></SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value={NONE_VALUE}>None</SelectItem>
+                                {categories.map((category) => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-xl border bg-white p-3 text-sm text-muted-foreground">
+                          Reading modules use pronunciation defaults. The only required content is the passage trainees will read aloud.
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -1927,7 +1939,9 @@ export default function TrainerMicrolearningStudio() {
                       </div>
                     </div>
                     <div className="mt-4 text-sm text-muted-foreground">
-                      Recommended flow: choose a template, set the scoring, attach media if needed, then add the learner-facing questions.
+                      {moduleForm.module_type === 'reading'
+                        ? 'Recommended flow: select Reading Assessment, enter the module title, paste the passage, then assign it to a batch.'
+                        : 'Recommended flow: choose a template, set the scoring, attach media if needed, then add the learner-facing questions.'}
                     </div>
                   </div>
                 </div>
@@ -2529,26 +2543,6 @@ export default function TrainerMicrolearningStudio() {
                 </div>
 
                 <div className="grid gap-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="reading-title">Reading Title</Label>
-                      <Input
-                        id="reading-title"
-                        value={moduleForm.reading_title}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_title: e.target.value }))}
-                        placeholder="Ex. Claims Verification Script"
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="reading-category">Reading Category</Label>
-                      <Input
-                        id="reading-category"
-                        value={moduleForm.reading_category}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_category: e.target.value }))}
-                        placeholder="Ex. Telephone Script"
-                      />
-                    </div>
-                  </div>
                   <div className="space-y-2">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <Label htmlFor="reading-passage">Reading Passage</Label>
@@ -2600,6 +2594,30 @@ export default function TrainerMicrolearningStudio() {
                       </span>
                     </div>
                   </div>
+
+                  <details className="rounded-xl border bg-slate-50 p-4">
+                    <summary className="cursor-pointer text-sm font-medium">Optional reading settings</summary>
+                    <div className="mt-4 grid gap-4">
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label htmlFor="reading-title">Reading Title</Label>
+                          <Input
+                            id="reading-title"
+                            value={moduleForm.reading_title}
+                            onChange={(e) => setModuleForm(current => ({ ...current, reading_title: e.target.value }))}
+                            placeholder="Ex. Claims Verification Script"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="reading-category">Reading Category</Label>
+                          <Input
+                            id="reading-category"
+                            value={moduleForm.reading_category}
+                            onChange={(e) => setModuleForm(current => ({ ...current, reading_category: e.target.value }))}
+                            placeholder="Ex. Telephone Script"
+                          />
+                        </div>
+                      </div>
                   <div className="space-y-2">
                     <Label htmlFor="reading-instructions">Instructions</Label>
                     <Textarea
@@ -2730,6 +2748,8 @@ export default function TrainerMicrolearningStudio() {
                       ))}
                     </div>
                   </div>
+                    </div>
+                  </details>
                 </div>
               </div>
             )}
