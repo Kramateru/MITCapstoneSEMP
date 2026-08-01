@@ -30,6 +30,9 @@ interface ReadingAssessmentProps {
     instructions?: string;
     passingScore: number;
     wordCount: number;
+    sentenceCount?: number;
+    paragraphCount?: number;
+    readingLevel?: string;
     estimatedReadingTime?: number;
     readingContent: string;
     readingRichContent?: string;
@@ -119,6 +122,51 @@ function safePercent(value: unknown) {
   return Number.isFinite(numeric) ? Math.round(numeric) : 0;
 }
 
+function getPaceLabel(wordsPerMinute?: number | null) {
+  const wpm = Number(wordsPerMinute || 0);
+  if (!wpm) return 'Pending';
+  if (wpm < 100) return 'Too Slow';
+  if (wpm > 170) return 'Too Fast';
+  return 'Normal';
+}
+
+function getMicStatusCopy(status: 'checking' | 'ready' | 'permission_needed' | 'missing' | 'unsupported') {
+  switch (status) {
+    case 'ready':
+      return 'Microphone Ready';
+    case 'permission_needed':
+      return 'Microphone Permission Needed';
+    case 'missing':
+      return 'Microphone Not Detected';
+    case 'unsupported':
+      return 'Recording Not Supported';
+    default:
+      return 'Checking Microphone';
+  }
+}
+
+function getSupportedRecordingMimeType() {
+  if (typeof MediaRecorder === 'undefined' || !MediaRecorder.isTypeSupported) {
+    return '';
+  }
+  return [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/ogg;codecs=opus',
+    'audio/ogg',
+  ].find((candidate) => MediaRecorder.isTypeSupported(candidate)) || '';
+}
+
+function extensionForAudioMimeType(mimeType: string) {
+  if (mimeType.includes('mp4')) return 'm4a';
+  if (mimeType.includes('mpeg')) return 'mp3';
+  if (mimeType.includes('ogg')) return 'ogg';
+  if (mimeType.includes('wav')) return 'wav';
+  return 'webm';
+}
+
 function getStatusClass(status: WordStatus) {
   switch (status) {
     case 'current':
@@ -151,7 +199,7 @@ function collectSpeechTranscript(event: { results: ArrayLike<ArrayLike<{ transcr
 }
 
 function sanitizeReadingMarkup(value: string) {
-  const allowedTags = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'ul', 'ol', 'li', 'h1', 'h2', 'h3']);
+  const allowedTags = new Set(['p', 'br', 'strong', 'b', 'em', 'i', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'blockquote']);
   return (value || '')
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
@@ -181,11 +229,18 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     attempt_number: number;
     status: string;
     score?: number | null;
+    accuracy?: number | null;
+    fluency?: number | null;
+    confidence?: number | null;
+    words_per_minute?: number | null;
+    duration_seconds?: number | null;
+    improvement?: number | null;
     passed: boolean;
     completed_at?: string | null;
   }>>([]);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [micLevel, setMicLevel] = useState(0);
+  const [micStatus, setMicStatus] = useState<'checking' | 'ready' | 'permission_needed' | 'missing' | 'unsupported'>('checking');
   const [submitting, setSubmitting] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -230,6 +285,9 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [moduleId, token]);
   useEffect(() => {
+    void checkMicrophoneStatus();
+  }, []);
+  useEffect(() => {
     if (!reading.timeLimitSeconds || stage !== 'recording') {
       return;
     }
@@ -262,6 +320,39 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       setAttemptHistory(Array.isArray(data.attempts) ? data.attempts : []);
     } catch {
       setAttemptHistory([]);
+    }
+  }
+
+  async function checkMicrophoneStatus() {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setMicStatus('unsupported');
+      return;
+    }
+
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+      const hasAudioInput = devices.some((device) => device.kind === 'audioinput');
+      if (devices.length && !hasAudioInput) {
+        setMicStatus('missing');
+        return;
+      }
+
+      const permissionsApi = (navigator as any).permissions;
+      if (permissionsApi?.query) {
+        const permission = await permissionsApi.query({ name: 'microphone' as PermissionName }).catch(() => null);
+        if (permission?.state === 'granted') {
+          setMicStatus('ready');
+          return;
+        }
+        if (permission?.state === 'denied') {
+          setMicStatus('permission_needed');
+          return;
+        }
+      }
+
+      setMicStatus(hasAudioInput || !devices.length ? 'permission_needed' : 'missing');
+    } catch {
+      setMicStatus('permission_needed');
     }
   }
 
@@ -361,21 +452,28 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
   }
 
   async function startRecording() {
+    let stream: MediaStream | null = null;
     try {
-      await ensureAttempt();
-      const stream = await navigator.mediaDevices.getUserMedia({
+      if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+        setMicStatus('unsupported');
+        toast({ title: 'Recording unsupported', description: 'This browser does not support microphone recording for this assessment.', variant: 'destructive' });
+        return;
+      }
+      stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
       });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
-      const recorder = new MediaRecorder(stream, { mimeType });
+      await ensureAttempt();
+      const mimeType = getSupportedRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       audioChunksRef.current = [];
       streamRef.current = stream;
+      setMicStatus('ready');
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
@@ -383,7 +481,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
         }
       };
       recorder.onstop = () => {
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        const blob = new Blob(audioChunksRef.current, { type: mimeType || recorder.mimeType || 'audio/webm' });
         setAudioBlob(blob);
         if (audioUrl) {
           URL.revokeObjectURL(audioUrl);
@@ -405,12 +503,23 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       startLiveRecognition();
     } catch (error: any) {
       const name = error?.name || '';
+      const isMicrophoneError = ['NotAllowedError', 'NotFoundError', 'NotReadableError', 'SecurityError'].includes(name);
       const message = name === 'NotAllowedError'
         ? 'Microphone access was denied. Enable microphone permission and try again.'
         : name === 'NotFoundError'
           ? 'No microphone was found. Connect a microphone and try again.'
           : error?.message || 'Unable to start the reading assessment.';
-      toast({ title: 'Microphone unavailable', description: message, variant: 'destructive' });
+      if (isMicrophoneError) {
+        setMicStatus(name === 'NotFoundError' ? 'missing' : 'permission_needed');
+      } else if (stream) {
+        setMicStatus('ready');
+      }
+      toast({
+        title: isMicrophoneError ? 'Microphone unavailable' : 'Unable to start reading',
+        description: message,
+        variant: 'destructive',
+      });
+      stream?.getTracks().forEach((track) => track.stop());
       cleanupRecording();
       setStage('preparation');
     }
@@ -464,7 +573,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     try {
       setStage('uploading');
       const formData = new FormData();
-      formData.append('file', audioBlob, 'reading-attempt.webm');
+      formData.append('file', audioBlob, `reading-attempt.${extensionForAudioMimeType(audioBlob.type)}`);
       const uploadResponse = await fetch(`/api/trainee/reading/attempts/${activeAttemptId}/upload-audio`, {
         method: 'POST',
         headers: authHeaders(),
@@ -570,6 +679,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
               <Metric label="Repeated" value={results.repeated_words || 0} />
               <Metric label="Inserted" value={results.extra_words} />
               <Metric label="WPM" value={safePercent(results.words_per_minute)} />
+              <Metric label="Pace" value={getPaceLabel(results.words_per_minute)} />
               <Metric label="Duration" value={formatTime(Math.round(results.duration_seconds || recordingTime))} />
               <Metric label="Required" value={`${results.passing_score}%`} />
             </div>
@@ -689,19 +799,35 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
         <CardContent className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Metric label="Words" value={reading.wordCount || passageWords.length} />
+            <Metric label="Sentences" value={reading.sentenceCount || passageSentences.length} />
+            <Metric label="Paragraphs" value={reading.paragraphCount || Math.max(1, reading.readingContent.split(/\n{2,}/).filter(Boolean).length)} />
+            <Metric label="Reading Level" value={reading.readingLevel || 'Standard'} />
             <Metric label="Estimated" value={`${reading.estimatedReadingTime || Math.max(1, Math.ceil(passageWords.length / 130))} min`} />
-            <Metric label="Attempts" value={reading.maxAttempts || 3} />
+            <Metric label="Attempts" value={reading.maxAttempts === 0 ? 'Unlimited' : reading.maxAttempts || 3} />
             <Metric label="Time Limit" value={reading.timeLimitSeconds ? formatTime(reading.timeLimitSeconds) : 'None'} />
+            <Metric label="Microphone" value={getMicStatusCopy(micStatus)} />
           </div>
 
           <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm leading-6 text-slate-700">
             {reading.instructions || 'Read the passage aloud clearly and naturally.'}
           </div>
 
+          {micStatus === 'missing' || micStatus === 'unsupported' ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm leading-6 text-rose-800">
+              {micStatus === 'missing'
+                ? 'No microphone was detected. Connect or enable a microphone before starting this assessment.'
+                : 'This browser does not support microphone recording for this assessment. Use Chrome, Edge, Firefox, or Safari with microphone support.'}
+            </div>
+          ) : micStatus === 'permission_needed' ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800">
+              Microphone permission is required. Your browser will ask for access when you start reading.
+            </div>
+          ) : null}
+
           <div className="rounded-xl border bg-white p-5 text-lg leading-8 text-slate-800">
             {richPassageHtml ? (
               <div
-                className="space-y-3 [&_em]:italic [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:text-lg [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_strong]:font-semibold"
+                className="space-y-3 [&_blockquote]:border-l-4 [&_blockquote]:border-slate-300 [&_blockquote]:pl-4 [&_blockquote]:text-slate-600 [&_em]:italic [&_h1]:text-2xl [&_h1]:font-semibold [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:text-lg [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_strong]:font-semibold"
                 dangerouslySetInnerHTML={{ __html: richPassageHtml }}
               />
             ) : (
@@ -770,6 +896,16 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
                     <div className="mt-2 text-slate-600">
                       Score: {attempt.score !== null && attempt.score !== undefined ? `${Math.round(attempt.score)}%` : 'Pending'}
                     </div>
+                    <div className="mt-2 grid gap-1 text-xs text-slate-500">
+                      <span>Accuracy: {safePercent(attempt.accuracy)}%</span>
+                      <span>Fluency: {safePercent(attempt.fluency)}%</span>
+                      <span>Confidence: {safePercent(attempt.confidence)}%</span>
+                      <span>WPM: {safePercent(attempt.words_per_minute)}</span>
+                      <span>Time: {formatTime(Math.round(attempt.duration_seconds || 0))}</span>
+                      {attempt.improvement !== null && attempt.improvement !== undefined ? (
+                        <span>Improvement: {attempt.improvement > 0 ? '+' : ''}{attempt.improvement.toFixed(1)}%</span>
+                      ) : null}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -784,7 +920,11 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
 
           <div className="flex flex-col gap-3 sm:flex-row">
             {stage === 'preparation' ? (
-              <Button onClick={() => void startRecording()} className="flex-1">
+              <Button
+                onClick={() => void startRecording()}
+                className="flex-1"
+                disabled={micStatus === 'checking' || micStatus === 'missing' || micStatus === 'unsupported'}
+              >
                 <Mic className="mr-2 size-4" />
                 Start Reading
               </Button>

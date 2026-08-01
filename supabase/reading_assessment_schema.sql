@@ -152,6 +152,9 @@ reading_title TEXT,
 reading_category TEXT,
 reading_content TEXT NOT NULL,
 word_count INTEGER NOT NULL,
+sentence_count INTEGER DEFAULT 0,
+paragraph_count INTEGER DEFAULT 0,
+reading_level TEXT,
 estimated_reading_time_minutes INTEGER,
 language TEXT DEFAULT 'en-US',
 description TEXT,
@@ -217,6 +220,9 @@ END $$;
 
 ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS reading_title TEXT;
 ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS reading_category TEXT;
+ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS sentence_count INTEGER DEFAULT 0;
+ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS paragraph_count INTEGER DEFAULT 0;
+ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS reading_level TEXT;
 ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS language TEXT DEFAULT 'en-US';
 ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS description TEXT;
 ALTER TABLE reading_module_config ADD COLUMN IF NOT EXISTS allow_replay INTEGER DEFAULT 1;
@@ -250,10 +256,12 @@ END $$;
 ALTER TABLE reading_attempt ENABLE ROW LEVEL SECURITY;
 
 -- Trainees can view only their own attempts
+DROP POLICY IF EXISTS trainee_read_own_attempts ON reading_attempt;
 CREATE POLICY trainee_read_own_attempts ON reading_attempt
   FOR SELECT USING (trainee_id = auth.uid()::text);
 
 -- Trainers can view attempts for their assigned trainees
+DROP POLICY IF EXISTS trainer_read_trainee_attempts ON reading_attempt;
 CREATE POLICY trainer_read_trainee_attempts ON reading_attempt
   FOR SELECT USING (
     EXISTS (
@@ -264,10 +272,12 @@ CREATE POLICY trainer_read_trainee_attempts ON reading_attempt
   );
 
 -- Trainees can create attempts
+DROP POLICY IF EXISTS trainee_create_attempts ON reading_attempt;
 CREATE POLICY trainee_create_attempts ON reading_attempt
   FOR INSERT WITH CHECK (trainee_id = auth.uid()::text);
 
 -- Trainees can update their own in-progress attempts
+DROP POLICY IF EXISTS trainee_update_own_attempts ON reading_attempt;
 CREATE POLICY trainee_update_own_attempts ON reading_attempt
   FOR UPDATE USING (trainee_id = auth.uid()::text)
   WITH CHECK (trainee_id = auth.uid()::text);
@@ -276,6 +286,7 @@ CREATE POLICY trainee_update_own_attempts ON reading_attempt
 ALTER TABLE reading_word_analysis ENABLE ROW LEVEL SECURITY;
 
 -- Users can view word analysis for attempts they own or created
+DROP POLICY IF EXISTS view_word_analysis ON reading_word_analysis;
 CREATE POLICY view_word_analysis ON reading_word_analysis
   FOR SELECT USING (
     EXISTS (
@@ -290,6 +301,7 @@ CREATE POLICY view_word_analysis ON reading_word_analysis
 -- Enable RLS on reading_pronunciation_issue
 ALTER TABLE reading_pronunciation_issue ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS view_pronunciation_issues ON reading_pronunciation_issue;
 CREATE POLICY view_pronunciation_issues ON reading_pronunciation_issue
   FOR SELECT USING (
     EXISTS (

@@ -73,6 +73,26 @@ def _word_count(value: str) -> int:
     return len(re.findall(r"\b[\w']+\b", value or ""))
 
 
+def _reading_stats(value: str) -> dict[str, Any]:
+    words = re.findall(r"\b[\w']+\b", value or "")
+    sentences = [item.strip() for item in re.split(r"[.!?]+(?:\s|$)", value or "") if item.strip()]
+    paragraphs = [item.strip() for item in re.split(r"\n{2,}", value or "") if item.strip()]
+    average_words_per_sentence = (len(words) / len(sentences)) if sentences else 0
+    if len(words) < 120 or average_words_per_sentence <= 12:
+        reading_level = "Basic"
+    elif average_words_per_sentence <= 20:
+        reading_level = "Intermediate"
+    else:
+        reading_level = "Advanced"
+    return {
+        "word_count": len(words),
+        "sentence_count": len(sentences),
+        "paragraph_count": max(len(paragraphs), 1 if value else 0),
+        "reading_level": reading_level,
+        "estimated_reading_time_minutes": max(1, int((len(words) + 129) // 130)) if words else 1,
+    }
+
+
 def _reading_content_from_module(module: MicrolearningModule, config: Optional[ReadingModuleConfig] = None) -> str:
     if config and config.reading_content:
         return config.reading_content
@@ -89,6 +109,11 @@ def _reading_settings_from_module(module: MicrolearningModule, config: Optional[
     content = dict(module.content_data or {})
     reading_config = dict(content.get("reading_config") or {})
     ai_config = dict(content.get("ai_configuration") or reading_config.get("ai_configuration") or {})
+    configured_max_attempts = (config.max_attempts if config else None)
+    if configured_max_attempts is None:
+        configured_max_attempts = reading_config.get("max_attempts")
+    if configured_max_attempts is None:
+        configured_max_attempts = 3
     return {
         "reading_title": (config.reading_title if config else None) or content.get("reading_title") or module.title,
         "reading_category": (config.reading_category if config else None) or content.get("reading_category") or module.category,
@@ -96,7 +121,7 @@ def _reading_settings_from_module(module: MicrolearningModule, config: Optional[
         "language": (config.language if config else None) or content.get("language") or content.get("audio_language") or "en-US",
         "instructions": (config.instructions if config else None) or content.get("instructions") or "Read the assigned passage aloud clearly and naturally.",
         "description": (config.description if config else None) or module.description,
-        "max_attempts": int((config.max_attempts if config else None) or reading_config.get("max_attempts") or 3),
+        "max_attempts": int(configured_max_attempts),
         "time_limit_seconds": (config.time_limit_seconds if config else None) or reading_config.get("time_limit_seconds"),
         "allow_replay": bool((config.allow_replay if config else None) if config else reading_config.get("allow_replay", True)),
         "allow_pause": bool((config.allow_pause if config else None) if config else reading_config.get("allow_pause", True)),
@@ -253,11 +278,11 @@ async def create_reading_module(
     if passing_score < 1 or passing_score > 100:
         raise HTTPException(status_code=400, detail="Passing score must be between 1 and 100.")
     
-    # Calculate word count and estimated reading time
-    word_count = _word_count(reading_content)
-    estimated_time = int(estimated_time_payload or max(1, round(word_count / 130)))  # Average reading speed ~130 wpm
+    passage_stats = _reading_stats(reading_content)
+    word_count = passage_stats["word_count"]
+    estimated_time = int(estimated_time_payload or passage_stats["estimated_reading_time_minutes"])
     reading_config = {
-        "max_attempts": max(1, min(10, max_attempts)),
+        "max_attempts": max(0, min(10, max_attempts)),
         "time_limit_seconds": int(time_limit_seconds) if time_limit_seconds else None,
         "allow_replay": bool(_payload_value(payload, "allow_replay", "allowReplay", default=True)),
         "allow_pause": bool(_payload_value(payload, "allow_pause", "allowPause", default=True)),
@@ -285,6 +310,9 @@ async def create_reading_module(
             "reading_passage": reading_content,
             "reading_rich_content": reading_rich_content.strip() or reading_content,
             "word_count": word_count,
+            "sentence_count": passage_stats["sentence_count"],
+            "paragraph_count": passage_stats["paragraph_count"],
+            "reading_level": passage_stats["reading_level"],
             "estimated_reading_time_minutes": estimated_time,
             "instructions": instructions,
             "language": language,
@@ -316,6 +344,9 @@ async def create_reading_module(
         reading_category=reading_category,
         reading_content=reading_content,
         word_count=word_count,
+        sentence_count=passage_stats["sentence_count"],
+        paragraph_count=passage_stats["paragraph_count"],
+        reading_level=passage_stats["reading_level"],
         estimated_reading_time_minutes=estimated_time,
         instructions=instructions,
         max_attempts=reading_config["max_attempts"],
@@ -384,7 +415,7 @@ async def start_reading_attempt(
         trainee_id=user.id,
     ).count()
     
-    if attempt_count >= max_attempts:
+    if max_attempts > 0 and attempt_count >= max_attempts:
         raise HTTPException(
             status_code=400,
             detail=f"Maximum attempts ({max_attempts}) reached for this module."
@@ -411,6 +442,9 @@ async def start_reading_attempt(
         "reading_title": settings["reading_title"],
         "instructions": settings["instructions"],
         "word_count": config.word_count if config else _word_count(attempt.expected_text),
+        "sentence_count": config.sentence_count if config else _reading_stats(attempt.expected_text)["sentence_count"],
+        "paragraph_count": config.paragraph_count if config else _reading_stats(attempt.expected_text)["paragraph_count"],
+        "reading_level": config.reading_level if config else _reading_stats(attempt.expected_text)["reading_level"],
         "passing_score": float(module.passing_score or 0),
         "settings": settings,
     }
@@ -870,6 +904,29 @@ async def get_trainer_reading_report(
     fluency_scores = [float(attempt.fluency_score or 0) for attempt in completed_attempts]
     confidence_scores = [float(attempt.confidence_score or 0) for attempt in completed_attempts]
     passed_count = sum(1 for attempt in completed_attempts if attempt.status == "passed")
+    trend_buckets: dict[str, dict[str, Any]] = {}
+    for attempt in completed_attempts:
+        bucket_date = (attempt.completed_at or attempt.created_at or datetime.utcnow()).date().isoformat()
+        bucket = trend_buckets.setdefault(
+            bucket_date,
+            {"date": bucket_date, "scores": [], "pronunciation": [], "accuracy": [], "fluency": [], "attempts": 0},
+        )
+        bucket["attempts"] += 1
+        bucket["scores"].append(float(attempt.overall_score or 0))
+        bucket["pronunciation"].append(float(attempt.pronunciation_score or 0))
+        bucket["accuracy"].append(float(attempt.accuracy_score or 0))
+        bucket["fluency"].append(float(attempt.fluency_score or 0))
+    trend_over_time = [
+        {
+            "date": bucket["date"],
+            "attempts": bucket["attempts"],
+            "average_score": _average(bucket["scores"]),
+            "average_pronunciation": _average(bucket["pronunciation"]),
+            "average_accuracy": _average(bucket["accuracy"]),
+            "average_fluency": _average(bucket["fluency"]),
+        }
+        for bucket in sorted(trend_buckets.values(), key=lambda item: item["date"])
+    ]
 
     return {
         "summary": {
@@ -888,6 +945,7 @@ async def get_trainer_reading_report(
         "needs_improvement": needs_improvement,
         "most_difficult_words": difficult_words[:20],
         "most_difficult_sounds": difficult_sounds[:20],
+        "trend_over_time": trend_over_time,
         "attempts": [_serialize_attempt_summary(attempt) for attempt in attempts[:100]],
     }
 
@@ -1012,19 +1070,32 @@ async def get_attempt_history(
         module_id=module_id,
         trainee_id=user.id,
     ).order_by(ReadingAttempt.attempt_number).all()
+
+    history_rows = []
+    previous_score: Optional[float] = None
+    for attempt in attempts:
+        score = float(attempt.overall_score or attempt.pronunciation_score or 0) if attempt.completed_at else None
+        history_rows.append({
+            "id": attempt.id,
+            "attempt_number": attempt.attempt_number,
+            "status": attempt.status,
+            "score": score,
+            "overall_score": float(attempt.overall_score or 0),
+            "accuracy": float(attempt.accuracy_score or 0),
+            "fluency": float(attempt.fluency_score or 0),
+            "confidence": float(attempt.confidence_score or 0),
+            "passed": attempt.status == "passed",
+            "words_per_minute": float(attempt.words_per_minute or 0),
+            "duration_seconds": float(attempt.audio_duration_seconds or 0),
+            "improvement": round(score - previous_score, 2) if score is not None and previous_score is not None else None,
+            "completed_at": attempt.completed_at.isoformat() if attempt.completed_at else None,
+            "created_at": attempt.created_at.isoformat() if attempt.created_at else None,
+        })
+        if score is not None:
+            previous_score = score
     
     return {
         "module_id": module_id,
         "total_attempts": len(attempts),
-        "attempts": [
-            {
-                "id": a.id,
-                "attempt_number": a.attempt_number,
-                "status": a.status,
-                "score": float(a.pronunciation_score) if a.pronunciation_score else None,
-                "passed": a.status == "passed",
-                "completed_at": a.completed_at.isoformat() if a.completed_at else None,
-            }
-            for a in attempts
-        ],
+        "attempts": history_rows,
     }

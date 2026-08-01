@@ -4131,6 +4131,12 @@ export default function MicrolearningHub() {
                         wordCount:
                           Number(assignmentDetail.module.content_data.word_count || 0) ||
                           tokenizeText(assignmentDetail.module.content_data.reading_passage || assignmentDetail.module.content_data.reading_content || assignmentDetail.module.content_data.content || '').length,
+                        sentenceCount:
+                          Number(assignmentDetail.module.content_data.sentence_count || 0) || undefined,
+                        paragraphCount:
+                          Number(assignmentDetail.module.content_data.paragraph_count || 0) || undefined,
+                        readingLevel:
+                          assignmentDetail.module.content_data.reading_level || undefined,
                         estimatedReadingTime:
                           Number(assignmentDetail.module.content_data.estimated_reading_time_minutes || activeAssignment.duration_minutes || 0) || undefined,
                         readingContent:

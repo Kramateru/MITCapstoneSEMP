@@ -11,6 +11,7 @@ const Italic = (props: any) => <LazyIcon name="Italic" {...props} />;
 const List = (props: any) => <LazyIcon name="List" {...props} />;
 const Pencil = (props: any) => <LazyIcon name="Pencil" {...props} />;
 const Plus = (props: any) => <LazyIcon name="Plus" {...props} />;
+const Quote = (props: any) => <LazyIcon name="Quote" {...props} />;
 const RefreshCw = (props: any) => <LazyIcon name="RefreshCw" {...props} />;
 const Trash2 = (props: any) => <LazyIcon name="Trash2" {...props} />;
 const Upload = (props: any) => <LazyIcon name="Upload" {...props} />;
@@ -32,9 +33,9 @@ import { deleteModuleAndDependencies } from '@/app/lib/microlearning/client';
 import {
     buildContentData,
     CATEGORY_STYLES,
-    countReadingWords,
     emptyModuleForm,
     formatLabel,
+    getReadingPassageStats,
     MicrolearningModule,
     ModuleFormState,
     moduleToForm,
@@ -406,6 +407,10 @@ export default function TrainerMicrolearningStudio() {
   const librarySectionRef = useRef<HTMLDivElement | null>(null);
   const reportingSectionRef = useRef<HTMLDivElement | null>(null);
   const readingPassageRef = useRef<HTMLTextAreaElement | null>(null);
+  const readingPassageStats = useMemo(
+    () => getReadingPassageStats(moduleForm.reading_passage),
+    [moduleForm.reading_passage],
+  );
 
   const authedFetch = useCallback(
     async (url: string, init: RequestInit = {}) => {
@@ -2560,6 +2565,9 @@ export default function TrainerMicrolearningStudio() {
                         <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<ul>\n<li>', '</li>\n</ul>', 'list item')}>
                           <List className="size-4" />
                         </Button>
+                        <Button type="button" variant="outline" size="icon" onClick={() => insertReadingMarkup('<blockquote>', '</blockquote>', 'quoted line')}>
+                          <Quote className="size-4" />
+                        </Button>
                       </div>
                     </div>
                     <Textarea
@@ -2573,13 +2581,22 @@ export default function TrainerMicrolearningStudio() {
                     />
                     <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
                       <span>
-                        {countReadingWords(moduleForm.reading_passage)} words
+                        {readingPassageStats.words} words
                       </span>
                       <span>
-                        Est. {Math.max(1, Math.ceil(countReadingWords(moduleForm.reading_passage) / 130))} min
+                        {readingPassageStats.sentences} sentences
                       </span>
                       <span>
-                        Pass target: {Math.ceil((countReadingWords(moduleForm.reading_passage) * moduleForm.passing_score) / 100)} correct words
+                        {readingPassageStats.paragraphs} paragraphs
+                      </span>
+                      <span>
+                        {readingPassageStats.readingLevel} level
+                      </span>
+                      <span>
+                        Est. {readingPassageStats.estimatedMinutes} min
+                      </span>
+                      <span>
+                        Pass target: {Math.ceil((readingPassageStats.words * moduleForm.passing_score) / 100)} correct words
                       </span>
                     </div>
                   </div>
@@ -2608,11 +2625,12 @@ export default function TrainerMicrolearningStudio() {
                       <Input
                         id="reading-max-attempts"
                         type="number"
-                        min={1}
+                        min={0}
                         max={10}
                         value={moduleForm.reading_max_attempts}
-                        onChange={(e) => setModuleForm(current => ({ ...current, reading_max_attempts: Number(e.target.value || 1) }))}
+                        onChange={(e) => setModuleForm(current => ({ ...current, reading_max_attempts: Number(e.target.value || 0) }))}
                       />
+                      <div className="text-xs text-muted-foreground">Use 0 for unlimited attempts.</div>
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="reading-time-limit">Time Limit Seconds</Label>
@@ -2627,7 +2645,7 @@ export default function TrainerMicrolearningStudio() {
                     <div className="space-y-2">
                       <Label>Reading Time</Label>
                       <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
-                        {Math.max(1, Math.ceil(countReadingWords(moduleForm.reading_passage) / 130))} minute(s)
+                        {readingPassageStats.estimatedMinutes} minute(s)
                       </div>
                     </div>
                   </div>

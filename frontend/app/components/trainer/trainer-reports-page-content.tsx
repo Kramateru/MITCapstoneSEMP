@@ -144,6 +144,14 @@ type ReadingPronunciationReport = {
     sound: string
     issue_count: number
   }>
+  trend_over_time: Array<{
+    date: string
+    attempts: number
+    average_score: number
+    average_pronunciation: number
+    average_accuracy: number
+    average_fluency: number
+  }>
   attempts: Array<{
     id: string
     module_title?: string | null
@@ -1306,6 +1314,35 @@ export default function ReportsPage() {
                     icon={Target}
                   />
                 </div>
+
+                <Card className="border-slate-200 shadow-sm">
+                  <CardHeader>
+                    <CardTitle>Reading Progress Over Time</CardTitle>
+                    <CardDescription>
+                      Daily average score, pronunciation, accuracy, and fluency across completed reading attempts.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {readingReport?.trend_over_time.length ? (
+                      <div className="h-72">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={readingReport.trend_over_time}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="date" />
+                            <YAxis domain={[0, 100]} />
+                            <Tooltip formatter={(value) => formatPercent(Number(value))} />
+                            <Line type="monotone" dataKey="average_score" name="Overall" stroke="#0f766e" strokeWidth={2} dot={false} />
+                            <Line type="monotone" dataKey="average_pronunciation" name="Pronunciation" stroke="#2563eb" strokeWidth={2} dot={false} />
+                            <Line type="monotone" dataKey="average_accuracy" name="Accuracy" stroke="#16a34a" strokeWidth={2} dot={false} />
+                            <Line type="monotone" dataKey="average_fluency" name="Fluency" stroke="#d97706" strokeWidth={2} dot={false} />
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    ) : (
+                      <SectionEmpty message="Reading progress trends will appear after completed attempts are saved." />
+                    )}
+                  </CardContent>
+                </Card>
 
                 <div className="grid gap-6 xl:grid-cols-2">
                   <Card className="border-slate-200 shadow-sm">

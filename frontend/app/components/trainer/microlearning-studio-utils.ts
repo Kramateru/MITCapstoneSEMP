@@ -332,6 +332,27 @@ export function countReadingWords(value: string) {
   return (stripReadingMarkup(value).match(/\b[\w']+\b/g) || []).length;
 }
 
+export function getReadingPassageStats(value: string) {
+  const plain = stripReadingMarkup(value);
+  const words = plain.match(/\b[\w']+\b/g) || [];
+  const sentences = plain.split(/[.!?]+(?:\s|$)/).map((item) => item.trim()).filter(Boolean);
+  const paragraphs = plain.split(/\n{2,}/).map((item) => item.trim()).filter(Boolean);
+  const averageWordsPerSentence = sentences.length ? words.length / sentences.length : 0;
+  const readingLevel = words.length < 120 || averageWordsPerSentence <= 12
+    ? 'Basic'
+    : averageWordsPerSentence <= 20
+      ? 'Intermediate'
+      : 'Advanced';
+
+  return {
+    words: words.length,
+    sentences: sentences.length,
+    paragraphs: Math.max(paragraphs.length, plain ? 1 : 0),
+    readingLevel,
+    estimatedMinutes: Math.max(1, Math.ceil(words.length / 130)),
+  };
+}
+
 function parseCaptionDataJson(value: string) {
   if (!value.trim()) {
     return undefined;
@@ -462,6 +483,7 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
     case 'reading':
       const readingRichContent = form.reading_passage.trim();
       const readingPlainContent = stripReadingMarkup(readingRichContent);
+      const readingStats = getReadingPassageStats(readingRichContent);
       return {
         ...preserved,
         reading_title: form.reading_title.trim() || form.title.trim() || undefined,
@@ -472,7 +494,10 @@ export function buildContentData(form: ModuleFormState, previousContentData?: Re
         content: readingPlainContent || undefined,
         instructions: form.reading_instructions.trim() || undefined,
         language: form.reading_language || 'en-US',
-        word_count: countReadingWords(readingRichContent),
+        word_count: readingStats.words,
+        sentence_count: readingStats.sentences,
+        paragraph_count: readingStats.paragraphs,
+        reading_level: readingStats.readingLevel,
         estimated_reading_time_minutes: form.duration_minutes,
         reading_config: {
           max_attempts: form.reading_max_attempts,
@@ -660,7 +685,7 @@ export function moduleToForm(module: MicrolearningModule): ModuleFormState {
         reading_passage: content.reading_rich_content || content.reading_passage || content.reading_content || content.content || '',
         reading_instructions: content.instructions || form.reading_instructions,
         reading_language: content.language || content.audio_language || 'en-US',
-        reading_max_attempts: Number(readingConfig.max_attempts || content.max_attempts || 3),
+        reading_max_attempts: Number(readingConfig.max_attempts ?? content.max_attempts ?? 3),
         reading_time_limit_seconds: Number(readingConfig.time_limit_seconds || 0),
         reading_allow_replay: readingConfig.allow_replay !== false,
         reading_allow_pause: readingConfig.allow_pause !== false,
