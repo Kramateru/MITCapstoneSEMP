@@ -21,9 +21,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trainee/reading", tags=["reading-assessment"])
 
+try:
+    from ..services.audio_transcription import get_transcription_service as _direct_get_transcription_service
+except Exception:
+    _direct_get_transcription_service = None
+
 
 def get_transcription_service():
     """Resolve the shared transcription service lazily at runtime."""
+    if callable(_direct_get_transcription_service):
+        return _direct_get_transcription_service()
+
     service_factory = getattr(audio_transcription, "get_transcription_service", None)
     if callable(service_factory):
         return service_factory()
