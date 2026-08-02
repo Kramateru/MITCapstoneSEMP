@@ -1,5 +1,0 @@
-
-> frontend@0.1.0 build
-> next build --webpack --no-lint ; status=$?; tail -n 80 build.log; echo EXIT_CODE=$status
-
-error: unknown option '--no-lint'
