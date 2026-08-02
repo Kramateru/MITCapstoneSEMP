@@ -15,62 +15,14 @@ const Heading2 = (props: any) => <LazyIcon name="Heading2" {...props} />;
 const Italic = (props: any) => <LazyIcon name="Italic" {...props} />;
 const List = (props: any) => <LazyIcon name="List" {...props} />;
 
-type Difficulty = 'basic' | 'intermediate' | 'advanced';
-
 interface ReadingModuleFormData {
   title: string;
-  readingTitle: string;
-  readingCategory: string;
-  description: string;
-  instructions: string;
   readingContent: string;
-  passingScore: number;
-  minimumPronunciationScore: number;
-  minimumAccuracy: number;
-  minimumCompleteness: number;
-  minimumFluency: number;
-  maxAttempts: number;
-  timeLimitSeconds: number;
-  language: string;
-  difficulty: Difficulty;
-  allowReplay: boolean;
-  allowPause: boolean;
-  autoSubmit: boolean;
-  manualReviewRequired: boolean;
-  ai: Record<string, boolean>;
 }
 
 const DEFAULT_FORM_DATA: ReadingModuleFormData = {
   title: '',
-  readingTitle: '',
-  readingCategory: 'BPO Communication',
-  description: '',
-  instructions: 'Read the passage aloud clearly and naturally. Pause at punctuation and complete ending consonants.',
   readingContent: '',
-  passingScore: 85,
-  minimumPronunciationScore: 0,
-  minimumAccuracy: 0,
-  minimumCompleteness: 0,
-  minimumFluency: 0,
-  maxAttempts: 3,
-  timeLimitSeconds: 0,
-  language: 'en-US',
-  difficulty: 'intermediate',
-  allowReplay: true,
-  allowPause: true,
-  autoSubmit: false,
-  manualReviewRequired: false,
-  ai: {
-    pronunciation: true,
-    fluency: true,
-    accuracy: true,
-    completeness: true,
-    confidence: true,
-    word_analysis: true,
-    mispronounced_words: true,
-    sound_analysis: true,
-    suggestions: true,
-  },
 };
 
 function stripMarkup(value: string) {
@@ -140,14 +92,6 @@ export function CreateReadingModule() {
       toast({ title: 'Error', description: 'Reading passage must have at least 10 words', variant: 'destructive' });
       return false;
     }
-    if (formData.passingScore < 1 || formData.passingScore > 100) {
-      toast({ title: 'Error', description: 'Passing score must be between 1 and 100', variant: 'destructive' });
-      return false;
-    }
-    if (formData.maxAttempts < 0 || formData.maxAttempts > 10) {
-      toast({ title: 'Error', description: 'Maximum attempts must be between 0 and 10', variant: 'destructive' });
-      return false;
-    }
     return true;
   }
 
@@ -162,30 +106,9 @@ export function CreateReadingModule() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           title: formData.title,
-          reading_title: formData.readingTitle || formData.title,
-          reading_category: formData.readingCategory,
-          description: formData.description,
+          reading_title: formData.title,
           reading_rich_content: formData.readingContent,
           reading_content: stats.plainText,
-          passing_score: formData.passingScore,
-          instructions: formData.instructions,
-          max_attempts: formData.maxAttempts,
-          time_limit_seconds: formData.timeLimitSeconds > 0 ? formData.timeLimitSeconds : null,
-          difficulty: formData.difficulty,
-          language: formData.language,
-          estimated_reading_time: stats.estimatedMinutes,
-          allow_replay: formData.allowReplay,
-          allow_pause: formData.allowPause,
-          auto_submit: formData.autoSubmit,
-          manual_review_required: formData.manualReviewRequired,
-          minimum_pronunciation_score: formData.minimumPronunciationScore,
-          minimum_accuracy: formData.minimumAccuracy,
-          minimum_completeness: formData.minimumCompleteness,
-          minimum_fluency: formData.minimumFluency,
-          ai_configuration: {
-            voice_assessment_enabled: true,
-            ...formData.ai,
-          },
         }),
       });
 
@@ -253,14 +176,6 @@ export function CreateReadingModule() {
                 required
                 className="text-base leading-7"
               />
-              <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                <span>{stats.words} words</span>
-                <span>{stats.sentences} sentences</span>
-                <span>{stats.paragraphs} paragraphs</span>
-                <span>{stats.readingLevel} level</span>
-                <span>Est. {stats.estimatedMinutes} min</span>
-                <span>Pass target: {Math.ceil((stats.words * formData.passingScore) / 100)} correct words</span>
-              </div>
             </div>
 
             <div className="flex flex-col gap-3 pt-2 sm:flex-row">
@@ -287,55 +202,6 @@ function Field({ label, required, children }: { label: string; required?: boolea
       </Label>
       {children}
     </div>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min?: number;
-  max?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <Field label={label}>
-      <Input
-        type="number"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value || 0))}
-      />
-    </Field>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-xl border bg-slate-50 p-4">
-      <div className="font-medium">{title}</div>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">{children}</div>
-    </div>
-  );
-}
-
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
-  return (
-    <label className="flex items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm">
-      <span>{label}</span>
-      <input
-        type="checkbox"
-        className="size-4"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    </label>
   );
 }
 

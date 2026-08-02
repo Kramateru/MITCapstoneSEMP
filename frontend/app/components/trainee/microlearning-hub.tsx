@@ -3910,11 +3910,11 @@ export default function MicrolearningHub() {
         <Card>
           <CardHeader>
             <CardTitle>{activeAssignment?.title || 'Module Detail'}</CardTitle>
-            <CardDescription>
-              {isReadingPronunciationModule
-                ? 'Read the passage aloud, record your response, then submit it for pronunciation analysis.'
-                : activeAssignment?.skill_focus || 'Open a module to review the lesson, complete the exercises, and save your answers.'}
-            </CardDescription>
+            {!isReadingPronunciationModule ? (
+              <CardDescription>
+                {activeAssignment?.skill_focus || 'Open a module to review the lesson, complete the exercises, and save your answers.'}
+              </CardDescription>
+            ) : null}
           </CardHeader>
           <CardContent>
             {!hasDetailForActiveAssignment || !activeAssignment ? (
@@ -3923,19 +3923,6 @@ export default function MicrolearningHub() {
               </div>
             ) : (
               <div className="space-y-6">
-                {isReadingPronunciationModule && !moduleStarted ? (
-                  <div className="rounded-xl border border-sky-200 bg-sky-50 p-4">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div className="text-sm text-sky-800">
-                        Start this reading module to open the passage and record your spoken response.
-                      </div>
-                      <Button type="button" onClick={() => void handleStartAssignment()} disabled={startingAssignment}>
-                        {startingAssignment ? 'Starting...' : 'Start Module'}
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-
                 {!isReadingPronunciationModule ? (
                   <>
                 <div className="grid gap-3 rounded-xl border border-sky-100 bg-sky-50/70 p-4 md:grid-cols-3">
@@ -4115,7 +4102,45 @@ export default function MicrolearningHub() {
 
                   {moduleStarted && !isReadingPronunciationModule ? renderModuleContent() : null}
 
-                {moduleStarted ? (
+                {isReadingPronunciationModule ? (
+                  <TraineeReadingAssessment
+                    moduleId={assignmentDetail.module.id}
+                    reading={{
+                      title: activeAssignment.title,
+                      readingTitle:
+                        assignmentDetail.module.content_data.reading_title || activeAssignment.title,
+                      category: assignmentDetail.module.content_data.reading_category || activeAssignment.topic_category_name || 'BPO Reading',
+                      difficulty: activeAssignment.difficulty || undefined,
+                      language: assignmentDetail.module.content_data.language || 'en-US',
+                      passingScore: activeAssignment.passing_score || assignmentDetail.module.passing_score,
+                      wordCount:
+                        Number(assignmentDetail.module.content_data.word_count || 0) ||
+                        tokenizeText(assignmentDetail.module.content_data.reading_passage || assignmentDetail.module.content_data.reading_content || assignmentDetail.module.content_data.content || '').length,
+                      sentenceCount:
+                        Number(assignmentDetail.module.content_data.sentence_count || 0) || undefined,
+                      paragraphCount:
+                        Number(assignmentDetail.module.content_data.paragraph_count || 0) || undefined,
+                      readingLevel:
+                        assignmentDetail.module.content_data.reading_level || undefined,
+                      estimatedReadingTime:
+                        Number(assignmentDetail.module.content_data.estimated_reading_time_minutes || activeAssignment.duration_minutes || 0) || undefined,
+                      readingContent:
+                        assignmentDetail.module.content_data.reading_passage ||
+                        assignmentDetail.module.content_data.reading_content ||
+                        assignmentDetail.module.content_data.content ||
+                        '',
+                      readingRichContent:
+                        assignmentDetail.module.content_data.reading_rich_content ||
+                        assignmentDetail.module.content_data.reading_markup ||
+                        undefined,
+                      maxAttempts:
+                        Number(assignmentDetail.module.content_data.reading_config?.max_attempts ?? assignmentDetail.module.content_data.max_attempts ?? 3),
+                      timeLimitSeconds:
+                        assignmentDetail.module.content_data.reading_config?.time_limit_seconds || null,
+                    }}
+                    onComplete={() => void loadAssignments({ preferredAssignmentId: activeAssignmentId })}
+                  />
+                ) : moduleStarted ? (
                   isFlashcardModule ? (
                     <div className="space-y-4">
                       <TimedFlashcardSessionCard
@@ -4146,54 +4171,6 @@ export default function MicrolearningHub() {
                       />
                       {shouldShowModuleResultSummary ? renderAssignmentResultSummary() : null}
                     </div>
-                  ) : isReadingPronunciationModule ? (
-                    <TraineeReadingAssessment
-                      moduleId={assignmentDetail.module.id}
-                      reading={{
-                        title: activeAssignment.title,
-                        readingTitle:
-                          assignmentDetail.module.content_data.reading_title || activeAssignment.title,
-                        category: assignmentDetail.module.content_data.reading_category || activeAssignment.topic_category_name || 'BPO Reading',
-                        difficulty: activeAssignment.difficulty || undefined,
-                        language: assignmentDetail.module.content_data.language || 'en-US',
-                        description: activeAssignment.description || undefined,
-                        instructions:
-                          assignmentDetail.module.content_data.instructions ||
-                          'Read the passage aloud clearly and naturally.',
-                        passingScore: activeAssignment.passing_score || assignmentDetail.module.passing_score,
-                        wordCount:
-                          Number(assignmentDetail.module.content_data.word_count || 0) ||
-                          tokenizeText(assignmentDetail.module.content_data.reading_passage || assignmentDetail.module.content_data.reading_content || assignmentDetail.module.content_data.content || '').length,
-                        sentenceCount:
-                          Number(assignmentDetail.module.content_data.sentence_count || 0) || undefined,
-                        paragraphCount:
-                          Number(assignmentDetail.module.content_data.paragraph_count || 0) || undefined,
-                        readingLevel:
-                          assignmentDetail.module.content_data.reading_level || undefined,
-                        estimatedReadingTime:
-                          Number(assignmentDetail.module.content_data.estimated_reading_time_minutes || activeAssignment.duration_minutes || 0) || undefined,
-                        readingContent:
-                          assignmentDetail.module.content_data.reading_passage ||
-                          assignmentDetail.module.content_data.reading_content ||
-                          assignmentDetail.module.content_data.content ||
-                          '',
-                        readingRichContent:
-                          assignmentDetail.module.content_data.reading_rich_content ||
-                          assignmentDetail.module.content_data.reading_markup ||
-                          undefined,
-                        maxAttempts:
-                          Number(assignmentDetail.module.content_data.reading_config?.max_attempts ?? assignmentDetail.module.content_data.max_attempts ?? 3),
-                        timeLimitSeconds:
-                          assignmentDetail.module.content_data.reading_config?.time_limit_seconds || null,
-                        allowReplay:
-                          assignmentDetail.module.content_data.reading_config?.allow_replay !== false,
-                        allowPause:
-                          assignmentDetail.module.content_data.reading_config?.allow_pause !== false,
-                        autoSubmit:
-                          Boolean(assignmentDetail.module.content_data.reading_config?.auto_submit),
-                      }}
-                      onComplete={() => void loadAssignments({ preferredAssignmentId: activeAssignmentId })}
-                    />
                   ) : renderStandardExerciseFlow()
                 ) : null}
               </div>

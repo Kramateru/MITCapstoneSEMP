@@ -1934,6 +1934,7 @@ export default function TrainerMicrolearningStudio() {
                     </div>
                   </div>
 
+                  {moduleForm.module_type !== 'reading' ? (
                   <div className="rounded-2xl border bg-slate-50 p-5 sm:p-6">
                     <div className="text-lg font-semibold">Quick Overview</div>
                     <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
@@ -1951,11 +1952,10 @@ export default function TrainerMicrolearningStudio() {
                       </div>
                     </div>
                     <div className="mt-4 text-sm text-muted-foreground">
-                      {moduleForm.module_type === 'reading'
-                        ? 'Recommended flow: select Reading Assessment, enter the module title, paste the passage, then assign it to a batch.'
-                        : 'Recommended flow: choose a template, set the scoring, attach media if needed, then add the learner-facing questions.'}
+                      Recommended flow: choose a template, set the scoring, attach media if needed, then add the learner-facing questions.
                     </div>
                   </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -2585,26 +2585,6 @@ export default function TrainerMicrolearningStudio() {
                       placeholder="Paste the story, article, dialogue, call center script, or BPO scenario trainees should read aloud."
                       className="text-base leading-7"
                     />
-                    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                      <span>
-                        {readingPassageStats.words} words
-                      </span>
-                      <span>
-                        {readingPassageStats.sentences} sentences
-                      </span>
-                      <span>
-                        {readingPassageStats.paragraphs} paragraphs
-                      </span>
-                      <span>
-                        {readingPassageStats.readingLevel} level
-                      </span>
-                      <span>
-                        Est. {readingPassageStats.estimatedMinutes} min
-                      </span>
-                      <span>
-                        Pass target: {Math.ceil((readingPassageStats.words * moduleForm.passing_score) / 100)} correct words
-                      </span>
-                    </div>
                   </div>
 
                 </div>

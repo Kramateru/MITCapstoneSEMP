@@ -12,11 +12,8 @@ import { Progress } from '../ui/progress';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 
 const Mic = (props: any) => <LazyIcon name="Mic" {...props} />;
-const Pause = (props: any) => <LazyIcon name="Pause" {...props} />;
-const Play = (props: any) => <LazyIcon name="Play" {...props} />;
 const RotateCcw = (props: any) => <LazyIcon name="RotateCcw" {...props} />;
 const Send = (props: any) => <LazyIcon name="Send" {...props} />;
-const Square = (props: any) => <LazyIcon name="Square" {...props} />;
 
 interface ReadingAssessmentProps {
   moduleId: string;
@@ -26,8 +23,6 @@ interface ReadingAssessmentProps {
     category?: string;
     difficulty?: string;
     language?: string;
-    description?: string;
-    instructions?: string;
     passingScore: number;
     wordCount: number;
     sentenceCount?: number;
@@ -38,14 +33,11 @@ interface ReadingAssessmentProps {
     readingRichContent?: string;
     maxAttempts?: number;
     timeLimitSeconds?: number | null;
-    allowReplay?: boolean;
-    allowPause?: boolean;
-    autoSubmit?: boolean;
   };
   onComplete?: (attemptId: string) => void;
 }
 
-type Stage = 'preparation' | 'recording' | 'paused' | 'review' | 'uploading' | 'processing' | 'complete';
+type Stage = 'preparation' | 'recording' | 'uploading' | 'processing' | 'complete';
 
 type WordStatus = 'unread' | 'current' | 'correct' | 'mispronounced' | 'omitted' | 'extra' | 'repeated' | 'uncertain';
 
@@ -220,7 +212,6 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
   const [stage, setStage] = useState<Stage>('preparation');
   const [recordingTime, setRecordingTime] = useState(0);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [audioUrl, setAudioUrl] = useState('');
   const [attemptId, setAttemptId] = useState('');
   const [attemptNumber, setAttemptNumber] = useState<number | null>(null);
   const [results, setResults] = useState<ReadingResult | null>(null);
@@ -251,6 +242,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
   const analyserFrameRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const submitAfterStopRef = useRef(false);
 
   const passageWords = useMemo(() => tokenize(reading.readingContent), [reading.readingContent]);
   const richPassageHtml = useMemo(
@@ -277,12 +269,10 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       return;
     }
     if (recordingTime >= reading.timeLimitSeconds) {
+      submitAfterStopRef.current = true;
       stopRecording();
-      if (reading.autoSubmit) {
-        window.setTimeout(() => void handleSubmit(), 250);
-      }
     }
-  }, [recordingTime, reading.autoSubmit, reading.timeLimitSeconds, stage]);
+  }, [recordingTime, reading.timeLimitSeconds, stage]);
 
   function authHeaders(): HeadersInit {
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -468,18 +458,18 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType || recorder.mimeType || 'audio/webm' });
         setAudioBlob(blob);
-        if (audioUrl) {
-          URL.revokeObjectURL(audioUrl);
-        }
-        setAudioUrl(URL.createObjectURL(blob));
         cleanupRecording();
-        setStage('review');
+        if (submitAfterStopRef.current) {
+          submitAfterStopRef.current = false;
+          void handleSubmit(blob);
+        } else {
+          setStage('preparation');
+        }
       };
 
       recorder.start(1000);
       mediaRecorderRef.current = recorder;
       setAudioBlob(null);
-      setAudioUrl('');
       setLiveTranscript('');
       setRecordingTime(0);
       setStage('recording');
@@ -510,29 +500,6 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     }
   }
 
-  function pauseRecording() {
-    if (!reading.allowPause || mediaRecorderRef.current?.state !== 'recording') {
-      return;
-    }
-    mediaRecorderRef.current.pause();
-    recognitionRef.current?.stop();
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    setStage('paused');
-  }
-
-  function resumeRecording() {
-    if (mediaRecorderRef.current?.state !== 'paused') {
-      return;
-    }
-    mediaRecorderRef.current.resume();
-    setStage('recording');
-    startTimer();
-    startLiveRecognition();
-  }
-
   function stopRecording() {
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -541,7 +508,6 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
 
   function restartRecording(options?: { newAttempt?: boolean }) {
     setAudioBlob(null);
-    setAudioUrl('');
     setLiveTranscript('');
     setRecordingTime(0);
     setResults(null);
@@ -552,9 +518,20 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     void startRecording();
   }
 
-  async function handleSubmit() {
-    if (!audioBlob) {
+  function submitResponse() {
+    if (stage === 'recording') {
+      submitAfterStopRef.current = true;
+      setStage('uploading');
+      stopRecording();
+      return;
+    }
+    void handleSubmit();
+  }
+
+  async function handleSubmit(recordingBlob: Blob | null = audioBlob) {
+    if (!recordingBlob) {
       toast({ title: 'No recording', description: 'Record your response before submitting.', variant: 'destructive' });
+      setStage('preparation');
       return;
     }
     const activeAttemptId = attemptId || await ensureAttempt();
@@ -562,7 +539,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
     try {
       setStage('uploading');
       const formData = new FormData();
-      formData.append('file', audioBlob, `reading-attempt.${extensionForAudioMimeType(audioBlob.type)}`);
+      formData.append('file', recordingBlob, `reading-attempt.${extensionForAudioMimeType(recordingBlob.type)}`);
       const uploadResponse = await fetch(`/api/trainee/reading/attempts/${activeAttemptId}/upload-audio`, {
         method: 'POST',
         headers: authHeaders(),
@@ -597,7 +574,7 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
         description: error?.message || 'Unable to analyze the recording.',
         variant: 'destructive',
       });
-      setStage('review');
+      setStage('preparation');
     } finally {
       setSubmitting(false);
     }
@@ -808,11 +785,11 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             )}
           </div>
 
-          {(stage === 'recording' || stage === 'paused' || stage === 'review') ? (
+          {stage === 'recording' ? (
             <div className="rounded-xl border bg-slate-50 p-4">
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-3">
-                  <Metric label="Recording Status" value={stage === 'recording' ? 'Recording' : stage === 'paused' ? 'Paused' : 'Ready to Submit'} />
+                  <Metric label="Recording Status" value="Recording" />
                   <Metric label="Elapsed" value={formatTime(recordingTime)} />
                   <Metric label="Mic Level" value={`${micLevel}%`} />
                 </div>
@@ -834,13 +811,6 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
             </div>
           ) : null}
 
-          {audioUrl && stage === 'review' ? (
-            <div className="rounded-xl border bg-slate-50 p-4">
-              <p className="mb-3 text-sm text-slate-600">Duration: {formatTime(recordingTime)}</p>
-              <audio controls className="w-full" src={audioUrl} />
-            </div>
-          ) : null}
-
           {stage === 'uploading' || stage === 'processing' ? (
             <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-800">
               {stage === 'uploading' ? 'Uploading your response to Supabase Storage...' : 'Analyzing pronunciation, word alignment, fluency, and sound patterns...'}
@@ -859,42 +829,10 @@ export function TraineeReadingAssessment({ moduleId, reading, onComplete }: Read
               </Button>
             ) : null}
             {stage === 'recording' ? (
-              <>
-                {reading.allowPause !== false ? (
-                  <Button variant="outline" onClick={pauseRecording} className="flex-1">
-                    <Pause className="mr-2 size-4" />
-                    Pause
-                  </Button>
-                ) : null}
-                <Button onClick={stopRecording} className="flex-1" variant="destructive">
-                  <Square className="mr-2 size-4" />
-                  Stop
-                </Button>
-              </>
-            ) : null}
-            {stage === 'paused' ? (
-              <>
-                <Button onClick={resumeRecording} className="flex-1">
-                  <Play className="mr-2 size-4" />
-                  Resume
-                </Button>
-                <Button onClick={stopRecording} className="flex-1" variant="destructive">
-                  <Square className="mr-2 size-4" />
-                  Stop
-                </Button>
-              </>
-            ) : null}
-            {stage === 'review' ? (
-              <>
-                <Button variant="outline" onClick={() => restartRecording()} className="flex-1" disabled={submitting}>
-                  <RotateCcw className="mr-2 size-4" />
-                  Record Again
-                </Button>
-                <Button onClick={() => void handleSubmit()} className="flex-1" disabled={submitting}>
-                  <Send className="mr-2 size-4" />
-                  Submit Response
-                </Button>
-              </>
+              <Button onClick={submitResponse} className="flex-1" disabled={submitting}>
+                <Send className="mr-2 size-4" />
+                Submit Response
+              </Button>
             ) : null}
           </div>
         </CardContent>
