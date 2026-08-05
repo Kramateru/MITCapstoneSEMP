@@ -79,29 +79,30 @@ export default function LoginPage() {
           cache: 'no-store',
           signal: controller.signal,
         })
-        const payload = await readHttpResponse<AuthProviderStatus>(response)
+        const parsed = await readHttpResponse<AuthProviderStatus>(response)
 
         if (!response.ok) {
           throw new Error(
             getHttpErrorMessage(
               response,
-              payload,
+              parsed,
               'Unable to verify the credential source right now.',
             ),
           )
         }
 
-        if (!payload.data) {
+        const providerData = (parsed.data ?? parsed) as AuthProviderStatus | null
+        if (!providerData || typeof providerData !== 'object') {
           throw new Error(
             getUnexpectedJsonResponseMessage(
               response,
-              payload,
+              parsed,
               'Unable to verify the credential source right now.',
             ),
           )
         }
 
-        setProviderStatus(payload.data)
+        setProviderStatus(providerData)
       } catch (fetchError) {
         if (controller.signal.aborted) {
           return
