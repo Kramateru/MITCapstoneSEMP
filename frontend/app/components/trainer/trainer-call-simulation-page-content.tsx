@@ -3883,14 +3883,28 @@ export default function TrainerSimFloorPage() {
                       </div>
                       {memberSpeechGenerationSummary.failed > 0 ? (
                         <div className="mt-2 space-y-1">
-                          {memberSpeechGenerationSummary.items
-                            .filter((item) => item.status === 'failed')
-                            .slice(0, 4)
-                            .map((item) => (
-                              <div key={`${item.step_number}-${item.script_turn_id || item.actor}`} className="text-cyan-900/85">
-                                Step {item.step_number} {item.speaker_label || item.actor}: {item.error || item.reason || 'Unable to generate speech.'}
+                          {(() => {
+                            const failedItems = memberSpeechGenerationSummary.items.filter((item) => item.status === 'failed');
+                            const failedMessages = Array.from(
+                              new Set(
+                                failedItems.map((item) => item.error || item.reason || 'Unable to generate speech.')
+                              )
+                            ).slice(0, 4);
+
+                            if (failedMessages.length === 1 && memberSpeechGenerationSummary.failed > 1) {
+                              return (
+                                <div className="text-cyan-900/85">
+                                  {memberSpeechGenerationSummary.failed} failures: {failedMessages[0]}
+                                </div>
+                              );
+                            }
+
+                            return failedMessages.map((message, index) => (
+                              <div key={`${message}-${index}`} className="text-cyan-900/85">
+                                {message}
                               </div>
-                            ))}
+                            ));
+                          })()}
                         </div>
                       ) : null}
                     </div>

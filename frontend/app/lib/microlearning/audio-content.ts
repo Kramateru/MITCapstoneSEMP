@@ -3,10 +3,10 @@ import 'server-only'
 import { GoogleAIFileManager } from '@google/generative-ai/server'
 
 import { AssessmentHttpError } from '@/app/lib/assessment/backend-auth'
-import { fetchBackendPath } from '@/app/lib/backend-proxy'
 import { getConfigValue } from '@/app/lib/assessment/env'
 import { createSupabaseAdminClient } from '@/app/lib/assessment/supabase-admin'
 import type { BackendSessionUser } from '@/app/lib/assessment/types'
+import { fetchBackendPath } from '@/app/lib/backend-proxy'
 
 const DEFAULT_AUDIO_BUCKET = 'microlearning-audio'
 const DEFAULT_GEMINI_AUDIO_MODEL = 'gemini-2.5-flash'
@@ -1101,8 +1101,9 @@ export async function uploadMicrolearningAudioContent({
 
   const audioUrl = backendUpload?.audio_url?.trim() || ''
   const signedUrl = backendUpload?.signed_url?.trim() || audioUrl
-  const storagePath = backendUpload?.storage_path?.trim() || ''
-  const bucketName = backendUpload?.bucket_name?.trim() || getAudioBucketName()
+  const inferredObject = resolveSupabasePublicObject(audioUrl)
+  const storagePath = backendUpload?.storage_path?.trim() || inferredObject?.storagePath || ''
+  const bucketName = backendUpload?.bucket_name?.trim() || inferredObject?.bucketName || ''
   const transcriptText = backendUpload?.transcript?.trim() || ''
   const transcriptProvider = backendUpload?.transcript_provider?.trim() || ''
   const durationSeconds =

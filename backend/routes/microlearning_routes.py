@@ -1019,13 +1019,21 @@ async def upload_module_audio(
         filename=storage_filename,
         content_type=content_type,
         lesson_id=lesson_id,
-        allow_local_fallback=False,
+        allow_local_fallback=True,
     )
     if not audio_url:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Microlearning audio storage could not save the audio asset to Supabase.",
+            detail="Microlearning audio storage could not save the audio asset to Supabase or local media fallback.",
         )
+
+    resolved_bucket, resolved_path = _resolve_supabase_public_asset(audio_url)
+    if resolved_bucket and resolved_path:
+        bucket_name = resolved_bucket
+        storage_path = resolved_path
+    else:
+        bucket_name = None
+        storage_path = None
 
     # Update module with audio URL
     module.audio_url = audio_url
@@ -1041,6 +1049,7 @@ async def upload_module_audio(
         storage_path=storage_path,
         bucket_name=bucket_name,
     )
+
     content_data = dict(module.content_data or {})
     content_data["lesson_id"] = lesson_id
     content_data["audio_file_size"] = int(upload_meta["file_size"])
@@ -1048,11 +1057,17 @@ async def upload_module_audio(
     content_data["audio_uploaded_at"] = datetime.utcnow().isoformat()
     if local_audio_path:
         content_data["audio_local_path"] = local_audio_path
+
+    if not storage_path:
+        content_data.pop("audio_storage_path", None)
+        content_data.pop("audio_bucket", None)
+        content_data["signed_url_required"] = False
+
     module.content_data = content_data
     signed_url = supabase_client.create_signed_storage_url(
         bucket_name=bucket_name,
         path=storage_path,
-    ) if bucket_name and storage_path else None
+    ) if bucket_name and storage_path else audio_url or None
 
     result = {
         "audio_url": audio_url,
@@ -1597,6 +1612,8 @@ async def get_module_audio(
         if storage_metadata.get("storage_path") and storage_metadata.get("bucket_name")
         else None
     )
+    if not signed_url:
+        signed_url = resolved_audio_url
 
     result = {
         "module_id": module_id,

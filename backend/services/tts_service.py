@@ -295,6 +295,12 @@ class TTSService:
 
         if not self.enable_local_tts:
             provider_errors = [error for error in [gemini_error, azure_error, openai_error] if error]
+            fallback_instructions = (
+                "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, OPENAI_API_KEY, "
+                "or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
+            )
+            if os.name == "nt":
+                fallback_instructions += " On Windows, set ENABLE_LOCAL_TTS=1 to enable local Windows TTS fallback."
             return {
                 "audio_url": None,
                 "audio_base64": None,
@@ -305,10 +311,7 @@ class TTSService:
                 "provider": "browser_fallback",
                 "error": ". ".join(provider_errors)
                 if provider_errors
-                else (
-                    "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, OPENAI_API_KEY, "
-                    "or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
-                ),
+                else fallback_instructions,
                 "fallback_mode": "browser",
             }
 

@@ -8264,6 +8264,11 @@ async def synthesize_member_speech(
 
     if not audio_url:
         error_detail = provider_error or "Generated speech could not be synthesized by the backend."
+        if fallback_mode == "browser" or provider == "browser_fallback":
+            error_detail = (
+                f"{error_detail} Server-side audio persistence requires a backend TTS provider. "
+                "Configure server-side TTS credentials or enable local TTS on Windows."
+            )
         logger.warning(
             "Call Simulation backend TTS returned no playable audio. error=%s",
             error_detail,
