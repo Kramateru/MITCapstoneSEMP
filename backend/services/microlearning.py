@@ -116,6 +116,7 @@ def _module_asset_url(module: Optional[MicrolearningModule]) -> str:
         getattr(module, "audio_url", None),
         content_data.get("asset_url"),
         content_data.get("audio_url"),
+        content_data.get("content_url"),
     ):
         normalized = _normalize_media_url(candidate)
         if normalized:
@@ -2093,9 +2094,9 @@ def serialize_microlearning_module(
         "duration_minutes": module.duration_minutes,
         "passing_score": int(getattr(module, "passing_score", 0) or 0),
         "skill_focus": module.skill_focus,
-        "content_url": module.content_url or module.audio_url,
+        "content_url": _module_asset_url(module),
         "content_data": module.content_data or {},
-        "audio_url": module.audio_url,
+        "audio_url": _module_asset_url(module),
         "audio_transcript": module.audio_transcript,
         "audio_tts_url": module.audio_tts_url,
         "audio_duration_seconds": module.audio_duration_seconds,
@@ -2205,7 +2206,7 @@ def serialize_assignment_summary(assignment: MicrolearningAssignment) -> dict[st
         "duration_minutes": module.duration_minutes if module else None,
         "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
         "difficulty": _enum_value(module.difficulty) if module else None,
-        "content_url": (module.content_url or module.audio_url) if module else None,
+        "content_url": _module_asset_url(module) if module else None,
         "status": assignment.status,
         "completion_percentage": float(assignment.completion_percentage or 0.0),
         "average_score": average_score,
@@ -2312,8 +2313,8 @@ def serialize_assignment_detail(
                 if key not in question_payload_keys
             } if module else {},
             "passing_score": int(getattr(module, "passing_score", 0) or 0) if module else 0,
-            "content_url": (module.content_url or module.audio_url) if module else None,
-            "audio_url": module.audio_url if module else None,
+            "content_url": _module_asset_url(module) if module else None,
+            "audio_url": _module_asset_url(module) if module else None,
             "audio_transcript": module.audio_transcript if module else None,
             "audio_tts_url": module.audio_tts_url if module else None,
             "audio_duration_seconds": module.audio_duration_seconds if module else None,

@@ -2119,6 +2119,18 @@ def _normalize_optional_url(value: Any) -> Optional[str]:
     return normalized or None
 
 
+def _resolve_call_simulation_step_audio_url(step: Any) -> Optional[str]:
+    if step is None:
+        return None
+    metadata = _normalize_json_object(getattr(step, "step_metadata", None) or getattr(step, "metadata", None))
+    return _normalize_optional_url(
+        getattr(step, "prompt_audio", None)
+        or getattr(step, "audio_url", None)
+        or metadata.get("member_audio_url")
+        or metadata.get("audio_url")
+    )
+
+
 def _normalize_uuid_candidate(value: Any) -> Optional[str]:
     normalized = str(value or "").strip()
     if not normalized:
@@ -2401,10 +2413,7 @@ async def _generate_call_simulation_step_speech_asset(
     actor = (getattr(step, "speaker_role", None) or "member").strip().lower() or "member"
     speaker_label = str(getattr(step, "speaker_label", None) or actor.title()).strip()
     text_value = _resolve_call_simulation_step_speech_text(step)
-    existing_audio_url = _normalize_optional_url(
-        getattr(step, "prompt_audio", None)
-        or _normalize_json_object(getattr(step, "step_metadata", None)).get("member_audio_url")
-    )
+    existing_audio_url = _resolve_call_simulation_step_audio_url(step)
 
     base_item = {
         "step_number": step_number,
@@ -2644,10 +2653,7 @@ def _validate_call_simulation_launch_assets(
             continue
         if not str(getattr(step, "script", "") or "").strip():
             continue
-        audio_url = _normalize_optional_url(
-            getattr(step, "audio_url", None)
-            or _normalize_json_object(getattr(step, "metadata", None)).get("member_audio_url")
-        )
+        audio_url = _resolve_call_simulation_step_audio_url(step)
         if _is_stored_call_simulation_audio_public_url(audio_url):
             continue
         missing_member_references.append(f"step {int(step.step_number or 0)}")
@@ -2712,9 +2718,7 @@ async def generate_call_simulation_scenario_speech(
     for step in ordered_steps:
         metadata = _normalize_json_object(getattr(step, "step_metadata", None))
         current_status = str(metadata.get("speech_status") or "").strip().lower()
-        existing_audio_url = _normalize_optional_url(
-            getattr(step, "prompt_audio", None) or metadata.get("member_audio_url")
-        )
+        existing_audio_url = _resolve_call_simulation_step_audio_url(step)
 
         if retry_failed_only and current_status != "failed" and _is_stored_call_simulation_audio_public_url(existing_audio_url):
             items.append(
@@ -4093,7 +4097,7 @@ def _serialize_flow_step(step: ScenarioFlow) -> CallSimulationScenarioStepRespon
         speaker_label=step.speaker_label,
         script=script,
         expected_keywords=list(step.expected_keywords_for_step or []),
-        audio_url=step.prompt_audio or _normalize_optional_url(_normalize_json_object(step.step_metadata).get("member_audio_url")),
+        audio_url=_resolve_call_simulation_step_audio_url(step),
         response_time_limit=step.response_time_limit,
         is_closing=bool(step.is_closing),
         metadata=_normalize_json_object(step.step_metadata),
@@ -8850,10 +8854,7 @@ async def request_session_member_speech(
     if not step or _is_csr_actor(step.actor):
         raise HTTPException(status_code=400, detail="Requested step must be a Member AI step")
 
-    saved_audio_url = _normalize_optional_url(
-        getattr(step, "audio_url", None)
-        or _normalize_json_object(getattr(step, "metadata", None)).get("member_audio_url")
-    )
+    saved_audio_url = _resolve_call_simulation_step_audio_url(step)
     if not _is_stored_call_simulation_audio_public_url(saved_audio_url):
         _log_call_simulation_audio_action(
             db,
