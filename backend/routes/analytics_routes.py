@@ -585,6 +585,32 @@ def _category_average_rows(sessions: List[PracticeSession], target_score: float)
     return rows
 
 
+def _summarize_session_collection(sessions: List[PracticeSession]) -> dict[str, Any]:
+    total_sessions = len(sessions)
+    total_score = 0.0
+    scored_session_count = 0
+    latest_session_score = None
+    sessions_passed = 0
+
+    for session in sessions:
+        overall_score = getattr(session, "overall_score", None)
+        if overall_score is not None:
+            total_score += float(overall_score)
+            scored_session_count += 1
+            if latest_session_score is None:
+                latest_session_score = overall_score
+
+        if (overall_score or 0) >= 70:
+            sessions_passed += 1
+
+    return {
+        "total_sessions": total_sessions,
+        "sessions_passed": sessions_passed,
+        "current_average_score": round(total_score / scored_session_count, 2) if scored_session_count else 0.0,
+        "latest_session_score": latest_session_score,
+    }
+
+
 def _progress_state(sessions: List[PracticeSession]) -> str:
     ordered_scores = [float(s.overall_score) for s in sessions if s.overall_score is not None]
     if len(ordered_scores) < 2:
@@ -671,16 +697,9 @@ async def get_trainee_progress(
         PracticeSession.user_id == trainee_id
     ).order_by(PracticeSession.created_at.desc()).all()
     
-    total_sessions = len(sessions)
-    sessions_passed = sum((s.overall_score or 0) >= 70 for s in sessions)
+    summary = _summarize_session_collection(sessions)
 
-    # Calculate average score (only count sessions with a score)
-    scored = [s.overall_score for s in sessions if s.overall_score is not None]
-    avg_score = sum(scored) / len(scored) if scored else 0.0
-
-    latest_score = sessions[0].overall_score if sessions and sessions[0].overall_score is not None else None
-
-    # Determine improvement trend using moving averages
+    scored = [session.overall_score for session in sessions if session.overall_score is not None]
     trend = "stable"
     if len(scored) >= 2:
         recent = scored[:3]
@@ -691,14 +710,14 @@ async def get_trainee_progress(
             trend = "improving"
         elif recent_avg < older_avg:
             trend = "declining"
-    
+
     return TraineeProgressResponse(
         trainee_id=trainee_id,
         trainee_name=trainee.full_name,
-        total_sessions=total_sessions,
-        sessions_passed=sessions_passed,
-        current_average_score=avg_score,
-        latest_session_score=latest_score,
+        total_sessions=summary["total_sessions"],
+        sessions_passed=summary["sessions_passed"],
+        current_average_score=summary["current_average_score"],
+        latest_session_score=summary["latest_session_score"],
         improvement_trend=trend,
         last_updated=datetime.utcnow()
     )
@@ -813,35 +832,29 @@ async def get_batch_analytics(
         PracticeSession.user_id.in_(trainee_ids)
     ).all()
     
-    total_sessions = len(sessions)
-    sessions_passed = sum((s.overall_score or 0) >= 70 for s in sessions)
-    
-    # Calculate batch average score
-    if sessions and any(s.overall_score for s in sessions):
-        avg_batch_score = sum(s.overall_score for s in sessions if s.overall_score) / len([s for s in sessions if s.overall_score])
-    else:
-        avg_batch_score = 0.0
-    
+    summary = _summarize_session_collection(sessions)
+    total_sessions = summary["total_sessions"]
+    sessions_passed = summary["sessions_passed"]
+    avg_batch_score = summary["current_average_score"]
     passing_rate = (sessions_passed / total_sessions * 100) if total_sessions > 0 else 0.0
     
     # Get top performers and needs improvement
     trainee_progress = []
+    sessions_by_trainee: dict[str, list[PracticeSession]] = {}
+    for session in sessions:
+        sessions_by_trainee.setdefault(session.user_id, []).append(session)
+
     for trainee in trainees:
-        trainee_sessions = [s for s in sessions if s.user_id == trainee.id]
-        if trainee_sessions and any(s.overall_score for s in trainee_sessions):
-            avg_score = sum(s.overall_score for s in trainee_sessions if s.overall_score) / len([s for s in trainee_sessions if s.overall_score])
-        else:
-            avg_score = 0.0
-        
-        latest_score = trainee_sessions[0].overall_score if trainee_sessions and trainee_sessions[0].overall_score else None
-        
+        trainee_sessions = sessions_by_trainee.get(trainee.id, [])
+        trainee_summary = _summarize_session_collection(trainee_sessions)
+
         trainee_progress.append(TraineeProgressResponse(
             trainee_id=trainee.id,
             trainee_name=trainee.full_name,
-            total_sessions=len(trainee_sessions),
-            sessions_passed=sum((s.overall_score or 0) >= 70 for s in trainee_sessions),
-            current_average_score=avg_score,
-            latest_session_score=latest_score,
+            total_sessions=trainee_summary["total_sessions"],
+            sessions_passed=trainee_summary["sessions_passed"],
+            current_average_score=trainee_summary["current_average_score"],
+            latest_session_score=trainee_summary["latest_session_score"],
             improvement_trend="stable",
             last_updated=datetime.utcnow()
         ))

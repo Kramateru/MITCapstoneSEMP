@@ -56,7 +56,7 @@ def _build_login_batch_context(user: User) -> dict[str, Any]:
             "wave_number": None,
         }
 
-    batches = [batch for batch in user.batches if batch is not None]
+    batches = [batch for batch in user.batches or [] if batch is not None]
     if not batches:
         return {
             "batch_id": None,
@@ -64,16 +64,18 @@ def _build_login_batch_context(user: User) -> dict[str, Any]:
             "wave_number": None,
         }
 
-    active_batches = [batch for batch in batches if getattr(batch, "is_active", True)]
-    candidate_batches = active_batches or batches
-    selected_batch = sorted(
+    candidate_batches = [batch for batch in batches if getattr(batch, "is_active", True)]
+    if not candidate_batches:
+        candidate_batches = batches
+
+    selected_batch = min(
         candidate_batches,
         key=lambda batch: (
             batch.wave_number is None,
             batch.wave_number or 0,
             (batch.name or "").lower(),
         ),
-    )[0]
+    )
 
     return {
         "batch_id": selected_batch.id,

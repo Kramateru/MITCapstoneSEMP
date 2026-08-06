@@ -3,12 +3,13 @@ Assessment Routes
 Handles practice sessions, speech recording, and pronunciation scoring
 """
 
+import base64
+import json
 from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.orm import Session
-import json
 
 from .. import auth_utils
 from ..database import SessionLocal, get_db
@@ -325,43 +326,37 @@ async def assess_practice(
 
         audio_buffer = bytearray()
         reference_text = build_gold_standard_script(scenario=scenario)
-        
+
         while True:
             data = await websocket.receive_text()
-            
+
             try:
                 message = json.loads(data)
-                
-                # Initialize session
-                if message.get("type") == "init":
-                    reference_text = message.get("reference_text") or build_gold_standard_script(scenario=scenario)
-                    
+                message_type = message.get("type")
+
+                if message_type == "init":
+                    reference_text = message.get("reference_text") or reference_text
+
                     await websocket.send_json({
                         "type": "session_ready",
                         "reference_text": reference_text,
-                        "message": "Ready to receive audio"
+                        "message": "Ready to receive audio",
                     })
-                
-                # Receive audio chunk
-                elif message.get("type") == "audio":
+                elif message_type == "audio":
                     audio_data = message.get("audio")
                     if audio_data:
-                        import base64
                         audio_bytes = base64.b64decode(audio_data)
                         audio_buffer.extend(audio_bytes)
-                        
+
                         await websocket.send_json({
                             "type": "audio_received",
-                            "bytes_received": len(audio_bytes)
+                            "bytes_received": len(audio_bytes),
                         })
-                
-                # End session and process
-                elif message.get("type") == "stop":
+                elif message_type == "stop":
                     if len(audio_buffer) > 0:
-                        # Send processing status
                         await websocket.send_json({
                             "type": "processing",
-                            "message": "Processing audio for pronunciation assessment"
+                            "message": "Processing audio for pronunciation assessment",
                         })
 
                         assessment = assess_audio_submission(
@@ -392,18 +387,17 @@ async def assess_practice(
                             "word_feedback": assessment.get("word_feedback", []),
                             "provider": assessment.get("provider"),
                         })
-                        
+
                         audio_buffer = bytearray()
                     else:
                         await websocket.send_json({
                             "type": "error",
-                            "message": "No audio data received"
+                            "message": "No audio data received",
                         })
-            
             except json.JSONDecodeError:
                 await websocket.send_json({
                     "type": "error",
-                    "message": "Invalid JSON message"
+                    "message": "Invalid JSON message",
                 })
     
     except WebSocketDisconnect:

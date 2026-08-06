@@ -4942,6 +4942,19 @@ def _session_transcript_log(session: SimSession) -> list[dict[str, Any]]:
     return list(session.transcript_log or []) if isinstance(session.transcript_log, list) else []
 
 
+def _count_turn_attempts_for_step(turn_logs: list[dict[str, Any]], step_number: int) -> int:
+    target_step = int(step_number or 0)
+    if target_step <= 0:
+        return 0
+
+    count = 0
+    for item in turn_logs:
+        if int(item.get("step_number") or 0) != target_step:
+            continue
+        count += 1
+    return count
+
+
 def _session_member_speech_log(session: SimSession) -> list[dict[str, Any]]:
     """Extract member speech logs for Phase 2 audio reconstruction."""
     return list(session.member_speech_log or []) if isinstance(session.member_speech_log, list) else []
@@ -4976,6 +4989,14 @@ def _extract_member_speech_from_events(db: Session, session_id: str) -> list[dic
         return []
 
 
+def _select_latest_csr_attempt(attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    latest_accepted: Optional[dict[str, Any]] = None
+    for item in attempts:
+        if bool(item.get("accepted_for_progress")):
+            latest_accepted = item
+    return latest_accepted or attempts[-1] if attempts else {}
+
+
 def _selected_csr_turns_for_scoring(session: SimSession) -> list[dict[str, Any]]:
     grouped_turns: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for item in _session_turn_logs(session):
@@ -4989,8 +5010,7 @@ def _selected_csr_turns_for_scoring(session: SimSession) -> list[dict[str, Any]]
     selected_turns: list[dict[str, Any]] = []
     for step_number in sorted(grouped_turns):
         attempts = grouped_turns[step_number]
-        accepted_attempts = [item for item in attempts if bool(item.get("accepted_for_progress"))]
-        selected_turns.append((accepted_attempts or attempts)[-1])
+        selected_turns.append(_select_latest_csr_attempt(attempts))
     return selected_turns
 
 
@@ -8680,9 +8700,7 @@ async def submit_session_turn(
 
     turn_logs = _session_turn_logs(session)
     transcript_log = _session_transcript_log(session)
-    step_attempt_number = (
-        len([item for item in turn_logs if int(item.get("step_number") or 0) == step.step_number]) + 1
-    )
+    step_attempt_number = _count_turn_attempts_for_step(turn_logs, step.step_number) + 1
 
     turn_log = {
         "turn_attempt_id": str(uuid.uuid4()),
