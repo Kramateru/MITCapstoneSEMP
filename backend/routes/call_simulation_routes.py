@@ -195,6 +195,11 @@ def _require_supabase_storage(detail: str) -> Any:
     return supabase
 
 
+def _require_server_side_tts(detail: str) -> None:
+    if not get_tts_service().is_available():
+        raise HTTPException(status_code=503, detail=detail)
+
+
 def _log_call_simulation_audio_action(
     db: Session,
     *,
@@ -2704,6 +2709,10 @@ async def generate_call_simulation_scenario_speech(
             "Scenario speech generation requires Supabase Storage so trainees can play the generated audio."
         )
 
+    _require_server_side_tts(
+        "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, OPENAI_API_KEY, or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
+    )
+
     ordered_steps = sorted(
         list(getattr(scenario, "flow_steps", []) or []),
         key=lambda step: (int(step.step_number or 0), step.created_at or datetime.utcnow()),
@@ -4881,37 +4890,43 @@ async def _replace_scenario_steps(
                 # For member steps, use the conversation audio
                 step_audio_url = conversation_audio_url
             else:
-                try:
-                    tts_result = await text_to_speech_for_persistence(
-                        step.script.strip(),
-                        voice_name="Kore" if actor == "csr" else "Puck",
-                        speaking_style="professionally" if actor == "csr" else "casually",
-                    )
-                    upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
-                    if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
-                        try:
-                            upload_bytes = b64decode(tts_result.get("audio_base64"))
-                        except Exception:
-                            upload_bytes = None
+                if get_tts_service().is_available():
+                    try:
+                        tts_result = await text_to_speech_for_persistence(
+                            step.script.strip(),
+                            voice_name="Kore" if actor == "csr" else "Puck",
+                            speaking_style="professionally" if actor == "csr" else "casually",
+                        )
+                        upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
+                        if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
+                            try:
+                                upload_bytes = b64decode(tts_result.get("audio_base64"))
+                            except Exception:
+                                upload_bytes = None
 
-                    if upload_bytes:
-                        get_tts_service().save_audio_locally(
-                            upload_bytes,
-                            scenario_id=scenario.id,
-                            step_number=index,
-                            asset_kind="step-prompt",
-                        )
-                        supabase_client = get_supabase_client()
-                        step_audio_url = supabase_client.upload_call_simulation_asset(
-                            file_data=upload_bytes,
-                            trainer_id=scenario.created_by,
-                            asset_kind="step-prompts",
-                            filename=f"{scenario.id}_step_{index}.wav",
-                            scenario_id=scenario.id,
-                            content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
-                        )
-                except Exception as exc:
-                    logger.warning("Failed to generate TTS for step %d: %s", index, exc)
+                        if upload_bytes:
+                            get_tts_service().save_audio_locally(
+                                upload_bytes,
+                                scenario_id=scenario.id,
+                                step_number=index,
+                                asset_kind="step-prompt",
+                            )
+                            supabase_client = get_supabase_client()
+                            step_audio_url = supabase_client.upload_call_simulation_asset(
+                                file_data=upload_bytes,
+                                trainer_id=scenario.created_by,
+                                asset_kind="step-prompts",
+                                filename=f"{scenario.id}_step_{index}.wav",
+                                scenario_id=scenario.id,
+                                content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
+                            )
+                    except Exception as exc:
+                        logger.warning("Failed to generate TTS for step %d: %s", index, exc)
+                else:
+                    logger.info(
+                        "Skipping persisted TTS generation for step %d because no server-side TTS provider is available.",
+                        index,
+                    )
         
         created = ScenarioFlow(
             id=str(uuid.uuid4()),
@@ -5492,33 +5507,39 @@ async def create_call_simulation_scenario(
 
     # Generate TTS audio for opening prompt if not provided and TTS is available
     if not new_scenario.opening_prompt_audio:
-        try:
-            tts_result = await text_to_speech_for_persistence(
-                new_scenario.opening_prompt,
-                voice_name="Kore",
-                speaking_style="professionally",
-            )
-            upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
-            if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
-                try:
-                    upload_bytes = b64decode(tts_result.get("audio_base64"))
-                except Exception:
-                    upload_bytes = None
-
-            if upload_bytes:
-                supabase_client = get_supabase_client()
-                audio_url = supabase_client.upload_call_simulation_asset(
-                    file_data=upload_bytes,
-                    trainer_id=current_user.id,
-                    asset_kind="opening-prompts",
-                    filename=f"{new_scenario.id}_opening.wav",
-                    scenario_id=new_scenario.id,
-                    content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
+        if get_tts_service().is_available():
+            try:
+                tts_result = await text_to_speech_for_persistence(
+                    new_scenario.opening_prompt,
+                    voice_name="Kore",
+                    speaking_style="professionally",
                 )
-                if audio_url:
-                    new_scenario.opening_prompt_audio = audio_url
-        except Exception as exc:
-            logger.warning("Failed to generate TTS for opening prompt: %s", exc)
+                upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
+                if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
+                    try:
+                        upload_bytes = b64decode(tts_result.get("audio_base64"))
+                    except Exception:
+                        upload_bytes = None
+
+                if upload_bytes:
+                    supabase_client = get_supabase_client()
+                    audio_url = supabase_client.upload_call_simulation_asset(
+                        file_data=upload_bytes,
+                        trainer_id=current_user.id,
+                        asset_kind="opening-prompts",
+                        filename=f"{new_scenario.id}_opening.wav",
+                        scenario_id=new_scenario.id,
+                        content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
+                    )
+                    if audio_url:
+                        new_scenario.opening_prompt_audio = audio_url
+            except Exception as exc:
+                logger.warning("Failed to generate TTS for opening prompt: %s", exc)
+        else:
+            logger.info(
+                "Skipping opening prompt TTS generation for new scenario %s because no server-side TTS provider is available.",
+                new_scenario.id,
+            )
 
     mapping = BatchScenarioMapping(
         id=str(uuid.uuid4()),
@@ -5812,33 +5833,39 @@ async def update_call_simulation_scenario(
         scenario.opening_prompt = scenario_update.opening_prompt.strip()
         # Regenerate TTS for opening prompt if changed and no audio provided
         if not scenario.opening_prompt_audio:
-            try:
-                tts_result = await text_to_speech_for_persistence(
-                    scenario.opening_prompt,
-                    voice_name="Kore",
-                    speaking_style="professionally",
-                )
-                upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
-                if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
-                    try:
-                        upload_bytes = b64decode(tts_result.get("audio_base64"))
-                    except Exception:
-                        upload_bytes = None
-
-                if upload_bytes:
-                    supabase_client = get_supabase_client()
-                    audio_url = supabase_client.upload_call_simulation_asset(
-                        file_data=upload_bytes,
-                        trainer_id=current_user.id,
-                        asset_kind="opening-prompts",
-                        filename=f"{scenario.id}_opening.wav",
-                        scenario_id=scenario.id,
-                        content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
+            if get_tts_service().is_available():
+                try:
+                    tts_result = await text_to_speech_for_persistence(
+                        scenario.opening_prompt,
+                        voice_name="Kore",
+                        speaking_style="professionally",
                     )
-                    if audio_url:
-                        scenario.opening_prompt_audio = audio_url
-            except Exception as exc:
-                logger.warning("Failed to generate TTS for updated opening prompt: %s", exc)
+                    upload_bytes = _coerce_audio_bytes(tts_result.get("audio_bytes"))
+                    if upload_bytes is None and isinstance(tts_result.get("audio_base64"), str) and tts_result.get("audio_base64").strip():
+                        try:
+                            upload_bytes = b64decode(tts_result.get("audio_base64"))
+                        except Exception:
+                            upload_bytes = None
+
+                    if upload_bytes:
+                        supabase_client = get_supabase_client()
+                        audio_url = supabase_client.upload_call_simulation_asset(
+                            file_data=upload_bytes,
+                            trainer_id=current_user.id,
+                            asset_kind="opening-prompts",
+                            filename=f"{scenario.id}_opening.wav",
+                            scenario_id=scenario.id,
+                            content_type=str(tts_result.get("audio_content_type") or "audio/wav").strip() or "audio/wav",
+                        )
+                        if audio_url:
+                            scenario.opening_prompt_audio = audio_url
+                except Exception as exc:
+                    logger.warning("Failed to generate TTS for updated opening prompt: %s", exc)
+            else:
+                logger.info(
+                    "Skipping opening prompt TTS generation for updated scenario %s because no server-side TTS provider is available.",
+                    scenario.id,
+                )
     if scenario_update.difficulty is not None:
         scenario.difficulty = scenario_update.difficulty
     if scenario_update.purpose is not None:
@@ -7898,6 +7925,15 @@ async def synthesize_member_speech(
     strict_persistence_message = (
         "Generated speech must be saved to supported storage, but that upload did not complete."
     )
+
+    if persist and not get_tts_service().is_available():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, "
+                "OPENAI_API_KEY, or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
+            ),
+        )
 
     try:
         synthesis_fn = text_to_speech_for_persistence if persist else text_to_speech
