@@ -47,6 +47,9 @@ MICROLEARNING_AUDIO_EXTENSION_CONTENT_TYPES = {
     ".wav": "audio/wav",
     ".m4a": "audio/mp4",
     ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+    ".aac": "audio/aac",
+    ".flac": "audio/flac",
 }
 MICROLEARNING_AUDIO_CONTENT_TYPES = {
     "audio/mpeg": "audio/mpeg",
@@ -59,6 +62,9 @@ MICROLEARNING_AUDIO_CONTENT_TYPES = {
     "audio/x-m4a": "audio/mp4",
     "audio/m4a": "audio/mp4",
     "audio/ogg": "audio/ogg",
+    "audio/webm": "audio/webm",
+    "audio/aac": "audio/aac",
+    "audio/flac": "audio/flac",
 }
 
 
@@ -241,6 +247,9 @@ def _normalize_microlearning_audio_content_type(content_type: Optional[str]) -> 
     normalized = str(content_type or "").strip().lower()
     if not normalized:
         return None
+
+    # Ignore MIME parameters like charset or codecs
+    normalized = normalized.split(";", 1)[0].strip()
     return MICROLEARNING_AUDIO_CONTENT_TYPES.get(normalized)
 
 
@@ -260,7 +269,7 @@ def _validate_microlearning_audio_upload(uploaded_file: UploadFile, audio_bytes:
     if not extension_content_type and not content_type:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.",
+            detail="Unsupported audio format. Upload MP3, WAV, M4A, OGG, WEBM, AAC, or FLAC audio.",
         )
     if content_type and extension_content_type and content_type != extension_content_type:
         raise HTTPException(

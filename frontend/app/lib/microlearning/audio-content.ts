@@ -25,6 +25,9 @@ const SUPPORTED_AUDIO_UPLOAD_MIME_TYPES = new Set([
   'audio/mp4',
   'audio/x-m4a',
   'audio/ogg',
+  'audio/webm',
+  'audio/aac',
+  'audio/flac',
 ])
 
 type AudioContentRow = {
@@ -193,12 +196,15 @@ function sanitizeAudioFileName(fileName: string) {
 
 function isSupportedAudioUpload(fileName: string, mimeType: string) {
   const normalizedName = fileName.trim().toLowerCase()
-  const normalizedMimeType = mimeType.trim().toLowerCase()
+  const normalizedMimeType = mimeType.trim().toLowerCase().split(';', 1)[0].trim()
   return (
     normalizedName.endsWith('.mp3')
     || normalizedName.endsWith('.wav')
     || normalizedName.endsWith('.m4a')
     || normalizedName.endsWith('.ogg')
+    || normalizedName.endsWith('.webm')
+    || normalizedName.endsWith('.aac')
+    || normalizedName.endsWith('.flac')
     || SUPPORTED_AUDIO_UPLOAD_MIME_TYPES.has(normalizedMimeType)
   )
 }
@@ -207,7 +213,7 @@ function assertSupportedAudioUpload(fileName: string, mimeType: string) {
   if (!isSupportedAudioUpload(fileName, mimeType)) {
     throw new AssessmentHttpError(
       400,
-      'Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.',
+      'Unsupported audio format. Upload MP3, WAV, M4A, OGG, WEBM, AAC, or FLAC audio.',
     )
   }
 }
@@ -295,6 +301,15 @@ function inferAudioMimeType(assetUrl: string, contentType?: string | null) {
   }
   if (normalizedUrl.endsWith('.ogg')) {
     return 'audio/ogg'
+  }
+  if (normalizedUrl.endsWith('.webm')) {
+    return 'audio/webm'
+  }
+  if (normalizedUrl.endsWith('.aac')) {
+    return 'audio/aac'
+  }
+  if (normalizedUrl.endsWith('.flac')) {
+    return 'audio/flac'
   }
 
   return 'audio/mpeg'

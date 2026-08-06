@@ -81,7 +81,7 @@ logger = logging.getLogger(__name__)
 TRAINER_BULK_UPLOAD_TEMPLATE = "trainer-trainee-bulk-upload-template.xlsx"
 SUPABASE_PUBLIC_OBJECT_MARKER = "/storage/v1/object/public/"
 SUPPORTED_VIDEO_EXTENSIONS = (".mp4", ".mov", ".webm", ".ogg", ".m4v")
-SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg")
+SUPPORTED_AUDIO_EXTENSIONS = (".mp3", ".wav", ".m4a", ".ogg", ".webm", ".aac", ".flac")
 SUPPORTED_IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg")
 SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/mpeg",
@@ -93,6 +93,9 @@ SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/mp4",
     "audio/x-m4a",
     "audio/ogg",
+    "audio/webm",
+    "audio/aac",
+    "audio/flac",
 }
 MAX_TRAINER_MICROLEARNING_ASSET_SIZE = MICROLEARNING_BUCKET_FILE_SIZE_LIMIT
 
@@ -628,7 +631,7 @@ def _validate_uploadable_media_asset(
 ) -> None:
     normalized_module_type = normalize_module_type(module_type) if module_type else ""
     normalized_filename = (filename or "").strip().lower()
-    normalized_content_type = _normalize_text_value(content_type).lower()
+    normalized_content_type = _normalize_text_value(content_type).lower().split(";", 1)[0].strip()
 
     if normalized_module_type == "video":
         if normalized_content_type.startswith("video/") or normalized_filename.endswith(SUPPORTED_VIDEO_EXTENSIONS):
@@ -643,7 +646,7 @@ def _validate_uploadable_media_asset(
             return
         raise HTTPException(
             status_code=400,
-            detail="Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.",
+            detail="Unsupported audio format. Upload MP3, WAV, M4A, OGG, WEBM, AAC, or FLAC audio.",
         )
 
     if normalized_module_type == "infographic":

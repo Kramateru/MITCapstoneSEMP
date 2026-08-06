@@ -35,8 +35,8 @@ import {
     CATEGORY_STYLES,
     emptyModuleForm,
     formatLabel,
-    getReadingPassageStats,
     getModuleFormType,
+    getReadingPassageStats,
     MicrolearningModule,
     ModuleFormState,
     moduleToForm,
@@ -196,7 +196,7 @@ function getTrainerMediaUploadSizeError(file: File, moduleType: ModuleFormState[
 
 function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['module_type']) {
   const normalizedName = file.name.trim().toLowerCase();
-  const normalizedMimeType = file.type.trim().toLowerCase();
+  const normalizedMimeType = file.type.trim().toLowerCase().split(';', 1)[0].trim();
 
   if (moduleType === 'video') {
     const isSupported =
@@ -208,8 +208,8 @@ function getTrainerMediaUploadError(file: File, moduleType: ModuleFormState['mod
   if (moduleType === 'audio' || moduleType === 'case_study') {
     const isSupported =
       SUPPORTED_TRAINER_AUDIO_MIME_TYPES.has(normalizedMimeType)
-      || /\.(mp3|wav|m4a|ogg)$/i.test(normalizedName);
-    return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, or OGG audio.';
+      || /\.(mp3|wav|m4a|ogg|webm|aac|flac)$/i.test(normalizedName);
+    return isSupported ? null : 'Unsupported audio format. Upload MP3, WAV, M4A, OGG, WEBM, AAC, or FLAC audio.';
   }
 
   if (moduleType === 'infographic') {

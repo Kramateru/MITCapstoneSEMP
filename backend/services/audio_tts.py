@@ -5,13 +5,20 @@ Converts audio transcripts to speech for trainees who prefer listening.
 
 from __future__ import annotations
 
+import base64
 import io
 import logging
 import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Optional
 
-from ..config_validation import normalize_env_value, resolve_gemini_api_key
+from ..config_validation import (
+    is_usable_azure_speech_key,
+    normalize_env_value,
+    resolve_gemini_api_key,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
@@ -42,9 +49,11 @@ def _load_pyttsx3():
     return pyttsx3
 
 
-# Lazy-load google.genai to avoid importing heavy SDK at startup
+# Lazy-load google.genai, Azure Speech, and OpenAI SDKs to avoid importing heavy SDKs at startup
 _genai = None
 _genai_types = None
+_azure_speech = None
+_openai = None
 
 def _ensure_genai():
     global _genai, _genai_types
@@ -61,6 +70,37 @@ def _ensure_genai():
         _genai = None
         _genai_types = None
         return None, None
+
+
+def _ensure_azure_speech():
+    global _azure_speech
+    if _azure_speech is not None:
+        return _azure_speech
+    try:
+        import importlib
+
+        _azure_speech = importlib.import_module('azure.cognitiveservices.speech')
+        return _azure_speech
+    except Exception as exc:
+        logger.info('Azure Speech SDK not available: %s', exc)
+        _azure_speech = None
+        return None
+
+
+def _ensure_openai():
+    global _openai
+    if _openai is not None:
+        return _openai
+    try:
+        import importlib
+
+        mod = importlib.import_module('openai')
+        _openai = getattr(mod, 'OpenAI', mod)
+        return _openai
+    except Exception as exc:
+        logger.info('OpenAI SDK not available: %s', exc)
+        _openai = None
+        return None
 
 
 @dataclass
@@ -81,15 +121,39 @@ class TextToSpeechService:
         # Gemini TTS configuration
         self.gemini_api_key = resolve_gemini_api_key(os.getenv)
         self.gemini_tts_model = normalize_env_value(os.getenv("GEMINI_TTS_MODEL")) or DEFAULT_GEMINI_TTS_MODEL
+
+        # Azure TTS configuration
+        self.azure_speech_key = normalize_env_value(os.getenv("AZURE_SPEECH_KEY"))
+        self.azure_speech_region = normalize_env_value(os.getenv("AZURE_SPEECH_REGION")) or "eastus"
+        self.azure_voice_name = normalize_env_value(os.getenv("AZURE_TTS_VOICE")) or "en-US-JennyNeural"
+
+        # OpenAI TTS configuration
+        self.openai_api_key = normalize_env_value(os.getenv("OPENAI_API_KEY"))
+        self.openai_tts_model = normalize_env_value(os.getenv("OPENAI_TTS_MODEL")) or "gpt-4o-mini-tts"
+        self.openai_voice_name = normalize_env_value(os.getenv("OPENAI_TTS_VOICE")) or "marin"
+        self.openai_client = None
+
         self.enable_local_tts = _default_local_tts_enabled()
         self.gemini_client = None
+        self.gemini_types = None
         genai, _types = _ensure_genai()
         if genai and self.gemini_api_key:
             try:
                 self.gemini_client = genai.Client(api_key=self.gemini_api_key)
+                self.gemini_types = _types
                 logger.info("Gemini TTS client initialized.")
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini TTS client: {e}")
+                self.gemini_client = None
+                self.gemini_types = None
+
+        OpenAI = _ensure_openai()
+        if OpenAI and self.openai_api_key:
+            try:
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+                logger.info("OpenAI TTS client initialized.")
+            except Exception as e:
+                logger.warning(f"Failed to initialize OpenAI TTS client: {e}")
 
         # pyttsx3 offline TTS
         self.pyttsx3_engine = None
@@ -111,72 +175,65 @@ class TextToSpeechService:
                 "Local microlearning TTS fallback is disabled. Browser fallback should be used when server audio is unavailable."
             )
 
+        # Automatically enable Windows local fallback if no cloud providers are configured.
+        if (
+            os.name == "nt"
+            and not self.gemini_client
+            and not self._azure_tts_available()
+            and not self._openai_tts_available()
+            and not self.enable_local_tts
+        ):
+            logger.info(
+                "No Gemini/Azure/OpenAI TTS providers configured; enabling local Windows TTS fallback."
+            )
+            self.enable_local_tts = True
+
     def is_available(self) -> bool:
         """Check if any TTS provider is available"""
-        return bool(self.gemini_client or self.pyttsx3_engine)
+        return bool(
+            self.gemini_client
+            or self._azure_tts_available()
+            or self._openai_tts_available()
+            or self.pyttsx3_engine
+            or self._windows_sapi_available()
+        )
 
     def get_available_providers(self) -> list[str]:
         """Get list of available TTS providers"""
         providers = []
         if self.gemini_client:
             providers.append("gemini")
+        if self._azure_tts_available():
+            providers.append("azure_speech")
+        if self._openai_tts_available():
+            providers.append("openai")
         if self.pyttsx3_engine:
             providers.append("pyttsx3")
+        if self._windows_sapi_available():
+            providers.append("windows_sapi")
         return providers
 
-    def synthesize(
-        self,
-        text: str,
-        language_code: str = "en-US",
-        provider: Optional[str] = None,
-        voice_name: Optional[str] = None,
-    ) -> Optional[TTSResult]:
-        """
-        Convert text to speech audio.
-
-        Args:
-            text: Text to convert to speech
-            language_code: Language code (affects voice selection)
-            provider: Force specific provider ("gemini", "pyttsx3") or None for auto
-            voice_name: Voice name (for Gemini: "Kore", "Puck"; for pyttsx3: voice ID)
-
-        Returns:
-            TTSResult with audio bytes and metadata, or None if no providers available
-        """
-        if not text or not text.strip():
-            logger.warning("Empty text provided for TTS")
-            return None
-
-        # Auto-select provider if not specified
-        if not provider:
-            provider = self._select_provider()
-
-        if provider == "gemini":
-            result = self._synthesize_gemini(text, language_code, voice_name)
-            # Return result even if it has an error (caller will check error field)
-            return result
-        if provider == "pyttsx3":
-            result = self._synthesize_pyttsx3(text, language_code, voice_name)
-            # Return result even if it has an error (caller will check error field)
-            return result
-
-        error_msg = f"Unknown or unavailable TTS provider: {provider}"
-        logger.error(error_msg)
-        return TTSResult(
-            audio_bytes=b"",
-            format="wav",
-            duration_seconds=0,
-            provider=provider or "unknown",
-            error=error_msg,
+    def _azure_tts_available(self) -> bool:
+        azure = _ensure_azure_speech()
+        return bool(
+            azure
+            and is_usable_azure_speech_key(self.azure_speech_key)
+            and self.azure_speech_region
         )
 
+    def _openai_tts_available(self) -> bool:
+        return bool(_openai and self.openai_client and self.openai_api_key)
+
     def _select_provider(self) -> str:
-        """Select best available provider"""
         if self.gemini_client:
             return "gemini"
-        if self.pyttsx3_engine:
-            return "pyttsx3"
-        return "pyttsx3"  # Fallback (will fail gracefully)
+        if self._azure_tts_available():
+            return "azure"
+        if self._openai_tts_available():
+            return "openai"
+        if self._windows_sapi_available():
+            return "windows_sapi"
+        return "pyttsx3"
 
     def _synthesize_gemini(
         self,
@@ -185,10 +242,11 @@ class TextToSpeechService:
         voice_name: Optional[str],
     ) -> Optional[TTSResult]:
         """Synthesize speech using Gemini TTS"""
-        if not self.gemini_client:
-            logger.warning("Gemini client not available")
+        if not self.gemini_client or not self.gemini_types:
+            logger.warning("Gemini client or Gemini types are not available")
             return None
 
+        types = self.gemini_types
         try:
             # Map language code to voice
             # Gemini supports: Kore (en-US), Puck (en-US), etc.
@@ -336,15 +394,18 @@ class TextToSpeechService:
                 # Voice ID provided
                 self.pyttsx3_engine.setProperty("voice", voice_name)
 
-            self.pyttsx3_engine.save_to_file(text, "temp.wav")
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                temp_filename = temp_file.name
+
+            self.pyttsx3_engine.save_to_file(text, temp_filename)
             self.pyttsx3_engine.runAndWait()
 
             # Read the temp file
-            with open("temp.wav", "rb") as f:
+            with open(temp_filename, "rb") as f:
                 audio_bytes = f.read()
 
             try:
-                os.remove("temp.wav")
+                os.remove(temp_filename)
             except OSError:
                 pass
 
@@ -382,6 +443,282 @@ class TextToSpeechService:
                 provider="pyttsx3",
                 error=error_msg,
             )
+
+    def _synthesize_azure(
+        self,
+        text: str,
+        language_code: str,
+        voice_name: Optional[str],
+    ) -> Optional[TTSResult]:
+        if not self._azure_tts_available() or not text.strip():
+            return None
+
+        azure = _ensure_azure_speech()
+        if not azure:
+            logger.info("Azure Speech SDK not available at runtime for TTS.")
+            return None
+
+        speech_config = azure.SpeechConfig(
+            subscription=self.azure_speech_key,
+            region=self.azure_speech_region,
+        )
+        speech_config.speech_synthesis_voice_name = voice_name or self.azure_voice_name
+        speech_config.set_speech_synthesis_output_format(
+            azure.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
+        )
+        synthesizer = azure.SpeechSynthesizer(
+            speech_config=speech_config,
+            audio_config=None,
+        )
+        result = synthesizer.speak_text_async(text).get()
+
+        if result.reason != azure.ResultReason.SynthesizingAudioCompleted:
+            details = getattr(result, "cancellation_details", None)
+            detail_text = getattr(details, "error_details", None) or getattr(details, "reason", None)
+            error_msg = f"Azure TTS failed to synthesize audio. {detail_text or ''}".strip()
+            logger.error(error_msg)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="azure_speech",
+                error=error_msg,
+            )
+
+        audio_bytes = bytes(result.audio_data or b"")
+        if not audio_bytes:
+            error_msg = "Azure TTS completed without returning audio data."
+            logger.error(error_msg)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="azure_speech",
+                error=error_msg,
+            )
+
+        return TTSResult(
+            audio_bytes=audio_bytes,
+            format="wav",
+            duration_seconds=len(audio_bytes) / 32000,
+            provider="azure_speech",
+            error=None,
+        )
+
+    def _synthesize_openai(
+        self,
+        text: str,
+        language_code: str,
+        voice_name: Optional[str],
+    ) -> Optional[TTSResult]:
+        if not self._openai_tts_available() or not text.strip():
+            return None
+
+        resolved_voice = voice_name or self.openai_voice_name
+        instructions = (
+            "Speak in a professional and natural customer-service tone."
+            if not isinstance(language_code, str)
+            else f"Speak in a professional and natural customer-service tone."
+        )
+
+        try:
+            response = self.openai_client.audio.speech.create(
+                model=self.openai_tts_model,
+                voice=resolved_voice,
+                input=text,
+                instructions=instructions,
+                response_format="wav",
+            )
+            audio_bytes = response.read()
+            if not audio_bytes:
+                raise RuntimeError("OpenAI TTS completed without returning audio data.")
+
+            return TTSResult(
+                audio_bytes=audio_bytes,
+                format="wav",
+                duration_seconds=len(audio_bytes) / 32000,
+                provider="openai_tts",
+                error=None,
+            )
+        except Exception as e:
+            error_msg = f"OpenAI TTS synthesis failed: {e}"
+            logger.error(error_msg, exc_info=True)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="openai_tts",
+                error=error_msg,
+            )
+
+    def _windows_sapi_available(self) -> bool:
+        return self.enable_local_tts and os.name == "nt"
+
+    def _synthesize_windows_sapi(self, text: str) -> Optional[TTSResult]:
+        if not self._windows_sapi_available() or not text.strip():
+            return None
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            temp_path = tmp.name
+
+        encoded_text = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        encoded_path = base64.b64encode(temp_path.encode("utf-8")).decode("ascii")
+        script = f"""
+$ErrorActionPreference = 'Stop'
+$text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_text}')
+$outputPath = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_path}')
+$voice = New-Object -ComObject SAPI.SpVoice
+$stream = New-Object -ComObject SAPI.SpFileStream
+$stream.Open($outputPath, 3, $false)
+try {{
+    $voice.AudioOutputStream = $stream
+    [void]$voice.Speak($text)
+}} finally {{
+    try {{ $stream.Close() }} catch {{ }}
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($stream) | Out-Null
+    [System.Runtime.Interopservices.Marshal]::ReleaseComObject($voice) | Out-Null
+}}
+"""
+        
+        try:
+            completed = subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    script,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+                check=False,
+            )
+            if completed.returncode != 0:
+                stderr = (completed.stderr or completed.stdout or "").strip()
+                raise RuntimeError(stderr or "Windows SAPI speech synthesis failed.")
+
+            with open(temp_path, "rb") as audio_file:
+                audio_bytes = audio_file.read()
+
+            if len(audio_bytes) <= 64:
+                raise RuntimeError("Windows SAPI created an empty or invalid audio file.")
+
+            return TTSResult(
+                audio_bytes=audio_bytes,
+                format="wav",
+                duration_seconds=len(audio_bytes) / 32000,
+                provider="windows_sapi",
+                error=None,
+            )
+        except Exception as e:
+            logger.warning("Windows SAPI fallback TTS failed: %s", e)
+            return TTSResult(
+                audio_bytes=b"",
+                format="wav",
+                duration_seconds=0,
+                provider="windows_sapi",
+                error=str(e),
+            )
+        finally:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+    def _fallback_tts(self, text: str) -> TTSResult:
+        if self._windows_sapi_available():
+            result = self._synthesize_windows_sapi(text)
+            if result and result.audio_bytes:
+                return result
+
+        if self.pyttsx3_engine:
+            result = self._synthesize_pyttsx3(text, "en-US", None)
+            if result and result.audio_bytes:
+                return result
+
+        error_msg = "No local fallback TTS provider available."
+        logger.warning(error_msg)
+        return TTSResult(
+            audio_bytes=b"",
+            format="wav",
+            duration_seconds=0,
+            provider="local_fallback",
+            error=error_msg,
+        )
+
+    def synthesize(
+        self,
+        text: str,
+        language_code: str = "en-US",
+        provider: Optional[str] = None,
+        voice_name: Optional[str] = None,
+    ) -> Optional[TTSResult]:
+        """
+        Convert text to speech audio.
+
+        Args:
+            text: Text to convert to speech
+            language_code: Language code (affects voice selection)
+            provider: Force specific provider ("gemini", "azure", "openai", "pyttsx3") or None for auto
+            voice_name: Voice name (for Gemini: "Kore", "Puck"; for pyttsx3: voice ID)
+
+        Returns:
+            TTSResult with audio bytes and metadata, or None if no providers available
+        """
+
+        if not text or not text.strip():
+            logger.warning("Empty text provided for TTS")
+            return None
+
+        attempted_providers = []
+        if not provider:
+            provider = self._select_provider()
+
+        provider_sequence = [provider]
+        if provider == "gemini":
+            provider_sequence += ["azure", "openai", "pyttsx3"]
+        elif provider == "azure":
+            provider_sequence += ["openai", "gemini", "pyttsx3"]
+        elif provider == "openai":
+            provider_sequence += ["azure", "gemini", "pyttsx3"]
+        elif provider == "pyttsx3":
+            provider_sequence += ["gemini", "azure", "openai"]
+
+        for provider_choice in provider_sequence:
+            if provider_choice in attempted_providers:
+                continue
+            attempted_providers.append(provider_choice)
+            if provider_choice == "gemini" and self.gemini_client:
+                result = self._synthesize_gemini(text, language_code, voice_name)
+            elif provider_choice == "azure" and self._azure_tts_available():
+                result = self._synthesize_azure(text, language_code, voice_name)
+            elif provider_choice == "openai" and self._openai_tts_available():
+                result = self._synthesize_openai(text, language_code, voice_name)
+            elif provider_choice == "pyttsx3" and self.pyttsx3_engine:
+                result = self._synthesize_pyttsx3(text, language_code, voice_name)
+            else:
+                result = None
+
+            if result and result.audio_bytes:
+                return result
+
+        if self._windows_sapi_available():
+            fallback_result = self._synthesize_windows_sapi(text)
+            if fallback_result and fallback_result.audio_bytes:
+                return fallback_result
+
+        logger.error("Unable to synthesize speech with any available provider.")
+        return TTSResult(
+            audio_bytes=b"",
+            format="wav",
+            duration_seconds=0,
+            provider=provider or "unknown",
+            error=(
+                "No TTS provider succeeded. Configure your Gemini/OpenAI/Azure credentials, "
+                "or install pyttsx3 and enable local TTS on Windows."
+            ),
+        )
 
     def _detect_speaking_style(self, text: str) -> str:
         """Detect appropriate speaking style based on text content"""
