@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:%(name)s:%(message)s',
+    stream=sys.stdout,
+)
 logger = logging.getLogger(__name__)
 
 def _local_tts_enabled() -> bool:
@@ -166,10 +170,6 @@ except ImportError:
 load_backend_environment()
 MEDIA_ROOT = Path(__file__).resolve().parent.parent / "media"
 MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
-
-# Configure logging early for import error handling
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 
 def validate_environment():
