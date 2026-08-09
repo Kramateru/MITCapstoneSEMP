@@ -39,6 +39,11 @@ const backendPublicWsUrl = firstConfiguredValue(
 );
 
 const nextConfig: NextConfig = {
+  deploymentId: firstConfiguredValue(
+    process.env.DEPLOYMENT_VERSION,
+    process.env.RENDER_GIT_COMMIT,
+    process.env.COMMIT_SHA,
+  ) || undefined,
   env: {
     NEXT_PUBLIC_SUPABASE_URL: supabasePublicUrl,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: supabasePublishableKey,

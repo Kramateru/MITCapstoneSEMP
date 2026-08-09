@@ -1,0 +1,25 @@
+
+> frontend@0.1.0 dev
+> next dev --webpack --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.6 (webpack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local
+- Experiments (use with caution):
+  · optimizePackageImports
+
+✓ Starting...
+✓ Ready in 21.1s
+○ Compiling /login ...
+ GET /login 200 in 197ms (compile: 16ms, proxy.ts: 48ms, render: 133ms)
+⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
+▲ Next.js 16.1.6 (webpack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+- Environments: .env.local
+- Experiments (use with caution):
+  · optimizePackageImports
+
+✓ Starting...
+✓ Ready in 2.5s
