@@ -7925,15 +7925,24 @@ async def synthesize_member_speech(
     strict_persistence_message = (
         "Generated speech must be saved to supported storage, but that upload did not complete."
     )
+    storage_warning: Optional[str] = None
 
     if persist and not get_tts_service().is_available():
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, "
-                "OPENAI_API_KEY, or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
-            ),
+        if require_supabase:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Server-side TTS is unavailable. Configure GOOGLE_API_KEY or GEMINI_API_KEY, "
+                    "OPENAI_API_KEY, or AZURE_SPEECH_KEY/AZURE_SPEECH_REGION for deployed speech generation."
+                ),
+            )
+        logger.warning(
+            "Server-side TTS unavailable for optional persistence request. Falling back to browser audio inline."
         )
+        storage_warning = (
+            "Server-side TTS is unavailable. Generated speech is returned inline for draft playback."
+        )
+        persist = False
 
     try:
         synthesis_fn = text_to_speech_for_persistence if persist else text_to_speech
@@ -7973,7 +7982,6 @@ async def synthesize_member_speech(
     fallback_mode = str(audio_result.get("fallback_mode") or "").strip() or None
 
     storage_mode = "inline"
-    storage_warning: Optional[str] = None
     audio_asset: Optional[CallSimulationAudioAsset] = None
     normalized_asset_kind = str(asset_kind or "").strip().lower() or "member-step"
     persisted_scenario: Optional[Scenario] = None
