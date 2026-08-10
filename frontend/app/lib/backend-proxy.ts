@@ -265,8 +265,7 @@ async function fetchAcrossBackendCandidates(
   // Attach the attempted candidates to the thrown error to help diagnostics
   const err = lastError instanceof Error ? lastError : new Error(DEFAULT_BACKEND_UNAVAILABLE_MESSAGE)
   try {
-    // @ts-ignore - attach debug info
-    ;(err as any).attemptedCandidates = candidates
+    ;(err as Error & { attemptedCandidates?: string[] }).attemptedCandidates = candidates
   } catch {
     // ignore
   }

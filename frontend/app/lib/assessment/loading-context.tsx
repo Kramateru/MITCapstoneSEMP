@@ -129,7 +129,7 @@ export function useAsyncOperation<T>(key: string) {
         throw error
       }
     },
-    [key, setLoading, setError, setData],
+    [setLoading, setError, setData],
   )
 
   return {

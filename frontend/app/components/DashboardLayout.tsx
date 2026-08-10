@@ -17,8 +17,8 @@ import {
 } from '@/app/utils/user-settings';
 import Image from 'next/image';
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
-import { type ReactNode, type SVGProps, useEffect, useMemo, useState } from 'react';
+import { usePathname } from 'next/navigation';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 
 interface SidebarItem {
   label: string;
@@ -27,8 +27,6 @@ interface SidebarItem {
   badge?: number;
   section?: string;
 }
-
-const UserRound = (props: SVGProps<SVGSVGElement>) => <LazyIcon name="UserRound" {...props} />;
 
 const ROLE_LABEL_MAP = {
   trainee: 'Trainee Workspace',
@@ -63,9 +61,8 @@ export function DashboardLayout({
   );
   const isSidebarVisible = sidebarOpen || (!dashboardSettings.hideNavigation && !dashboardSettings.topNavigation);
   const [sidebarBadgeMap, setSidebarBadgeMap] = useState<Record<string, number>>({});
-  const { user, token, isLoading, logout } = useAuth();
+  const { user, token, isLoading } = useAuth();
   const pathname = usePathname();
-  const router = useRouter();
   const resolvedUserRole = userRole === 'admin' || userRole === 'trainer' || userRole === 'trainee'
     ? userRole
     : 'trainee';
@@ -315,13 +312,6 @@ export function DashboardLayout({
   }, [pathname]);
   const currentPageLabel = activeSidebarItem?.label || inferredPageLabel;
   const currentPageSection = activeSidebarItem?.section || ROLE_LABEL_MAP[resolvedUserRole];
-  const userDisplayName = user?.user_name || user?.email || 'User';
-  const userInitials = userDisplayName
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((namePart) => namePart[0]?.toUpperCase())
-    .join('') || user?.email?.[0]?.toUpperCase() || 'U';
   const headerBreadcrumbs = useMemo(() => {
     const items: Array<{ label: string; href?: string }> = [
       { label: ROLE_LABEL_MAP[resolvedUserRole], href: roleHomePath },
@@ -350,11 +340,6 @@ export function DashboardLayout({
 
     return items;
   }, [activeSidebarItem, currentPageLabel, currentPageSection, pathname, resolvedUserRole, roleHomePath]);
-
-  const handleLogout = () => {
-    logout('You have been logged out successfully.');
-    navigateToPath('/login');
-  };
 
   const handleSidebarLinkClick = () => {
     if (typeof window !== 'undefined' && (window.innerWidth < 1024 || isHiddenSidebar)) {

@@ -74,6 +74,7 @@ export default function CertificatePreview({
         <CardContent className="p-5 md:p-5">
           <div className="space-y-6">
             <div className="flex flex-col items-center gap-4 text-center md:flex-row md:items-center md:justify-center md:text-left">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={logoSource}
                 alt="Training center logo"
@@ -150,6 +151,7 @@ export default function CertificatePreview({
                 </Badge>
                 <div className="space-y-3">
                   {settings.manager_signature_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={settings.manager_signature_url}
                       alt="Signatory signature"

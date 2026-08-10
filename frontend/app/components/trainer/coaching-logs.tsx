@@ -2,7 +2,7 @@
 
 import { LazyIcon } from '@/app/components/ui/LazyIcon';
 import { useAuth } from '@/app/context/AuthContext';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
@@ -70,7 +70,7 @@ export default function CoachingLogsManagement() {
     return new Map(trainees.map((t) => [t.id, t.name]));
   }, [trainees]);
 
-  const fetchWithAuthRetry = async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchWithAuthRetry = useCallback(async (input: RequestInfo | URL, init?: RequestInit) => {
     const sendRequest = async (authToken: string | null) => {
       const nextHeaders = new Headers(init?.headers || undefined);
       if (authToken || token) {
@@ -99,9 +99,9 @@ export default function CoachingLogsManagement() {
     }
 
     return response;
-  };
+  }, [logout, refreshToken, token]);
 
-  const loadTrainees = async () => {
+  const loadTrainees = useCallback(async () => {
     if (isAuthLoading) {
       return;
     }
@@ -146,9 +146,9 @@ export default function CoachingLogsManagement() {
       console.error(error);
       setTrainees([]);
     }
-  };
+  }, [fetchWithAuthRetry, isAuthLoading, isAuthenticated, token]);
 
-  const loadLogs = async () => {
+  const loadLogs = useCallback(async () => {
     if (isAuthLoading) {
       return;
     }
@@ -192,12 +192,12 @@ export default function CoachingLogsManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchWithAuthRetry, isAuthLoading, isAuthenticated, token]);
 
   useEffect(() => {
     void loadTrainees();
     void loadLogs();
-  }, [isAuthLoading, isAuthenticated, token]);
+  }, [loadLogs, loadTrainees]);
 
   const handleCreateLog = () => {
     setFormData({

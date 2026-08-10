@@ -191,7 +191,6 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [liveStatus, setLiveStatus] = useState('');
-  const [showSecondaryPanel, setShowSecondaryPanel] = useState(false);
 
   const authHeaders = () => {
     const token = sessionStorage.getItem('token');

@@ -63,7 +63,7 @@ test.describe('Assessment Navigation Module - User Requirements', () => {
   test('Requirement 3: Trainee Access Control - Prevent direct URL access', async () => {
     // This test would need a trainee session
     // Navigate to trainee dashboard
-    const response = await page.goto('http://localhost:3000/trainee/assessment', {
+    await page.goto('http://localhost:3000/trainee/assessment', {
       waitUntil: 'networkidle',
     })
 
@@ -125,7 +125,7 @@ test.describe('Assessment Navigation Module - User Requirements', () => {
 
   test('Requirement 7: Assessment Taking - Question loading and choice randomization', async () => {
     // Navigate to trainee assessment page
-    const response = await page.goto('http://localhost:3000/trainee/assessment', {
+    await page.goto('http://localhost:3000/trainee/assessment', {
       waitUntil: 'networkidle',
     })
 

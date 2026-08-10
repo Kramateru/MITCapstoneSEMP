@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/app/context/AuthContext';
 
 export interface LobOption {
@@ -21,12 +21,12 @@ export function useLobCatalog() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchLobsWithToken = async (authToken: string) =>
+  const fetchLobsWithToken = useCallback(async (authToken: string) =>
     fetch('/api/auth/lobs', {
       headers: { Authorization: `Bearer ${authToken}` },
-    });
+    }), []);
 
-  const loadLobs = async () => {
+  const loadLobs = useCallback(async () => {
     if (isAuthLoading) {
       return;
     }
@@ -67,11 +67,11 @@ export function useLobCatalog() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [fetchLobsWithToken, isAuthLoading, isAuthenticated, refreshToken, token]);
 
   useEffect(() => {
     void loadLobs();
-  }, [isAuthLoading, isAuthenticated, token]);
+  }, [loadLobs]);
 
   return {
     lobs,

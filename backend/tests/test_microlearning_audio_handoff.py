@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 
+from backend.routes.microlearning_routes import _resolve_audio_media_type
 from backend.services.microlearning import serialize_assignment_detail, serialize_microlearning_module
+from backend.supabase_client import SupabaseClient
 
 
 def test_microlearning_module_serialization_exposes_audio_from_content_data():
@@ -92,3 +94,34 @@ def test_assignment_detail_serialization_exposes_audio_from_content_data():
 
     assert payload["module"]["content_url"] == "https://cdn.example.com/lesson.mp3"
     assert payload["module"]["audio_url"] == "https://cdn.example.com/lesson.mp3"
+
+
+def test_microlearning_tts_upload_preserves_mp3_extension_and_content_type(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ALLOW_LOCAL_MEDIA_FALLBACK", "true")
+    monkeypatch.setenv("BACKEND_URL", "http://127.0.0.1:8001")
+
+    client = SupabaseClient()
+    client.is_available = False
+
+    url = client.upload_microlearning_tts(
+        audio_data=b"fake mp3 bytes",
+        module_id="module-tts",
+        audio_format="mp3",
+        content_type="audio/mpeg",
+    )
+
+    assert url is not None
+    assert "/media/microlearning/audio/module-tts/tts/tts_" in url
+    assert url.endswith(".mp3")
+    assert (tmp_path / "media" / "microlearning" / "audio" / "module-tts" / "tts").exists()
+
+
+def test_tts_stream_media_type_uses_saved_mp3_metadata():
+    module = SimpleNamespace(content_data={"tts_content_type": "audio/mpeg"})
+
+    assert _resolve_audio_media_type(
+        module,
+        use_tts=True,
+        asset_url="https://cdn.example.com/lesson-tts.mp3",
+    ) == "audio/mpeg"

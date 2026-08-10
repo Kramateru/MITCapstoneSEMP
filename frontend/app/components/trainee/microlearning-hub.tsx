@@ -460,16 +460,6 @@ function formatPoints(earned?: number | null, possible?: number | null) {
   return `${earnedLabel}/${possibleLabel} pts`;
 }
 
-function formatAttemptScore(attempt?: ExerciseAttempt | null) {
-  if (!attempt) {
-    return '0%';
-  }
-
-  const pointsLabel = formatPoints(attempt.points_earned, attempt.points_possible);
-  const percentLabel = `${Math.round(attempt.score || 0)}%`;
-  return pointsLabel ? `${pointsLabel} • ${percentLabel}` : percentLabel;
-}
-
 function hasStartedAssignment(assignment?: AssignmentSummary | null) {
   return Boolean(
     assignment &&
@@ -502,16 +492,6 @@ function sortAssignmentsForQueue(items: AssignmentSummary[]) {
 
     return left.title.localeCompare(right.title);
   });
-}
-
-function getFirstContentArray(content: Record<string, any>, keys: string[]) {
-  for (const key of keys) {
-    if (Array.isArray(content[key]) && content[key].length > 0) {
-      return content[key];
-    }
-  }
-
-  return [];
 }
 
 function getFirstContentText(content: Record<string, any>, keys: string[]) {
@@ -764,16 +744,6 @@ function getKeywordCoverage(responseText: string, keywords?: string[]) {
 
 function isCompletedAssignment(status?: AssignmentStatus | null) {
   return status === 'completed' || status === 'certified';
-}
-
-function getQuestionResultBadgeClass(result?: string | null) {
-  if (result === 'correct') {
-    return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-  }
-  if (result === 'incorrect') {
-    return 'border-rose-200 bg-rose-50 text-rose-700';
-  }
-  return 'border-amber-200 bg-amber-50 text-amber-700';
 }
 
 function getObservationTitle(provider?: string | null) {
@@ -1077,7 +1047,7 @@ function AudioPlaybackCard({
     if (Number.isFinite(hydratedDuration) && hydratedDuration > 0) {
       setResolvedDuration((current) => (current > 0 ? Math.max(current, hydratedDuration) : hydratedDuration));
     }
-  }, [fetchAuthorizedResponse, moduleId]);
+  }, [audioUrl, fetchAuthorizedResponse, moduleId]);
 
   const ensureProtectedPlaybackSource = useCallback(
     async (mode: 'primary' | 'tts', forceRefresh: boolean = false) => {
@@ -2989,7 +2959,7 @@ export default function MicrolearningHub() {
       window.removeEventListener('online', retry);
       window.removeEventListener('focus', retry);
     };
-  }, [activeAssignmentId, assignmentDetail, retryPendingFlashcardSubmission]);
+  }, [activeAssignmentId, assignmentDetail]);
 
   const filteredAssignments = assignments.filter((assignment) => {
     if (queueFilter === 'all') {

@@ -1909,13 +1909,6 @@ export async function bulkUploadQuestions(
   }
 }
 
-async function listAssignments(
-  request: Request,
-): Promise<BackendMcqAssignment[]> {
-  const payload = await fetchBackendJson<BackendListResponse<BackendMcqAssignment, 'assignments'>>(request, '/api/certification/mcq/assignments')
-  return payload.assignments || []
-}
-
 async function listTrainerBatches(
   request: Request,
   sessionUser: BackendSessionUser,

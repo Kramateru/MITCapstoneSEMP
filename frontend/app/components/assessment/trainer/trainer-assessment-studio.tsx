@@ -198,7 +198,7 @@ const SECTION_ANCHORS: Record<ManagementSection, string> = {
   results: 'assessment-results',
 }
 
-function getSections(role: ManagementRole) {
+function getSections() {
   return [
     {
       id: 'overview' as const,
@@ -263,7 +263,7 @@ function normalizeSection(role: ManagementRole, value: string | null): Managemen
     assignments: 'assignment-status',
   }
   const mappedValue = value ? (legacyMap[value] || value) : value
-  const availableSections = getSections(role)
+  const availableSections = getSections()
   return availableSections.some((section) => section.id === mappedValue)
     ? (mappedValue as ManagementSection)
     : 'overview'
@@ -559,7 +559,7 @@ export function TrainerAssessmentStudio({
 
   const needsAssessmentSessionRefresh = isAssessmentServiceAuthError(error)
   const activeSection = useMemo(() => normalizeSection(role, searchParams.get('section')), [role, searchParams])
-  const workspaceSections = useMemo(() => getSections(role), [role])
+  const workspaceSections = useMemo(() => getSections(), [])
 
   const refreshWorkspace = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     try {
@@ -664,7 +664,6 @@ export function TrainerAssessmentStudio({
   )
   const recentAssignments = useMemo(() => assignments.slice(0, 3), [assignments])
 
-  const attemptById = useMemo(() => new Map(attempts.map((attempt) => [attempt.id, attempt])), [attempts])
   const availableBatchOptionsForAssignment = useMemo(() => {
     const ownerId = categories.find((category) => category.id === assignmentDraft.categoryId)?.createdBy
     return (workspace?.batches || []).filter((batch) => !ownerId || !batch.createdBy || batch.createdBy === ownerId)

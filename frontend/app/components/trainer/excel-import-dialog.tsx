@@ -59,7 +59,7 @@ export default function ExcelImportDialog({ onImport }: ExcelImportDialogProps) 
       setIsProcessing(false);
       
       if (mockValidation.valid) {
-        toast.success(`File validated successfully. Found ${mockValidation.rows} dialogue rows.`);
+        toast.success(`${file.name} validated successfully. Found ${mockValidation.rows} dialogue rows.`);
       }
     }, 2000);
   };

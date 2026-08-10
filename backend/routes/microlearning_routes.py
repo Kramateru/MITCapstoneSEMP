@@ -569,10 +569,18 @@ def _resolve_audio_media_type(
     use_tts: bool,
     asset_url: Optional[str],
 ) -> str:
+    content_data = dict(module.content_data or {})
     if use_tts:
+        configured_tts_media_type = str(content_data.get("tts_content_type") or "").strip()
+        if configured_tts_media_type:
+            return configured_tts_media_type
+
+        guessed_tts_media_type, _ = mimetypes.guess_type((asset_url or "").split("?", 1)[0])
+        if guessed_tts_media_type:
+            return guessed_tts_media_type
+
         return "audio/wav"
 
-    content_data = dict(module.content_data or {})
     configured_media_type = str(content_data.get("audio_content_type") or "").strip()
     if configured_media_type:
         return configured_media_type
@@ -607,6 +615,8 @@ def _sync_audio_content_data(
     transcript: Optional[str] = None,
     captions_url: Optional[str] = None,
     tts_url: Optional[str] = None,
+    tts_content_type: Optional[str] = None,
+    tts_format: Optional[str] = None,
     duration_seconds: Optional[float] = None,
     language_code: Optional[str] = None,
     original_filename: Optional[str] = None,
@@ -634,6 +644,10 @@ def _sync_audio_content_data(
     resolved_tts_url = tts_url or module.audio_tts_url
     if resolved_tts_url:
         content_data["tts_url"] = resolved_tts_url
+    if tts_content_type:
+        content_data["tts_content_type"] = tts_content_type
+    if tts_format:
+        content_data["tts_format"] = tts_format
 
     if captions_url:
         content_data["captions_url"] = captions_url
@@ -665,6 +679,18 @@ def _sync_audio_content_data(
         content_data["transcript_confidence"] = round(float(transcript_confidence), 4)
 
     module.content_data = content_data
+
+
+def _tts_content_type(audio_format: Optional[str]) -> str:
+    return "audio/mpeg" if str(audio_format or "").strip().lower().lstrip(".") == "mp3" else "audio/wav"
+
+
+def _storage_method_for_url(url: Optional[str], supabase_available: bool) -> str:
+    normalized = str(url or "").strip()
+    parsed_path = urlparse(normalized).path if normalized else ""
+    if parsed_path.startswith("/media/") or "/media/" in parsed_path:
+        return "local"
+    return "supabase" if supabase_available else "local"
 
 
 def _resolve_module_audio_asset_url(module: MicrolearningModule) -> Optional[str]:
@@ -1159,9 +1185,12 @@ async def upload_module_audio(
             )
             
             if tts_result and tts_result.audio_bytes:
+                tts_content_type = _tts_content_type(tts_result.format)
                 tts_url = supabase_client.upload_microlearning_tts(
                     audio_data=tts_result.audio_bytes,
                     module_id=module_id,
+                    audio_format=tts_result.format,
+                    content_type=tts_content_type,
                 )
 
                 if tts_url:
@@ -1169,11 +1198,15 @@ async def upload_module_audio(
                     _sync_audio_content_data(
                         module,
                         tts_url=tts_url,
+                        tts_content_type=tts_content_type,
+                        tts_format=tts_result.format,
                         duration_seconds=module.audio_duration_seconds,
                         language_code=module.audio_language or "en-US",
                     )
                     result["tts_url"] = tts_url
                     result["tts_provider"] = tts_result.provider
+                    result["tts_content_type"] = tts_content_type
+                    result["tts_format"] = tts_result.format
                     logger.info(f"✓ TTS audio generated: {tts_result.provider}")
                 else:
                     logger.warning(
@@ -1479,36 +1512,31 @@ async def generate_tts_audio(
             "error": f"Failed to generate speech: {error_msg}. Please try again or use browser fallback.",
         }
 
-    # Try to save to Supabase
     supabase_client = get_supabase_client()
-    if not supabase_client.is_available:
-        logger.error("Supabase storage is unavailable for microlearning TTS upload for module %s", module_id)
-        return {
-            "module_id": module_id,
-            "tts_url": None,
-            "provider": tts_result.provider,
-            "error": "Supabase storage is unavailable. Generated TTS could not be saved.",
-        }
-
+    tts_content_type = _tts_content_type(tts_result.format)
     tts_url = None
     try:
         tts_url = supabase_client.upload_microlearning_tts(
             audio_data=tts_result.audio_bytes,
             module_id=module_id,
+            audio_format=tts_result.format,
+            content_type=tts_content_type,
         )
-        if tts_url:
+        if tts_url and supabase_client.is_available:
             logger.info(f"TTS saved to Supabase: {tts_url}")
     except Exception as e:
-        logger.warning(f"Failed to upload TTS to Supabase: {e}")
+        logger.warning(f"Failed to save TTS audio: {e}")
         tts_url = None
 
     if not tts_url:
-        logger.error(f"Failed to save TTS for module {module_id} - Supabase upload failed")
+        logger.error(f"Failed to save TTS for module {module_id}")
         return {
             "module_id": module_id,
             "tts_url": None,
             "provider": tts_result.provider,
-            "error": "Generated speech could not be saved to Supabase. Check server logs for details.",
+            "format": tts_result.format,
+            "content_type": tts_content_type,
+            "error": "Generated speech could not be saved. Check Supabase storage or local media fallback settings.",
         }
 
     # Update module with TTS URL
@@ -1516,6 +1544,8 @@ async def generate_tts_audio(
     _sync_audio_content_data(
         module,
         tts_url=tts_url,
+        tts_content_type=tts_content_type,
+        tts_format=tts_result.format,
         duration_seconds=module.audio_duration_seconds,
         language_code=module.audio_language or "en-US",
     )
@@ -1529,6 +1559,8 @@ async def generate_tts_audio(
         metadata={
             "tts_url": tts_url,
             "provider": tts_result.provider,
+            "format": tts_result.format,
+            "content_type": tts_content_type,
             "duration_seconds": tts_result.duration_seconds,
         },
     )
@@ -1538,8 +1570,10 @@ async def generate_tts_audio(
         "module_id": module_id,
         "tts_url": tts_url,
         "provider": tts_result.provider,
+        "format": tts_result.format,
+        "content_type": tts_content_type,
         "duration_seconds": tts_result.duration_seconds,
-        "storage_method": "supabase",
+        "storage_method": _storage_method_for_url(tts_url, supabase_client.is_available),
         "message": "TTS audio generated and saved successfully",
     }
 

@@ -218,11 +218,6 @@ function assertSupportedAudioUpload(fileName: string, mimeType: string) {
   }
 }
 
-function buildStoragePath(trainerId: string, moduleId: string, fileName: string) {
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  return `microlearning/audio/${moduleId}/${moduleId}/${timestamp}-${sanitizeAudioFileName(fileName)}`
-}
-
 function resolveSupabasePublicObject(assetUrl?: string | null) {
   const normalized = (assetUrl || '').trim()
   if (!normalized) {
@@ -279,11 +274,6 @@ function resolvePreferredStoragePath(
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function getSupabaseObjectUrl(bucketName: string, storagePath: string) {
-  const supabase = createSupabaseAdminClient()
-  return supabase.storage.from(bucketName).getPublicUrl(storagePath).data.publicUrl
 }
 
 function inferAudioMimeType(assetUrl: string, contentType?: string | null) {
@@ -1025,80 +1015,9 @@ export async function createAudioModuleSignedUrl(storagePath: string, bucketName
   return data.signedUrl
 }
 
-async function persistAudioContentRow(
-  supabase: ReturnType<typeof createSupabaseAdminClient>,
-  existingRow: AudioContentRow | null,
-  {
-    moduleId,
-    title,
-    trainerId,
-    canonicalAudioUrl,
-    storagePath,
-    mimeType,
-    transcript,
-    summaryText,
-    geminiModel,
-    geminiFileUri,
-  }: {
-    moduleId: string
-    title: string
-    trainerId: string
-    canonicalAudioUrl: string
-    storagePath: string
-    mimeType: string
-    transcript: string
-    summaryText: string
-    geminiModel: string
-    geminiFileUri: string
-  },
-) {
-  const rowPayload = {
-    module_id: moduleId,
-    title,
-    trainer_id: trainerId,
-    url: canonicalAudioUrl,
-    storage_path: storagePath,
-    mime_type: mimeType,
-    transcript,
-    transcript_text: transcript,
-    summary_text: summaryText,
-    duration_seconds: null,
-    gemini_model: geminiModel,
-    gemini_file_uri: geminiFileUri,
-  }
-
-  if (existingRow?.id) {
-    const { data, error } = await supabase
-      .from('audio_content')
-      .update(rowPayload)
-      .eq('id', existingRow.id)
-      .select('*')
-      .single()
-
-    if (error || !data) {
-      throw error || new Error('Unable to update the audio module metadata.')
-    }
-
-    return data as AudioContentRow
-  }
-
-  const { data, error } = await supabase
-    .from('audio_content')
-    .insert(rowPayload)
-    .select('*')
-    .single()
-
-  if (error || !data) {
-    throw error || new Error('Unable to save the audio module metadata.')
-  }
-
-  return data as AudioContentRow
-}
-
 export async function uploadMicrolearningAudioContent({
   authorization,
   moduleId,
-  trainerId,
   title,
   fileName,
   mimeType,

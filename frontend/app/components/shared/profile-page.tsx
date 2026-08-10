@@ -106,7 +106,6 @@ export function ProfilePageContent({ roleLabel }: { roleLabel: string }) {
   const [savingName, setSavingName] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
-  const [replaying, setReplaying] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadProfile = useCallback(async () => {

@@ -137,7 +137,6 @@ export default function TraineeDashboard() {
   const [isChanging, setIsChanging] = useState(false);
   const [strengthTouched, setStrengthTouched] = useState(false);
   const [loadingWorkspace, setLoadingWorkspace] = useState(true);
-  const [showSecondaryPanel, setShowSecondaryPanel] = useState(false);
   const hasLoadedWorkspace = useRef(false);
 
   const loadTraineeStats = useCallback(async () => {
@@ -166,12 +165,6 @@ export default function TraineeDashboard() {
       console.error('Error loading coaching logs:', error);
     }
   }, []);
-
-  const fetchTraineeData = useCallback(() => {
-    void loadTraineeStats();
-    void loadTraineeSessions();
-    void loadTraineeCoachingLogs();
-  }, [loadTraineeStats, loadTraineeSessions, loadTraineeCoachingLogs]);
 
   const loadSimFloorWorkspace = useCallback(async () => {
     try {
@@ -207,11 +200,6 @@ export default function TraineeDashboard() {
 
   useEffect(() => {
     void refreshDashboard();
-    const timer = window.setTimeout(() => {
-      setShowSecondaryPanel(true);
-    }, 220);
-
-    return () => window.clearTimeout(timer);
   }, [refreshDashboard]);
 
   useLiveRefresh({

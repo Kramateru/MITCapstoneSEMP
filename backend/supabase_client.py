@@ -715,35 +715,62 @@ class SupabaseClient:
         audio_data: bytes,
         module_id: str,
         filename: Optional[str] = None,
+        audio_format: str = "wav",
+        content_type: Optional[str] = None,
+        allow_local_fallback: bool = True,
     ) -> Optional[str]:
         """
         Upload text-to-speech generated audio for accessibility.
         
         Args:
-            audio_data: TTS audio bytes (WAV format)
+            audio_data: TTS audio bytes
             module_id: Microlearning module ID
             filename: Optional custom filename
+            audio_format: File extension matching the generated audio bytes
+            content_type: MIME type matching the generated audio bytes
+            allow_local_fallback: Whether local /media fallback is allowed when Supabase is unavailable
         
         Returns:
             Public URL of uploaded TTS audio, or None if upload fails
         """
-        if not self.is_available:
-            logger.warning("Supabase not available. TTS audio not uploaded to cloud.")
-            return None
+        normalized_format = (audio_format or "wav").strip().lower().lstrip(".")
+        if normalized_format not in {"mp3", "wav"}:
+            normalized_format = "wav"
+        resolved_content_type = content_type or ("audio/mpeg" if normalized_format == "mp3" else "audio/wav")
 
         if not filename:
             timestamp = datetime.utcnow().isoformat().replace(":", "-")
-            filename = f"tts_{timestamp}.wav"
+            filename = f"tts_{timestamp}.{normalized_format}"
 
-        safe_filename = (filename or "tts.wav").strip().replace("\\", "/").split("/")[-1]
+        safe_filename = (filename or f"tts.{normalized_format}").strip().replace("\\", "/").split("/")[-1]
+        if "." not in safe_filename:
+            safe_filename = f"{safe_filename}.{normalized_format}"
         path = f"{MICROLEARNING_STORAGE_ROOT}/audio/{module_id}/tts/{safe_filename}"
-        return self._upload_bytes_to_bucket(
-            bucket_name=self.microlearning_bucket_name,
-            path=path,
-            file_data=audio_data,
-            content_type="audio/wav",
-            upsert=True,
-        )
+        if self.is_available:
+            public_url = self._upload_bytes_to_bucket(
+                bucket_name=self.microlearning_bucket_name,
+                path=path,
+                file_data=audio_data,
+                content_type=resolved_content_type,
+                upsert=True,
+            )
+            if public_url:
+                return public_url
+
+        if allow_local_fallback and self._allow_local_media_fallback():
+            logger.warning(
+                "Supabase upload failed or is unavailable. Using local media fallback for microlearning TTS: %s",
+                path,
+            )
+            return self._to_public_media_url(
+                self._write_local_media_copy(
+                    relative_path=path,
+                    file_data=audio_data,
+                )
+            )
+
+        logger.error("Microlearning TTS upload failed and local fallback is disabled: %s", path)
+        return None
 
     def save_microlearning_tts_local(
         self,

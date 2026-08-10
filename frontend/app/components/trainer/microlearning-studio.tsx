@@ -36,7 +36,6 @@ import {
     emptyModuleForm,
     formatLabel,
     getModuleFormType,
-    getReadingPassageStats,
     MicrolearningModule,
     ModuleFormState,
     moduleToForm,
@@ -123,14 +122,6 @@ function isTrainerDirectVideoFile(url?: string | null) {
   }
 
   return /(^\/|\.mp4($|[?#])|\.webm($|[?#])|\.ogg($|[?#])|\.mov($|[?#])|\.m4v($|[?#]))/i.test(url);
-}
-
-function isTrainerDirectAudioFile(url?: string | null) {
-  if (!url) {
-    return false;
-  }
-
-  return /(^\/|\.mp3($|[?#])|\.wav($|[?#])|\.m4a($|[?#])|\.ogg($|[?#])|\.aac($|[?#])|\.flac($|[?#])|\.webm($|[?#]))/i.test(url);
 }
 
 function hasTrainerPlayableVideoReference(form: ModuleFormState) {
@@ -408,10 +399,6 @@ export default function TrainerMicrolearningStudio() {
   const librarySectionRef = useRef<HTMLDivElement | null>(null);
   const reportingSectionRef = useRef<HTMLDivElement | null>(null);
   const readingPassageRef = useRef<HTMLTextAreaElement | null>(null);
-  const readingPassageStats = useMemo(
-    () => getReadingPassageStats(moduleForm.reading_passage),
-    [moduleForm.reading_passage],
-  );
 
   const authedFetch = useCallback(
     async (url: string, init: RequestInit = {}) => {

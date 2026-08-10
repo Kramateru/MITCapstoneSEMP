@@ -23,6 +23,13 @@ from ..config_validation import (
 logger = logging.getLogger(__name__)
 DEFAULT_GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 
+
+def _estimate_spoken_duration_seconds(text: str, words_per_minute: int = 150) -> float:
+    words = len((text or "").split())
+    if words <= 0:
+        return 0.0
+    return max(1.0, (words / max(1, words_per_minute)) * 60.0)
+
 def _default_local_tts_enabled() -> bool:
     normalized = normalize_env_value(os.getenv("ENABLE_LOCAL_TTS")).lower()
     if not normalized or normalized not in {"1", "true", "yes", "on"}:
@@ -225,12 +232,12 @@ class TextToSpeechService:
         return bool(_openai and self.openai_client and self.openai_api_key)
 
     def _select_provider(self) -> str:
-        if self.gemini_client:
-            return "gemini"
         if self._azure_tts_available():
             return "azure"
         if self._openai_tts_available():
             return "openai"
+        if self.gemini_client:
+            return "gemini"
         if self._windows_sapi_available():
             return "windows_sapi"
         return "pyttsx3"
@@ -464,7 +471,7 @@ class TextToSpeechService:
         )
         speech_config.speech_synthesis_voice_name = voice_name or self.azure_voice_name
         speech_config.set_speech_synthesis_output_format(
-            azure.SpeechSynthesisOutputFormat.Riff16Khz16BitMonoPcm
+            azure.SpeechSynthesisOutputFormat.Audio16Khz32KBitRateMonoMp3
         )
         synthesizer = azure.SpeechSynthesizer(
             speech_config=speech_config,
@@ -499,8 +506,8 @@ class TextToSpeechService:
 
         return TTSResult(
             audio_bytes=audio_bytes,
-            format="wav",
-            duration_seconds=len(audio_bytes) / 32000,
+            format="mp3",
+            duration_seconds=_estimate_spoken_duration_seconds(text),
             provider="azure_speech",
             error=None,
         )
@@ -527,7 +534,7 @@ class TextToSpeechService:
                 voice=resolved_voice,
                 input=text,
                 instructions=instructions,
-                response_format="wav",
+                response_format="mp3",
             )
             audio_bytes = response.read()
             if not audio_bytes:
@@ -535,8 +542,8 @@ class TextToSpeechService:
 
             return TTSResult(
                 audio_bytes=audio_bytes,
-                format="wav",
-                duration_seconds=len(audio_bytes) / 32000,
+                format="mp3",
+                duration_seconds=_estimate_spoken_duration_seconds(text),
                 provider="openai_tts",
                 error=None,
             )
@@ -565,8 +572,8 @@ class TextToSpeechService:
         encoded_path = base64.b64encode(temp_path.encode("utf-8")).decode("ascii")
         script = f"""
 $ErrorActionPreference = 'Stop'
-$text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_text}')
-$outputPath = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_path}')
+$text = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_text}'))
+$outputPath = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{encoded_path}'))
 $voice = New-Object -ComObject SAPI.SpVoice
 $stream = New-Object -ComObject SAPI.SpFileStream
 $stream.Open($outputPath, 3, $false)

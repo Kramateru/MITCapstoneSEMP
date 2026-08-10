@@ -407,6 +407,7 @@ function AssetUploadCard({
       </div>
       <div className="mb-4 flex min-h-[120px] items-center justify-center rounded-2xl border bg-slate-50 p-4">
         {imageUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img src={imageUrl} alt={title} className="max-h-24 object-contain" />
         ) : (
           <div className="flex flex-col items-center gap-2 text-sm text-slate-500">

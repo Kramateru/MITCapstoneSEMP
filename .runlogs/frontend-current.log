@@ -10,16 +10,11 @@
   · optimizePackageImports
 
 ✓ Starting...
-✓ Ready in 21.1s
+✓ Ready in 5.8s
 ○ Compiling /login ...
- GET /login 200 in 197ms (compile: 16ms, proxy.ts: 48ms, render: 133ms)
-⚠ Found a change in next.config.ts. Restarting the server to apply the changes...
-▲ Next.js 16.1.6 (webpack)
-- Local:         http://127.0.0.1:3000
-- Network:       http://127.0.0.1:3000
-- Environments: .env.local
-- Experiments (use with caution):
-  · optimizePackageImports
-
-✓ Starting...
-✓ Ready in 2.5s
+ GET /login 200 in 8.1s (compile: 6.9s, proxy.ts: 392ms, render: 796ms)
+ GET /login 200 in 401ms (compile: 57ms, proxy.ts: 47ms, render: 298ms)
+○ Compiling /_not-found ...
+ GET /dashboard/analytics 404 in 7.0s (compile: 6.6s, render: 375ms)
+ GET /dashboard/assistant 404 in 6.8s (compile: 6.4s, render: 384ms)
+ GET /login 200 in 1699ms (compile: 1346ms, proxy.ts: 8ms, render: 345ms)

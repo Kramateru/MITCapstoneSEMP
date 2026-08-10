@@ -352,7 +352,7 @@ export function TraineeAssessmentWorkspace() {
       }
     : null
 
-  const savedAttempts = dashboard?.attempts ?? []
+  const savedAttempts = useMemo(() => dashboard?.attempts ?? [], [dashboard?.attempts])
   const totalAttemptPages = Math.max(1, Math.ceil(savedAttempts.length / ATTEMPTS_PER_PAGE))
   const paginatedAttempts = useMemo(() => {
     const startIndex = (attemptPage - 1) * ATTEMPTS_PER_PAGE
